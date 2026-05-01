@@ -1,0 +1,7 @@
+let User = "value";
+
+interface User {
+  name: string;
+}
+
+let user: User = { name: "Ada" };

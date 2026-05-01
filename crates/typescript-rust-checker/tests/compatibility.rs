@@ -153,6 +153,62 @@ fn manifest_contains_at_least_one_active_case() {
     );
 }
 
+#[test]
+fn object_literal_excess_property_uses_first_source_order_property() {
+    let source = "let user: { name: string } = { name: \"Ada\", age: 36, active: true };";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2353"]);
+    assert!(
+        diagnostics[0].message.contains("age"),
+        "unexpected TS2353 message: {rendered}"
+    );
+}
+
+#[test]
+fn object_literal_missing_property_uses_first_target_order_property() {
+    let source = "let user: { name: string; alpha: number } = {};";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2741"]);
+    assert!(
+        diagnostics[0].message.contains("alpha"),
+        "unexpected TS2741 message: {rendered}"
+    );
+}
+
+#[test]
+fn object_literal_missing_property_does_not_cascade_from_unresolved_value() {
+    let source = "let user: { name: string; age: number } = { name: missing };";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2304"]);
+    assert!(
+        diagnostics[0].message.contains("missing"),
+        "unexpected TS2304 message: {rendered}"
+    );
+}
+
+#[test]
+fn type_aliases_are_desugared_in_diagnostic_messages() {
+    let source = "type Name = string; let value: Name = 123;";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2322"]);
+    assert!(
+        diagnostics[0].message.contains("string"),
+        "expected alias target name in TS2322 message: {rendered}"
+    );
+    assert!(
+        !diagnostics[0].message.contains("Name"),
+        "expected alias name to be desugared in TS2322 message: {rendered}"
+    );
+}
+
 fn load_manifest() -> Manifest {
     let manifest_path = workspace_root().join("tests/upstream/typescript-go/manifest.toml");
     let manifest_text = fs::read_to_string(&manifest_path).unwrap_or_else(|error| {

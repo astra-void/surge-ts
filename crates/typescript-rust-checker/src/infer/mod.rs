@@ -1,0 +1,23 @@
+mod expression;
+mod types;
+
+pub(crate) use expression::infer_expression;
+pub(crate) use types::map_parsed_type;
+
+use typescript_rust_syntax::TextSpan;
+use typescript_rust_types::Type;
+
+#[derive(Debug, Clone)]
+pub(crate) enum InferredExpression {
+    Known(Type),
+    UnresolvedIdentifier {
+        name: String,
+        span: Option<TextSpan>,
+    },
+    MissingProperty {
+        property_name: String,
+        object_type: Type,
+        span: Option<TextSpan>,
+    },
+    Unknown,
+}

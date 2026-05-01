@@ -1,1 +1,1 @@
-const value: boolean = "a" === "b";
+const value: boolean = "a" === "a";

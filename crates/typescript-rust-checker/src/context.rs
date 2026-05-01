@@ -1,7 +1,7 @@
 use typescript_rust_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
 use typescript_rust_syntax::TextSpan as SyntaxTextSpan;
 
-use crate::symbols::SymbolTable;
+use crate::symbols::{SymbolTable, TypeDeclarationTable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckerOptions {
@@ -21,6 +21,7 @@ pub(crate) struct CheckerContext {
     pub(crate) options: CheckerOptions,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) symbols: SymbolTable,
+    pub(crate) type_declarations: TypeDeclarationTable,
 }
 
 impl CheckerContext {
@@ -30,6 +31,7 @@ impl CheckerContext {
             options,
             diagnostics: Vec::new(),
             symbols: SymbolTable::new(),
+            type_declarations: TypeDeclarationTable::new(),
         }
     }
 

@@ -823,6 +823,10 @@ dependencies = [
 [[package]]
 name = "typescript-rust-diagnostics"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
 
 [[package]]
 name = "typescript-rust-syntax"

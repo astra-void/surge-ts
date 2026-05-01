@@ -254,6 +254,311 @@ path = "tests/smoke/object_property_unresolved_object.ts"
 expected_diagnostics = ["TS2304"]
 
 [[case]]
+name = "object-type-annotation-variable-valid"
+path = "tests/smoke/object_type_annotation_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-annotation-variable-missing-property"
+path = "tests/smoke/object_type_annotation_variable_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-annotation-variable-excess-property"
+path = "tests/smoke/object_type_annotation_variable_excess_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "object-type-annotation-variable-property-mismatch"
+path = "tests/smoke/object_type_annotation_variable_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-annotation-assignment-excess-property"
+path = "tests/smoke/object_type_annotation_assignment_excess_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "object-type-annotation-assignment-missing-property"
+path = "tests/smoke/object_type_annotation_assignment_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-annotation-assignment-property-mismatch"
+path = "tests/smoke/object_type_annotation_assignment_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-annotation-non-fresh-excess-property-allowed"
+path = "tests/smoke/object_type_annotation_non_fresh_excess_property_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-annotation-parameter-property-access-valid"
+path = "tests/smoke/object_type_annotation_parameter_property_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-annotation-parameter-property-access-missing"
+path = "tests/smoke/object_type_annotation_parameter_property_access_missing.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "object-type-annotation-return-valid"
+path = "tests/smoke/object_type_annotation_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-annotation-return-missing-property"
+path = "tests/smoke/object_type_annotation_return_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-annotation-return-excess-property"
+path = "tests/smoke/object_type_annotation_return_excess_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "object-type-annotation-conditional-branch-excess-property"
+path = "tests/smoke/object_type_annotation_conditional_branch_excess_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "object-type-annotation-conditional-branch-missing-property"
+path = "tests/smoke/object_type_annotation_conditional_branch_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-annotation-conditional-branch-property-mismatch"
+path = "tests/smoke/object_type_annotation_conditional_branch_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-annotation-call-argument-valid"
+path = "tests/smoke/object_type_annotation_call_argument_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-annotation-call-argument-missing-property"
+path = "tests/smoke/object_type_annotation_call_argument_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-annotation-call-argument-excess-property"
+path = "tests/smoke/object_type_annotation_call_argument_excess_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "object-type-annotation-no-cascade-unresolved-property-value"
+path = "tests/smoke/object_type_annotation_no_cascade_unresolved_property_value.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "object-type-annotation-no-cascade-nested-missing-property-value"
+path = "tests/smoke/object_type_annotation_no_cascade_nested_missing_property_value.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "object-type-annotation-no-cascade-missing-then-no-root-ts2322"
+path = "tests/smoke/object_type_annotation_no_cascade_missing_then_no_root_ts2322.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-annotation-nested-object-ignored-or-unknown"
+path = "tests/smoke/object_type_annotation_nested_object_ignored_or_unknown.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-annotation-multiple-excess-first-property"
+path = "tests/smoke/object_type_annotation_multiple_excess_first_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "object-type-annotation-multiple-missing-first-property"
+path = "tests/smoke/object_type_annotation_multiple_missing_first_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-annotation-semicolon-separator-valid"
+path = "tests/smoke/object_type_annotation_semicolon_separator_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-annotation-comma-separator-valid"
+path = "tests/smoke/object_type_annotation_comma_separator_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-annotation-trailing-semicolon-valid"
+path = "tests/smoke/object_type_annotation_trailing_semicolon_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-variable-missing-valid"
+path = "tests/smoke/object_type_optional_variable_missing_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-variable-present-valid"
+path = "tests/smoke/object_type_optional_variable_present_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-variable-present-mismatch"
+path = "tests/smoke/object_type_optional_variable_present_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-variable-excess-property"
+path = "tests/smoke/object_type_optional_variable_excess_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "object-type-optional-variable-required-still-missing"
+path = "tests/smoke/object_type_optional_variable_required_still_missing.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-optional-variable-mixed-missing-optional-valid"
+path = "tests/smoke/object_type_optional_variable_mixed_missing_optional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-assignment-non-fresh-missing-valid"
+path = "tests/smoke/object_type_optional_assignment_non_fresh_missing_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-assignment-non-fresh-present-mismatch"
+path = "tests/smoke/object_type_optional_assignment_non_fresh_present_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-call-argument-missing-valid"
+path = "tests/smoke/object_type_optional_call_argument_missing_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-call-argument-present-mismatch"
+path = "tests/smoke/object_type_optional_call_argument_present_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-return-missing-valid"
+path = "tests/smoke/object_type_optional_return_missing_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-return-present-mismatch"
+path = "tests/smoke/object_type_optional_return_present_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-conditional-branch-missing-valid"
+path = "tests/smoke/object_type_optional_conditional_branch_missing_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-conditional-branch-present-mismatch"
+path = "tests/smoke/object_type_optional_conditional_branch_present_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-property-access-string-return-mismatch"
+path = "tests/smoke/object_type_optional_property_access_string_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-property-access-missing-still-ts2339"
+path = "tests/smoke/object_type_optional_property_access_missing_still_ts2339.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "object-type-optional-no-cascade-excess-before-missing-required"
+path = "tests/smoke/object_type_optional_no_cascade_excess_before_missing_required.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "object-type-optional-no-cascade-unresolved-present-optional-value"
+path = "tests/smoke/object_type_optional_no_cascade_unresolved_present_optional_value.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "object-type-optional-no-cascade-missing-property-value"
+path = "tests/smoke/object_type_optional_no_cascade_missing_property_value.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "object-type-optional-no-cascade-present-optional-mismatch-only"
+path = "tests/smoke/object_type_optional_no_cascade_present_optional_mismatch_only.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-required-missing-with-optional-present"
+path = "tests/smoke/object_type_optional_required_missing_with_optional_present.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-optional-required-missing-with-optional-mismatch-priority"
+path = "tests/smoke/object_type_optional_required_missing_with_optional_mismatch_priority.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-non-fresh-extra-property-allowed"
+path = "tests/smoke/object_type_optional_non_fresh_extra_property_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-non-fresh-missing-required-still-ts2322"
+path = "tests/smoke/object_type_optional_non_fresh_missing_required_still_ts2322.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-non-fresh-optional-present-mismatch-ts2322"
+path = "tests/smoke/object_type_optional_non_fresh_optional_present_mismatch_ts2322.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-non-fresh-optional-absent-valid"
+path = "tests/smoke/object_type_optional_non_fresh_optional_absent_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-non-fresh-required-present-optional-absent-valid"
+path = "tests/smoke/object_type_optional_non_fresh_required_present_optional_absent_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-call-argument-required-missing-with-optional-present"
+path = "tests/smoke/object_type_optional_call_argument_required_missing_with_optional_present.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-optional-return-required-missing-with-optional-present"
+path = "tests/smoke/object_type_optional_return_required_missing_with_optional_present.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "object-type-optional-conditional-both-branches-missing-optional-valid"
+path = "tests/smoke/object_type_optional_conditional_both_branches_missing_optional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-conditional-one-branch-present-optional-valid"
+path = "tests/smoke/object_type_optional_conditional_one_branch_present_optional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-conditional-one-branch-present-optional-mismatch"
+path = "tests/smoke/object_type_optional_conditional_one_branch_present_optional_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-conditional-required-missing-in-one-branch"
+path = "tests/smoke/object_type_optional_conditional_required_missing_in_one_branch.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
 name = "function-return-valid"
 path = "tests/smoke/function_return_valid.ts"
 expected_diagnostics = []
@@ -1010,3 +1315,2147 @@ expected_diagnostics = ["TS2339"]
 name = "conditional-nested-context-no-target-still-minimal"
 path = "tests/smoke/conditional_nested_context_no_target_still_minimal.ts"
 expected_diagnostics = []
+
+[[case]]
+name = "function-return-missing-value"
+path = "tests/smoke/function_return_missing_value.ts"
+expected_diagnostics = ["TS2355"]
+
+[[case]]
+name = "function-return-partial-branch"
+path = "tests/smoke/function_return_partial_branch.ts"
+expected_diagnostics = ["TS2366"]
+
+[[case]]
+name = "function-duplicate-implementation"
+path = "tests/smoke/function_duplicate_implementation.ts"
+expected_diagnostics = ["TS2393"]
+
+[[case]]
+name = "no_implicit_any_variable"
+path = "tests/smoke/no_implicit_any_variable.ts"
+expected_diagnostics = ["TS7005"]
+no_implicit_any = true
+
+[[case]]
+name = "control-flow-return-before-assignment"
+path = "tests/smoke/control_flow_return_before_assignment.ts"
+expected_diagnostics = ["TS2454"]
+
+[[case]]
+name = "control-flow-initializer-use-before-declaration"
+path = "tests/smoke/control_flow_initializer_use_before_declaration.ts"
+expected_diagnostics = ["TS2448"]
+
+[[case]]
+name = "control-flow-initializer-used-before-assignment"
+path = "tests/smoke/control_flow_initializer_used_before_assignment.ts"
+expected_diagnostics = ["TS2454"]
+
+[[case]]
+name = "control-flow-initializer-unresolved-still-ts2304"
+path = "tests/smoke/control_flow_initializer_unresolved_still_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "control-flow-initializer-var-future-no-ts2448"
+path = "tests/smoke/control_flow_initializer_var_future_no_ts2448.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "control-flow-initializer-self-reference"
+path = "tests/smoke/control_flow_initializer_self_reference.ts"
+expected_diagnostics = ["TS2454"]
+
+[[case]]
+name = "control-flow-assignment-valid"
+path = "tests/smoke/control_flow_assignment_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "control-flow-assignment-branch-maybe-assigned"
+path = "tests/smoke/control_flow_assignment_branch_maybe_assigned.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "control-flow-assignment-both-branches-assigned-valid"
+path = "tests/smoke/control_flow_assignment_both_branches_assigned_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "control-flow-assignment-else-missing-maybe-no-ts2454"
+path = "tests/smoke/control_flow_assignment_else_missing_maybe_no_ts2454.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "control-flow-use-before-declaration"
+path = "tests/smoke/control_flow_use_before_declaration.ts"
+expected_diagnostics = ["TS2448"]
+
+[[case]]
+name = "control-flow-order-return-type-mismatch-before-missing-return"
+path = "tests/smoke/control_flow_order_return_type_mismatch_before_missing_return.ts"
+expected_diagnostics = ["TS2322", "TS2366"]
+
+[[case]]
+name = "control-flow-order-unassigned-return-before-missing-return"
+path = "tests/smoke/control_flow_order_unassigned_return_before_missing_return.ts"
+expected_diagnostics = ["TS2454", "TS2366"]
+
+[[case]]
+name = "control-flow-truthiness-if-string"
+path = "tests/smoke/control_flow_truthiness_if_string.ts"
+expected_diagnostics = ["TS2872"]
+
+[[case]]
+name = "control-flow-truthiness-if-number"
+path = "tests/smoke/control_flow_truthiness_if_number.ts"
+expected_diagnostics = ["TS2872"]
+
+[[case]]
+name = "control-flow-truthiness-if-true"
+path = "tests/smoke/control_flow_truthiness_if_true.ts"
+expected_diagnostics = ["TS2872"]
+
+[[case]]
+name = "control-flow-truthiness-if-false"
+path = "tests/smoke/control_flow_truthiness_if_false.ts"
+expected_diagnostics = ["TS2873"]
+
+[[case]]
+name = "control-flow-truthiness-while-true"
+path = "tests/smoke/control_flow_truthiness_while_true.ts"
+expected_diagnostics = ["TS2872"]
+
+[[case]]
+name = "control-flow-truthiness-while-zero"
+path = "tests/smoke/control_flow_truthiness_while_zero.ts"
+expected_diagnostics = ["TS2873"]
+
+[[case]]
+name = "control-flow-truthiness-conditional-expression"
+path = "tests/smoke/control_flow_truthiness_conditional_expression.ts"
+expected_diagnostics = ["TS2872"]
+
+# v0.46 undefined and union-lite coverage
+
+[[case]]
+name = "union-undefined-variable-valid"
+path = "tests/smoke/union_undefined_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-undefined-variable-mismatch"
+path = "tests/smoke/union_undefined_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-undefined-expression-inferred-valid"
+path = "tests/smoke/union_undefined_expression_inferred_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-undefined-expression-inferred-mismatch"
+path = "tests/smoke/union_undefined_expression_inferred_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-type-variable-string-or-undefined-string-valid"
+path = "tests/smoke/union_type_variable_string_or_undefined_string_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-type-variable-string-or-undefined-undefined-valid"
+path = "tests/smoke/union_type_variable_string_or_undefined_undefined_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-type-variable-string-or-undefined-number-mismatch"
+path = "tests/smoke/union_type_variable_string_or_undefined_number_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-type-variable-string-number-boolean-mismatch"
+path = "tests/smoke/union_type_variable_string_number_boolean_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-type-function-parameter-valid"
+path = "tests/smoke/union_type_function_parameter_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-type-function-parameter-mismatch"
+path = "tests/smoke/union_type_function_parameter_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "union-type-function-return-valid"
+path = "tests/smoke/union_type_function_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-type-function-return-mismatch"
+path = "tests/smoke/union_type_function_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-property-access-union-return-valid"
+path = "tests/smoke/object_type_optional_property_access_union_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-optional-property-access-undefined-return-mismatch"
+path = "tests/smoke/object_type_optional_property_access_undefined_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-present-undefined-without-union-mismatch"
+path = "tests/smoke/object_type_optional_present_undefined_without_union_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "object-type-optional-present-undefined-with-union-valid"
+path = "tests/smoke/object_type_optional_present_undefined_with_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-required-property-union-undefined-accepts-undefined"
+path = "tests/smoke/object_type_required_property_union_undefined_accepts_undefined.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "object-type-required-property-union-undefined-missing-still-ts2741"
+path = "tests/smoke/object_type_required_property_union_undefined_missing_still_ts2741.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "union-conditional-string-or-undefined-inferred-valid"
+path = "tests/smoke/union_conditional_string_or_undefined_inferred_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-conditional-string-or-undefined-assignment-mismatch"
+path = "tests/smoke/union_conditional_string_or_undefined_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-conditional-string-number-expected-union-valid"
+path = "tests/smoke/union_conditional_string_number_expected_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-conditional-string-number-expected-boolean-mismatch"
+path = "tests/smoke/union_conditional_string_number_expected_boolean_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-conditional-unresolved-no-cascade"
+path = "tests/smoke/union_conditional_unresolved_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "union-object-property-value-valid"
+path = "tests/smoke/union_object_property_value_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-object-property-value-mismatch"
+path = "tests/smoke/union_object_property_value_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-object-property-access-required-union-valid"
+path = "tests/smoke/union_object_property_access_required_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-object-property-access-required-union-mismatch"
+path = "tests/smoke/union_object_property_access_required_union_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-equality-overlap-string-or-number-with-number-valid"
+path = "tests/smoke/union_equality_overlap_string_or_number_with_number_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-equality-no-overlap-string-or-undefined-with-number"
+path = "tests/smoke/union_equality_no_overlap_string_or_undefined_with_number.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "union-equality-overlap-undefined-with-string-or-undefined-valid"
+path = "tests/smoke/union_equality_overlap_undefined_with_string_or_undefined_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-equality-no-overlap-undefined-with-string"
+path = "tests/smoke/union_equality_no_overlap_undefined_with_string.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "union-equality-no-cascade-unresolved-operand"
+path = "tests/smoke/union_equality_no_cascade_unresolved_operand.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "union-operator-add-string-or-number-with-string-current-behavior"
+path = "tests/smoke/union_operator_add_string_or_number_with_string_current_behavior.ts"
+expected_diagnostics = ["TS2365"]
+
+[[case]]
+name = "union-operator-arithmetic-string-or-number-invalid"
+path = "tests/smoke/union_operator_arithmetic_string_or_number_invalid.ts"
+expected_diagnostics = ["TS2362"]
+
+[[case]]
+name = "union-operator-unary-plus-string-or-number-invalid"
+path = "tests/smoke/union_operator_unary_plus_string_or_number_invalid.ts"
+expected_diagnostics = ["TS2356"]
+
+[[case]]
+name = "union-operator-no-cascade-unresolved-union-operand"
+path = "tests/smoke/union_operator_no_cascade_unresolved_union_operand.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "union-function-return-undefined-missing-allowed"
+path = "tests/smoke/union_function_return_undefined_missing_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-function-return-string-or-undefined-missing-still-ts2355"
+path = "tests/smoke/union_function_return_string_or_undefined_missing_still_ts2355.ts"
+expected_diagnostics = ["TS2355"]
+
+[[case]]
+name = "union-function-return-string-or-undefined-partial-still-ts2366"
+path = "tests/smoke/union_function_return_string_or_undefined_partial_still_ts2366.ts"
+expected_diagnostics = ["TS2366"]
+
+[[case]]
+name = "union-function-return-undefined-value-valid"
+path = "tests/smoke/union_function_return_undefined_value_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-conditional-true-branch-invalid-against-union"
+path = "tests/smoke/union_conditional_true_branch_invalid_against_union.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-conditional-false-branch-invalid-against-union"
+path = "tests/smoke/union_conditional_false_branch_invalid_against_union.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-conditional-both-branches-invalid-same-type-order"
+path = "tests/smoke/union_conditional_both_branches_invalid_same_type_order.ts"
+expected_diagnostics = ["TS2322", "TS2322"]
+
+[[case]]
+name = "union-conditional-both-branches-invalid-different-type-single-or-documented-order"
+path = "tests/smoke/union_conditional_both_branches_invalid_different_type_single_or_documented_order.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "union-conditional-nested-union-valid"
+path = "tests/smoke/union_conditional_nested_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-conditional-branch-property-access-optional-union-valid"
+path = "tests/smoke/union_conditional_branch_property_access_optional_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-conditional-branch-property-access-optional-string-mismatch"
+path = "tests/smoke/union_conditional_branch_property_access_optional_string_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-primitive-variable-valid"
+path = "tests/smoke/type_alias_primitive_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-primitive-variable-mismatch"
+path = "tests/smoke/type_alias_primitive_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-primitive-function-parameter-valid"
+path = "tests/smoke/type_alias_primitive_function_parameter_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-primitive-function-parameter-mismatch"
+path = "tests/smoke/type_alias_primitive_function_parameter_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "type-alias-primitive-function-return-valid"
+path = "tests/smoke/type_alias_primitive_function_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-primitive-function-return-mismatch"
+path = "tests/smoke/type_alias_primitive_function_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-object-variable-valid"
+path = "tests/smoke/type_alias_object_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-object-variable-missing-property"
+path = "tests/smoke/type_alias_object_variable_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "type-alias-object-variable-excess-property"
+path = "tests/smoke/type_alias_object_variable_excess_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "type-alias-object-optional-property-valid"
+path = "tests/smoke/type_alias_object_optional_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-object-optional-property-present-mismatch"
+path = "tests/smoke/type_alias_object_optional_property_present_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-object-property-access-valid"
+path = "tests/smoke/type_alias_object_property_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-object-property-access-missing"
+path = "tests/smoke/type_alias_object_property_access_missing.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-union-variable-string-valid"
+path = "tests/smoke/type_alias_union_variable_string_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-union-variable-undefined-valid"
+path = "tests/smoke/type_alias_union_variable_undefined_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-union-variable-mismatch"
+path = "tests/smoke/type_alias_union_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-union-function-return-valid"
+path = "tests/smoke/type_alias_union_function_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-union-conditional-valid"
+path = "tests/smoke/type_alias_union_conditional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-union-conditional-mismatch"
+path = "tests/smoke/type_alias_union_conditional_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-alias-of-alias-valid"
+path = "tests/smoke/type_alias_alias_of_alias_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-alias-of-alias-mismatch"
+path = "tests/smoke/type_alias_alias_of_alias_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-forward-reference-valid"
+path = "tests/smoke/type_alias_forward_reference_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-forward-reference-in-union-valid"
+path = "tests/smoke/type_alias_forward_reference_in_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-forward-reference-in-object-property-valid"
+path = "tests/smoke/type_alias_forward_reference_in_object_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-unknown-type-name"
+path = "tests/smoke/type_alias_unknown_type_name.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-unknown-nested-property-type"
+path = "tests/smoke/type_alias_unknown_nested_property_type.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-cycle-self"
+path = "tests/smoke/type_alias_cycle_self.ts"
+expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+
+[[case]]
+name = "type-alias-cycle-indirect"
+path = "tests/smoke/type_alias_cycle_indirect.ts"
+expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+
+[[case]]
+name = "type-alias-duplicate-declaration"
+path = "tests/smoke/type_alias_duplicate_declaration.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "type-alias-not-value-ts2304"
+path = "tests/smoke/type_alias_not_value_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-value-not-type-ts2304"
+path = "tests/smoke/type_alias_value_not_type_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-same-name-as-value-allowed"
+path = "tests/smoke/type_alias_same_name_as_value_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-duplicate-first-alias-wins"
+path = "tests/smoke/type_alias_duplicate_first_alias_wins.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "type-alias-duplicate-no-cascade-after-duplicate"
+path = "tests/smoke/type_alias_duplicate_no_cascade_after_duplicate.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "type-alias-duplicate-same-name-as-value-allowed"
+path = "tests/smoke/type_alias_duplicate_same_name_as_value_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-duplicate-value-duplicate-still-value-rule"
+path = "tests/smoke/type_alias_duplicate_value_duplicate_still_value_rule.ts"
+expected_diagnostics = ["TS2451"]
+
+[[case]]
+name = "type-alias-unknown-type-variable-no-cascade"
+path = "tests/smoke/type_alias_unknown_type_variable_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-unknown-type-function-parameter-no-cascade"
+path = "tests/smoke/type_alias_unknown_type_function_parameter_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-unknown-type-function-return-no-missing-return-cascade"
+path = "tests/smoke/type_alias_unknown_type_function_return_no_missing_return_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-unknown-type-object-property-no-cascade"
+path = "tests/smoke/type_alias_unknown_type_object_property_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-unknown-type-union-constituent-no-cascade"
+path = "tests/smoke/type_alias_unknown_type_union_constituent_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-unknown-type-call-argument-no-cascade"
+path = "tests/smoke/type_alias_unknown_type_call_argument_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-cycle-self-no-cascade"
+path = "tests/smoke/type_alias_cycle_self_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+
+[[case]]
+name = "type-alias-cycle-indirect-no-cascade"
+path = "tests/smoke/type_alias_cycle_indirect_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+
+[[case]]
+name = "type-alias-cycle-in-object-property-no-cascade"
+path = "tests/smoke/type_alias_cycle_in_object_property_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+
+[[case]]
+name = "type-alias-cycle-in-union-no-cascade"
+path = "tests/smoke/type_alias_cycle_in_union_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+
+[[case]]
+name = "type-alias-cycle-function-return-no-missing-return-cascade"
+path = "tests/smoke/type_alias_cycle_function_return_no_missing_return_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+
+[[case]]
+name = "type-alias-not-value-still-ts2304"
+path = "tests/smoke/type_alias_not_value_still_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-value-not-type-still-ts2304"
+path = "tests/smoke/type_alias_value_not_type_still_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "type-alias-same-name-as-function-value-allowed"
+path = "tests/smoke/type_alias_same_name_as_function_value_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-same-name-as-parameter-type-allowed"
+path = "tests/smoke/type_alias_same_name_as_parameter_type_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-value-shadow-does-not-affect-type-alias"
+path = "tests/smoke/type_alias_value_shadow_does_not_affect_type_alias.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-local-variable-valid"
+path = "tests/smoke/type_alias_local_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-local-variable-mismatch"
+path = "tests/smoke/type_alias_local_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-assignment-valid"
+path = "tests/smoke/type_alias_assignment_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-assignment-mismatch"
+path = "tests/smoke/type_alias_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "type-alias-call-argument-object-valid"
+path = "tests/smoke/type_alias_call_argument_object_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-call-argument-object-missing-property"
+path = "tests/smoke/type_alias_call_argument_object_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "type-alias-return-object-valid"
+path = "tests/smoke/type_alias_return_object_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-return-object-missing-property"
+path = "tests/smoke/type_alias_return_object_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "type-alias-conditional-object-valid"
+path = "tests/smoke/type_alias_conditional_object_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-conditional-object-mismatch"
+path = "tests/smoke/type_alias_conditional_object_mismatch.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "type-alias-nested-optional-union-property-access-valid"
+path = "tests/smoke/type_alias_nested_optional_union_property_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-alias-nested-optional-union-property-access-mismatch"
+path = "tests/smoke/type_alias_nested_optional_union_property_access_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-basic-variable-valid"
+path = "tests/smoke/interface_basic_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-basic-variable-missing-property"
+path = "tests/smoke/interface_basic_variable_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "interface-basic-variable-property-mismatch"
+path = "tests/smoke/interface_basic_variable_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-basic-variable-excess-property"
+path = "tests/smoke/interface_basic_variable_excess_property.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "interface-optional-property-missing-valid"
+path = "tests/smoke/interface_optional_property_missing_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-optional-property-present-valid"
+path = "tests/smoke/interface_optional_property_present_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-optional-property-present-mismatch"
+path = "tests/smoke/interface_optional_property_present_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-optional-property-present-undefined-without-union-mismatch"
+path = "tests/smoke/interface_optional_property_present_undefined_without_union_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-optional-property-present-undefined-with-union-valid"
+path = "tests/smoke/interface_optional_property_present_undefined_with_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-optional-property-access-union-return-valid"
+path = "tests/smoke/interface_optional_property_access_union_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-optional-property-access-string-return-mismatch"
+path = "tests/smoke/interface_optional_property_access_string_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-optional-property-access-missing-still-ts2339"
+path = "tests/smoke/interface_optional_property_access_missing_still_ts2339.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "interface-function-parameter-valid"
+path = "tests/smoke/interface_function_parameter_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-function-parameter-missing-property"
+path = "tests/smoke/interface_function_parameter_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "interface-function-parameter-property-mismatch"
+path = "tests/smoke/interface_function_parameter_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-function-return-valid"
+path = "tests/smoke/interface_function_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-function-return-missing-property"
+path = "tests/smoke/interface_function_return_missing_property.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "interface-function-return-property-mismatch"
+path = "tests/smoke/interface_function_return_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-forward-reference-variable-valid"
+path = "tests/smoke/interface_forward_reference_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-forward-reference-function-parameter-valid"
+path = "tests/smoke/interface_forward_reference_function_parameter_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-nested-interface-property-valid"
+path = "tests/smoke/interface_nested_interface_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-nested-interface-property-missing"
+path = "tests/smoke/interface_nested_interface_property_missing.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "interface-nested-interface-property-mismatch"
+path = "tests/smoke/interface_nested_interface_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-property-type-alias-valid"
+path = "tests/smoke/interface_property_type_alias_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-property-type-alias-mismatch"
+path = "tests/smoke/interface_property_type_alias_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-union-with-undefined-valid"
+path = "tests/smoke/interface_union_with_undefined_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-union-with-undefined-mismatch"
+path = "tests/smoke/interface_union_with_undefined_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-type-alias-to-interface-valid"
+path = "tests/smoke/interface_type_alias_to_interface_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-interface-uses-type-alias-union-valid"
+path = "tests/smoke/interface_interface_uses_type_alias_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-interface-inside-union-alias-valid"
+path = "tests/smoke/interface_interface_inside_union_alias_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-duplicate-interface-ts2300"
+path = "tests/smoke/interface_duplicate_interface_ts2300.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "interface-duplicate-interface-first-wins"
+path = "tests/smoke/interface_duplicate_interface_first_wins.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "interface-duplicate-alias-then-interface-first-wins"
+path = "tests/smoke/interface_duplicate_alias_then_interface_first_wins.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "interface-duplicate-interface-then-alias-first-wins"
+path = "tests/smoke/interface_duplicate_interface_then_alias_first_wins.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "interface-not-value-still-ts2304"
+path = "tests/smoke/interface_not_value_still_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-value-not-type-still-ts2304"
+path = "tests/smoke/interface_value_not_type_still_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-same-name-as-value-allowed"
+path = "tests/smoke/interface_same_name_as_value_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-same-name-as-function-value-allowed"
+path = "tests/smoke/interface_same_name_as_function_value_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-value-shadow-does-not-affect-interface"
+path = "tests/smoke/interface_value_shadow_does_not_affect_interface.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-unknown-property-type-no-cascade"
+path = "tests/smoke/interface_unknown_property_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-nested-property-type-no-cascade"
+path = "tests/smoke/interface_unknown_nested_property_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-union-constituent-no-cascade"
+path = "tests/smoke/interface_unknown_union_constituent_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-function-return-no-missing-return-cascade"
+path = "tests/smoke/interface_unknown_function_return_no_missing_return_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-cycle-self-no-stack-overflow"
+path = "tests/smoke/interface_cycle_self_no_stack_overflow.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-cycle-indirect-no-stack-overflow"
+path = "tests/smoke/interface_cycle_indirect_no_stack_overflow.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-cycle-no-assignment-cascade"
+path = "tests/smoke/interface_cycle_no_assignment_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-duplicate-alias-then-interface-no-cascade"
+path = "tests/smoke/interface_duplicate_alias_then_interface_no_cascade.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "interface-duplicate-interface-then-alias-no-cascade"
+path = "tests/smoke/interface_duplicate_interface_then_alias_no_cascade.ts"
+expected_diagnostics = ["TS2300"]
+
+[[case]]
+name = "interface-duplicate-interface-first-wins-property-mismatch"
+path = "tests/smoke/interface_duplicate_interface_first_wins_property_mismatch.ts"
+expected_diagnostics = ["TS2300", "TS2322"]
+
+[[case]]
+name = "interface-duplicate-alias-first-wins-property-mismatch"
+path = "tests/smoke/interface_duplicate_alias_first_wins_property_mismatch.ts"
+expected_diagnostics = ["TS2300", "TS2322"]
+
+[[case]]
+name = "interface-duplicate-type-namespace-value-namespace-independent"
+path = "tests/smoke/interface_duplicate_type_namespace_value_namespace_independent.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-unknown-property-type-variable-no-cascade"
+path = "tests/smoke/interface_unknown_property_type_variable_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-property-type-call-argument-no-cascade"
+path = "tests/smoke/interface_unknown_property_type_call_argument_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-property-type-return-no-cascade"
+path = "tests/smoke/interface_unknown_property_type_return_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-property-type-optional-no-cascade"
+path = "tests/smoke/interface_unknown_property_type_optional_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-property-type-union-no-cascade"
+path = "tests/smoke/interface_unknown_property_type_union_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-property-type-nested-object-no-cascade"
+path = "tests/smoke/interface_unknown_property_type_nested_object_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-function-parameter-no-cascade"
+path = "tests/smoke/interface_unknown_function_parameter_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-unknown-function-return-no-missing-return-cascade"
+path = "tests/smoke/interface_unknown_function_return_no_missing_return_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-cycle-self-property-no-cascade"
+path = "tests/smoke/interface_cycle_self_property_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-cycle-self-optional-property-no-cascade"
+path = "tests/smoke/interface_cycle_self_optional_property_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-cycle-self-union-property-no-cascade"
+path = "tests/smoke/interface_cycle_self_union_property_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-cycle-indirect-property-no-cascade"
+path = "tests/smoke/interface_cycle_indirect_property_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-cycle-through-type-alias-no-cascade"
+path = "tests/smoke/interface_cycle_through_type_alias_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-cycle-type-alias-through-interface-no-cascade"
+path = "tests/smoke/interface_cycle_type_alias_through_interface_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+
+[[case]]
+name = "interface-cycle-function-parameter-no-cascade"
+path = "tests/smoke/interface_cycle_function_parameter_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-cycle-function-return-no-missing-return-cascade"
+path = "tests/smoke/interface_cycle_function_return_no_missing_return_cascade.ts"
+expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+
+[[case]]
+name = "interface-optional-write-uses-declared-type"
+path = "tests/smoke/interface_optional_write_uses_declared_type.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-optional-read-widens-to-undefined"
+path = "tests/smoke/interface_optional_read_widens_to_undefined.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-optional-union-dedupes-undefined"
+path = "tests/smoke/interface_optional_union_dedupes_undefined.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-optional-nested-property-valid"
+path = "tests/smoke/interface_optional_nested_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-optional-nested-property-mismatch"
+path = "tests/smoke/interface_optional_nested_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-optional-non-fresh-extra-property-allowed"
+path = "tests/smoke/interface_optional_non_fresh_extra_property_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-optional-non-fresh-missing-required-still-ts2322"
+path = "tests/smoke/interface_optional_non_fresh_missing_required_still_ts2322.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-local-variable-valid"
+path = "tests/smoke/interface_local_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-local-variable-mismatch"
+path = "tests/smoke/interface_local_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-assignment-valid"
+path = "tests/smoke/interface_assignment_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-assignment-mismatch"
+path = "tests/smoke/interface_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-object-type-property-valid"
+path = "tests/smoke/interface_object_type_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-object-type-property-missing"
+path = "tests/smoke/interface_object_type_property_missing.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "interface-object-type-optional-property-valid"
+path = "tests/smoke/interface_object_type_optional_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-union-constituent-valid"
+path = "tests/smoke/interface_union_constituent_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-union-constituent-mismatch"
+path = "tests/smoke/interface_union_constituent_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "interface-conditional-valid"
+path = "tests/smoke/interface_conditional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-conditional-mismatch"
+path = "tests/smoke/interface_conditional_mismatch.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "interface-call-argument-contextual-valid"
+path = "tests/smoke/interface_call_argument_contextual_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "interface-call-argument-contextual-excess"
+path = "tests/smoke/interface_call_argument_contextual_excess.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "interface-call-argument-contextual-missing"
+path = "tests/smoke/interface_call_argument_contextual_missing.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "interface-not-value-expression-ts2304"
+path = "tests/smoke/interface_not_value_expression_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-not-value-call-ts2304"
+path = "tests/smoke/interface_not_value_call_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-value-not-type-variable-ts2304"
+path = "tests/smoke/interface_value_not_type_variable_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-value-not-type-parameter-ts2304"
+path = "tests/smoke/interface_value_not_type_parameter_ts2304.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "interface-same-name-as-parameter-type-allowed"
+path = "tests/smoke/interface_same_name_as_parameter_type_allowed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-string-variable-valid"
+path = "tests/smoke/literal_string_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-string-variable-mismatch"
+path = "tests/smoke/literal_string_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-string-assignable-to-string"
+path = "tests/smoke/literal_string_assignable_to_string.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-string-from-string-mismatch"
+path = "tests/smoke/literal_string_from_string_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-number-variable-valid"
+path = "tests/smoke/literal_number_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-number-variable-mismatch"
+path = "tests/smoke/literal_number_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-number-assignable-to-number"
+path = "tests/smoke/literal_number_assignable_to_number.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-boolean-true-variable-valid"
+path = "tests/smoke/literal_boolean_true_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-boolean-true-variable-mismatch"
+path = "tests/smoke/literal_boolean_true_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-boolean-false-variable-valid"
+path = "tests/smoke/literal_boolean_false_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-boolean-false-variable-mismatch"
+path = "tests/smoke/literal_boolean_false_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-boolean-assignable-to-boolean"
+path = "tests/smoke/literal_boolean_assignable_to_boolean.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-union-variable-valid"
+path = "tests/smoke/literal_union_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-union-variable-mismatch"
+path = "tests/smoke/literal_union_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-union-type-alias-valid"
+path = "tests/smoke/literal_union_type_alias_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-union-type-alias-mismatch"
+path = "tests/smoke/literal_union_type_alias_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-union-function-parameter-valid"
+path = "tests/smoke/literal_union_function_parameter_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-union-function-parameter-mismatch"
+path = "tests/smoke/literal_union_function_parameter_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "literal-union-function-return-valid"
+path = "tests/smoke/literal_union_function_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-union-function-return-mismatch"
+path = "tests/smoke/literal_union_function_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-union-conditional-valid"
+path = "tests/smoke/literal_union_conditional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-union-conditional-mismatch"
+path = "tests/smoke/literal_union_conditional_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-object-property-valid"
+path = "tests/smoke/literal_object_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-object-property-mismatch"
+path = "tests/smoke/literal_object_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-interface-property-valid"
+path = "tests/smoke/literal_interface_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-interface-property-mismatch"
+path = "tests/smoke/literal_interface_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-type-alias-object-property-valid"
+path = "tests/smoke/literal_type_alias_object_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-type-alias-object-property-mismatch"
+path = "tests/smoke/literal_type_alias_object_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-optional-property-present-literal-valid"
+path = "tests/smoke/literal_optional_property_present_literal_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-optional-property-present-literal-mismatch"
+path = "tests/smoke/literal_optional_property_present_literal_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-property-access-preserves-literal"
+path = "tests/smoke/literal_property_access_preserves_literal.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-property-access-assignable-to-base"
+path = "tests/smoke/literal_property_access_assignable_to_base.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-property-access-mismatch"
+path = "tests/smoke/literal_property_access_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-optional-property-access-literal-union-undefined"
+path = "tests/smoke/literal_optional_property_access_literal_union_undefined.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-same-literal-valid"
+path = "tests/smoke/literal_equality_same_literal_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-different-literal-no-overlap"
+path = "tests/smoke/literal_equality_different_literal_no_overlap.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "literal-equality-union-overlap-valid"
+path = "tests/smoke/literal_equality_union_overlap_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-union-no-overlap"
+path = "tests/smoke/literal_equality_union_no_overlap.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "literal-equality-base-string-overlap-valid"
+path = "tests/smoke/literal_equality_base_string_overlap_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-unresolved-no-cascade"
+path = "tests/smoke/literal_equality_unresolved_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-operator-string-add-valid"
+path = "tests/smoke/literal_operator_string_add_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-operator-number-add-valid"
+path = "tests/smoke/literal_operator_number_add_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-operator-arithmetic-valid"
+path = "tests/smoke/literal_operator_arithmetic_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-operator-boolean-add-invalid"
+path = "tests/smoke/literal_operator_boolean_add_invalid.ts"
+expected_diagnostics = ["TS2365"]
+
+[[case]]
+name = "literal-operator-unary-number-valid"
+path = "tests/smoke/literal_operator_unary_number_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-operator-unary-string-invalid"
+path = "tests/smoke/literal_operator_unary_string_invalid.ts"
+expected_diagnostics = ["TS2356"]
+
+[[case]]
+name = "literal-no-cascade-unresolved-initializer"
+path = "tests/smoke/literal_no_cascade_unresolved_initializer.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-no-cascade-object-property-unresolved"
+path = "tests/smoke/literal_no_cascade_object_property_unresolved.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-no-cascade-conditional-unresolved"
+path = "tests/smoke/literal_no_cascade_conditional_unresolved.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-widening-let-string-to-base"
+path = "tests/smoke/literal_widening_let_string_to_base.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-widening-var-string-to-base"
+path = "tests/smoke/literal_widening_var_string_to_base.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-widening-const-string-preserves-literal"
+path = "tests/smoke/literal_widening_const_string_preserves_literal.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-widening-let-number-to-base"
+path = "tests/smoke/literal_widening_let_number_to_base.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-widening-const-number-preserves-literal"
+path = "tests/smoke/literal_widening_const_number_preserves_literal.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-widening-let-boolean-to-base"
+path = "tests/smoke/literal_widening_let_boolean_to_base.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-widening-const-boolean-preserves-literal"
+path = "tests/smoke/literal_widening_const_boolean_preserves_literal.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-contextual-let-target-preserves-literal-check"
+path = "tests/smoke/literal_contextual_let_target_preserves_literal_check.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-contextual-object-property-preserves-literal-check"
+path = "tests/smoke/literal_contextual_object_property_preserves_literal_check.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-contextual-call-argument-preserves-literal-check"
+path = "tests/smoke/literal_contextual_call_argument_preserves_literal_check.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "literal-contextual-return-preserves-literal-check"
+path = "tests/smoke/literal_contextual_return_preserves_literal_check.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-equality-direct-same-string-literals-valid"
+path = "tests/smoke/literal_equality_direct_same_string_literals_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-direct-different-string-literals-no-overlap"
+path = "tests/smoke/literal_equality_direct_different_string_literals_no_overlap.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "literal-equality-direct-same-number-literals-valid"
+path = "tests/smoke/literal_equality_direct_same_number_literals_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-direct-different-number-literals-no-overlap"
+path = "tests/smoke/literal_equality_direct_different_number_literals_no_overlap.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "literal-equality-direct-same-boolean-literals-valid"
+path = "tests/smoke/literal_equality_direct_same_boolean_literals_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-direct-different-boolean-literals-no-overlap"
+path = "tests/smoke/literal_equality_direct_different_boolean_literals_no_overlap.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "literal-equality-variable-literal-to-matching-literal-valid"
+path = "tests/smoke/literal_equality_variable_literal_to_matching_literal_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-variable-literal-to-different-literal-no-overlap"
+path = "tests/smoke/literal_equality_variable_literal_to_different_literal_no_overlap.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "literal-equality-literal-union-to-member-valid"
+path = "tests/smoke/literal_equality_literal_union_to_member_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-literal-union-to-non-member-no-overlap"
+path = "tests/smoke/literal_equality_literal_union_to_non_member_no_overlap.ts"
+expected_diagnostics = ["TS2367"]
+
+[[case]]
+name = "literal-equality-literal-to-base-string-valid"
+path = "tests/smoke/literal_equality_literal_to_base_string_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-literal-to-base-number-valid"
+path = "tests/smoke/literal_equality_literal_to_base_number_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-equality-literal-to-base-boolean-valid"
+path = "tests/smoke/literal_equality_literal_to_base_boolean_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-operator-string-concat-returns-string-not-literal"
+path = "tests/smoke/literal_operator_string_concat_returns_string_not_literal.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-operator-number-add-returns-number-not-literal"
+path = "tests/smoke/literal_operator_number_add_returns_number_not_literal.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-operator-number-subtract-returns-number"
+path = "tests/smoke/literal_operator_number_subtract_returns_number.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-operator-boolean-arithmetic-invalid"
+path = "tests/smoke/literal_operator_boolean_arithmetic_invalid.ts"
+expected_diagnostics = ["TS2365"]
+
+[[case]]
+name = "literal-operator-string-arithmetic-invalid"
+path = "tests/smoke/literal_operator_string_arithmetic_invalid.ts"
+expected_diagnostics = ["TS2362"]
+
+[[case]]
+name = "literal-operator-unary-number-literal-valid"
+path = "tests/smoke/literal_operator_unary_number_literal_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-operator-unary-boolean-invalid"
+path = "tests/smoke/literal_operator_unary_boolean_invalid.ts"
+expected_diagnostics = ["TS2356"]
+
+[[case]]
+name = "literal-operator-unary-string-invalid"
+path = "tests/smoke/literal_operator_unary_string_invalid.ts"
+expected_diagnostics = ["TS2356"]
+
+[[case]]
+name = "literal-object-property-const-source-valid"
+path = "tests/smoke/literal_object_property_const_source_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-object-property-let-source-mismatch-after-widening"
+path = "tests/smoke/literal_object_property_let_source_mismatch_after_widening.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-interface-property-const-source-valid"
+path = "tests/smoke/literal_interface_property_const_source_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-interface-property-let-source-mismatch-after-widening"
+path = "tests/smoke/literal_interface_property_let_source_mismatch_after_widening.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-nested-object-literal-property-valid"
+path = "tests/smoke/literal_nested_object_literal_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-nested-object-literal-property-mismatch"
+path = "tests/smoke/literal_nested_object_literal_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-optional-literal-property-missing-valid"
+path = "tests/smoke/literal_optional_literal_property_missing_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-optional-literal-property-present-valid"
+path = "tests/smoke/literal_optional_literal_property_present_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-optional-literal-property-present-mismatch"
+path = "tests/smoke/literal_optional_literal_property_present_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-optional-literal-property-access-union-undefined-valid"
+path = "tests/smoke/literal_optional_literal_property_access_union_undefined_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-optional-literal-property-access-string-literal-mismatch"
+path = "tests/smoke/literal_optional_literal_property_access_string_literal_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-conditional-same-literals-preserves-literal"
+path = "tests/smoke/literal_conditional_same_literals_preserves_literal.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-conditional-different-literals-infers-literal-union"
+path = "tests/smoke/literal_conditional_different_literals_infers_literal_union.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-conditional-literal-union-assignable-valid"
+path = "tests/smoke/literal_conditional_literal_union_assignable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-conditional-literal-union-assignment-mismatch"
+path = "tests/smoke/literal_conditional_literal_union_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-conditional-let-widening-source-mismatch"
+path = "tests/smoke/literal_conditional_let_widening_source_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "literal-conditional-const-source-valid"
+path = "tests/smoke/literal_conditional_const_source_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "literal-conditional-unresolved-no-cascade"
+path = "tests/smoke/literal_conditional_unresolved_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-no-cascade-unresolved-literal-target"
+path = "tests/smoke/literal_no_cascade_unresolved_literal_target.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-no-cascade-unresolved-call-argument"
+path = "tests/smoke/literal_no_cascade_unresolved_call_argument.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-no-cascade-unresolved-return"
+path = "tests/smoke/literal_no_cascade_unresolved_return.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-no-cascade-unresolved-object-property"
+path = "tests/smoke/literal_no_cascade_unresolved_object_property.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "literal-no-cascade-missing-property-literal-target"
+path = "tests/smoke/literal_no_cascade_missing_property_literal_target.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "function-type-void-variable-undefined-valid"
+path = "tests/smoke/function_type_void_variable_undefined_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-void-function-missing-return-valid"
+path = "tests/smoke/function_type_void_function_missing_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-void-function-return-undefined-valid"
+path = "tests/smoke/function_type_void_function_return_undefined_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-void-function-return-value-mismatch"
+path = "tests/smoke/function_type_void_function_return_value_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-void-not-assignable-to-undefined"
+path = "tests/smoke/function_type_void_not_assignable_to_undefined.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-void-union-valid"
+path = "tests/smoke/function_type_void_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-alias-valid"
+path = "tests/smoke/function_type_alias_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-alias-parameter-mismatch"
+path = "tests/smoke/function_type_alias_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-alias-return-mismatch"
+path = "tests/smoke/function_type_alias_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-variable-valid"
+path = "tests/smoke/function_type_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-variable-parameter-mismatch"
+path = "tests/smoke/function_type_variable_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-variable-return-mismatch"
+path = "tests/smoke/function_type_variable_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-variable-arity-mismatch"
+path = "tests/smoke/function_type_variable_arity_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-variable-call-valid"
+path = "tests/smoke/function_type_variable_call_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-variable-call-argument-mismatch"
+path = "tests/smoke/function_type_variable_call_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "function-type-variable-call-arity-mismatch"
+path = "tests/smoke/function_type_variable_call_arity_mismatch.ts"
+expected_diagnostics = ["TS2554"]
+
+[[case]]
+name = "function-type-parameter-valid"
+path = "tests/smoke/function_type_parameter_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-parameter-call-valid"
+path = "tests/smoke/function_type_parameter_call_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-parameter-call-argument-mismatch"
+path = "tests/smoke/function_type_parameter_call_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "function-type-return-function-valid"
+path = "tests/smoke/function_type_return_function_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-return-function-mismatch"
+path = "tests/smoke/function_type_return_function_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-return-callback-valid"
+path = "tests/smoke/function_type_return_callback_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-return-callback-mismatch"
+path = "tests/smoke/function_type_return_callback_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-object-property-valid"
+path = "tests/smoke/function_type_object_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-object-property-return-mismatch"
+path = "tests/smoke/function_type_object_property_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-object-property-parameter-mismatch"
+path = "tests/smoke/function_type_object_property_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-interface-property-valid"
+path = "tests/smoke/function_type_interface_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-interface-property-return-mismatch"
+path = "tests/smoke/function_type_interface_property_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-interface-property-parameter-mismatch"
+path = "tests/smoke/function_type_interface_property_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-property-access-preserves-function-type"
+path = "tests/smoke/function_type_property_access_preserves_function_type.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-literal-parameter-valid"
+path = "tests/smoke/function_type_literal_parameter_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-literal-parameter-mismatch"
+path = "tests/smoke/function_type_literal_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-literal-return-valid"
+path = "tests/smoke/function_type_literal_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-literal-return-mismatch"
+path = "tests/smoke/function_type_literal_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-union-parameter-valid"
+path = "tests/smoke/function_type_union_parameter_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-union-parameter-mismatch"
+path = "tests/smoke/function_type_union_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-union-return-valid"
+path = "tests/smoke/function_type_union_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-union-return-mismatch"
+path = "tests/smoke/function_type_union_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-unknown-parameter-type-no-cascade"
+path = "tests/smoke/function_type_unknown_parameter_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unknown-return-type-no-cascade"
+path = "tests/smoke/function_type_unknown_return_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unknown-nested-parameter-type-no-cascade"
+path = "tests/smoke/function_type_unknown_nested_parameter_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unknown-object-property-no-cascade"
+path = "tests/smoke/function_type_unknown_object_property_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unknown-interface-property-no-cascade"
+path = "tests/smoke/function_type_unknown_interface_property_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unresolved-initializer-no-cascade"
+path = "tests/smoke/function_type_unresolved_initializer_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unresolved-call-argument-no-cascade"
+path = "tests/smoke/function_type_unresolved_call_argument_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unresolved-return-no-cascade"
+path = "tests/smoke/function_type_unresolved_return_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-void-union-missing-return-still-checked"
+path = "tests/smoke/function_type_void_union_missing_return_still_checked.ts"
+expected_diagnostics = ["TS2355"]
+
+[[case]]
+name = "function-type-void-union-return-undefined-valid"
+path = "tests/smoke/function_type_void_union_return_undefined_valid.ts"
+
+[[case]]
+name = "function-type-void-union-return-value-valid"
+path = "tests/smoke/function_type_void_union_return_value_valid.ts"
+
+[[case]]
+name = "function-type-void-argument-undefined-valid"
+path = "tests/smoke/function_type_void_argument_undefined_valid.ts"
+
+[[case]]
+name = "function-type-void-argument-string-mismatch"
+path = "tests/smoke/function_type_void_argument_string_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-assignability-same-signature-valid"
+path = "tests/smoke/function_type_assignability_same_signature_valid.ts"
+
+[[case]]
+name = "function-type-assignability-different-arity-mismatch"
+path = "tests/smoke/function_type_assignability_different_arity_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-assignability-parameter-mismatch"
+path = "tests/smoke/function_type_assignability_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-assignability-return-mismatch"
+path = "tests/smoke/function_type_assignability_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-assignability-literal-parameter-same-valid"
+path = "tests/smoke/function_type_assignability_literal_parameter_same_valid.ts"
+
+[[case]]
+name = "function-type-assignability-literal-parameter-base-mismatch"
+path = "tests/smoke/function_type_assignability_literal_parameter_base_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-assignability-union-parameter-same-valid"
+path = "tests/smoke/function_type_assignability_union_parameter_same_valid.ts"
+
+[[case]]
+name = "function-type-assignability-union-parameter-mismatch"
+path = "tests/smoke/function_type_assignability_union_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-assignability-void-return-valid"
+path = "tests/smoke/function_type_assignability_void_return_valid.ts"
+
+[[case]]
+name = "function-type-assignability-void-return-to-string-mismatch"
+path = "tests/smoke/function_type_assignability_void_return_to_string_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-call-variable-no-params-valid"
+path = "tests/smoke/function_type_call_variable_no_params_valid.ts"
+
+[[case]]
+name = "function-type-call-variable-no-params-too-many"
+path = "tests/smoke/function_type_call_variable_no_params_too_many.ts"
+expected_diagnostics = ["TS2554"]
+
+[[case]]
+name = "function-type-call-variable-one-param-valid"
+path = "tests/smoke/function_type_call_variable_one_param_valid.ts"
+
+[[case]]
+name = "function-type-call-variable-one-param-mismatch"
+path = "tests/smoke/function_type_call_variable_one_param_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "function-type-call-variable-one-param-too-few"
+path = "tests/smoke/function_type_call_variable_one_param_too_few.ts"
+expected_diagnostics = ["TS2554"]
+
+[[case]]
+name = "function-type-call-variable-one-param-too-many"
+path = "tests/smoke/function_type_call_variable_one_param_too_many.ts"
+expected_diagnostics = ["TS2554"]
+
+[[case]]
+name = "function-type-call-parameter-no-params-valid"
+path = "tests/smoke/function_type_call_parameter_no_params_valid.ts"
+
+[[case]]
+name = "function-type-call-parameter-one-param-valid"
+path = "tests/smoke/function_type_call_parameter_one_param_valid.ts"
+
+[[case]]
+name = "function-type-call-parameter-argument-mismatch"
+path = "tests/smoke/function_type_call_parameter_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "function-type-call-return-type-assignment-valid"
+path = "tests/smoke/function_type_call_return_type_assignment_valid.ts"
+
+[[case]]
+name = "function-type-call-return-type-assignment-mismatch"
+path = "tests/smoke/function_type_call_return_type_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-call-return-void-valid"
+path = "tests/smoke/function_type_call_return_void_valid.ts"
+
+[[case]]
+name = "function-type-call-return-void-to-string-mismatch"
+path = "tests/smoke/function_type_call_return_void_to_string_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-nested-parameter-valid"
+path = "tests/smoke/function_type_nested_parameter_valid.ts"
+
+[[case]]
+name = "function-type-nested-parameter-mismatch"
+path = "tests/smoke/function_type_nested_parameter_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "function-type-nested-return-valid"
+path = "tests/smoke/function_type_nested_return_valid.ts"
+
+[[case]]
+name = "function-type-nested-return-mismatch"
+path = "tests/smoke/function_type_nested_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-nested-alias-parameter-valid"
+path = "tests/smoke/function_type_nested_alias_parameter_valid.ts"
+
+[[case]]
+name = "function-type-nested-alias-return-valid"
+path = "tests/smoke/function_type_nested_alias_return_valid.ts"
+
+[[case]]
+name = "function-type-nested-interface-property-valid"
+path = "tests/smoke/function_type_nested_interface_property_valid.ts"
+
+[[case]]
+name = "function-type-nested-object-property-valid"
+path = "tests/smoke/function_type_nested_object_property_valid.ts"
+
+[[case]]
+name = "function-type-nested-no-cascade-unknown-inner-parameter"
+path = "tests/smoke/function_type_nested_no_cascade_unknown_inner_parameter.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-nested-no-cascade-unknown-inner-return"
+path = "tests/smoke/function_type_nested_no_cascade_unknown_inner_return.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-object-property-missing-function"
+path = "tests/smoke/function_type_object_property_missing_function.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "function-type-object-property-excess-still-ts2353"
+path = "tests/smoke/function_type_object_property_excess_still_ts2353.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "function-type-interface-property-missing-function"
+path = "tests/smoke/function_type_interface_property_missing_function.ts"
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "function-type-interface-property-excess-still-ts2353"
+path = "tests/smoke/function_type_interface_property_excess_still_ts2353.ts"
+expected_diagnostics = ["TS2353"]
+
+[[case]]
+name = "function-type-property-access-function-type-assignment-mismatch"
+path = "tests/smoke/function_type_property_access_function_type_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-union-variable-function-valid"
+path = "tests/smoke/function_type_union_variable_function_valid.ts"
+
+[[case]]
+name = "function-type-union-variable-undefined-valid"
+path = "tests/smoke/function_type_union_variable_undefined_valid.ts"
+
+[[case]]
+name = "function-type-union-variable-mismatch"
+path = "tests/smoke/function_type_union_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-union-call-not-supported-or-non-callable"
+path = "tests/smoke/function_type_union_call_not_supported_or_non_callable.ts"
+expected_diagnostics = ["TS2349"]
+
+[[case]]
+name = "function-type-conditional-same-function-types-valid"
+path = "tests/smoke/function_type_conditional_same_function_types_valid.ts"
+
+[[case]]
+name = "function-type-conditional-different-function-types-union-valid"
+path = "tests/smoke/function_type_conditional_different_function_types_union_valid.ts"
+
+[[case]]
+name = "function-type-conditional-expected-function-valid"
+path = "tests/smoke/function_type_conditional_expected_function_valid.ts"
+
+[[case]]
+name = "function-type-conditional-expected-function-mismatch"
+path = "tests/smoke/function_type_conditional_expected_function_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-conditional-unresolved-no-cascade"
+path = "tests/smoke/function_type_conditional_unresolved_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unknown-nested-return-type-no-cascade"
+path = "tests/smoke/function_type_unknown_nested_return_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unresolved-object-property-no-cascade"
+path = "tests/smoke/function_type_unresolved_object_property_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-unresolved-conditional-no-cascade"
+path = "tests/smoke/function_type_unresolved_conditional_no_cascade.ts"
+expected_diagnostics = ["TS2304"]

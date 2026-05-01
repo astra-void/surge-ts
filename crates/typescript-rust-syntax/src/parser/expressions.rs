@@ -1,0 +1,313 @@
+use oxc_ast::ast::{
+    Argument, BinaryExpression, BinaryOperator, ConditionalExpression, Expression,
+    LogicalExpression, LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKey,
+    PropertyKind, StaticMemberExpression, UnaryExpression, UnaryOperator,
+};
+use oxc_span::{GetSpan, Span};
+
+use crate::{
+    ParsedBinaryOperator, ParsedCall, ParsedCallArgument, ParsedExpression, ParsedLogicalOperator,
+    ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
+};
+
+use super::spans::text_span_from_oxc_span;
+
+pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression, Span) {
+    let parsed_expression = match expression {
+        Expression::StringLiteral(string_literal) => {
+            ParsedExpression::StringLiteral(string_literal.value.to_string())
+        }
+        Expression::NumericLiteral(numeric_literal) => {
+            ParsedExpression::NumberLiteral(numeric_literal.value.to_string())
+        }
+        Expression::BooleanLiteral(boolean_literal) => {
+            ParsedExpression::BooleanLiteral(boolean_literal.value)
+        }
+        Expression::Identifier(identifier) => {
+            if identifier.name == "undefined" {
+                ParsedExpression::UndefinedLiteral
+            } else {
+                ParsedExpression::Identifier(identifier.name.to_string())
+            }
+        }
+        Expression::ObjectExpression(object_expression) => {
+            ParsedExpression::ObjectLiteral(parse_object_properties(object_expression))
+        }
+        Expression::BinaryExpression(binary_expression) => {
+            parse_binary_expression(binary_expression).unwrap_or(ParsedExpression::Unknown)
+        }
+        Expression::LogicalExpression(logical_expression) => {
+            parse_logical_expression(logical_expression).unwrap_or(ParsedExpression::Unknown)
+        }
+        Expression::UnaryExpression(unary_expression) => {
+            parse_unary_expression(unary_expression).unwrap_or(ParsedExpression::Unknown)
+        }
+        Expression::ParenthesizedExpression(parenthesized_expression) => {
+            return parse_expression(&parenthesized_expression.expression);
+        }
+        Expression::ConditionalExpression(conditional_expression) => {
+            parse_conditional_expression(conditional_expression)
+                .unwrap_or(ParsedExpression::Unknown)
+        }
+        Expression::CallExpression(call_expression) => parse_call_expression(call_expression)
+            .map(|call| ParsedExpression::Call {
+                callee_name: call.callee_name,
+                callee_span: call.callee_span,
+                arguments: call.arguments,
+            })
+            .unwrap_or(ParsedExpression::Unknown),
+        Expression::StaticMemberExpression(member_expression) => {
+            parse_static_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown)
+        }
+        _ => ParsedExpression::Unknown,
+    };
+
+    (parsed_expression, expression.span())
+}
+
+pub(crate) fn parse_call_expression(
+    call_expression: &oxc_ast::ast::CallExpression<'_>,
+) -> Option<ParsedCall> {
+    let call = parse_call_expression_parts(call_expression)?;
+
+    Some(ParsedCall {
+        callee_name: call.callee_name,
+        callee_span: call.callee_span,
+        arguments: call.arguments,
+    })
+}
+
+struct ParsedCallExpressionParts {
+    callee_name: String,
+    callee_span: Option<TextSpan>,
+    arguments: Vec<ParsedCallArgument>,
+}
+
+fn parse_call_expression_parts(
+    call_expression: &oxc_ast::ast::CallExpression<'_>,
+) -> Option<ParsedCallExpressionParts> {
+    let Expression::Identifier(callee) = &call_expression.callee else {
+        return None;
+    };
+
+    let arguments = call_expression
+        .arguments
+        .iter()
+        .map(parse_call_argument)
+        .collect();
+
+    Some(ParsedCallExpressionParts {
+        callee_name: callee.name.to_string(),
+        callee_span: Some(text_span_from_oxc_span(callee.span)),
+        arguments,
+    })
+}
+
+fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
+    let (expression, span) = match argument {
+        Argument::SpreadElement(_) => (ParsedExpression::Unknown, argument.span()),
+        Argument::BooleanLiteral(boolean_literal) => (
+            ParsedExpression::BooleanLiteral(boolean_literal.value),
+            argument.span(),
+        ),
+        Argument::NumericLiteral(numeric_literal) => (
+            ParsedExpression::NumberLiteral(numeric_literal.value.to_string()),
+            argument.span(),
+        ),
+        Argument::StringLiteral(string_literal) => (
+            ParsedExpression::StringLiteral(string_literal.value.to_string()),
+            argument.span(),
+        ),
+        Argument::Identifier(identifier) => (
+            if identifier.name == "undefined" {
+                ParsedExpression::UndefinedLiteral
+            } else {
+                ParsedExpression::Identifier(identifier.name.to_string())
+            },
+            argument.span(),
+        ),
+        Argument::BinaryExpression(binary_expression) => (
+            parse_binary_expression(binary_expression).unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
+        Argument::LogicalExpression(logical_expression) => (
+            parse_logical_expression(logical_expression).unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
+        Argument::UnaryExpression(unary_expression) => (
+            parse_unary_expression(unary_expression).unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
+        Argument::ParenthesizedExpression(parenthesized_expression) => (
+            parse_expression(&parenthesized_expression.expression).0,
+            argument.span(),
+        ),
+        Argument::ConditionalExpression(conditional_expression) => (
+            parse_conditional_expression(conditional_expression)
+                .unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
+        Argument::ObjectExpression(object_expression) => (
+            ParsedExpression::ObjectLiteral(parse_object_properties(object_expression)),
+            argument.span(),
+        ),
+        Argument::CallExpression(call_expression) => (
+            parse_call_expression_parts(call_expression)
+                .map(|call| ParsedExpression::Call {
+                    callee_name: call.callee_name,
+                    callee_span: call.callee_span,
+                    arguments: call.arguments,
+                })
+                .unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
+        Argument::StaticMemberExpression(member_expression) => (
+            parse_static_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
+        _ => (ParsedExpression::Unknown, argument.span()),
+    };
+
+    ParsedCallArgument {
+        expression,
+        span: Some(text_span_from_oxc_span(span)),
+    }
+}
+
+fn parse_binary_expression(binary_expression: &BinaryExpression<'_>) -> Option<ParsedExpression> {
+    let operator = match binary_expression.operator {
+        BinaryOperator::StrictEquality => ParsedBinaryOperator::StrictEquals,
+        BinaryOperator::StrictInequality => ParsedBinaryOperator::StrictNotEquals,
+        BinaryOperator::Equality => ParsedBinaryOperator::Equals,
+        BinaryOperator::Inequality => ParsedBinaryOperator::NotEquals,
+        BinaryOperator::LessThan => ParsedBinaryOperator::LessThan,
+        BinaryOperator::LessEqualThan => ParsedBinaryOperator::LessThanEquals,
+        BinaryOperator::GreaterThan => ParsedBinaryOperator::GreaterThan,
+        BinaryOperator::GreaterEqualThan => ParsedBinaryOperator::GreaterThanEquals,
+        BinaryOperator::Addition => ParsedBinaryOperator::Add,
+        BinaryOperator::Subtraction => ParsedBinaryOperator::Subtract,
+        BinaryOperator::Multiplication => ParsedBinaryOperator::Multiply,
+        BinaryOperator::Division => ParsedBinaryOperator::Divide,
+        BinaryOperator::Remainder => ParsedBinaryOperator::Remainder,
+        _ => return None,
+    };
+
+    let (left, left_span) = parse_expression(&binary_expression.left);
+    let (right, right_span) = parse_expression(&binary_expression.right);
+
+    Some(ParsedExpression::Binary {
+        left: Box::new(left),
+        left_span: Some(text_span_from_oxc_span(left_span)),
+        operator,
+        right: Box::new(right),
+        right_span: Some(text_span_from_oxc_span(right_span)),
+        operator_span: None,
+    })
+}
+
+fn parse_logical_expression(
+    logical_expression: &LogicalExpression<'_>,
+) -> Option<ParsedExpression> {
+    let operator = match logical_expression.operator {
+        LogicalOperator::And => ParsedLogicalOperator::And,
+        LogicalOperator::Or => ParsedLogicalOperator::Or,
+        LogicalOperator::Coalesce => return None,
+    };
+
+    let (left, left_span) = parse_expression(&logical_expression.left);
+    let (right, right_span) = parse_expression(&logical_expression.right);
+
+    Some(ParsedExpression::Logical {
+        left: Box::new(left),
+        left_span: Some(text_span_from_oxc_span(left_span)),
+        operator,
+        right: Box::new(right),
+        right_span: Some(text_span_from_oxc_span(right_span)),
+        operator_span: None,
+    })
+}
+
+pub(crate) fn parse_conditional_expression(
+    conditional_expression: &ConditionalExpression<'_>,
+) -> Option<ParsedExpression> {
+    let (condition, condition_span) = parse_expression(&conditional_expression.test);
+    let (when_true, when_true_span) = parse_expression(&conditional_expression.consequent);
+    let (when_false, when_false_span) = parse_expression(&conditional_expression.alternate);
+
+    Some(ParsedExpression::Conditional {
+        condition: Box::new(condition),
+        condition_span: Some(text_span_from_oxc_span(condition_span)),
+        when_true: Box::new(when_true),
+        when_true_span: Some(text_span_from_oxc_span(when_true_span)),
+        when_false: Box::new(when_false),
+        when_false_span: Some(text_span_from_oxc_span(when_false_span)),
+    })
+}
+
+pub(crate) fn parse_unary_expression(
+    unary_expression: &UnaryExpression<'_>,
+) -> Option<ParsedExpression> {
+    let operator = match unary_expression.operator {
+        UnaryOperator::LogicalNot => ParsedUnaryOperator::Not,
+        UnaryOperator::UnaryPlus => ParsedUnaryOperator::Plus,
+        UnaryOperator::UnaryNegation => ParsedUnaryOperator::Minus,
+        UnaryOperator::BitwiseNot
+        | UnaryOperator::Typeof
+        | UnaryOperator::Void
+        | UnaryOperator::Delete => {
+            return Some(ParsedExpression::Unknown);
+        }
+    };
+
+    let (operand, operand_span) = parse_expression(&unary_expression.argument);
+
+    Some(ParsedExpression::Unary {
+        operator,
+        operator_span: None,
+        operand: Box::new(operand),
+        operand_span: Some(text_span_from_oxc_span(operand_span)),
+    })
+}
+
+fn parse_object_properties(object_expression: &ObjectExpression<'_>) -> Vec<ParsedObjectProperty> {
+    object_expression
+        .properties
+        .iter()
+        .filter_map(|property_kind| {
+            let ObjectPropertyKind::ObjectProperty(property) = property_kind else {
+                return None;
+            };
+
+            let PropertyKey::StaticIdentifier(key) = &property.key else {
+                return None;
+            };
+
+            if property.kind != PropertyKind::Init || property.method || property.computed {
+                return None;
+            }
+
+            let (value, _) = parse_expression(&property.value);
+
+            Some(ParsedObjectProperty {
+                name: key.name.to_string(),
+                value,
+                span: Some(text_span_from_oxc_span(property.span)),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn parse_static_member_expression(
+    member_expression: &StaticMemberExpression<'_>,
+) -> Option<ParsedExpression> {
+    let Expression::Identifier(object_identifier) = &member_expression.object else {
+        return None;
+    };
+
+    Some(ParsedExpression::PropertyAccess {
+        object_name: object_identifier.name.to_string(),
+        object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+        property_name: member_expression.property.name.to_string(),
+        property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+    })
+}
