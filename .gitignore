@@ -1,0 +1,11 @@
+.vscode
+target
+digest.txt
+node_modules
+dist
+coverage
+*.log
+*.tsbuildinfo
+.env
+.DS_Store
+.idea
