@@ -1,0 +1,23 @@
+[[case]]
+name = "simple-test-single-file"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/simpleTestSingleFile.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/simpleTestSingleFile.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/simpleTestSingleFile.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2322"]
+reason = "Covers a primitive assignment mismatch supported by the current checker."
+
+[[case]]
+name = "simple-test-multi-file"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/simpleTestMultiFile.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/simpleTestMultiFile.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/simpleTestMultiFile.ts"
+mode = "virtual_files"
+expected_diagnostics = ["TS2322", "TS2322"]
+reason = "Upstream fixture uses @filename comments and is covered by the test-only virtual file splitter."

@@ -1,0 +1,10 @@
+[workspace]
+members = [
+  "crates/typescript-rust-cli",
+  "crates/typescript-rust-syntax",
+  "crates/typescript-rust-checker",
+  "crates/typescript-rust-diagnostics",
+  "crates/typescript-rust-types",
+  "crates/typescript-rust-config",
+]
+resolver = "2"

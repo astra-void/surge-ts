@@ -1,0 +1,2 @@
+const value = true;
+value();
