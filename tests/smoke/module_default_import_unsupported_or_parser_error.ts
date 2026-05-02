@@ -1,1 +1,0 @@
-import DefaultThing from "./thing";

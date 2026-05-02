@@ -25,5 +25,7 @@ Alias limitations:
   type-parameter substitution
 - constraints are parsed and stored but are not enforced yet
 - no package, node_modules, or tsconfig-path resolution
-- no default, namespace, or star import/export semantics
+- program-mode relative module visibility now includes default imports,
+  namespace imports, named re-exports, type-only re-exports, and star
+  re-exports for loaded `.ts` files
 - program-mode relative module visibility only for loaded `.ts` files

@@ -716,6 +716,80 @@ fn project_mode_relative_type_alias_import_valid() {
 }
 
 #[test]
+fn project_mode_default_import_cross_file_valid() {
+    let root = temp_dir("project-default-import-valid");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/user.ts",
+        "export default function getName(): string { return \"Ada\"; }",
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        "import getName from \"./user\";\nlet value: string = getName();",
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.trim().is_empty());
+}
+
+#[test]
+fn project_mode_namespace_import_cross_file_valid() {
+    let root = temp_dir("project-namespace-import-valid");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/user.ts", "export const version: number = 1;");
+    write_file(
+        &root,
+        "src/index.ts",
+        "import * as user from \"./user\";\nlet value: number = user.version;",
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.trim().is_empty());
+}
+
+#[test]
+fn project_mode_star_re_export_missing_module_no_consumer_cascade() {
+    let root = temp_dir("project-star-re-export-missing-module");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/index.ts", "export * from \"./missing\";");
+    write_file(
+        &root,
+        "src/app.ts",
+        "import { User } from \"./index\";\nlet value = User;",
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("TS2307"));
+    assert!(!stdout.contains("TS2305"));
+}
+
+#[test]
 fn project_mode_regular_type_export_value_usage_unresolved() {
     let root = temp_dir("project-regular-type-export-value-usage");
     write_file(

@@ -5,7 +5,7 @@
 - `check_program(files: Vec<SourceFileInput>)`
 - `check_program_with_options(files: Vec<SourceFileInput>, options: CheckerOptions)`
 
-The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, and v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass.
+The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, and v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files.
 
 ## Public API
 
@@ -34,7 +34,7 @@ Program mode treats the input files as one shared global script:
 - Top-level function declarations are shared across files.
 - Function bodies can reference shared declarations from earlier or later files.
 - Top-level `let`, `const`, and `var` declarations remain file-local.
-- Relative named imports, type-only named imports, side-effect imports, and local named export lists are resolved across loaded `.ts` files.
+- Relative named imports, type-only named imports, default imports, namespace imports, side-effect imports, local named export lists, named re-exports, type-only re-exports, and star re-exports are resolved across loaded `.ts` files.
 - Module files are isolated from the global-script prepass in this phase.
 - `declare` and ambient declarations are still unsupported.
 
@@ -54,7 +54,7 @@ Program diagnostics are emitted in a fixed order:
 1. Parser diagnostics in input-file order.
 2. Global type-declaration diagnostics in input-file order.
 3. Global function-signature diagnostics in input-file order.
-4. Module export/import diagnostics in input-file order.
+4. Module export/import diagnostics in input-file order, including default-import/default-export checks, namespace imports, named re-exports, type-only re-exports, and star re-exports.
 5. Per-file statement and function-body diagnostics in input-file order.
 
 This ordering is part of the v0.55.1 compatibility contract.

@@ -5602,24 +5602,191 @@ path = "tests/smoke/module_non_relative_side_effect_import.ts"
 expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 
 [[case]]
-name = "module-default-import-unsupported-or-parser-error"
-path = "tests/smoke/module_default_import_unsupported_or_parser_error.ts"
+name = "module-default-import-non-relative-unsupported"
+path = "tests/smoke/module_default_import_non_relative_unsupported.ts"
 expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 
 [[case]]
-name = "module-namespace-import-unsupported-or-parser-error"
-path = "tests/smoke/module_namespace_import_unsupported_or_parser_error.ts"
+name = "module-default-import-mixed-named-parser-safe-or-pinned"
+path = "tests/smoke/module_default_import_mixed_named_parser_safe_or_pinned.ts"
 expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 
 [[case]]
-name = "module-re-export-named-unsupported-or-parser-error"
-path = "tests/smoke/module_re_export_named_unsupported_or_parser_error.ts"
+name = "module-namespace-import-non-relative-unsupported"
+path = "tests/smoke/module_namespace_import_non_relative_unsupported.ts"
 expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 
 [[case]]
-name = "module-re-export-star-unsupported-or-parser-error"
-path = "tests/smoke/module_re_export_star_unsupported_or_parser_error.ts"
+name = "module-namespace-import-missing-module-no-cascade"
+path = "tests/smoke/module_namespace_import_missing_module_no_cascade.ts"
 expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-re-export-named-missing-module"
+path = "tests/smoke/module_re_export_named_missing_module.ts"
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-re-export-named-non-relative-unsupported"
+path = "tests/smoke/module_re_export_named_non_relative_unsupported.ts"
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-re-export-star-missing-module"
+path = "tests/smoke/module_re_export_star_missing_module.ts"
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-re-export-star-as-unsupported"
+path = "tests/smoke/module_re_export_star_as_unsupported.ts"
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-re-export-star-non-relative-unsupported"
+path = "tests/smoke/module_re_export_star_non_relative_unsupported.ts"
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-default-import-valid"
+files = [
+  { file_name = "user.ts", source_text = "export default function getName(): string { return \"Ada\"; }" },
+  { file_name = "index.ts", source_text = "import getName from \"./user\";\nlet name: string = getName();" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-default-import-missing-default-export"
+files = [
+  { file_name = "user.ts", source_text = "export const getName: string = \"Ada\";" },
+  { file_name = "index.ts", source_text = "import getName from \"./user\";\nlet name = getName;" },
+]
+expected_diagnostics = ["TS2305"]
+
+[[case]]
+name = "module-default-import-missing-module-no-cascade"
+path = "tests/smoke/module_default_import_missing_module_no_cascade.ts"
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-default-import-does-not-bind-type"
+files = [
+  { file_name = "user.ts", source_text = "export default 123;" },
+  { file_name = "index.ts", source_text = "import DefaultThing from \"./user\";\nlet value: DefaultThing = 123;" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-namespace-import-function-property-call-valid"
+files = [
+  { file_name = "user.ts", source_text = "export function getName(): string { return \"Ada\"; }\nexport const version: string = \"1\";" },
+  { file_name = "index.ts", source_text = "import * as user from \"./user\";\nlet name: string = user.getName();\nlet version: string = user.version;" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-namespace-import-missing-property"
+files = [
+  { file_name = "user.ts", source_text = "export function getName(): string { return \"Ada\"; }" },
+  { file_name = "index.ts", source_text = "import * as user from \"./user\";\nlet value = user.missing;" },
+]
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "module-namespace-import-does-not-bind-named-value"
+files = [
+  { file_name = "user.ts", source_text = "export function getName(): string { return \"Ada\"; }" },
+  { file_name = "index.ts", source_text = "import * as ns from \"./user\";\nlet value = getName;" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-namespace-import-does-not-bind-named-type"
+files = [
+  { file_name = "user.ts", source_text = "export interface User { name: string; }" },
+  { file_name = "index.ts", source_text = "import * as ns from \"./user\";\nlet value: User = { name: \"Ada\" };" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-re-export-named-type-valid"
+files = [
+  { file_name = "user.ts", source_text = "export interface User { name: string; }\nexport function getName(): string { return \"Ada\"; }" },
+  { file_name = "index.ts", source_text = "export { User, getName } from \"./user\";" },
+  { file_name = "app.ts", source_text = "import { User, getName } from \"./index\";\nlet user: User = { name: getName() };" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-re-export-named-missing-member"
+files = [
+  { file_name = "user.ts", source_text = "export const version: number = 1;" },
+  { file_name = "index.ts", source_text = "export { Foo } from \"./user\";" },
+  { file_name = "app.ts", source_text = "import { Foo } from \"./index\";\nlet value: Foo = 123;" },
+]
+expected_diagnostics = ["TS2305"]
+
+[[case]]
+name = "module-re-export-type-named-valid"
+files = [
+  { file_name = "user.ts", source_text = "export interface User { name: string; }" },
+  { file_name = "index.ts", source_text = "export type { User } from \"./user\";" },
+  { file_name = "app.ts", source_text = "import type { User } from \"./index\";\nlet value: User = { name: \"Ada\" };" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-re-export-type-named-does-not-export-value"
+files = [
+  { file_name = "user.ts", source_text = "export interface User { name: string; }" },
+  { file_name = "index.ts", source_text = "export type { User } from \"./user\";" },
+  { file_name = "app.ts", source_text = "import { User } from \"./index\";\nlet value = User;" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-re-export-star-type-valid"
+files = [
+  { file_name = "user.ts", source_text = "export interface User { name: string; }\nexport function getName(): string { return \"Ada\"; }\nexport const version: string = \"1\";" },
+  { file_name = "index.ts", source_text = "export * from \"./user\";" },
+  { file_name = "app.ts", source_text = "import { User, getName, version } from \"./index\";\nlet user: User = { name: getName() + version };" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-re-export-star-does-not-export-default"
+files = [
+  { file_name = "user.ts", source_text = "export default function getName(): string { return \"Ada\"; }\nexport const version: number = 1;" },
+  { file_name = "index.ts", source_text = "export * from \"./user\";" },
+  { file_name = "app.ts", source_text = "import getName from \"./index\";\nlet value = getName;" },
+]
+expected_diagnostics = ["TS2305"]
+
+[[case]]
+name = "module-re-export-star-missing-module-no-cascade"
+files = [
+  { file_name = "index.ts", source_text = "export * from \"./missing\";" },
+  { file_name = "app.ts", source_text = "import { User } from \"./index\";\nlet value = User;" },
+]
+expected_diagnostics = ["TS2307"]
+
+[[case]]
+name = "module-re-export-star-conflict-policy-pinned"
+files = [
+  { file_name = "a.ts", source_text = "export const name: string = \"Ada\";" },
+  { file_name = "b.ts", source_text = "export const name: number = 1;" },
+  { file_name = "index.ts", source_text = "export * from \"./a\";\nexport * from \"./b\";" },
+  { file_name = "app.ts", source_text = "import { name } from \"./index\";\nlet value: string = name;" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-re-export-star-local-explicit-wins"
+files = [
+  { file_name = "other.ts", source_text = "export const name: number = 1;" },
+  { file_name = "index.ts", source_text = "export const name: string = \"Ada\";\nexport * from \"./other\";" },
+  { file_name = "app.ts", source_text = "import { name } from \"./index\";\nlet value: string = name;" },
+]
+expected_diagnostics = []
 
 [[case]]
 name = "module-resolution-side-effect-script-file-valid"

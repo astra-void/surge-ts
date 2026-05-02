@@ -10,6 +10,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | --- | --- |
 | TS2304 unresolved value identifier | identifier token span |
 | TS2304 unresolved type name | type name token span |
+| TS2305 missing default export | default import name span |
 | TS2305 missing exported member | imported specifier name span |
 | TS2307 unresolved relative module | module specifier string span |
 | TS2307 non-relative module import | module specifier string span, or unsupported-module span when syntax is not modeled |
@@ -41,6 +42,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2365 invalid operator | operator or whole expression span, pinned |
 | TS2367 no-overlap equality | operator or whole expression span, pinned |
 | TS2872/TS2873 truthiness | condition or literal span |
+| typescript-rust::duplicate-default-export | default keyword or export statement span, pinned |
 | typescript-rust::unsupported-module-syntax | import/export statement span, pinned |
 | parser-error | parser-provided best-effort span when available; otherwise no span |
 
@@ -50,6 +52,15 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 - TS2305 should underline the imported specifier name. TS2307 should underline the module specifier string.
 - TS2314/TS2315 should stay pinned to the type reference name; v0.59 uses
   these as stable arity diagnostics for generic alias/interface references.
+- Missing default exports underline the default-import identifier, and missing
+  relative default-import modules underline the module specifier string.
+- Missing re-export modules underline the module specifier string. Missing
+  re-export members underline the exported specifier name.
+- Namespace import property failures underline the property name, while
+  namespace import module failures underline the module specifier string.
+- Star re-export module failures underline the module specifier string.
+- `export * as Foo from ...` stays parser-safe or pinned rather than adding a
+  separate span policy in this phase.
 - Duplicate generic type parameters use a custom checker diagnostic and should
   underline the repeated name span, not the declaration keyword.
 - Call-expression type arguments are parsed for syntax stability, but v0.59

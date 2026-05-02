@@ -1,81 +1,56 @@
 # Modules
 
-v0.58 keeps the relative module-resolution-lite boundary from v0.57.1 and adds
-compatibility-report instrumentation for real-project triage.
+v0.61 expands the existing relative module-resolution-lite boundary with a
+small, pinned module syntax surface for loaded `.ts` files. It keeps package
+resolution, `node_modules`, `paths`/`baseUrl`, declaration files, CommonJS,
+and full TypeScript parity out of scope.
 
-## What is parsed
+## What Is Supported
 
-- Named imports: `import { User } from "./user";`
-- Type-only imports: `import type { User } from "./user";`
-- Side-effect imports: `import "./setup";`
-- Exported declarations:
-  - `export interface ...`
-  - `export type ...`
-  - `export function ...`
-  - `export const/let/var ...`
-- Named export lists:
-  - `export { User };`
-  - `export { User as UserModel };`
-  - `export type { User };`
-  - `export type { User as UserModel };`
-- Empty export markers: `export {};`
+All supported forms are limited to already loaded relative `.ts` files.
 
-## Module boundary
+- Default imports: `import DefaultThing from "./user";`
+- Namespace imports: `import * as user from "./user";`
+- Default exports: `export default function ...`, `export default "Ada"`, `export default 123`, `export default true`, and small expression forms the parser already models
+- Named re-exports: `export { User } from "./user";`
+- Type-only named re-exports: `export type { User } from "./user";`
+- Star re-exports: `export * from "./user";`
+- Named export lists and wrapped declarations from the earlier module-resolution-lite phase
+- Side-effect imports and `export {}` module markers
 
-Any file containing top-level import or export syntax is treated as a module file.
+Namespace imports bind a single value symbol whose object type is built from the source module's value exports. Default imports bind only a value symbol. Type-only exports stay in the type namespace. Star re-exports forward named value exports and named type exports, but they do not forward default exports.
 
-- Script files continue to participate in global-script sharing.
-- Module files are isolated for declaration sharing in this phase.
-- Relative imports and local named exports participate in a limited program-mode resolution pass over loaded `.ts` files only.
-- Named imports bind type and value namespaces separately.
-- Side-effect imports resolve a loaded target file and bind nothing.
-- Named export lists resolve against same-file local declarations.
-- Exported generic aliases and interfaces are preserved across the relative module-resolution-lite pass, explicit type arguments are substituted when the imported declaration is instantiated, and trailing defaults are applied when callers omit type arguments.
-- Constraints remain parser-only metadata in this phase.
-- Private helper types stay visible through the current module-resolution-lite
-  pass, so imported declarations can still resolve them while the model remains
-  intentionally narrower than full package/module resolution.
-- Unsupported module forms are parser-safe or pinned with a stable
-  `typescript-rust::unsupported-module-syntax` diagnostic.
+## Current Policy
 
-## Current policy
-
-- Script files can still share top-level `type` aliases, `interface` declarations, and function declarations across files.
+- Script files still share top-level `type` aliases, `interface` declarations, and function declarations across files.
 - Module files keep their own top-level declarations local to the file.
 - Module files do not contribute to the global script namespace.
-- Module files do not see script globals under the current isolated-module policy.
-- `export {}` and side-effect imports are accepted as module markers.
-- Relative resolution only covers loaded `./` and `../` specifiers against already loaded `.ts` files in the current program.
-- Side-effect imports may target script files or module files; they do not bind names.
-- Named imports bind only the namespace that exists on the export table. Missing modules emit TS2307; missing exported members emit TS2305.
-- Type-only named imports never bind value symbols.
-- Exported type declarations can keep private helper types inside their defining module's local type scope when imported.
-- Imports from non-relative specifiers remain intentionally unsupported and emit TS2307 or an unsupported-module diagnostic.
-- Missing relative modules and missing exported names emit stable diagnostics.
+- Module files do not see script globals under the isolated-module policy.
+- Relative resolution only covers already loaded `./` and `../` specifiers.
+- Missing relative modules emit TS2307.
+- Missing exported members emit TS2305.
+- Unsupported module syntax stays parser-safe and is pinned with `typescript-rust::unsupported-module-syntax`.
+- `export * from` follows a pinned conflict policy: local explicit exports win, and the first star export wins when multiple star exports provide the same name.
+- Unresolved star re-exports are intentionally kept from cascading extra consumer diagnostics.
 
-## Supported module binding
+## Still Unsupported
 
-- Relative specifiers: `./user`, `./user.ts`, `../models/user`, `../models/user.ts`
-- Named imports: `import { User } from "./user";`
-- Type-only named imports: `import type { User } from "./user";`
-- Side-effect imports: `import "./setup";`
-- Export-wrapped declarations: `export interface`, `export type`, `export function`, `export const/let/var`
-- Named export lists: `export { User }`, `export { User as UserModel }`, `export type { User }`
+These forms remain intentionally out of scope for v0.61:
 
-## Unsupported syntax
-
-The parser accepts unsupported module surface without panicking, but the checker does not resolve it yet:
-
-- default imports
-- namespace imports
-- non-relative package imports
-- re-export forms such as `export { Foo } from "./foo";`
-- star re-exports
+- Non-relative package imports and re-exports
+- `node_modules` lookup
+- `paths` / `baseUrl` resolution
+- Declaration files and `lib.d.ts`
 - `import = require(...)`
 - `export =`
-- `export default ...`
+- `export * as Foo from "./foo"`
+- Mixed default + named imports
+- Default class exports
+- CommonJS semantics
 
-The resolver does not read from disk and does not yet handle `.js`, `.jsx`, `.tsx`, `.json`, or `.d.ts` targets.
+## Notes
 
-The next phase should be chosen from compatibility-report output rather than by
-expanding into package or tsconfig-path semantics by default.
+- Exported generic aliases and interfaces still use the relative module-resolution-lite pass, with explicit type arguments substituted when the imported declaration is instantiated and trailing defaults applied when callers omit type arguments.
+- Constraints remain parser-only metadata in this phase.
+- Private helper types stay visible through the current module-resolution-lite pass so imported declarations can still resolve them.
+- The next phase should still be chosen from compatibility-report output rather than by expanding into package or tsconfig-path semantics by default.

@@ -24,7 +24,7 @@ Resolution model:
   change the first-wins lowering policy
 - aliases use `typescript-rust::type-alias-cycle`
 - interfaces use `typescript-rust::type-declaration-cycle`
-- program-mode relative imports can expose exported type declarations from loaded `.ts` files
+- program-mode relative imports and re-exports can expose exported type declarations from loaded `.ts` files
 - imported type declarations keep the defining module's local type scope for private helper references
 
 Current limitations:
@@ -39,8 +39,8 @@ Current limitations:
 - no computed properties
 - no alias/interface-preserving diagnostic display
 - no package, node_modules, or tsconfig-path resolution
-- no default, namespace, or star import/export semantics
-- no re-export forms, declaration files, or CommonJS semantics
+- no declaration files or CommonJS semantics
+- unsupported module syntax such as `export * as Foo from "./foo"` stays parser-safe or pinned
 - program-mode module visibility is limited to loaded relative `.ts` files
 
 Design note:

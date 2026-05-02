@@ -126,6 +126,7 @@ pub(crate) fn build_module_export_table(
         type_declarations,
         symbols,
         default_symbol,
+        has_unresolved_star_export: false,
     }
 }
 
@@ -264,6 +265,8 @@ fn resolve_module_export_table(
                     resolving,
                     ctx,
                 ) else {
+                    ctx.set_file_name(parsed_files[file_index].file_name.clone());
+
                     for specifier in specifiers {
                         emit_missing_export_diagnostic(
                             ctx,
@@ -296,6 +299,8 @@ fn resolve_module_export_table(
 
                     continue;
                 };
+
+                ctx.set_file_name(parsed_files[file_index].file_name.clone());
 
                 for specifier in specifiers {
                     let type_export = target_export_table
@@ -351,7 +356,12 @@ fn resolve_module_export_table(
                     }
 
                     if !found {
-                        if target_export_table.has_unresolved_star_export {
+                        if target_export_table.has_unresolved_star_export
+                            || module_has_unresolved_star_export(
+                                resolved_module.resolved_file_index,
+                                parsed_files,
+                            )
+                        {
                             insert_unknown_type_import(
                                 &mut resolved_export_table.type_declarations,
                                 &specifier.exported_name,
@@ -416,8 +426,11 @@ fn resolve_module_export_table(
             resolving,
             ctx,
         ) else {
+            ctx.set_file_name(parsed_files[file_index].file_name.clone());
             continue;
         };
+
+        ctx.set_file_name(parsed_files[file_index].file_name.clone());
 
         for (name, declaration) in target_export_table.type_declarations.iter() {
             if resolved_export_table.type_declarations.get(name).is_none() {
@@ -825,7 +838,31 @@ fn resolve_import_declaration(
                 return;
             };
 
+            let has_unresolved_star_export = export_table.has_unresolved_star_export
+                || module_has_unresolved_star_export(resolved.resolved_file_index, program_files);
+
             for specifier in specifiers {
+                if has_unresolved_star_export {
+                    if *is_type_only {
+                        insert_unknown_type_import(
+                            type_declarations,
+                            &specifier.local_name,
+                            ctx.file_name.clone(),
+                            specifier.name_span,
+                        );
+                        continue;
+                    }
+
+                    insert_unknown_type_import(
+                        type_declarations,
+                        &specifier.local_name,
+                        ctx.file_name.clone(),
+                        specifier.name_span,
+                    );
+                    insert_unknown_value_import(&specifier.local_name, symbols);
+                    continue;
+                }
+
                 let type_export = export_table
                     .type_declarations
                     .get(&specifier.imported_name)
@@ -1043,6 +1080,28 @@ fn emit_unresolved_module_diagnostic(ctx: &mut CheckerContext, import: &ParsedIm
     }
 
     ctx.push(diagnostic);
+}
+
+fn module_has_unresolved_star_export(
+    file_index: usize,
+    parsed_files: &[ParsedProgramFile],
+) -> bool {
+    parsed_files[file_index].statements.iter().any(|statement| {
+        let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
+            module_specifier,
+            ..
+        }) = statement
+        else {
+            return false;
+        };
+
+        resolve_relative_module(
+            &parsed_files[file_index].file_name,
+            module_specifier,
+            parsed_files,
+        )
+        .is_none()
+    })
 }
 
 fn emit_unsupported_module_syntax_diagnostic(
@@ -1295,6 +1354,33 @@ mod tests {
         ]);
         let resolved = resolve_relative_module("src/index.ts", "./setup", &files).unwrap();
         assert_eq!(resolved.resolved_file_name, "src/setup.ts");
+    }
+
+    #[test]
+    fn module_resolver_marks_unresolved_star_exports() {
+        let files = program(&[("src/index.ts", "export * from \"./missing\";")]);
+        let mut ctx = CheckerContext::new("src/index.ts".to_string(), Default::default());
+        let local_tables = files
+            .iter()
+            .map(|file| {
+                let local_types = TypeDeclarationTable::new();
+                let local_symbols = SymbolTable::new();
+                Some(build_module_export_table(
+                    file,
+                    &local_types,
+                    &local_symbols,
+                    &mut ctx,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module_export_tables(&files, &local_tables, &mut ctx);
+
+        assert!(
+            resolved[0]
+                .as_ref()
+                .map(|table| table.has_unresolved_star_export)
+                .unwrap_or(false)
+        );
     }
 
     #[test]
