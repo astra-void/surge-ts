@@ -525,5 +525,5 @@ fn project_mode_single_file_positional_export_valid() {
     let (stdout, stderr) = run_cli(&[file.as_str()]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.trim().is_empty());
+    assert!(stdout.contains("No errors."));
 }
