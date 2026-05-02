@@ -78,6 +78,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
         &source,
         &loaded.files[0].to_string_lossy(),
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
         },
     );
@@ -1353,8 +1354,8 @@ fn cli_compat_report_project_counts_by_code() {
     assert!(stderr.is_empty());
     assert!(stdout.contains("Compatibility report"));
     assert!(stdout.contains("Files loaded: 1"));
-    assert!(stdout.contains("Diagnostics: 3"));
-    assert!(stdout.contains("TS2307  3"));
+    assert!(stdout.contains("Diagnostics: 8"));
+    assert!(stdout.contains("TS2307  8"));
 }
 
 #[test]
@@ -1364,7 +1365,7 @@ fn cli_compat_report_project_counts_by_file() {
     let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--compatReport"]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.contains("src/index.ts  3"));
+    assert!(stdout.contains("src/index.ts  8"));
 }
 
 #[test]
@@ -1443,7 +1444,7 @@ fn cli_compat_report_format_json_still_report_shape() {
         .to_string();
     assert_eq!(parsed["rootDir"].as_str().unwrap(), expected_root);
     assert_eq!(parsed["filesLoaded"], Value::from(1));
-    assert_eq!(parsed["diagnosticsTotal"], Value::from(3));
+    assert_eq!(parsed["diagnosticsTotal"], Value::from(8));
     assert!(parsed["byCode"].is_array());
     assert!(parsed["byFile"].is_array());
     assert!(parsed["parserErrors"].is_array());
@@ -1521,8 +1522,8 @@ fn compat_project_package_imports_report_stable() {
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("Compatibility report"));
-    assert!(stdout.contains("Diagnostics: 3"));
-    assert!(stdout.contains("TS2307  3"));
+    assert!(stdout.contains("Diagnostics: 8"));
+    assert!(stdout.contains("TS2307  8"));
 }
 
 #[test]
@@ -1563,7 +1564,7 @@ fn compat_project_report_counts_by_code() {
     let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--compatReport"]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.contains("TS2307  3"));
+    assert!(stdout.contains("TS2307  8"));
 }
 
 #[test]
@@ -1573,5 +1574,5 @@ fn compat_project_report_counts_by_file() {
     let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--compatReport"]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.contains("src/index.ts  3"));
+    assert!(stdout.contains("src/index.ts  8"));
 }

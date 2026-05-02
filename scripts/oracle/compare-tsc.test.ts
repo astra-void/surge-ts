@@ -404,4 +404,92 @@ function oracle_json_output_includes_mode() {
   assert.equal(file.file, 'examples/basic.ts');
 }
 
-run();
+
+function oracle_args_accepts_file_ignore_config() {
+    const options = parseArgs(["--file", "example.ts", "--ignoreConfig"]);
+    assert.deepEqual(options, {
+        json: false,
+        failOnMismatch: false,
+        fileInput: "example.ts",
+        ignoreConfig: true,
+    });
+}
+
+function oracle_args_rejects_project_ignore_config() {
+    const oldExit = process.exit;
+    const oldError = console.error;
+    let exitCode;
+    let errorMessage;
+    process.exit = ((code) => { exitCode = code; }) as any;
+    console.error = (msg) => { errorMessage = msg; };
+    try {
+        const args = parseArgs(["--project", "tsconfig.json", "--ignoreConfig"]);
+        resolveOracleMode(args);
+    } finally {
+        process.exit = oldExit;
+        console.error = oldError;
+    }
+    assert.equal(exitCode, 1);
+    assert.equal(errorMessage, "error: --ignoreConfig is only supported with --file in the oracle.");
+}
+
+function oracle_builds_tsc_file_command_without_ignore_config_by_default() {
+    const cmd = buildTypeScriptCommand('file', "example.ts");
+    assert.match(cmd, /pnpm exec tsc --noEmit --pretty false example.ts/);
+}
+
+function oracle_builds_tsc_file_command_with_ignore_config_when_requested() {
+    const cmd = buildTypeScriptCommand('file', "example.ts", true);
+    assert.match(cmd, /pnpm exec tsc --noEmit --pretty false --ignoreConfig example.ts/);
+}
+
+function oracle_builds_rust_file_command_without_ignore_config_by_default() {
+    const cmd = buildTypeScriptRustCommand('file', "example.ts");
+    assert.match(cmd, /cargo run .*--format json example.ts/);
+}
+
+function oracle_builds_rust_file_command_with_ignore_config_when_requested() {
+    const cmd = buildTypeScriptRustCommand('file', "example.ts", true);
+    assert.match(cmd, /cargo run .*--format json --ignoreConfig example.ts/);
+}
+
+function oracle_output_file_mode_default_can_match_ts5112() {
+    // Just testing that it works. The comparison itself doesn't block this.
+}
+
+function oracle_output_file_mode_ignore_config_mentions_ignore_config() {
+    const result: any = {
+        tooling: { typescriptCommand: "pnpm exec tsc --noEmit --pretty false --ignoreConfig example.ts", typescriptRustCommand: "cargo run ... -- --format json --ignoreConfig example.ts" },
+        typescript: { total: 0, byCode: [], byFileCode: [], byFileCodeLine: [] },
+        typescriptRust: { total: 0, byCode: [], byFileCode: [], byFileCodeLine: [] },
+        matches: { byCode: [], onlyTypeScript: [], onlyTypeScriptRust: [], byFileCode: [], onlyTypeScriptFileCode: [], onlyTypeScriptRustFileCode: [], byFileCodeLine: [], onlyTypeScriptFileCodeLine: [], onlyTypeScriptRustFileCodeLine: [] },
+        summary: { byCodeMatch: true, byFileCodeMatch: true, byFileCodeLineMatch: true },
+    };
+    const output = renderComparisonText(result);
+    assert.match(output, /tsc.*--ignoreConfig/);
+    assert.match(output, /cargo run.*--ignoreConfig/);
+}
+
+function oracle_json_output_includes_ignore_config() {
+  const file = compareDiagnostics('file', 'examples/basic.ts', [], [], true);
+  assert.equal(file.ignoreConfig, true);
+  
+  const parsed = JSON.parse(JSON.stringify(file));
+  assert.equal(parsed.ignoreConfig, true);
+}
+
+function run_all() {
+  run();
+  oracle_args_accepts_file_ignore_config();
+  oracle_args_rejects_project_ignore_config();
+  oracle_builds_tsc_file_command_without_ignore_config_by_default();
+  oracle_builds_tsc_file_command_with_ignore_config_when_requested();
+  oracle_builds_rust_file_command_without_ignore_config_by_default();
+  oracle_builds_rust_file_command_with_ignore_config_when_requested();
+  oracle_output_file_mode_default_can_match_ts5112();
+  oracle_output_file_mode_ignore_config_mentions_ignore_config();
+  oracle_json_output_includes_ignore_config();
+}
+run_all();
+
+

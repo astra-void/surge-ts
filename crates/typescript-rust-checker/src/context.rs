@@ -6,12 +6,14 @@ use crate::symbols::{SymbolTable, TypeDeclarationTable};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
+    pub stub_external_modules: bool,
 }
 
 impl Default for CheckerOptions {
     fn default() -> Self {
         Self {
             no_implicit_any: false,
+            stub_external_modules: false,
         }
     }
 }

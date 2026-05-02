@@ -806,6 +806,7 @@ dependencies = [
  "typescript-rust-checker",
  "typescript-rust-config",
  "typescript-rust-diagnostics",
+ "typescript-rust-syntax",
 ]
 
 [[package]]

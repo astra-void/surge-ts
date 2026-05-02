@@ -155,6 +155,14 @@ impl Diagnostic {
         )
     }
 
+    pub fn ts5112(file_name: impl Into<String>) -> Self {
+        Self::typescript(
+            TypeScriptDiagnosticKind::TsconfigNotLoaded,
+            vec![],
+            file_name,
+        )
+    }
+
     pub fn ts2304(name: &str, file_name: impl Into<String>) -> Self {
         Self::typescript(
             TypeScriptDiagnosticKind::CannotFindName,

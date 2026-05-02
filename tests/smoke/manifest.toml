@@ -6036,3 +6036,34 @@ files = [
   { file_name = "index.ts", source_text = "import { Internal } from \"./box\";" },
 ]
 expected_diagnostics = []
+[[test]]
+file = "external_named_import_reports_ts2307_no_cascade.ts"
+diagnostics = [2307]
+
+[[test]]
+file = "external_type_only_import_reports_ts2307_no_cascade.ts"
+diagnostics = [2307]
+
+[[test]]
+file = "external_default_import_reports_ts2307_no_cascade.ts"
+diagnostics = [2307]
+
+[[test]]
+file = "external_namespace_import_reports_ts2307_no_cascade.ts"
+diagnostics = [2307]
+
+[[test]]
+file = "external_side_effect_import_reports_ts2307.ts"
+diagnostics = [2307]
+
+[[test]]
+file = "external_re_export_named_reports_ts2307_no_cascade.ts"
+diagnostics = [2307]
+
+[[test]]
+file = "external_re_export_type_named_reports_ts2307_no_cascade.ts"
+diagnostics = [2307]
+
+[[test]]
+file = "external_re_export_star_reports_ts2307_no_cascade.ts"
+diagnostics = [2307]

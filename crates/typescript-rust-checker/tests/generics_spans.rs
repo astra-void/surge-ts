@@ -56,6 +56,7 @@ fn span_generic_arity_missing_points_to_type_reference_name() {
         source,
         "example.ts",
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: false,
         },
     );
@@ -77,6 +78,7 @@ fn span_generic_unknown_type_argument_points_to_type_argument() {
         source,
         "example.ts",
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: false,
         },
     );
@@ -152,6 +154,7 @@ fn span_generic_arity_too_many_points_to_type_reference_name() {
         source,
         "example.ts",
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: false,
         },
     );
@@ -166,6 +169,7 @@ fn span_generic_non_generic_type_args_points_to_type_reference_name() {
         source,
         "example.ts",
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: false,
         },
     );
@@ -180,6 +184,7 @@ fn span_generic_default_unknown_points_to_default_type_name() {
         source,
         "example.ts",
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: false,
         },
     );
@@ -195,6 +200,7 @@ fn span_generic_constraint_unknown_points_to_constraint_type_name() {
         source,
         "example.ts",
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: false,
         },
     );
@@ -209,6 +215,7 @@ fn span_generic_duplicate_type_parameter_points_to_duplicate_name() {
         source,
         "example.ts",
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: false,
         },
     );
@@ -228,6 +235,7 @@ fn span_generic_function_type_parameter_no_unresolved_span() {
         source,
         "example.ts",
         CheckerOptions {
+            stub_external_modules: false,
             no_implicit_any: false,
         },
     );

@@ -36,11 +36,18 @@ Compare one of the built-in presets:
 pnpm run oracle:compare -- --project generics-basic
 ```
 
-Compare a single standalone source file:
+Compare a single standalone source file using TypeScript-like CLI behavior:
 
 ```bash
 pnpm run oracle:compare -- --file examples/basic.ts
 pnpm run oracle:compare -- --file examples/assignment.ts
+```
+
+Compare a single standalone source file while explicitly bypassing TS5112
+and running semantic checking:
+
+```bash
+pnpm run oracle:compare -- --file examples/basic.ts --ignoreConfig
 ```
 
 Compare a disposable local project:
@@ -57,8 +64,24 @@ pnpm run oracle:test
 
 ## What it does
 
-- Project mode runs `pnpm exec tsc --noEmit --pretty false --project <tsconfig>` and `cargo run -q --manifest-path Cargo.toml -p typescript-rust-cli -- --project <tsconfig> --format json`.
-- File mode runs `pnpm exec tsc --noEmit --pretty false <file>` and `cargo run -q --manifest-path Cargo.toml -p typescript-rust-cli -- --format json <file>`.
+- Project mode runs:
+  ```txt
+  pnpm exec tsc --noEmit --pretty false --project <tsconfig>
+  cargo run ... -- --project <tsconfig> --format json
+  ```
+- File mode without `--ignoreConfig` runs:
+  ```txt
+  pnpm exec tsc --noEmit --pretty false <file>
+  cargo run ... -- --format json <file>
+  ```
+  and may report TS5112 when a `tsconfig.json` is present.
+- File mode with `--ignoreConfig` runs:
+  ```txt
+  pnpm exec tsc --noEmit --pretty false --ignoreConfig <file>
+  cargo run ... -- --format json --ignoreConfig <file>
+  ```
+  and is the explicit standalone semantic comparison mode.
+- The oracle never secretly adds `--ignoreConfig`.
 - Normalizes both diagnostic streams to code, file name, line, and column when
   available.
 - Compares code counts first, then `(fileName, code)` counts, then

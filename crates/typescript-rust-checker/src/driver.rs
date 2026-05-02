@@ -86,17 +86,91 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
         ParsedStatement::ImportDeclaration(import) => {
-            let mut diagnostic = Diagnostic::new(
-                DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-                "Unsupported module syntax.".to_string(),
-                ctx.file_name.clone(),
-            );
+            if ctx.options.stub_external_modules
+                && crate::modules::is_external_specifier(&import.module_specifier)
+            {
+                // Stub the imports to avoid cascades in single-file mode
+                match &import.kind {
+                    typescript_rust_syntax::ParsedImportKind::Named {
+                        specifiers,
+                        is_type_only,
+                    } => {
+                        for specifier in specifiers {
+                            if *is_type_only {
+                                let declaration = crate::symbols::TypeDeclarationInfo::Alias(
+                                    crate::symbols::TypeAliasInfo {
+                                        name: specifier.local_name.to_string(),
+                                        file_name: ctx.file_name.clone(),
+                                        name_span: specifier.name_span,
+                                        type_parameters: vec![],
+                                        ty: typescript_rust_syntax::ParsedType::Unknown,
+                                        resolution_scope: None,
+                                    },
+                                );
+                                let _ = ctx
+                                    .type_declarations
+                                    .insert(specifier.local_name.clone(), declaration);
+                            } else {
+                                let declaration = crate::symbols::TypeDeclarationInfo::Alias(
+                                    crate::symbols::TypeAliasInfo {
+                                        name: specifier.local_name.to_string(),
+                                        file_name: ctx.file_name.clone(),
+                                        name_span: specifier.name_span,
+                                        type_parameters: vec![],
+                                        ty: typescript_rust_syntax::ParsedType::Unknown,
+                                        resolution_scope: None,
+                                    },
+                                );
+                                let _ = ctx
+                                    .type_declarations
+                                    .insert(specifier.local_name.clone(), declaration);
+                                let _ = ctx.symbols.insert(
+                                    specifier.local_name.clone(),
+                                    crate::symbols::SymbolInfo {
+                                        ty: typescript_rust_types::Type::Unknown,
+                                        kind: crate::symbols::SymbolKind::Var,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    typescript_rust_syntax::ParsedImportKind::Default { local_name, .. } => {
+                        let _ = ctx.symbols.insert(
+                            local_name.clone(),
+                            crate::symbols::SymbolInfo {
+                                ty: typescript_rust_types::Type::Unknown,
+                                kind: crate::symbols::SymbolKind::Var,
+                            },
+                        );
+                    }
+                    typescript_rust_syntax::ParsedImportKind::Namespace { local_name, .. } => {
+                        let _ = ctx.symbols.insert(
+                            local_name.clone(),
+                            crate::symbols::SymbolInfo {
+                                ty: typescript_rust_types::Type::Object(
+                                    typescript_rust_types::ObjectType {
+                                        properties: std::collections::BTreeMap::new(),
+                                    },
+                                ),
+                                kind: crate::symbols::SymbolKind::Const,
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            } else {
+                let mut diagnostic = Diagnostic::new(
+                    DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
+                    "Unsupported module syntax.".to_string(),
+                    ctx.file_name.clone(),
+                );
 
-            if let Some(span) = import.span.or(import.module_specifier_span) {
-                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                if let Some(span) = import.span.or(import.module_specifier_span) {
+                    diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                }
+
+                ctx.push(diagnostic);
             }
-
-            ctx.push(diagnostic);
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
             declaration,

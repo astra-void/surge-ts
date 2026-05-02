@@ -54,6 +54,15 @@ macro_rules! define_typescript_diagnostics_catalog {
 }
 
 define_typescript_diagnostics_catalog! {
+    TsconfigNotLoaded => {
+        code: 5112,
+        key: "tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConfig_to_skip_this_error",
+        category: Error,
+        message_template: "tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error.",
+        argument_count: 0,
+        support: Emitted,
+    },
+
     CannotFindName => {
         code: 2304,
         key: "Cannot_find_name_0",
@@ -473,4 +482,17 @@ pub fn emitted_typescript_diagnostics()
     TYPE_SCRIPT_DIAGNOSTIC_DEFINITIONS
         .iter()
         .filter(|definition| definition.support == DiagnosticSupport::Emitted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_contains_ts5112() {
+        let definition = TypeScriptDiagnosticKind::TsconfigNotLoaded.definition();
+        assert_eq!(definition.code, 5112);
+        assert_eq!(definition.argument_count, 0);
+        assert_eq!(definition.support, DiagnosticSupport::Emitted);
+    }
 }

@@ -39,6 +39,7 @@ export type ComparisonResult = {
   mode: 'project' | 'file';
   project: string | null;
   file: string | null;
+  ignoreConfig?: boolean;
   tooling: {
     typescriptVersion: string;
     typescriptCommand: string;
@@ -70,6 +71,8 @@ export type ParsedArgs = {
   json: boolean;
   failOnMismatch: boolean;
   maxDiagnostics?: number;
+  ignoreConfig?: boolean;
+  stubExternalModules?: boolean;
 };
 
 export type OracleMode =
@@ -77,11 +80,15 @@ export type OracleMode =
       kind: 'project';
       project: string;
       resolvedTsconfig: string;
+      ignoreConfig?: boolean;
+      stubExternalModules?: boolean;
     }
   | {
       kind: 'file';
       file: string;
       resolvedFile: string;
+      ignoreConfig?: boolean;
+      stubExternalModules?: boolean;
     };
 
 export type RunResult = {
@@ -109,8 +116,8 @@ export function main(argv = process.argv.slice(2)): void {
   const mode = resolveOracleMode(args);
   const comparison =
     mode.kind === 'project'
-      ? compareProject(mode.resolvedTsconfig, displayComparisonTargetPath(mode.resolvedTsconfig), args.maxDiagnostics)
-      : compareFile(mode.resolvedFile, displayComparisonTargetPath(mode.resolvedFile), args.maxDiagnostics);
+      ? compareProject(mode.resolvedTsconfig, displayComparisonTargetPath(mode.resolvedTsconfig), args.maxDiagnostics, mode.stubExternalModules)
+      : compareFile(mode.resolvedFile, displayComparisonTargetPath(mode.resolvedFile), args.maxDiagnostics, mode.ignoreConfig, mode.stubExternalModules);
 
   if (args.json) {
     process.stdout.write(`${JSON.stringify(comparison, null, 2)}\n`);
@@ -151,6 +158,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       parsed.fileInput = value;
     } else if (arg === '--json') {
       parsed.json = true;
+    } else if (arg === '--ignoreConfig') {
+      parsed.ignoreConfig = true;
+    } else if (arg === '--stubExternalModules') {
+      parsed.stubExternalModules = true;
     } else if (arg === '--failOnMismatch' || arg === '--strictCodes') {
       parsed.failOnMismatch = true;
     } else if (arg === '--maxDiagnostics') {
@@ -182,12 +193,17 @@ export function resolveOracleMode(args: ParsedArgs): OracleMode {
   }
 
   if (hasProject) {
+    if (args.ignoreConfig) {
+      console.error('error: --ignoreConfig is only supported with --file in the oracle.');
+      process.exit(1);
+    }
     const projectInput = args.projectInput as string;
     const resolvedTsconfig = resolveProjectPresetOrPath(projectInput);
     return {
       kind: 'project',
       project: projectInput,
       resolvedTsconfig,
+      stubExternalModules: args.stubExternalModules,
     };
   }
 
@@ -197,6 +213,8 @@ export function resolveOracleMode(args: ParsedArgs): OracleMode {
     kind: 'file',
     file: fileInput,
     resolvedFile,
+    ignoreConfig: args.ignoreConfig,
+    stubExternalModules: args.stubExternalModules,
   };
 }
 
@@ -290,23 +308,33 @@ export function compareProject(
   tsconfigPath: string,
   projectDisplay: string,
   maxDiagnostics?: number,
+  stubExternalModules?: boolean,
 ): ComparisonResult {
   return executeComparison(
     {
       kind: 'project',
       project: projectDisplay,
       resolvedTsconfig: tsconfigPath,
+      stubExternalModules,
     },
     maxDiagnostics,
   );
 }
 
-export function compareFile(filePath: string, fileDisplay: string, maxDiagnostics?: number): ComparisonResult {
+export function compareFile(
+  filePath: string,
+  fileDisplay: string,
+  maxDiagnostics?: number,
+  ignoreConfig?: boolean,
+  stubExternalModules?: boolean,
+): ComparisonResult {
   return executeComparison(
     {
       kind: 'file',
       file: fileDisplay,
       resolvedFile: filePath,
+      ignoreConfig,
+      stubExternalModules,
     },
     maxDiagnostics,
   );
@@ -317,6 +345,9 @@ export function runTsc(mode: OracleMode): RunResult {
     mode.kind === 'project'
       ? ['exec', 'tsc', '--noEmit', '--pretty', 'false', '--project', mode.resolvedTsconfig]
       : ['exec', 'tsc', '--noEmit', '--pretty', 'false', mode.resolvedFile];
+  if (mode.ignoreConfig) {
+      args.splice(args.length - 1, 0, '--ignoreConfig');
+  }
   const result = spawnSync('pnpm', args, {
     cwd: workspaceRoot,
     encoding: 'utf8',
@@ -351,8 +382,17 @@ export function runTypeScriptRust(mode: OracleMode, maxDiagnostics?: number): Ru
   if (mode.kind === 'project') {
     args.push('--project', mode.resolvedTsconfig);
     args.push('--format', 'json');
+    if (mode.stubExternalModules) {
+      args.push('--stubExternalModules');
+    }
   } else {
     args.push('--format', 'json');
+    if (mode.ignoreConfig) {
+      args.push('--ignoreConfig');
+    }
+    if (mode.stubExternalModules) {
+      args.push('--stubExternalModules');
+    }
     if (maxDiagnostics !== undefined) {
       args.push('--maxDiagnostics', String(maxDiagnostics));
     }
@@ -540,6 +580,8 @@ export function compareDiagnostics(
   targetDisplay: string,
   typescript: NormalizedDiagnostic[],
   typescriptRust: NormalizedDiagnostic[],
+  ignoreConfig?: boolean,
+  stubExternalModules?: boolean,
 ): ComparisonResult {
   const byCode = compareBuckets(typescript, typescriptRust, keyByCode);
   const byFileCode = compareBuckets(typescript, typescriptRust, keyByFileCode);
@@ -553,10 +595,11 @@ export function compareDiagnostics(
     mode,
     project: mode === 'project' ? targetDisplay : null,
     file: mode === 'file' ? targetDisplay : null,
+    ignoreConfig: ignoreConfig ?? false,
     tooling: {
       typescriptVersion: pinnedTypeScriptVersion,
-      typescriptCommand: buildTypeScriptCommand(mode, targetDisplay),
-      typescriptRustCommand: buildTypeScriptRustCommand(mode, targetDisplay),
+      typescriptCommand: buildTypeScriptCommand(mode, targetDisplay, ignoreConfig),
+      typescriptRustCommand: buildTypeScriptRustCommand(mode, targetDisplay, ignoreConfig, stubExternalModules),
     },
     typescript: summarizeDiagnostics(typescript),
     typescriptRust: summarizeDiagnostics(typescriptRust),
@@ -586,22 +629,36 @@ export function compareDiagnostics(
   };
 }
 
-export function buildTypeScriptCommand(mode: 'project' | 'file', targetDisplay: string): string {
+export function buildTypeScriptCommand(mode: 'project' | 'file', targetDisplay: string, ignoreConfig?: boolean): string {
   if (mode === 'project') {
     return `pnpm exec tsc --noEmit --pretty false --project ${targetDisplay}`;
   }
 
-  return `pnpm exec tsc --noEmit --pretty false ${targetDisplay}`;
+  return ignoreConfig ? `pnpm exec tsc --noEmit --pretty false --ignoreConfig ${targetDisplay}` : `pnpm exec tsc --noEmit --pretty false ${targetDisplay}`;
 }
 
-export function buildTypeScriptRustCommand(mode: 'project' | 'file', targetDisplay: string): string {
+export function buildTypeScriptRustCommand(mode: 'project' | 'file', targetDisplay: string, ignoreConfig?: boolean, stubExternalModules?: boolean): string {
   const cargoToml = normalizePathForDisplay(path.join(workspaceRoot, 'Cargo.toml'));
+  let args = `cargo run -q --manifest-path ${cargoToml} -p typescript-rust-cli --`;
 
   if (mode === 'project') {
-    return `cargo run -q --manifest-path ${cargoToml} -p typescript-rust-cli -- --project ${targetDisplay} --format json`;
+    args += ` --project ${targetDisplay} --format json`;
+    if (stubExternalModules) {
+      args += ` --stubExternalModules`;
+    }
+    return args;
   }
 
-  return `cargo run -q --manifest-path ${cargoToml} -p typescript-rust-cli -- --format json ${targetDisplay}`;
+  args += ` --format json`;
+  if (ignoreConfig) {
+    args += ` --ignoreConfig`;
+  }
+  if (stubExternalModules) {
+    args += ` --stubExternalModules`;
+  }
+  args += ` ${targetDisplay}`;
+
+  return args;
 }
 
 export function summarizeDiagnostics(diagnostics: NormalizedDiagnostic[]): DiagnosticTotals {
@@ -898,7 +955,7 @@ function executeComparison(
   );
   const rustDiagnostics = limitDiagnostics(parseTypeScriptRustDiagnostics(rustOutput, projectDir), maxDiagnostics);
 
-  return compareDiagnostics(mode.kind, comparisonDisplay, tscDiagnostics, rustDiagnostics);
+  return compareDiagnostics(mode.kind, comparisonDisplay, tscDiagnostics, rustDiagnostics, mode.ignoreConfig, mode.stubExternalModules);
 }
 
 export function displayComparisonTargetPath(targetPath: string): string {

@@ -34,15 +34,63 @@ pub struct ProjectCompatibilityReport {
     pub by_code: Vec<CompatReportCountEntry>,
     pub by_file: Vec<CompatReportCountEntry>,
     pub parser_errors: Vec<CompatReportParserErrorEntry>,
+    pub external_module_stubs_total: usize,
+    pub external_module_stubs: Vec<CompatReportCountEntry>,
+}
+
+fn is_relative_specifier(specifier: &str) -> bool {
+    specifier.starts_with("./")
+        || specifier.starts_with("../")
+        || specifier.starts_with(".\\")
+        || specifier.starts_with("..\\")
 }
 
 pub fn build_project_compatibility_report(
     loaded: &LoadedTsConfig,
     diagnostics: &[Diagnostic],
+    sources: &[(PathBuf, String, String)],
 ) -> ProjectCompatibilityReport {
     let mut by_code = HashMap::<String, usize>::new();
     let mut by_file = HashMap::<String, usize>::new();
     let mut parser_errors = HashMap::<(String, String), usize>::new();
+    let mut external_module_stubs = HashMap::<String, usize>::new();
+    let mut external_module_stubs_total = 0;
+
+    for (_, file_name, source_text) in sources {
+        let parsed = typescript_rust_syntax::parse_source(source_text, file_name);
+        for statement in parsed.statements {
+            match statement {
+                typescript_rust_syntax::ParsedStatement::ImportDeclaration(import) => {
+                    if !is_relative_specifier(&import.module_specifier) {
+                        *external_module_stubs
+                            .entry(import.module_specifier.clone())
+                            .or_default() += 1;
+                        external_module_stubs_total += 1;
+                    }
+                }
+                typescript_rust_syntax::ParsedStatement::ExportDeclaration(export) => {
+                    let module_specifier = match &export {
+                        typescript_rust_syntax::ParsedExportDeclaration::Named {
+                            module_specifier,
+                            ..
+                        } => module_specifier.as_deref(),
+                        typescript_rust_syntax::ParsedExportDeclaration::All {
+                            module_specifier,
+                            ..
+                        } => Some(module_specifier.as_str()),
+                        _ => None,
+                    };
+                    if let Some(spec) = module_specifier {
+                        if !is_relative_specifier(spec) {
+                            *external_module_stubs.entry(spec.to_string()).or_default() += 1;
+                            external_module_stubs_total += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 
     for diagnostic in diagnostics {
         *by_code.entry(diagnostic.code.to_string()).or_default() += 1;
@@ -67,6 +115,8 @@ pub fn build_project_compatibility_report(
         by_code: sort_counts(by_code),
         by_file: sort_counts(by_file),
         parser_errors: sort_parser_errors(parser_errors),
+        external_module_stubs_total,
+        external_module_stubs: sort_counts(external_module_stubs),
     }
 }
 
@@ -124,6 +174,20 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
                 "{}: {}  {}",
                 entry.file_name, entry.message, entry.count
             ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(format!(
+        "External module stubs: {}",
+        report.external_module_stubs_total
+    ));
+    lines.push("External modules:".to_string());
+    if report.external_module_stubs.is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for entry in &report.external_module_stubs {
+            lines.push(format!("{}  {}", entry.key, entry.count));
         }
     }
 
@@ -193,6 +257,28 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
                 .collect(),
         ),
     );
+
+    let mut stubs_json = Map::new();
+    stubs_json.insert(
+        "total".to_string(),
+        Value::from(report.external_module_stubs_total as u64),
+    );
+    stubs_json.insert(
+        "bySpecifier".to_string(),
+        Value::Array(
+            report
+                .external_module_stubs
+                .iter()
+                .map(|entry| {
+                    let mut item = Map::new();
+                    item.insert("specifier".to_string(), Value::String(entry.key.clone()));
+                    item.insert("count".to_string(), Value::from(entry.count as u64));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
+    );
+    root.insert("externalModuleStubs".to_string(), Value::Object(stubs_json));
 
     Value::Object(root)
 }

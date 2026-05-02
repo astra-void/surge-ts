@@ -1,6 +1,13 @@
 # Pinned verification snapshot for the current TypeScript-compatible diagnostic catalog.
 
 [[diagnostic]]
+code = 5112
+key = "tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConfig_to_skip_this_error"
+message_template = "tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error."
+argument_count = 0
+
+
+[[diagnostic]]
 code = 2304
 key = "Cannot_find_name_0"
 message_template = "Cannot find name '{0}'."

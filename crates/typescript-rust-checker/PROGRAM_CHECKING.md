@@ -20,7 +20,8 @@ The checker crate keeps the existing single-file APIs and adds program-level wra
 
 These APIs remain stable in this phase. v0.58 adds compatibility-report
 instrumentation in the CLI on top of these APIs without changing the checker
-surface.
+surface. None of these semantic checker APIs emit TS5112; TS5112 is strictly a
+CLI/config-level diagnostic emitted prior to running semantic checking.
 
 ## Global Script Model
 

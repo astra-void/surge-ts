@@ -30,6 +30,9 @@ struct Cli {
     #[arg(long = "showSpans")]
     show_spans: bool,
 
+    #[arg(long = "ignoreConfig")]
+    ignore_config: bool,
+
     #[arg(long = "compatReport")]
     compat_report: bool,
 
@@ -38,6 +41,9 @@ struct Cli {
 
     #[arg(long = "maxDiagnostics")]
     max_diagnostics: Option<usize>,
+
+    #[arg(long = "stubExternalModules")]
+    stub_external_modules: bool,
 
     #[arg(long)]
     no_implicit_any: bool,
@@ -62,14 +68,22 @@ fn main() -> ExitCode {
         .exit();
     }
 
-    if let Some(project) = cli.project {
+    if cli.project.is_some() {
+        if cli.ignore_config {
+            Error::raw(
+                ErrorKind::ArgumentConflict,
+                "--ignoreConfig cannot be used with --project",
+            )
+            .exit();
+        }
         return run_project_mode(
-            project,
+            cli.project.unwrap(),
             cli.show_config,
             cli.show_spans,
             cli.compat_report,
             cli.format.unwrap_or(ReportFormat::Text),
             cli.max_diagnostics,
+            cli.stub_external_modules,
         );
     }
 
@@ -100,19 +114,44 @@ fn main() -> ExitCode {
     run_single_file_mode(
         file_path,
         cli.no_implicit_any,
+        cli.stub_external_modules,
         cli.show_spans,
         cli.format.unwrap_or(ReportFormat::Text),
         cli.max_diagnostics,
+        cli.ignore_config,
     )
 }
 
 fn run_single_file_mode(
     file_path: PathBuf,
     no_implicit_any: bool,
+    stub_external_modules: bool,
     show_spans: bool,
     format: ReportFormat,
     max_diagnostics: Option<usize>,
+    ignore_config: bool,
 ) -> ExitCode {
+    if !ignore_config
+        && std::env::current_dir()
+            .map(|dir| dir.join("tsconfig.json").exists())
+            .unwrap_or(false)
+    {
+        let diagnostic = typescript_rust_diagnostics::Diagnostic::ts5112("<command line>");
+        match format {
+            ReportFormat::Text => println!("{}", diagnostic.render("")),
+            ReportFormat::Json => {
+                let json = serde_json::to_string_pretty(&render_single_file_diagnostics_json(
+                    &file_path,
+                    &[diagnostic],
+                    "",
+                    max_diagnostics,
+                ))
+                .unwrap();
+                println!("{}", json);
+            }
+        }
+        return ExitCode::from(1);
+    }
     let source_text = match fs::read_to_string(&file_path) {
         Ok(source_text) => source_text,
         Err(error) => {
@@ -124,7 +163,10 @@ fn run_single_file_mode(
     let diagnostics = check_source_with_options(
         &source_text,
         &file_path.to_string_lossy(),
-        CheckerOptions { no_implicit_any },
+        CheckerOptions {
+            no_implicit_any,
+            stub_external_modules,
+        },
     );
     match format {
         ReportFormat::Text => println!(
@@ -159,6 +201,7 @@ fn run_project_mode(
     compat_report: bool,
     format: ReportFormat,
     max_diagnostics: Option<usize>,
+    stub_external_modules: bool,
 ) -> ExitCode {
     let loaded = load_tsconfig(TsConfigLoadOptions { project });
 
@@ -174,6 +217,7 @@ fn run_project_mode(
 
     let checker_options = CheckerOptions {
         no_implicit_any: loaded.compiler_options.no_implicit_any,
+        stub_external_modules,
     };
 
     let mut inputs = Vec::with_capacity(loaded.files.len());
@@ -198,7 +242,7 @@ fn run_project_mode(
 
     let diagnostics = check_program_with_options(inputs, checker_options);
     if compat_report {
-        let report = build_project_compatibility_report(&loaded, &diagnostics);
+        let report = build_project_compatibility_report(&loaded, &diagnostics, &sources);
         match format {
             ReportFormat::Text => {
                 println!("{}", render_project_compatibility_report_text(&report));
@@ -319,7 +363,11 @@ fn build_single_file_diagnostic_json(
     );
     item.insert(
         "fileName".to_string(),
-        Value::String(file_path.display().to_string()),
+        if diagnostic.file_name == "<command line>" {
+            Value::String(diagnostic.file_name.clone())
+        } else {
+            Value::String(file_path.display().to_string())
+        },
     );
     item.insert(
         "message".to_string(),

@@ -48,6 +48,10 @@ pub(crate) fn is_relative_specifier(specifier: &str) -> bool {
         || specifier.starts_with("..\\")
 }
 
+pub(crate) fn is_external_specifier(specifier: &str) -> bool {
+    !is_relative_specifier(specifier)
+}
+
 pub(crate) fn resolve_relative_module(
     importer_file_name: &str,
     specifier: &str,
@@ -225,11 +229,15 @@ fn resolve_module_export_table(
                     module_specifier,
                     parsed_files,
                 ) else {
-                    emit_unresolved_export_module_diagnostic(
-                        ctx,
-                        module_specifier,
-                        *module_specifier_span,
-                    );
+                    if !(ctx.options.stub_external_modules
+                        && is_external_specifier(module_specifier))
+                    {
+                        emit_unresolved_export_module_diagnostic(
+                            ctx,
+                            module_specifier,
+                            *module_specifier_span,
+                        );
+                    }
 
                     for specifier in specifiers {
                         if *is_type_only {
@@ -413,7 +421,13 @@ fn resolve_module_export_table(
             module_specifier,
             parsed_files,
         ) else {
-            emit_unresolved_export_module_diagnostic(ctx, module_specifier, *module_specifier_span);
+            if !(ctx.options.stub_external_modules && is_external_specifier(module_specifier)) {
+                emit_unresolved_export_module_diagnostic(
+                    ctx,
+                    module_specifier,
+                    *module_specifier_span,
+                );
+            }
             resolved_export_table.has_unresolved_star_export = true;
             continue;
         };
@@ -670,7 +684,11 @@ fn resolve_import_declaration(
             let Some(resolved) =
                 resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
             else {
-                emit_unresolved_module_diagnostic(ctx, import);
+                if !(ctx.options.stub_external_modules
+                    && is_external_specifier(&import.module_specifier))
+                {
+                    emit_unresolved_module_diagnostic(ctx, import);
+                }
                 insert_unknown_value_import(local_name, symbols);
                 return;
             };
@@ -710,7 +728,11 @@ fn resolve_import_declaration(
             let Some(resolved) =
                 resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
             else {
-                emit_unresolved_module_diagnostic(ctx, import);
+                if !(ctx.options.stub_external_modules
+                    && is_external_specifier(&import.module_specifier))
+                {
+                    emit_unresolved_module_diagnostic(ctx, import);
+                }
                 insert_unknown_value_import(local_name, symbols);
                 return;
             };
@@ -740,7 +762,11 @@ fn resolve_import_declaration(
             if resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
                 .is_none()
             {
-                emit_unresolved_module_diagnostic(ctx, import);
+                if !(ctx.options.stub_external_modules
+                    && is_external_specifier(&import.module_specifier))
+                {
+                    emit_unresolved_module_diagnostic(ctx, import);
+                }
             }
             return;
         }
@@ -751,7 +777,11 @@ fn resolve_import_declaration(
             let Some(resolved) =
                 resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
             else {
-                emit_unresolved_module_diagnostic(ctx, import);
+                if !(ctx.options.stub_external_modules
+                    && is_external_specifier(&import.module_specifier))
+                {
+                    emit_unresolved_module_diagnostic(ctx, import);
+                }
                 for specifier in specifiers {
                     if *is_type_only {
                         insert_unknown_type_import(
