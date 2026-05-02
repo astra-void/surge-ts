@@ -22,6 +22,7 @@ Example:
 mkdir -p .local-projects
 cargo run -p typescript-rust-cli -- --project .local-projects/<project>/tsconfig.json --compatReport --maxDiagnostics 200
 pnpm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --maxDiagnostics 200
+pnpm run oracle:compare -- --file examples/basic.ts
 ```
 
 ## What the report tells you
@@ -38,6 +39,9 @@ blockers from the noise:
 The report does not guarantee that a project is expected to pass.
 The oracle comparison does not guarantee that message text or exact spans
 match; it starts with code, file, and line/column normalization first.
+Use `--project` for `tsconfig.json`-based projects and `--file` for single
+source files. Passing a `.ts` file to `--project` is rejected now so TypeScript
+does not misread the file as a config input.
 
 ## Current baseline
 
@@ -59,6 +63,8 @@ match; it starts with code, file, and line/column normalization first.
 The oracle harness also stays away from those areas. It only measures the
 current surface against TypeScript diagnostics; it does not add new resolver or
 type-system behavior to make the numbers line up.
+File mode is intentionally narrow: it only accepts `.ts` source files for now,
+and it is a quick standalone oracle rather than the main compatibility path.
 
 The next phase should still be chosen from oracle and compat-report output, not
 from a fixed feature wish list. Generic aliases and interfaces now support

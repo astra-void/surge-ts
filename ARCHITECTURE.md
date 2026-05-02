@@ -47,9 +47,11 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
   instead of adding ad-hoc wrapper spans.
 - The workspace also has a committed TypeScript oracle comparison harness under
   `scripts/oracle/` that measures diagnostic drift without changing checker
-  semantics. It is dev-only tooling with a pinned TypeScript version and a
-  committed `pnpm-lock.yaml`; it should not pull Node resolution or
-  language-service behavior into the Rust crates.
+  semantics. It now has explicit project and single-file modes plus input
+  validation so `.ts` files are not accidentally treated as `tsconfig` inputs.
+  It is dev-only tooling with a pinned TypeScript version and a committed
+  `pnpm-lock.yaml`; it should not pull Node resolution or language-service
+  behavior into the Rust crates.
 - Future phases should add new modules for interfaces, arrays/tuples, and imports/exports rather than re-expanding monolithic files; literal types are already represented and should be hardened in-place before broader type-system expansion.
 - Config, syntax, and checker logic should stay in their dedicated submodule trees rather than returning to crate-root files.
 - After v0.60.1, the next phase should be chosen from `--compatReport`
@@ -63,4 +65,6 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - Imports and exports: `typescript-rust-syntax`, `typescript-rust-checker`, and `typescript-rust-config`
 - Program checking: `typescript-rust-checker` and CLI project mode
 - Compatibility reporting and triage: `typescript-rust-cli` and `typescript-rust-checker`
+- Oracle comparison: `scripts/oracle/compare-tsc.ts` for project and file mode
+  validation plus diagnostic drift measurement
 - New diagnostics: `typescript-rust-diagnostics`
