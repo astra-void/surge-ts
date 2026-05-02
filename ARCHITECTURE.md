@@ -66,5 +66,5 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - Program checking: `typescript-rust-checker` and CLI project mode
 - Compatibility reporting and triage: `typescript-rust-cli` and `typescript-rust-checker`
 - Oracle comparison: `scripts/oracle/compare-tsc.ts` for project and file mode
-  validation plus diagnostic drift measurement
-- New diagnostics: `typescript-rust-diagnostics`
+  validation (including --ignoreConfig for standalone file checking) plus diagnostic drift measurement
+- New diagnostics: `typescript-rust-diagnostics` (including CLI-only diagnostics like TS5112)

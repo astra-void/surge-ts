@@ -23,6 +23,7 @@ mkdir -p .local-projects
 cargo run -p typescript-rust-cli -- --project .local-projects/<project>/tsconfig.json --compatReport --maxDiagnostics 200
 pnpm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --maxDiagnostics 200
 pnpm run oracle:compare -- --file examples/basic.ts
+pnpm run oracle:compare -- --file examples/basic.ts --ignoreConfig
 ```
 
 ## What the report tells you
@@ -73,5 +74,6 @@ from a fixed feature wish list. Module syntax expansion now supports default,
 namespace, and re-export forms for relative `.ts` files. Likely follow-ups
 include:
 
-- `v0.62 package import stubbing`
-- `v0.62 declaration-file surface`
+- `v0.63 package import stubbing`
+- `v0.63 declaration-file surface`
+- `v0.63 lib/global type surface`
