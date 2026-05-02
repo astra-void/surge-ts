@@ -2285,3 +2285,143 @@ fn program_order_star_re_export_missing_module_before_statement() {
 
     assert_eq!(codes(&diagnostics), vec!["TS2307", "TS2322"]);
 }
+
+#[test]
+fn single_file_external_named_import_reports_ts2307_no_cascade() {
+    let source = r#"
+        import { useState } from "react";
+        let state = useState();
+    "#;
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code.to_string(), "TS2307");
+}
+
+#[test]
+fn single_file_external_named_import_stub_mode_suppresses_ts2307() {
+    let source = r#"
+        import { useState } from "react";
+        let state = useState();
+    "#;
+    let mut options = CheckerOptions::default();
+    options.stub_external_modules = true;
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn single_file_external_type_only_import_reports_ts2307_no_cascade() {
+    let source = r#"
+        import type { Store } from "zustand";
+        let x: Store = null as any;
+    "#;
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code.to_string(), "TS2307");
+}
+
+#[test]
+fn single_file_external_type_only_import_stub_mode_suppresses_ts2307() {
+    let source = r#"
+        import type { Store } from "zustand";
+        let x: Store = null as any;
+    "#;
+    let mut options = CheckerOptions::default();
+    options.stub_external_modules = true;
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn single_file_external_default_import_reports_ts2307_no_cascade() {
+    let source = r#"
+        import React from "react";
+        let r = React;
+    "#;
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code.to_string(), "TS2307");
+}
+
+#[test]
+fn single_file_external_default_import_stub_mode_suppresses_ts2307() {
+    let source = r#"
+        import React from "react";
+        let r = React;
+    "#;
+    let mut options = CheckerOptions::default();
+    options.stub_external_modules = true;
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn single_file_external_namespace_import_reports_ts2307_no_cascade() {
+    let source = r#"
+        import * as Zustand from "zustand";
+        let store = Zustand;
+    "#;
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code.to_string(), "TS2307");
+}
+
+#[test]
+fn single_file_external_namespace_import_stub_mode_suppresses_ts2307() {
+    let source = r#"
+        import * as Zustand from "zustand";
+        let store = Zustand;
+    "#;
+    let mut options = CheckerOptions::default();
+    options.stub_external_modules = true;
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn single_file_external_namespace_property_access_no_cascade() {
+    let source = r#"
+        import * as Zustand from "zustand";
+        let store = Zustand.createStore;
+    "#;
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code.to_string(), "TS2307");
+}
+
+#[test]
+fn program_external_namespace_property_access_no_cascade() {
+    let files = vec![SourceFileInput {
+        file_name: "test.ts".to_string(),
+        source_text: r#"
+            import * as Zustand from "zustand";
+            let store = Zustand.createStore;
+        "#
+        .to_string(),
+    }];
+    let options = CheckerOptions::default();
+    let result = check_program_with_options(files, options);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].code.to_string(), "TS2307");
+}
+
+#[test]
+fn program_stub_external_modules_keeps_relative_missing_module_ts2307() {
+    let files = vec![SourceFileInput {
+        file_name: "test.ts".to_string(),
+        source_text: r#"
+            import { X } from "./missing";
+        "#
+        .to_string(),
+    }];
+    let mut options = CheckerOptions::default();
+    options.stub_external_modules = true;
+    let result = check_program_with_options(files, options);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].code.to_string(), "TS2307");
+}

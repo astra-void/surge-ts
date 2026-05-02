@@ -51,6 +51,17 @@ impl Diagnostic {
         self
     }
 
+    pub fn ts2307(module_specifier: &str, file_name: impl Into<String>) -> Self {
+        Self::new(
+            DiagnosticCode::TypeScript(2307),
+            format!(
+                "Cannot find module '{}' or its corresponding type declarations.",
+                module_specifier
+            ),
+            file_name,
+        )
+    }
+
     pub fn ts2322(source_type: &str, target_type: &str, file_name: impl Into<String>) -> Self {
         Self::typescript(
             TypeScriptDiagnosticKind::TypeNotAssignable,

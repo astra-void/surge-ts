@@ -40,6 +40,9 @@ export type ComparisonResult = {
   project: string | null;
   file: string | null;
   ignoreConfig?: boolean;
+  typescriptRustOptions?: {
+    stubExternalModules?: boolean;
+  };
   tooling: {
     typescriptVersion: string;
     typescriptCommand: string;
@@ -100,7 +103,7 @@ export type RunResult = {
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
 const workspaceRoot = path.resolve(scriptDir, '../..');
-const npmCache = process.env.npm_config_cache ?? path.join(os.tmpdir(), 'npm-cache');
+const packageManagerCache = process.env.npm_config_cache ?? path.join(os.tmpdir(), 'npm-cache');
 const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
 
 const fixturePresets: Record<string, string> = {
@@ -353,7 +356,7 @@ export function runTsc(mode: OracleMode): RunResult {
     encoding: 'utf8',
     env: {
       ...process.env,
-      npm_config_cache: npmCache,
+      npm_config_cache: packageManagerCache,
     },
   });
 
@@ -596,6 +599,9 @@ export function compareDiagnostics(
     project: mode === 'project' ? targetDisplay : null,
     file: mode === 'file' ? targetDisplay : null,
     ignoreConfig: ignoreConfig ?? false,
+    typescriptRustOptions: {
+      stubExternalModules: stubExternalModules ?? false,
+    },
     tooling: {
       typescriptVersion: pinnedTypeScriptVersion,
       typescriptCommand: buildTypeScriptCommand(mode, targetDisplay, ignoreConfig),
@@ -761,6 +767,13 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   lines.push(`Mode: ${comparison.mode}`);
   lines.push(comparison.mode === 'project' ? `Project: ${comparison.project}` : `File: ${comparison.file}`);
   lines.push('');
+
+  if (comparison.typescriptRustOptions?.stubExternalModules) {
+    lines.push('typescript-rust options: --stubExternalModules');
+    lines.push('Note: --stubExternalModules is a typescript-rust-only compatibility mode.');
+    lines.push('');
+  }
+
   lines.push('Tooling:');
   lines.push(`TypeScript version: ${comparison.tooling.typescriptVersion}`);
   lines.push(`TypeScript command: ${comparison.tooling.typescriptCommand}`);

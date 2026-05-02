@@ -1576,3 +1576,175 @@ fn compat_project_report_counts_by_file() {
     assert!(stderr.is_empty());
     assert!(stdout.contains("src/index.ts  8"));
 }
+
+#[test]
+fn cli_stub_external_modules_project_suppresses_package_ts2307() {
+    let root = temp_dir("cli_stub_project");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["*.ts"] }"#);
+    write_file(&root, "index.ts", r#"import { useState } from "react";"#);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+    ]);
+    assert!(stdout.contains("TS2307"));
+    assert!(stderr.is_empty());
+
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+        "--stubExternalModules",
+    ]);
+    assert!(!stdout.contains("TS2307"));
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn cli_stub_external_modules_project_keeps_relative_ts2307() {
+    let root = temp_dir("cli_stub_project_rel");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["*.ts"] }"#);
+    write_file(&root, "index.ts", r#"import { X } from "./missing";"#);
+
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+        "--stubExternalModules",
+    ]);
+    assert!(stdout.contains("TS2307"));
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn cli_stub_external_modules_single_file_ignore_config_suppresses_package_ts2307() {
+    let root = temp_dir("cli_stub_single");
+    let file = root.join("index.ts");
+    fs::write(&file, r#"import { useState } from "react";"#).unwrap();
+
+    let (stdout, stderr) = run_cli(&["--ignoreConfig", file.to_string_lossy().as_ref()]);
+    assert!(stdout.contains("TS2307"));
+
+    let (stdout, stderr) = run_cli(&[
+        "--ignoreConfig",
+        file.to_string_lossy().as_ref(),
+        "--stubExternalModules",
+    ]);
+    assert!(!stdout.contains("TS2307"));
+}
+
+#[test]
+fn cli_stub_external_modules_does_not_affect_ts5112() {
+    let root = temp_dir("cli_stub_ts5112");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["*.ts"] }"#);
+    let file = root.join("index.ts");
+    fs::write(&file, "let x = 1;").unwrap();
+
+    // Changing the CWD so the CLI detects tsconfig.json automatically
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_typescript-rust-cli"));
+    cmd.current_dir(&root);
+    cmd.arg("index.ts");
+    cmd.arg("--stubExternalModules");
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("TS5112"));
+}
+
+#[test]
+fn cli_stub_external_modules_compat_report() {
+    let root = temp_dir("cli_stub_compat_report");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["*.ts"] }"#);
+    write_file(
+        &root,
+        "index.ts",
+        r#"import { useState } from "react"; import { create } from "zustand";"#,
+    );
+
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+        "--compatReport",
+    ]);
+    assert!(stdout.contains("External module stubs: 2"));
+    assert!(stdout.contains("react  1"));
+    assert!(stdout.contains("zustand  1"));
+    assert!(stdout.contains("TS2307"));
+
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+        "--compatReport",
+        "--stubExternalModules",
+    ]);
+    assert!(stdout.contains("External module stubs: 2"));
+    assert!(!stdout.contains("TS2307"));
+}
+
+#[test]
+fn cli_default_external_import_reports_ts2307_no_cascade() {
+    let root = temp_dir("cli_default_ext");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["*.ts"] }"#);
+    write_file(
+        &root,
+        "index.ts",
+        r#"import * as Zustand from "zustand"; let x = Zustand.create;"#,
+    );
+
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+    ]);
+    assert!(stdout.contains("TS2307"));
+    assert!(!stdout.contains("TS2339"));
+}
+
+#[test]
+fn cli_external_namespace_property_access_no_cascade() {
+    let root = temp_dir("cli_ext_ns");
+    let file = root.join("index.ts");
+    fs::write(
+        &file,
+        r#"import * as Zustand from "zustand"; let store = Zustand.createStore;"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr) = run_cli(&["--ignoreConfig", file.to_string_lossy().as_ref()]);
+    assert!(stdout.contains("TS2307"));
+    assert!(!stdout.contains("TS2339"));
+}
+
+#[test]
+fn compat_report_external_module_stubs_json() {
+    let root = temp_dir("cli_stub_compat_report_json");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["*.ts"] }"#);
+    write_file(
+        &root,
+        "index.ts",
+        r#"import { useState } from "react"; import { create } from "zustand";"#,
+    );
+
+    let (stdout, _stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let stubs = report.get("externalModuleStubs").unwrap();
+    assert_eq!(stubs.get("total").unwrap().as_u64().unwrap(), 2);
+    let by_specifier = stubs.get("bySpecifier").unwrap().as_array().unwrap();
+    assert_eq!(by_specifier.len(), 2);
+
+    // Sort or check for both since HashMap iteration order is non-deterministic
+    let has_react = by_specifier.iter().any(|v| {
+        v.get("specifier").unwrap().as_str().unwrap() == "react"
+            && v.get("count").unwrap().as_u64().unwrap() == 1
+    });
+    let has_zustand = by_specifier.iter().any(|v| {
+        v.get("specifier").unwrap().as_str().unwrap() == "zustand"
+            && v.get("count").unwrap().as_u64().unwrap() == 1
+    });
+
+    assert!(has_react);
+    assert!(has_zustand);
+}

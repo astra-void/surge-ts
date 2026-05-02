@@ -1333,3 +1333,73 @@ fn span_cross_file_declaration_error_points_to_declaration_file_token() {
         )]
     );
 }
+
+#[test]
+fn span_external_named_import_points_to_module_specifier() {
+    let source = "import { useState } from \"react\";";
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    let span = diagnostics[0].span.as_ref().unwrap();
+    assert_eq!(&source[span.start..span.end], "\"react\"");
+}
+
+#[test]
+fn span_external_type_only_import_points_to_module_specifier() {
+    let source = "import type { Store } from \"zustand\";";
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    let span = diagnostics[0].span.as_ref().unwrap();
+    assert_eq!(&source[span.start..span.end], "\"zustand\"");
+}
+
+#[test]
+fn span_external_default_import_points_to_module_specifier() {
+    let source = "import React from \"react\";";
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    let span = diagnostics[0].span.as_ref().unwrap();
+    assert_eq!(&source[span.start..span.end], "\"react\"");
+}
+
+#[test]
+fn span_external_namespace_import_points_to_module_specifier() {
+    let source = "import * as Zustand from \"zustand\";";
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    let span = diagnostics[0].span.as_ref().unwrap();
+    assert_eq!(&source[span.start..span.end], "\"zustand\"");
+}
+
+#[test]
+fn span_external_side_effect_import_points_to_module_specifier() {
+    let source = "import \"pkg\";";
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    let span = diagnostics[0].span.as_ref().unwrap();
+    assert_eq!(&source[span.start..span.end], "\"pkg\"");
+}
+
+#[test]
+fn span_external_re_export_named_points_to_module_specifier() {
+    let source = "export { x } from \"pkg\";";
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    let span = diagnostics[0].span.as_ref().unwrap();
+    assert_eq!(&source[span.start..span.end], "\"pkg\"");
+}
+
+#[test]
+fn span_external_re_export_star_points_to_module_specifier() {
+    let source = "export * from \"pkg\";";
+    let options = CheckerOptions::default();
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 1);
+    let span = diagnostics[0].span.as_ref().unwrap();
+    assert_eq!(&source[span.start..span.end], "\"pkg\"");
+}

@@ -8,6 +8,14 @@ CLI entry point for the workspace checker.
 - Single-file mode (standalone): `typescript-rust-cli --ignoreConfig <file.ts>`
 - Project mode: `typescript-rust-cli --project <tsconfig.json>`
 - Compatibility report: `typescript-rust-cli --project <tsconfig.json> --compatReport`
+- Stub external modules: `typescript-rust-cli --project <tsconfig.json> --stubExternalModules`
+
+## External Modules (v0.63)
+
+By default, non-relative package imports emit TS2307.
+`--stubExternalModules` suppresses non-relative TS2307 and inserts unknown type/value stubs.
+This is a typescript-rust-only compatibility/triage mode and does not resolve node_modules, package.json, or declaration files.
+
 
 ## Single-file behavior
 

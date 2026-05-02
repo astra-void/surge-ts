@@ -51,6 +51,13 @@ function run() {
   oracle_output_includes_mode_project();
   oracle_output_includes_mode_file();
   oracle_json_output_includes_mode();
+  oracle_args_accepts_stub_external_modules();
+  oracle_builds_rust_project_command_with_stub_external_modules();
+  oracle_builds_rust_file_command_with_stub_external_modules();
+  oracle_does_not_pass_stub_external_modules_to_tsc();
+  oracle_output_mentions_stub_external_modules_as_rust_only();
+  oracle_json_output_includes_stub_external_modules_flag();
+  oracle_default_does_not_use_stub_external_modules();
 }
 
 function oracle_parse_tsc_single_line() {
@@ -493,3 +500,49 @@ function run_all() {
 run_all();
 
 
+
+function oracle_args_accepts_stub_external_modules() {
+  const args = parseArgs(['--project', 'package-imports', '--stubExternalModules']);
+  assert.equal(args.stubExternalModules, true);
+  const mode = resolveOracleMode(args);
+  assert.equal(mode.kind, 'project');
+  if (mode.kind === 'project') {
+    assert.equal(mode.stubExternalModules, true);
+  }
+}
+
+function oracle_builds_rust_project_command_with_stub_external_modules() {
+  const cmd = buildTypeScriptRustCommand('project', 'tsconfig.json', false, true);
+  assert.ok(cmd.includes('--stubExternalModules'), 'should include --stubExternalModules');
+}
+
+function oracle_builds_rust_file_command_with_stub_external_modules() {
+  const cmd = buildTypeScriptRustCommand('file', 'test.ts', false, true);
+  assert.ok(cmd.includes('--stubExternalModules'), 'should include --stubExternalModules');
+}
+
+function oracle_does_not_pass_stub_external_modules_to_tsc() {
+  const cmd = buildTypeScriptCommand('project', 'tsconfig.json', false);
+  assert.ok(!cmd.includes('--stubExternalModules'), 'should not pass --stubExternalModules to tsc');
+}
+
+function oracle_output_mentions_stub_external_modules_as_rust_only() {
+  const comparison = compareDiagnostics('project', 'tsconfig.json', [], [], false, true);
+  const text = renderComparisonText(comparison);
+  assert.ok(text.includes('typescript-rust options: --stubExternalModules'));
+  assert.ok(text.includes('--stubExternalModules is a typescript-rust-only'));
+}
+
+function oracle_json_output_includes_stub_external_modules_flag() {
+  const comparison = compareDiagnostics('project', 'tsconfig.json', [], [], false, true);
+  assert.equal(comparison.typescriptRustOptions?.stubExternalModules, true);
+}
+
+function oracle_default_does_not_use_stub_external_modules() {
+  const args = parseArgs(['--project', 'package-imports']);
+  assert.equal(args.stubExternalModules, undefined);
+  const mode = resolveOracleMode(args);
+  if (mode.kind === 'project') {
+    assert.equal(mode.stubExternalModules, undefined);
+  }
+}

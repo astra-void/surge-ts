@@ -66,6 +66,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 - Call-expression type arguments are parsed for syntax stability, but v0.59
   ignores them in checker flow, so no dedicated diagnostic span is emitted yet.
 - Non-relative package-style imports intentionally do not resolve. They either
+  emit TS2307, are stubbed via `--stubExternalModules` (v0.63), or
   emit TS2307 with the module specifier span or a pinned unsupported-module
   diagnostic for parser-safe unsupported syntax.
 - Side-effect imports never bind names, so downstream unresolved-identifier diagnostics are still usage-site diagnostics.

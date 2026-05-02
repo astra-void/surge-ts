@@ -50,6 +50,14 @@ and running semantic checking:
 pnpm run oracle:compare -- --file examples/basic.ts --ignoreConfig
 ```
 
+Compare a project while suppressing external package missing-module errors:
+
+```bash
+pnpm run oracle:compare -- --project package-imports --stubExternalModules
+```
+*Note: `--stubExternalModules` is a typescript-rust-only compatibility flag. The oracle does not pass it to TypeScript.*
+
+
 Compare a disposable local project:
 
 ```bash

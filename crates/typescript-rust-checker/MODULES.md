@@ -33,11 +33,24 @@ Namespace imports bind a single value symbol whose object type is built from the
 - `export * from` follows a pinned conflict policy: local explicit exports win, and the first star export wins when multiple star exports provide the same name.
 - Unresolved star re-exports are intentionally kept from cascading extra consumer diagnostics.
 
+## Non-relative imports and package stubs
+
+v0.63 does not resolve packages. It does, however, stub non-relative imports
+and re-exports to reduce compatibility-report cascades.
+
+Default mode:
+- reports TS2307 for non-relative module specifiers
+- inserts unknown type/value stubs where possible
+
+`--stubExternalModules`:
+- suppresses non-relative TS2307
+- keeps unknown stubs
+- leaves relative missing modules unchanged
+
 ## Still Unsupported
 
 These forms remain intentionally out of scope for v0.61:
 
-- Non-relative package imports and re-exports
 - `node_modules` lookup
 - `paths` / `baseUrl` resolution
 - Declaration files and `lib.d.ts`

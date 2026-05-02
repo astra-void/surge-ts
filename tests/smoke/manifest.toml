@@ -5589,22 +5589,22 @@ expected_diagnostics = []
 [[case]]
 name = "module-non-relative-named-import-no-cascade"
 path = "tests/smoke/module_non_relative_named_import_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-non-relative-type-import-no-cascade"
 path = "tests/smoke/module_non_relative_type_import_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-non-relative-side-effect-import"
 path = "tests/smoke/module_non_relative_side_effect_import.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-default-import-non-relative-unsupported"
 path = "tests/smoke/module_default_import_non_relative_unsupported.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-default-import-mixed-named-parser-safe-or-pinned"
@@ -5614,7 +5614,7 @@ expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 [[case]]
 name = "module-namespace-import-non-relative-unsupported"
 path = "tests/smoke/module_namespace_import_non_relative_unsupported.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-namespace-import-missing-module-no-cascade"
@@ -5629,7 +5629,7 @@ expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 [[case]]
 name = "module-re-export-named-non-relative-unsupported"
 path = "tests/smoke/module_re_export_named_non_relative_unsupported.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-re-export-star-missing-module"
@@ -5644,7 +5644,7 @@ expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 [[case]]
 name = "module-re-export-star-non-relative-unsupported"
 path = "tests/smoke/module_re_export_star_non_relative_unsupported.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-default-import-valid"
@@ -6067,3 +6067,7 @@ diagnostics = [2307]
 [[test]]
 file = "external_re_export_star_reports_ts2307_no_cascade.ts"
 diagnostics = [2307]
+
+[[test]]
+file = "external_namespace_import_property_access_no_cascade.ts"
+expected_codes = ["TS2307"]
