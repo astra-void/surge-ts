@@ -1,10 +1,13 @@
 use typescript_rust_diagnostics::Diagnostic;
-use typescript_rust_syntax::{ParsedCall, ParsedCallArgument, TextSpan as SyntaxTextSpan};
+use typescript_rust_syntax::{
+    ParsedCall, ParsedCallArgument, ParsedType, TextSpan as SyntaxTextSpan,
+};
 use typescript_rust_types::{FunctionType, Type, is_assignable_to};
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
-use crate::context::{CheckerContext, convert_span};
+use crate::context::CheckerContext;
 use crate::infer::InferredExpression;
+use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 
 pub(crate) fn check_call(call: ParsedCall, ctx: &mut CheckerContext) {
@@ -12,6 +15,8 @@ pub(crate) fn check_call(call: ParsedCall, ctx: &mut CheckerContext) {
     let _ = check_call_like(
         &call.callee_name,
         call.callee_span,
+        call.span,
+        &call.type_arguments,
         &call.arguments,
         &symbols,
         ctx,
@@ -21,31 +26,41 @@ pub(crate) fn check_call(call: ParsedCall, ctx: &mut CheckerContext) {
 pub(crate) fn check_call_like(
     callee_name: &str,
     callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     let Some(symbol) = symbols.get(callee_name).cloned() else {
-        let diagnostic = Diagnostic::ts2304(callee_name, ctx.file_name.clone());
-        let diagnostic = match callee_span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2304(callee_name, ctx.file_name.clone()),
+            callee_span,
+        ));
         return None;
     };
+
+    if matches!(symbol.ty, Type::Unknown) {
+        return None;
+    }
 
     let Type::Function(function_type) = symbol.ty else {
-        let diagnostic = Diagnostic::ts2349(ctx.file_name.clone());
-        let diagnostic = match callee_span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2349(ctx.file_name.clone()),
+            callee_span,
+        ));
         return None;
     };
 
-    check_function_type_call(&function_type, callee_span, arguments, symbols, ctx)
+    check_function_type_call(
+        &function_type,
+        callee_span,
+        call_span,
+        type_arguments,
+        arguments,
+        symbols,
+        ctx,
+    )
 }
 
 pub(crate) fn check_property_call_like(
@@ -54,17 +69,16 @@ pub(crate) fn check_property_call_like(
     property_name: &str,
     property_span: Option<SyntaxTextSpan>,
     call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     let Some(symbol) = symbols.get(object_name).cloned() else {
-        let diagnostic = Diagnostic::ts2304(object_name, ctx.file_name.clone());
-        let diagnostic = match object_span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2304(object_name, ctx.file_name.clone()),
+            object_span,
+        ));
         return None;
     };
 
@@ -77,18 +91,19 @@ pub(crate) fn check_property_call_like(
             let Some(property_type) = object_type.get_property_access_type(property_name) else {
                 let diagnostic =
                     Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone());
-                let diagnostic = match property_span.or(object_span) {
-                    Some(span) => diagnostic.with_span(convert_span(span)),
-                    None => diagnostic,
-                };
-                ctx.push(diagnostic);
+                ctx.push(diagnostic_with_syntax_span(
+                    diagnostic,
+                    crate::spans::choose_span(property_span, object_span),
+                ));
                 return None;
             };
 
             match property_type {
                 Type::Function(function_type) => check_function_type_call(
                     &function_type,
-                    call_span.or(property_span),
+                    property_span,
+                    call_span,
+                    type_arguments,
                     arguments,
                     symbols,
                     ctx,
@@ -96,21 +111,23 @@ pub(crate) fn check_property_call_like(
                 Type::Any => Some(Type::Any),
                 Type::Unknown => None,
                 Type::Union(_) => {
-                    let diagnostic = Diagnostic::ts2349(ctx.file_name.clone());
-                    let diagnostic = match call_span.or(property_span).or(object_span) {
-                        Some(span) => diagnostic.with_span(convert_span(span)),
-                        None => diagnostic,
-                    };
-                    ctx.push(diagnostic);
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts2349(ctx.file_name.clone()),
+                        crate::spans::choose_span(
+                            call_span,
+                            crate::spans::choose_span(property_span, object_span),
+                        ),
+                    ));
                     None
                 }
                 _ => {
-                    let diagnostic = Diagnostic::ts2349(ctx.file_name.clone());
-                    let diagnostic = match call_span.or(property_span).or(object_span) {
-                        Some(span) => diagnostic.with_span(convert_span(span)),
-                        None => diagnostic,
-                    };
-                    ctx.push(diagnostic);
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts2349(ctx.file_name.clone()),
+                        crate::spans::choose_span(
+                            call_span,
+                            crate::spans::choose_span(property_span, object_span),
+                        ),
+                    ));
                     None
                 }
             }
@@ -118,11 +135,10 @@ pub(crate) fn check_property_call_like(
         _ => {
             let diagnostic =
                 Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone());
-            let diagnostic = match property_span.or(object_span) {
-                Some(span) => diagnostic.with_span(convert_span(span)),
-                None => diagnostic,
-            };
-            ctx.push(diagnostic);
+            ctx.push(diagnostic_with_syntax_span(
+                diagnostic,
+                crate::spans::choose_span(property_span, object_span),
+            ));
             None
         }
     }
@@ -131,6 +147,8 @@ pub(crate) fn check_property_call_like(
 pub(crate) fn check_function_type_call(
     function_type: &FunctionType,
     callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    _type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -140,12 +158,10 @@ pub(crate) fn check_function_type_call(
     let mut has_unresolved_argument = false;
 
     if expected != actual {
-        let diagnostic = Diagnostic::ts2554(expected, actual, ctx.file_name.clone());
-        let diagnostic = match callee_span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2554(expected, actual, ctx.file_name.clone()),
+            call_span.or(callee_span),
+        ));
         return None;
     }
 
@@ -174,12 +190,7 @@ pub(crate) fn check_function_type_call(
                         ctx.file_name.clone(),
                     );
 
-                    let diagnostic = match argument.span {
-                        Some(span) => diagnostic.with_span(convert_span(span)),
-                        None => diagnostic,
-                    };
-
-                    ctx.push(diagnostic);
+                    ctx.push(diagnostic_with_syntax_span(diagnostic, argument.span));
                 }
             }
             InferredExpression::UnresolvedIdentifier { .. }

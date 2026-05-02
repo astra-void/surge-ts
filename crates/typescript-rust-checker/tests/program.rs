@@ -635,41 +635,53 @@ fn program_module_file_local_exported_function_visible_same_file() {
 }
 
 #[test]
-fn program_import_named_does_not_bind_type_yet() {
-    let diagnostics = program(&[(
-        "a.ts",
-        "import { User } from \"./user\";\nlet user: User = { name: \"Ada\" };",
-    )]);
+fn program_import_named_relative_interface_valid() {
+    let diagnostics = program(&[
+        ("user.ts", "export interface User { name: string; }"),
+        (
+            "a.ts",
+            "import { User } from \"./user\";\nlet user: User = { name: \"Ada\" };",
+        ),
+    ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
-fn program_import_named_does_not_bind_value_yet() {
-    let diagnostics = program(&[(
-        "a.ts",
-        "import { getName } from \"./user\";\nlet value: string = getName();",
-    )]);
+fn program_import_named_relative_function_valid() {
+    let diagnostics = program(&[
+        (
+            "user.ts",
+            "export function getName(): string { return \"Ada\"; }",
+        ),
+        (
+            "a.ts",
+            "import { getName } from \"./user\";\nlet value: string = getName();",
+        ),
+    ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
-fn program_import_type_named_does_not_bind_type_yet() {
-    let diagnostics = program(&[(
-        "a.ts",
-        "import type { User } from \"./user\";\nlet user: User = { name: \"Ada\" };",
-    )]);
+fn program_import_type_named_relative_type_alias_valid() {
+    let diagnostics = program(&[
+        ("user.ts", "export type UserId = string;"),
+        (
+            "a.ts",
+            "import type { UserId } from \"./user\";\nlet id: UserId = \"u1\";",
+        ),
+    ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
-fn program_import_side_effect_no_diagnostic() {
-    let diagnostics = program(&[("a.ts", "import \"./setup\";\nlet value: string = \"ok\";")]);
+fn program_import_side_effect_relative_valid() {
+    let diagnostics = program(&[
+        ("setup.ts", "export const initialized: boolean = true;"),
+        ("a.ts", "import \"./setup\";\nlet value: string = \"ok\";"),
+    ]);
 
     assert!(diagnostics.is_empty());
 }
@@ -686,6 +698,54 @@ fn program_module_file_does_not_see_script_global_current_policy() {
     let diagnostics = program(&[
         ("a.ts", "interface User { name: string; }"),
         ("b.ts", "export {};\nlet user: User = { name: \"Ada\" };"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_module_file_does_not_see_script_type_alias_current_policy() {
+    let diagnostics = program(&[
+        ("a.ts", "type Name = string;"),
+        ("b.ts", "export {};\nlet value: Name = \"Ada\";"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_module_file_does_not_see_script_function_current_policy() {
+    let diagnostics = program(&[
+        ("a.ts", "function getName(): string { return \"Ada\"; }"),
+        ("b.ts", "export {};\nlet value: string = getName();"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_empty_export_isolates_file_from_script_globals() {
+    let diagnostics = program(&[
+        ("a.ts", "interface User { name: string; }"),
+        ("b.ts", "export {};\nlet user: User = { name: \"Ada\" };"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_side_effect_import_isolates_file_from_script_globals() {
+    let diagnostics = program(&[
+        ("a.ts", "interface User { name: string; }"),
+        ("setup.ts", "export {};"),
+        (
+            "b.ts",
+            "import \"./setup\";\nlet user: User = { name: \"Ada\" };",
+        ),
     ]);
 
     assert_eq!(codes(&diagnostics), vec!["TS2304"]);
@@ -727,13 +787,126 @@ fn program_module_duplicate_function_is_file_local_or_policy_pinned() {
 }
 
 #[test]
+fn program_script_files_still_share_interface() {
+    let diagnostics = program(&[
+        ("a.ts", "interface User { name: string; }"),
+        ("b.ts", "let user: User = { name: \"Ada\" };"),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_script_files_still_share_type_alias() {
+    let diagnostics = program(&[
+        ("a.ts", "type Name = string;"),
+        ("b.ts", "let value: Name = \"Ada\";"),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_script_files_still_share_function() {
+    let diagnostics = program(&[
+        ("a.ts", "function getName(): string { return \"Ada\"; }"),
+        ("b.ts", "let value: string = getName();"),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_exported_interface_not_global() {
+    let diagnostics = program(&[
+        ("a.ts", "export interface User { name: string; }"),
+        ("b.ts", "let user: User = { name: \"Ada\" };"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_module_exported_type_alias_not_global() {
+    let diagnostics = program(&[
+        ("a.ts", "export type Name = string;"),
+        ("b.ts", "let value: Name = \"Ada\";"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_module_exported_function_not_global() {
+    let diagnostics = program(&[
+        (
+            "a.ts",
+            "export function getName(): string { return \"Ada\"; }",
+        ),
+        ("b.ts", "let value: string = getName();"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_module_exported_variable_not_global() {
+    let diagnostics = program(&[
+        ("a.ts", "export const value: string = \"Ada\";"),
+        ("b.ts", "let other: string = value;"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_script_file_does_not_see_module_exported_interface() {
+    let diagnostics = program(&[
+        ("a.ts", "export interface User { name: string; }"),
+        ("b.ts", "let user: User = { name: \"Ada\" };"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_script_file_does_not_see_module_exported_type_alias() {
+    let diagnostics = program(&[
+        ("a.ts", "export type Name = string;"),
+        ("b.ts", "let value: Name = \"Ada\";"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_script_file_does_not_see_module_exported_function() {
+    let diagnostics = program(&[
+        (
+            "a.ts",
+            "export function getName(): string { return \"Ada\"; }",
+        ),
+        ("b.ts", "let value: string = getName();"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
 fn program_imported_type_unresolved_no_cascade() {
     let diagnostics = program(&[(
         "a.ts",
         "import { User } from \"./user\";\nlet user: User = { name: 123 };",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
 }
 
 #[test]
@@ -743,7 +916,7 @@ fn program_imported_function_unresolved_no_cascade() {
         "import { getName } from \"./user\";\nlet value: string = getName();",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
 }
 
 #[test]
@@ -763,4 +936,811 @@ fn program_parser_import_export_recovery_does_not_stop_other_files() {
 
     assert!(!diagnostics.is_empty());
     assert_eq!(file_names(&diagnostics)[0], "a.ts");
+}
+
+#[test]
+fn program_module_file_local_exported_const_visible_same_file() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export const value: string = \"Ada\";\nlet other: string = value;",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_file_local_exported_let_visible_same_file() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export let value: string = \"Ada\";\nlet other: string = value;",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_file_local_exported_var_visible_same_file() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export var value: string = \"Ada\";\nlet other: string = value;",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_file_local_non_exported_interface_visible_same_module_file() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\ninterface User { name: string; }\nlet user: User = { name: \"Ada\" };",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_file_local_non_exported_type_alias_visible_same_module_file() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\ntype Name = string;\nlet value: Name = \"Ada\";",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_file_local_non_exported_function_visible_same_module_file() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\nfunction getName(): string { return \"Ada\"; }\nlet value: string = getName();",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_type_alias_forward_reference_valid() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\nlet value: Name = \"Ada\";\ntype Name = string;",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_interface_forward_reference_valid() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\nlet value: User = { name: \"Ada\" };\ninterface User { name: string; }",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_export_function_parameter_no_implicit_any() {
+    let diagnostics = program_with_options(
+        &[(
+            "a.ts",
+            "export function f(value): string { return \"ok\"; }",
+        )],
+        CheckerOptions {
+            no_implicit_any: true,
+        },
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS7006"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_variable_initializer_mismatch() {
+    let diagnostics = program(&[("a.ts", "export const value: string = 123;")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_variable_duplicate_let_same_file() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export let value: string = \"Ada\";\nexport let value: string = \"Grace\";",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2451"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_type_alias_unknown_type_no_cascade() {
+    let diagnostics = program(&[("a.ts", "export type Name = Missing;\nlet value: Name = 1;")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_interface_unknown_property_no_cascade() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export interface User { name: string; }\nlet user: User = { name: \"Ada\" };\nlet value: string = user.missing;",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_function_unknown_return_no_missing_return_cascade() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export function getName(): string { return Missing; }",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_function_unknown_parameter_no_argument_cascade() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export function greet(name: Missing): void {}\ngreet(1);",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_import_alias_type_unresolved_local_name() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "import { User as UserModel } from \"./user\";\nlet user: UserModel = { name: \"Ada\" };",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_import_alias_value_unresolved_local_name() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "import { getName as getUserName } from \"./user\";\nlet value: string = getUserName();",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_import_side_effect_no_unresolved_name() {
+    let diagnostics = program(&[
+        ("setup.ts", "export {};"),
+        ("a.ts", "import \"./setup\";\nlet value: string = \"ok\";"),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_import_side_effect_script_file_valid() {
+    let diagnostics = program(&[
+        ("setup.ts", "let initialized: boolean = true;"),
+        ("a.ts", "import \"./setup\";\nlet value: string = \"ok\";"),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_import_regular_type_export_type_usage_valid() {
+    let diagnostics = program(&[
+        ("user.ts", "export interface User { name: string; }"),
+        (
+            "index.ts",
+            "import { User } from \"./user\";\nlet user: User = { name: \"Ada\" };",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_import_regular_type_export_value_usage_unresolved() {
+    let diagnostics = program(&[
+        ("user.ts", "export interface User { name: string; }"),
+        (
+            "index.ts",
+            "import { User } from \"./user\";\nlet value = User;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_import_regular_value_export_value_usage_valid() {
+    let diagnostics = program(&[
+        ("user.ts", "export const User: string = \"Ada\";"),
+        (
+            "index.ts",
+            "import { User } from \"./user\";\nlet value: string = User;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_import_regular_const_export_assignment_rejected() {
+    let diagnostics = program(&[
+        ("user.ts", "export const value: string = \"Ada\";"),
+        (
+            "index.ts",
+            "import { value } from \"./user\";\nvalue = \"Grace\";",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2588"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_import_regular_same_name_type_and_value_binds_both() {
+    let diagnostics = program(&[
+        (
+            "user.ts",
+            "export interface User { name: string; }\nexport const User: string = \"Ada\";",
+        ),
+        (
+            "index.ts",
+            "import { User } from \"./user\";\nlet user: User = { name: \"Ada\" };\nlet value: string = User;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_import_regular_alias_type_usage_valid() {
+    let diagnostics = program(&[
+        ("user.ts", "export interface User { name: string; }"),
+        (
+            "index.ts",
+            "import { User as UserModel } from \"./user\";\nlet user: UserModel = { name: \"Ada\" };",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_import_regular_alias_value_usage_valid() {
+    let diagnostics = program(&[
+        ("user.ts", "export const User: string = \"Ada\";"),
+        (
+            "index.ts",
+            "import { User as UserModel } from \"./user\";\nlet value: string = UserModel;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_import_regular_alias_type_export_value_usage_unresolved() {
+    let diagnostics = program(&[
+        ("user.ts", "export interface User { name: string; }"),
+        (
+            "index.ts",
+            "import { User as UserModel } from \"./user\";\nlet value = UserModel;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_import_regular_alias_value_export_type_usage_unresolved() {
+    let diagnostics = program(&[
+        ("user.ts", "export const User: string = \"Ada\";"),
+        (
+            "index.ts",
+            "import { User as UserModel } from \"./user\";\nlet value: UserModel = \"Ada\";",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_import_regular_value_export_type_usage_unresolved() {
+    let diagnostics = program(&[
+        ("user.ts", "export const User: string = \"Ada\";"),
+        (
+            "index.ts",
+            "import { User } from \"./user\";\nlet value: User = \"Ada\";",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_import_type_type_export_value_usage_unresolved() {
+    let diagnostics = program(&[
+        ("user.ts", "export type Name = string;"),
+        (
+            "index.ts",
+            "import type { Name } from \"./user\";\nlet name: Name = \"Ada\";\nlet value = Name;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_import_regular_missing_export_no_cascade() {
+    let diagnostics = program(&[
+        ("user.ts", "export interface User { name: string; }"),
+        (
+            "index.ts",
+            "import { Missing } from \"./user\";\nlet value: Missing = 123;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_import_missing_relative_no_cascade() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import { User } from \"./missing\";\nlet user: User = { name: 123 };",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_named_import_from_script_file_reports_missing_export() {
+    let diagnostics = program(&[
+        ("setup.ts", "let value = 1;"),
+        ("index.ts", "import { value } from \"./setup\";"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn program_module_imported_value_unresolved_no_operator_cascade() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "import { getCount } from \"./count\";\nlet value: number = getCount() + 1;",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_imported_property_receiver_unresolved_no_property_cascade() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "import { store } from \"./store\";\nlet value: string = store.getName();",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_order_module_export_error_before_consumer_statement_error() {
+    let diagnostics = program(&[
+        ("a.ts", "export type Name = Missing;\nlet value: Name = 1;"),
+        ("b.ts", "let value: number = \"bad\";"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304", "TS2322"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts"]);
+}
+
+#[test]
+fn program_module_order_module_import_error_before_consumer_statement_error() {
+    let diagnostics = program(&[
+        ("a.ts", "import { User } from \"./missing\";"),
+        ("b.ts", "let value: string = \"ok\";"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_order_all_import_errors_before_all_statement_errors() {
+    let diagnostics = program(&[
+        ("user.ts", "export interface User { name: string; }"),
+        (
+            "a.ts",
+            "import { Missing, AlsoMissing } from \"./user\";\nlet value: Missing = 123;",
+        ),
+        ("b.ts", "let value: number = \"bad\";"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305", "TS2305", "TS2322"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "a.ts", "b.ts"]);
+}
+
+#[test]
+fn program_order_parser_error_before_module_resolution_error() {
+    let diagnostics = program(&[
+        ("a.ts", "import { User from \"./user\";"),
+        ("b.ts", "import { User } from \"./missing\";"),
+    ]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::parser-error", "TS2307"]
+    );
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts"]);
+}
+
+#[test]
+fn program_module_function_forward_reference_valid() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\nlet value: string = getName();\nfunction getName(): string { return \"Ada\"; }",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_export_function_forward_reference_valid() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export function getName(): string { return \"Ada\"; }\nlet value: string = getName();",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_duplicate_function_same_module_file_ts2393() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\nfunction getValue(): string { return \"Ada\"; }\nfunction getValue(): number { return 1; }",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_duplicate_export_function_same_module_file_ts2393() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export function getValue(): string { return \"Ada\"; }\nexport function getValue(): number { return 1; }",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_duplicate_type_alias_same_module_file_ts2300() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\ntype Name = string;\ntype Name = number;\nlet value: Name = \"Ada\";",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2300"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_duplicate_interface_same_module_file_ts2300() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "export {};\ninterface User { name: string; }\ninterface User { name: number; }",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2300"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_named_existing_no_diagnostic() {
+    let diagnostics = program(&[("a.ts", "type User = string;\nexport { User };")]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_export_list_value_name_import_valid() {
+    let diagnostics = program(&[
+        ("a.ts", "const value: string = \"Ada\";\nexport { value };"),
+        (
+            "b.ts",
+            "import { value } from \"./a\";\nlet copy: string = value;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_export_list_type_name_import_valid() {
+    let diagnostics = program(&[
+        ("a.ts", "type User = { name: string };\nexport { User };"),
+        (
+            "b.ts",
+            "import { User } from \"./a\";\nlet user: User = { name: \"Ada\" };",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_export_type_list_exports_type_only() {
+    let diagnostics = program(&[
+        (
+            "a.ts",
+            "type User = { name: string };\nexport type { User };",
+        ),
+        (
+            "b.ts",
+            "import type { User } from \"./a\";\nlet user: User = { name: \"Ada\" };\nlet value = User;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn program_module_export_named_missing_no_diagnostic_current_policy() {
+    let diagnostics = program(&[("a.ts", "export { Missing };")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_list_missing_local_no_cascade() {
+    let diagnostics = program(&[("a.ts", "export { Missing }; let value: string = \"ok\";")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_export_type_named_missing_no_diagnostic_current_policy() {
+    let diagnostics = program(&[("a.ts", "export type { Missing };")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_exported_private_type_dependency_valid() {
+    let diagnostics = program(&[
+        (
+            "a.ts",
+            "interface InternalUser { name: string; }\nexport type Box = { user: InternalUser };",
+        ),
+        (
+            "b.ts",
+            "import { Box } from \"./a\";\nlet box: Box = { user: { name: \"Ada\" } };",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_exported_private_type_dependency_cycle_no_stack_overflow() {
+    let diagnostics = program(&[
+        (
+            "a.ts",
+            "interface A { next: B; }\ninterface B { next: A; }\nexport type Box = A;",
+        ),
+        (
+            "b.ts",
+            "import { Box } from \"./a\";\nlet box: Box = { next: { next: undefined } };",
+        ),
+    ]);
+
+    assert!(!diagnostics.is_empty());
+}
+
+#[test]
+fn program_module_export_named_does_not_make_global() {
+    let diagnostics = program(&[
+        ("a.ts", "type User = string;\nexport { User };"),
+        ("b.ts", "let value: User = \"Ada\";"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn module_non_relative_named_import_ts2307() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import { User } from \"pkg\";\nlet user: User = { name: \"Ada\" };",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn module_non_relative_type_import_ts2307() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import type { StoreApi } from \"pkg\";\nlet store: StoreApi = { getState: 123 };",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn module_non_relative_side_effect_import_ts2307() {
+    let diagnostics = program(&[("index.ts", "import \"pkg\";\nlet ok: string = \"ok\";")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn module_non_relative_no_cascade_type_usage() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import { User } from \"pkg\";\nlet user: User = { name: 123 };",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+}
+
+#[test]
+fn module_non_relative_no_cascade_value_usage() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import { createStore } from \"zustand/vanilla\";\nlet store = createStore();",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+}
+
+#[test]
+fn module_non_relative_no_cascade_call_usage() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import { createStore } from \"zustand/vanilla\";\ncreateStore();",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+}
+
+#[test]
+fn module_default_import_parser_safe_or_pinned() {
+    let diagnostics = program(&[("index.ts", "import DefaultThing from \"./thing\";")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_namespace_import_parser_safe_or_pinned() {
+    let diagnostics = program(&[("index.ts", "import * as ns from \"./thing\";")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_mixed_default_named_import_parser_safe() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import DefaultThing, { named } from \"./thing\";",
+    )]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_export_default_expression_parser_safe() {
+    let diagnostics = program(&[("index.ts", "export default 123;")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_export_default_function_parser_safe() {
+    let diagnostics = program(&[("index.ts", "export default function makeThing() {}")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_re_export_named_parser_safe_or_pinned() {
+    let diagnostics = program(&[("index.ts", "export { Foo } from \"./foo\";")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_re_export_type_named_parser_safe_or_pinned() {
+    let diagnostics = program(&[("index.ts", "export type { Foo } from \"./foo\";")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_re_export_star_parser_safe_or_pinned() {
+    let diagnostics = program(&[("index.ts", "export * from \"./foo\";")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_re_export_star_as_parser_safe_or_pinned() {
+    let diagnostics = program(&[("index.ts", "export * as Foo from \"./foo\";")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+}
+
+#[test]
+fn module_unsupported_syntax_single_diagnostic_no_cascade() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import DefaultThing from \"./thing\";\nlet ok: string = \"ok\";",
+    )]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-module-syntax"]
+    );
+    assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
 }

@@ -1,13 +1,16 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use typescript_rust_syntax::{ParsedInterfaceMember, ParsedType, TextSpan};
+use typescript_rust_syntax::{ParsedInterfaceMember, ParsedType, ParsedTypeParameter, TextSpan};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TypeAliasInfo {
     pub(crate) name: String,
     pub(crate) file_name: String,
     pub(crate) name_span: Option<TextSpan>,
+    pub(crate) type_parameters: Vec<ParsedTypeParameter>,
     pub(crate) ty: ParsedType,
+    pub(crate) resolution_scope: Option<Rc<TypeDeclarationTable>>,
 }
 
 #[derive(Debug, Clone)]
@@ -15,7 +18,9 @@ pub(crate) struct InterfaceInfo {
     pub(crate) name: String,
     pub(crate) file_name: String,
     pub(crate) name_span: Option<TextSpan>,
+    pub(crate) type_parameters: Vec<ParsedTypeParameter>,
     pub(crate) members: Vec<ParsedInterfaceMember>,
+    pub(crate) resolution_scope: Option<Rc<TypeDeclarationTable>>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +45,10 @@ impl TypeDeclarationTable {
 
     pub(crate) fn get(&self, name: &str) -> Option<&TypeDeclarationInfo> {
         self.declarations.get(name)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &TypeDeclarationInfo)> {
+        self.declarations.iter()
     }
 
     pub(crate) fn insert(
@@ -69,13 +78,17 @@ mod tests {
             name: "User".to_string(),
             file_name: "a.ts".to_string(),
             name_span: None,
+            type_parameters: vec![],
             ty: ParsedType::String,
+            resolution_scope: None,
         });
         let interface = TypeDeclarationInfo::Interface(InterfaceInfo {
             name: "User".to_string(),
             file_name: "b.ts".to_string(),
             name_span: None,
+            type_parameters: vec![],
             members: vec![],
+            resolution_scope: None,
         });
 
         assert!(table.insert("User", alias.clone()).is_none());

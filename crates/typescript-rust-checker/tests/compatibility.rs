@@ -6,7 +6,8 @@ use std::{
 
 use serde::Deserialize;
 use typescript_rust_checker::{
-    CheckerOptions, SourceFileInput, check_program, check_source, check_source_with_options,
+    CheckerOptions, SourceFileInput, check_program, check_program_with_options, check_source,
+    check_source_with_options,
 };
 use typescript_rust_diagnostics::render_diagnostics;
 
@@ -41,9 +42,18 @@ struct SmokeManifest {
 }
 
 #[derive(Debug, Deserialize)]
+struct SmokeFile {
+    file_name: String,
+    source_text: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct SmokeCase {
     name: String,
-    path: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    files: Vec<SmokeFile>,
     #[serde(default)]
     expected_diagnostics: Vec<String>,
     #[serde(default)]
@@ -55,32 +65,62 @@ fn smoke_cases_emit_expected_codes() {
     let manifest = load_smoke_manifest();
 
     for case in manifest.case {
-        let path = workspace_root().join(&case.path);
-        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
-            panic!(
-                "failed to read smoke case {} at {}: {error}",
-                case.name,
-                path.display()
-            );
-        });
-        let diagnostics = if case.no_implicit_any {
-            check_source_with_options(
-                &source,
-                &case.path,
-                CheckerOptions {
-                    no_implicit_any: true,
-                },
-            )
+        let (diagnostics, rendered) = if !case.files.is_empty() {
+            let inputs = case
+                .files
+                .iter()
+                .map(|file| SourceFileInput {
+                    file_name: file.file_name.clone(),
+                    source_text: file.source_text.clone(),
+                })
+                .collect::<Vec<_>>();
+            let diagnostics = if case.no_implicit_any {
+                check_program_with_options(
+                    inputs,
+                    CheckerOptions {
+                        no_implicit_any: true,
+                    },
+                )
+            } else {
+                check_program(inputs)
+            };
+
+            let rendered = render_program_diagnostics(&case.files, &diagnostics);
+            (diagnostics, rendered)
         } else {
-            check_source(&source, &case.path)
+            let path = workspace_root().join(case.path.as_ref().unwrap_or_else(|| {
+                panic!("smoke case {} is missing both path and files", case.name)
+            }));
+            let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!(
+                    "failed to read smoke case {} at {}: {error}",
+                    case.name,
+                    path.display()
+                );
+            });
+            let diagnostics = if case.no_implicit_any {
+                check_source_with_options(
+                    &source,
+                    path.to_string_lossy().as_ref(),
+                    CheckerOptions {
+                        no_implicit_any: true,
+                    },
+                )
+            } else {
+                check_source(&source, path.to_string_lossy().as_ref())
+            };
+            let rendered = render_diagnostics(&diagnostics, &source);
+            (diagnostics, rendered)
         };
-        let rendered = render_diagnostics(&diagnostics, &source);
         let actual_codes = diagnostic_codes(&diagnostics);
 
         assert_eq!(
-            actual_codes, case.expected_diagnostics,
+            actual_codes,
+            case.expected_diagnostics,
             "unexpected diagnostics for smoke case {} at {}\nrendered diagnostics:\n{}",
-            case.name, case.path, rendered
+            case.name,
+            case.path.as_deref().unwrap_or("<program files>"),
+            rendered
         );
     }
 }
@@ -256,6 +296,65 @@ fn diagnostic_codes(diagnostics: &[typescript_rust_diagnostics::Diagnostic]) -> 
         .iter()
         .map(|diagnostic| diagnostic.code.to_string())
         .collect()
+}
+
+fn render_program_diagnostics(
+    files: &[SmokeFile],
+    diagnostics: &[typescript_rust_diagnostics::Diagnostic],
+) -> String {
+    let mut sources_by_file = HashMap::new();
+    for file in files {
+        sources_by_file.insert(file.file_name.clone(), file.source_text.clone());
+    }
+
+    let mut diagnostics_by_file: HashMap<String, Vec<typescript_rust_diagnostics::Diagnostic>> =
+        HashMap::new();
+    for diagnostic in diagnostics {
+        diagnostics_by_file
+            .entry(diagnostic.file_name.clone())
+            .or_default()
+            .push(diagnostic.clone());
+    }
+
+    let mut rendered = Vec::new();
+    for file in files {
+        let Some(file_diagnostics) = diagnostics_by_file.remove(&file.file_name) else {
+            continue;
+        };
+
+        if file_diagnostics.is_empty() {
+            continue;
+        }
+
+        let Some(source_text) = sources_by_file.get(&file.file_name) else {
+            continue;
+        };
+
+        rendered.push(format!(
+            "virtual file: {}\n{}",
+            file.file_name,
+            render_diagnostics(&file_diagnostics, source_text)
+        ));
+    }
+
+    if !diagnostics_by_file.is_empty() {
+        let mut remaining = diagnostics_by_file.into_iter().collect::<Vec<_>>();
+        remaining.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for (file_name, file_diagnostics) in remaining {
+            if file_diagnostics.is_empty() {
+                continue;
+            }
+
+            rendered.push(format!(
+                "virtual file: {}\n{}",
+                file_name,
+                render_diagnostics(&file_diagnostics, "")
+            ));
+        }
+    }
+
+    rendered.join("\n\n")
 }
 
 fn render_virtual_file_diagnostics(

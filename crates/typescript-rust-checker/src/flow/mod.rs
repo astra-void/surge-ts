@@ -116,13 +116,18 @@ pub(crate) fn check_expression_flow(
     ctx: &mut CheckerContext,
 ) -> FlowCheck {
     match expression {
-        ParsedExpression::Identifier(name) => {
-            report_read_flow(name, fallback_span, flow_state, statement_index, ctx)
-        }
+        ParsedExpression::Identifier { name, span } => report_read_flow(
+            name,
+            span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
         ParsedExpression::Call {
             callee_name,
             callee_span,
             arguments,
+            ..
         } => {
             if report_read_flow(
                 callee_name,
@@ -302,11 +307,11 @@ pub(crate) fn check_expression_flow(
                 ctx,
             )
         }
-        ParsedExpression::ObjectLiteral(properties) => {
+        ParsedExpression::ObjectLiteral { properties, .. } => {
             for property in properties {
                 if check_expression_flow(
                     &property.value,
-                    property.span.or(fallback_span),
+                    property.value_span.or(property.span).or(fallback_span),
                     flow_state,
                     statement_index,
                     ctx,
@@ -319,7 +324,7 @@ pub(crate) fn check_expression_flow(
 
             FlowCheck::Clear
         }
-        ParsedExpression::ArrayLiteral(elements) => {
+        ParsedExpression::ArrayLiteral { elements, .. } => {
             for element in elements {
                 if check_expression_flow(
                     &element.expression,

@@ -24,4 +24,16 @@ The compatibility test harness still includes a small test-only splitter for the
 
 This is useful for early diagnostic-code compatibility, but it is not full upstream baseline compatibility.
 
-The checker now parses a minimal import/export surface and treats files with import/export syntax as module files, but it still does not resolve modules or imports. Module files remain isolated from the global-script prepass in this phase.
+The checker now parses import/export syntax and treats files with import/export syntax as module files. Module files remain isolated from the global-script prepass in this phase.
+
+v0.57.1 hardens the limited relative module-resolution-lite pass for loaded program files. It resolves named relative imports, type-only imports, side-effect imports, and local named export lists across already loaded `.ts` files, with separate type and value namespaces. It still does not implement package resolution, `node_modules`, `paths`, `baseUrl`, default imports, namespace imports, star re-exports, or other CommonJS/declaration-file semantics.
+
+v0.58 adds compatibility-report instrumentation for real-project triage. External project source should live under `.local-projects/` and should not be committed.
+
+v0.59 adds a narrow generic syntax surface and instantiation-lite for explicit
+type arguments on aliases and interfaces. v0.59.1 hardens parser recovery,
+defaults, arity diagnostics, and module propagation for those generics while
+still keeping constraints parser-only and generic inference out of scope.
+The upstream fixture subset here is still intentionally small, and
+compatibility-report output should continue to drive the next phase rather than
+any expectation of full TypeScript parity.

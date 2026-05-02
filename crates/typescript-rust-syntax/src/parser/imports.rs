@@ -2,6 +2,7 @@ use oxc_ast::ast::{
     ImportDeclaration, ImportDeclarationSpecifier, ImportOrExportKind, ImportSpecifier,
     ModuleExportName, TSImportEqualsDeclaration, TSModuleReference,
 };
+use oxc_span::GetSpan;
 
 use crate::{ParsedImportDeclaration, ParsedImportKind, ParsedImportSpecifier};
 
@@ -11,12 +12,14 @@ pub(crate) fn parse_import_declaration(
     declaration: &ImportDeclaration<'_>,
 ) -> Option<ParsedImportDeclaration> {
     let module_specifier = declaration.source.value.to_string();
+    let module_specifier_span = Some(text_span_from_oxc_span(declaration.source.span));
     let span = Some(text_span_from_oxc_span(declaration.span));
 
     let Some(specifiers) = declaration.specifiers.as_ref() else {
         return Some(ParsedImportDeclaration {
             kind: ParsedImportKind::SideEffect,
             module_specifier,
+            module_specifier_span,
             span,
         });
     };
@@ -28,6 +31,7 @@ pub(crate) fn parse_import_declaration(
             return Some(ParsedImportDeclaration {
                 kind: ParsedImportKind::Unsupported,
                 module_specifier,
+                module_specifier_span,
                 span,
             });
         };
@@ -36,6 +40,7 @@ pub(crate) fn parse_import_declaration(
             return Some(ParsedImportDeclaration {
                 kind: ParsedImportKind::Unsupported,
                 module_specifier,
+                module_specifier_span,
                 span,
             });
         };
@@ -51,6 +56,7 @@ pub(crate) fn parse_import_declaration(
             specifiers: parsed_specifiers,
         },
         module_specifier,
+        module_specifier_span,
         span,
     })
 }
@@ -68,6 +74,7 @@ pub(crate) fn parse_import_equals_declaration(
     Some(ParsedImportDeclaration {
         kind: ParsedImportKind::Unsupported,
         module_specifier,
+        module_specifier_span: Some(text_span_from_oxc_span(declaration.span)),
         span: Some(text_span_from_oxc_span(declaration.span)),
     })
 }
@@ -79,7 +86,7 @@ fn parse_import_specifier(specifier: &ImportSpecifier<'_>) -> Option<ParsedImpor
     Some(ParsedImportSpecifier {
         imported_name,
         local_name,
-        name_span: Some(text_span_from_oxc_span(specifier.span)),
+        name_span: Some(text_span_from_oxc_span(specifier.imported.span())),
     })
 }
 

@@ -18,14 +18,22 @@ use crate::flow::{
     check_obvious_truthiness_condition, collect_future_block_scoped_declarations,
     mark_assignment_state, merge_branch_states,
 };
-use crate::infer::{InferredExpression, map_parsed_type};
+use crate::infer::{
+    InferredExpression, TypeParameterSubstitution, map_parsed_type_with_substitution,
+    report_duplicate_type_parameters,
+};
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
 fn map_function_signature(
     parameters: &[ParsedFunctionParameter],
     return_type: Option<&ParsedType>,
+    type_parameters: &[typescript_rust_syntax::ParsedTypeParameter],
     ctx: &mut CheckerContext,
 ) -> FunctionType {
+    report_duplicate_type_parameters(type_parameters, ctx);
+
+    let type_parameter_substitution = build_type_parameter_substitution(type_parameters);
+
     let parameter_types = parameters
         .iter()
         .map(|parameter| {
@@ -33,13 +41,23 @@ fn map_function_signature(
                 .declared_type
                 .clone()
                 .map_or(Type::Unknown, |declared_type| {
-                    map_parsed_type(declared_type, ctx)
+                    map_parsed_type_with_substitution(
+                        declared_type,
+                        ctx,
+                        &type_parameter_substitution,
+                    )
                 })
         })
         .collect::<Vec<_>>();
 
     let function_return_type = return_type
-        .map(|return_type| map_parsed_type(return_type.clone(), ctx))
+        .map(|return_type| {
+            map_parsed_type_with_substitution(
+                return_type.clone(),
+                ctx,
+                &type_parameter_substitution,
+            )
+        })
         .unwrap_or(Type::Unknown);
 
     if ctx.options.no_implicit_any {
@@ -60,6 +78,20 @@ fn map_function_signature(
         parameters: parameter_types,
         return_type: Box::new(function_return_type),
     }
+}
+
+fn build_type_parameter_substitution(
+    type_parameters: &[typescript_rust_syntax::ParsedTypeParameter],
+) -> TypeParameterSubstitution {
+    let mut substitution = TypeParameterSubstitution::new();
+
+    for type_parameter in type_parameters {
+        substitution
+            .entry(type_parameter.name.clone())
+            .or_insert(Type::Unknown);
+    }
+
+    substitution
 }
 
 fn register_function_signature(
@@ -144,7 +176,12 @@ pub(crate) fn collect_function_declaration_signature(
     let FunctionType {
         parameters,
         return_type,
-    } = map_function_signature(&function.parameters, function.return_type.as_ref(), ctx);
+    } = map_function_signature(
+        &function.parameters,
+        function.return_type.as_ref(),
+        &function.type_parameters,
+        ctx,
+    );
     let function_type = FunctionType {
         parameters,
         return_type,
@@ -173,13 +210,15 @@ pub(crate) fn check_function_declaration(
     let ParsedFunctionDeclaration {
         name,
         name_span,
+        type_parameters,
         parameters,
         return_type,
         body,
         ..
     } = function;
 
-    let function_type = map_function_signature(&parameters, return_type.as_ref(), ctx);
+    let function_type =
+        map_function_signature(&parameters, return_type.as_ref(), &type_parameters, ctx);
 
     let duplicate = {
         let symbols = &mut ctx.symbols;

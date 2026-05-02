@@ -1,6 +1,7 @@
 use oxc_ast::ast::{
     Declaration, ExportNamedDeclaration, ExportSpecifier, ImportOrExportKind, ModuleExportName,
 };
+use oxc_span::GetSpan;
 
 use crate::{ParsedExportDeclaration, ParsedExportSpecifier, ParsedStatement};
 
@@ -86,7 +87,7 @@ fn parse_export_specifier(specifier: &ExportSpecifier<'_>) -> Option<ParsedExpor
     Some(ParsedExportSpecifier {
         local_name,
         exported_name,
-        name_span: Some(text_span_from_oxc_span(specifier.span)),
+        name_span: Some(text_span_from_oxc_span(specifier.local.span())),
     })
 }
 

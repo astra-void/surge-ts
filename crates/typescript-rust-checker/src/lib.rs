@@ -3,7 +3,9 @@ mod context;
 mod driver;
 mod flow;
 mod infer;
+mod modules;
 mod program;
+mod spans;
 mod symbols;
 
 pub use context::CheckerOptions;

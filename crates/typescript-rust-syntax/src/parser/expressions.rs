@@ -12,6 +12,7 @@ use crate::{
 };
 
 use super::spans::text_span_from_oxc_span;
+use super::types::parse_type_arguments;
 
 pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression, Span) {
     let parsed_expression = match expression {
@@ -28,12 +29,16 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
             if identifier.name == "undefined" {
                 ParsedExpression::UndefinedLiteral
             } else {
-                ParsedExpression::Identifier(identifier.name.to_string())
+                ParsedExpression::Identifier {
+                    name: identifier.name.to_string(),
+                    span: Some(text_span_from_oxc_span(identifier.span)),
+                }
             }
         }
-        Expression::ObjectExpression(object_expression) => {
-            ParsedExpression::ObjectLiteral(parse_object_properties(object_expression))
-        }
+        Expression::ObjectExpression(object_expression) => ParsedExpression::ObjectLiteral {
+            properties: parse_object_properties(object_expression),
+            span: Some(text_span_from_oxc_span(object_expression.span())),
+        },
         Expression::ArrayExpression(array_expression) => {
             parse_array_expression(array_expression).unwrap_or(ParsedExpression::Unknown)
         }
@@ -56,6 +61,10 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::CallExpression(call_expression) => {
             parse_call_expression_expression(call_expression).unwrap_or(ParsedExpression::Unknown)
         }
+        Expression::TSInstantiationExpression(instantiation_expression) => {
+            parse_instantiation_expression(instantiation_expression)
+                .unwrap_or(ParsedExpression::Unknown)
+        }
         Expression::StaticMemberExpression(member_expression) => {
             parse_static_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown)
         }
@@ -76,6 +85,8 @@ pub(crate) fn parse_call_expression(
     Some(ParsedCall {
         callee_name: call.callee_name,
         callee_span: call.callee_span,
+        span: call.span,
+        type_arguments: call.type_arguments,
         arguments: call.arguments,
     })
 }
@@ -88,11 +99,13 @@ fn parse_call_expression_expression(
         .iter()
         .map(parse_call_argument)
         .collect::<Vec<_>>();
+    let type_arguments = parse_call_type_arguments(call_expression)?;
 
     match &call_expression.callee {
         Expression::Identifier(callee) => Some(ParsedExpression::Call {
             callee_name: callee.name.to_string(),
             callee_span: Some(text_span_from_oxc_span(callee.span)),
+            type_arguments,
             arguments,
         }),
         Expression::StaticMemberExpression(member_expression) => {
@@ -106,6 +119,7 @@ fn parse_call_expression_expression(
                 property_name: member_expression.property.name.to_string(),
                 property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
                 call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                type_arguments,
                 arguments,
             })
         }
@@ -116,6 +130,8 @@ fn parse_call_expression_expression(
 struct ParsedCallExpressionParts {
     callee_name: String,
     callee_span: Option<TextSpan>,
+    span: Option<TextSpan>,
+    type_arguments: Vec<crate::ParsedType>,
     arguments: Vec<ParsedCallArgument>,
 }
 
@@ -131,11 +147,100 @@ fn parse_call_expression_parts(
         .iter()
         .map(parse_call_argument)
         .collect();
+    let type_arguments = parse_call_type_arguments(call_expression)?;
 
     Some(ParsedCallExpressionParts {
         callee_name: callee.name.to_string(),
         callee_span: Some(text_span_from_oxc_span(callee.span)),
+        span: Some(text_span_from_oxc_span(call_expression.span)),
+        type_arguments,
         arguments,
+    })
+}
+
+fn parse_call_type_arguments(
+    call_expression: &oxc_ast::ast::CallExpression<'_>,
+) -> Option<Vec<crate::ParsedType>> {
+    match call_expression.type_arguments.as_deref() {
+        Some(type_arguments) => parse_type_arguments(type_arguments),
+        None => Some(Vec::new()),
+    }
+}
+
+fn parse_instantiation_expression(
+    instantiation_expression: &oxc_ast::ast::TSInstantiationExpression<'_>,
+) -> Option<ParsedExpression> {
+    let type_arguments = parse_type_arguments(&instantiation_expression.type_arguments)?;
+
+    match &instantiation_expression.expression {
+        Expression::CallExpression(call_expression) => {
+            parse_call_expression_expression_with_type_arguments(call_expression, type_arguments)
+        }
+        Expression::StaticMemberExpression(member_expression) => {
+            parse_property_call_expression_with_type_arguments(member_expression, type_arguments)
+        }
+        Expression::Identifier(identifier) => Some(ParsedExpression::Call {
+            callee_name: identifier.name.to_string(),
+            callee_span: Some(text_span_from_oxc_span(identifier.span)),
+            type_arguments,
+            arguments: Vec::new(),
+        }),
+        _ => None,
+    }
+}
+
+fn parse_call_expression_expression_with_type_arguments(
+    call_expression: &oxc_ast::ast::CallExpression<'_>,
+    type_arguments: Vec<crate::ParsedType>,
+) -> Option<ParsedExpression> {
+    let arguments = call_expression
+        .arguments
+        .iter()
+        .map(parse_call_argument)
+        .collect::<Vec<_>>();
+
+    match &call_expression.callee {
+        Expression::Identifier(callee) => Some(ParsedExpression::Call {
+            callee_name: callee.name.to_string(),
+            callee_span: Some(text_span_from_oxc_span(callee.span)),
+            type_arguments,
+            arguments,
+        }),
+        Expression::StaticMemberExpression(member_expression) => {
+            let Expression::Identifier(object_identifier) = &member_expression.object else {
+                return None;
+            };
+
+            Some(ParsedExpression::PropertyCall {
+                object_name: object_identifier.name.to_string(),
+                object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+                property_name: member_expression.property.name.to_string(),
+                property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+                call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                type_arguments,
+                arguments,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_property_call_expression_with_type_arguments(
+    member_expression: &StaticMemberExpression<'_>,
+    type_arguments: Vec<crate::ParsedType>,
+) -> Option<ParsedExpression> {
+    let Expression::Identifier(object_identifier) = &member_expression.object else {
+        return None;
+    };
+
+    Some(ParsedExpression::PropertyCall {
+        object_name: object_identifier.name.to_string(),
+        object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+        property_name: member_expression.property.name.to_string(),
+        property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+        call_span: None,
+        type_arguments,
+        arguments: Vec::new(),
     })
 }
 
@@ -158,7 +263,10 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             if identifier.name == "undefined" {
                 ParsedExpression::UndefinedLiteral
             } else {
-                ParsedExpression::Identifier(identifier.name.to_string())
+                ParsedExpression::Identifier {
+                    name: identifier.name.to_string(),
+                    span: Some(text_span_from_oxc_span(identifier.span)),
+                }
             },
             argument.span(),
         ),
@@ -184,7 +292,10 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             argument.span(),
         ),
         Argument::ObjectExpression(object_expression) => (
-            ParsedExpression::ObjectLiteral(parse_object_properties(object_expression)),
+            ParsedExpression::ObjectLiteral {
+                properties: parse_object_properties(object_expression),
+                span: Some(text_span_from_oxc_span(object_expression.span())),
+            },
             argument.span(),
         ),
         Argument::ArrayExpression(array_expression) => (
@@ -325,11 +436,13 @@ fn parse_object_properties(object_expression: &ObjectExpression<'_>) -> Vec<Pars
                 return None;
             }
 
-            let (value, _) = parse_expression(&property.value);
+            let (value, value_span) = parse_expression(&property.value);
 
             Some(ParsedObjectProperty {
                 name: key.name.to_string(),
+                name_span: Some(text_span_from_oxc_span(key.span)),
                 value,
+                value_span: Some(text_span_from_oxc_span(value_span)),
                 span: Some(text_span_from_oxc_span(property.span)),
             })
         })
@@ -359,7 +472,10 @@ fn parse_array_expression(array_expression: &ArrayExpression<'_>) -> Option<Pars
         });
     }
 
-    Some(ParsedExpression::ArrayLiteral(elements))
+    Some(ParsedExpression::ArrayLiteral {
+        elements,
+        span: Some(text_span_from_oxc_span(array_expression.span())),
+    })
 }
 
 pub(crate) fn parse_static_member_expression(

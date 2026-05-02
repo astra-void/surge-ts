@@ -2,7 +2,10 @@ mod expression;
 mod types;
 
 pub(crate) use expression::infer_expression;
-pub(crate) use types::map_parsed_type;
+pub(crate) use types::{
+    TypeParameterSubstitution, map_parsed_type, map_parsed_type_with_substitution,
+    report_duplicate_type_parameters,
+};
 
 use typescript_rust_syntax::TextSpan;
 use typescript_rust_types::Type;

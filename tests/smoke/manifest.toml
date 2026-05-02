@@ -259,6 +259,262 @@ path = "tests/smoke/object_type_annotation_variable_valid.ts"
 expected_diagnostics = []
 
 [[case]]
+name = "module-resolution-interface-import-valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/user.ts"
+source_text = "export interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import { User } from \"./user\"; let user: User = { name: \"Ada\" };"
+
+[[case]]
+name = "module-resolution-interface-import-property-mismatch"
+expected_diagnostics = ["TS2322"]
+
+[[case.files]]
+file_name = "src/user.ts"
+source_text = "export interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import { User } from \"./user\"; let user: User = { name: 123 };"
+
+[[case]]
+name = "module-resolution_type_alias_import_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export type UserId = string;"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import type { UserId } from \"./a\"; let id: UserId = \"u1\";"
+
+[[case]]
+name = "module-resolution_type_alias_import_mismatch"
+expected_diagnostics = ["TS2322"]
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export type UserId = string;"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import type { UserId } from \"./a\"; let id: UserId = 123;"
+
+[[case]]
+name = "module-resolution_function_import_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export function getName(): string { return \"Ada\"; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { getName } from \"./a\"; let name: string = getName();"
+
+[[case]]
+name = "module-resolution_function_import_return_mismatch"
+expected_diagnostics = ["TS2322"]
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export function getName(): string { return \"Ada\"; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { getName } from \"./a\"; let name: number = getName();"
+
+[[case]]
+name = "module-resolution_function_import_argument_mismatch"
+expected_diagnostics = ["TS2345"]
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export function greet(name: string): void { }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { greet } from \"./a\"; greet(1);"
+
+[[case]]
+name = "module-resolution_variable_import_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export const version: string = \"1\";"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { version } from \"./a\"; let current: string = version;"
+
+[[case]]
+name = "module-resolution_variable_import_mismatch"
+expected_diagnostics = ["TS2322"]
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export const version: string = \"1\";"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { version } from \"./a\"; let current: number = version;"
+
+[[case]]
+name = "module-resolution_import_alias_type_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { User as UserModel } from \"./a\"; let user: UserModel = { name: \"Ada\" };"
+
+[[case]]
+name = "module-resolution_import_alias_value_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export function getName(): string { return \"Ada\"; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { getName as getUserName } from \"./a\"; let name: string = getUserName();"
+
+[[case]]
+name = "module-resolution_import_type_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import type { User } from \"./a\"; let user: User = { name: \"Ada\" };"
+
+[[case]]
+name = "module-resolution_type_only_import_value_usage"
+expected_diagnostics = ["TS2304"]
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import type { User } from \"./a\"; User;"
+
+[[case]]
+name = "module-resolution_side_effect_import_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/setup.ts"
+source_text = "export {};"
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import \"./setup\"; let ok: string = \"ok\";"
+
+[[case]]
+name = "module-resolution_missing_module"
+expected_diagnostics = ["TS2307"]
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import { User } from \"./missing\"; let user: User = { name: \"Ada\" };"
+
+[[case]]
+name = "module-resolution_missing_export"
+expected_diagnostics = ["TS2305"]
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { Missing } from \"./a\"; let value: Missing = \"x\";"
+
+[[case]]
+name = "module-resolution_export_list_type_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "type UserId = string; export type { UserId };"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import type { UserId } from \"./a\"; let id: UserId = \"u1\";"
+
+[[case]]
+name = "module-resolution_export_list_value_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "const version: string = \"1\"; export { version };"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { version } from \"./a\"; let current: string = version;"
+
+[[case]]
+name = "module-resolution_export_list_alias_valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "type UserId = string; export { UserId as UserModel };"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "import { UserModel } from \"./a\"; let id: UserModel = \"u1\";"
+
+[[case]]
+name = "module-resolution_export_list_missing_local"
+expected_diagnostics = ["TS2304"]
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "export { Missing };"
+
+[[case]]
+name = "module-resolution_script_global_still_works"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "let user: User = { name: \"Ada\" };"
+
+[[case]]
+name = "module-resolution_module_does_not_see_script_global"
+expected_diagnostics = ["TS2304"]
+
+[[case.files]]
+file_name = "src/a.ts"
+source_text = "interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/b.ts"
+source_text = "export {}; let user: User = { name: \"Ada\" };"
+
+[[case]]
 name = "property-call-interface-no-args-valid"
 path = "tests/smoke/property_call_interface_no_args_valid.ts"
 expected_diagnostics = []
@@ -5279,3 +5535,337 @@ expected_diagnostics = []
 name = "module-imported-type-no-cascade"
 path = "tests/smoke/module_imported_type_no_cascade.ts"
 expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-import-named-unresolved-value"
+path = "tests/smoke/module_import_named_unresolved_value.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-import-alias-unresolved-local-name"
+path = "tests/smoke/module_import_alias_unresolved_local_name.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-export-variable-same-file-valid"
+path = "tests/smoke/module_export_variable_same_file_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-export-named-noop-valid"
+path = "tests/smoke/module_export_named_noop_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-export-type-named-noop-valid"
+path = "tests/smoke/module_export_type_named_noop_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-exported-interface-not-global"
+path = "tests/smoke/module_exported_interface_not_global.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-exported-function-not-global"
+path = "tests/smoke/module_exported_function_not_global.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-imported-function-no-cascade"
+path = "tests/smoke/module_imported_function_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-module-does-not-see-script-global"
+path = "tests/smoke/module_module_does_not_see_script_global.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-script-files-still-share-global"
+path = "tests/smoke/module_script_files_still_share_global.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-non-relative-named-import-no-cascade"
+path = "tests/smoke/module_non_relative_named_import_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-non-relative-type-import-no-cascade"
+path = "tests/smoke/module_non_relative_type_import_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-non-relative-side-effect-import"
+path = "tests/smoke/module_non_relative_side_effect_import.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-default-import-unsupported-or-parser-error"
+path = "tests/smoke/module_default_import_unsupported_or_parser_error.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-namespace-import-unsupported-or-parser-error"
+path = "tests/smoke/module_namespace_import_unsupported_or_parser_error.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-re-export-named-unsupported-or-parser-error"
+path = "tests/smoke/module_re_export_named_unsupported_or_parser_error.ts"
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-re-export-star-unsupported-or-parser-error"
+path = "tests/smoke/module_re_export_star_unsupported_or_parser_error.ts"
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+[[case]]
+name = "module-resolution-side-effect-script-file-valid"
+files = [
+  { file_name = "setup.ts", source_text = "let initialized: boolean = true;" },
+  { file_name = "index.ts", source_text = "import \"./setup\";\nlet value: string = \"ok\";" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-resolution-side-effect-module-file-valid"
+files = [
+  { file_name = "setup.ts", source_text = "export const initialized: boolean = true;" },
+  { file_name = "index.ts", source_text = "import \"./setup\";\nlet value: string = \"ok\";" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-resolution-side-effect-no-bind-value"
+files = [
+  { file_name = "setup.ts", source_text = "export const initialized: boolean = true;" },
+  { file_name = "index.ts", source_text = "import \"./setup\";\nlet initializedCopy: boolean = initialized;" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-resolution-regular-type-export-type-usage-valid"
+files = [
+  { file_name = "user.ts", source_text = "export interface User { name: string; }" },
+  { file_name = "index.ts", source_text = "import { User } from \"./user\";\nlet user: User = { name: \"Ada\" };" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-resolution-regular-type-export-value-usage-unresolved"
+files = [
+  { file_name = "user.ts", source_text = "export interface User { name: string; }" },
+  { file_name = "index.ts", source_text = "import { User } from \"./user\";\nlet value = User;" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-resolution-regular-value-export-value-usage-valid"
+files = [
+  { file_name = "user.ts", source_text = "export const User: string = \"Ada\";" },
+  { file_name = "index.ts", source_text = "import { User } from \"./user\";\nlet value: string = User;" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-resolution-regular-value-export-type-usage-unresolved"
+files = [
+  { file_name = "user.ts", source_text = "export const User: string = \"Ada\";" },
+  { file_name = "index.ts", source_text = "import { User } from \"./user\";\nlet value: User = \"Ada\";" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-resolution-type-only-import-type-usage-valid"
+files = [
+  { file_name = "user.ts", source_text = "export type Name = string;" },
+  { file_name = "index.ts", source_text = "import type { Name } from \"./user\";\nlet name: Name = \"Ada\";" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-resolution-type-only-import-value-usage-unresolved"
+files = [
+  { file_name = "user.ts", source_text = "export type Name = string;" },
+  { file_name = "index.ts", source_text = "import type { Name } from \"./user\";\nlet value = Name;" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-resolution-missing-module-no-cascade"
+files = [
+  { file_name = "index.ts", source_text = "import { User } from \"./missing\";\nlet user: User = { name: 123 };" },
+]
+expected_diagnostics = ["TS2307"]
+
+[[case]]
+name = "module-resolution-missing-export-no-cascade"
+files = [
+  { file_name = "user.ts", source_text = "export interface User { name: string; }" },
+  { file_name = "index.ts", source_text = "import { Missing } from \"./user\";\nlet value: Missing = 123;" },
+]
+expected_diagnostics = ["TS2305"]
+
+[[case]]
+name = "module-resolution-export-list-type-valid"
+files = [
+  { file_name = "a.ts", source_text = "type User = { name: string };\nexport { User };" },
+  { file_name = "b.ts", source_text = "import { User } from \"./a\";\nlet user: User = { name: \"Ada\" };" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-resolution-export-list-value-valid"
+files = [
+  { file_name = "a.ts", source_text = "const value: string = \"Ada\";\nexport { value };" },
+  { file_name = "b.ts", source_text = "import { value } from \"./a\";\nlet copy: string = value;" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-resolution-exported-private-interface-dependency-valid"
+files = [
+  { file_name = "a.ts", source_text = "interface InternalUser { name: string; }\nexport type Box = { user: InternalUser };" },
+  { file_name = "b.ts", source_text = "import { Box } from \"./a\";\nlet box: Box = { user: { name: \"Ada\" } };" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "module-resolution-private-dependency-not-importable"
+files = [
+  { file_name = "a.ts", source_text = "interface InternalUser { name: string; }\nexport type Box = { user: InternalUser };" },
+  { file_name = "b.ts", source_text = "import { Box } from \"./a\";\nlet user: InternalUser = { name: \"Ada\" };" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-resolution-import-from-script-file-missing-export"
+files = [
+  { file_name = "setup.ts", source_text = "let value = 1;" },
+  { file_name = "index.ts", source_text = "import { value } from \"./setup\";" },
+]
+expected_diagnostics = ["TS2305"]
+
+[[case]]
+name = "generic-type-alias-identity-valid"
+path = "tests/smoke/generic_type_alias_identity_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-type-alias-identity-mismatch"
+path = "tests/smoke/generic_type_alias_identity_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-type-alias-pair-tuple-valid"
+path = "tests/smoke/generic_type_alias_pair_tuple_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-type-alias-pair-tuple-mismatch"
+path = "tests/smoke/generic_type_alias_pair_tuple_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-type-alias-union-valid"
+path = "tests/smoke/generic_type_alias_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-type-alias-union-mismatch"
+path = "tests/smoke/generic_type_alias_union_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-type-alias-nested-valid"
+path = "tests/smoke/generic_type_alias_nested_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-type-alias-nested-mismatch"
+path = "tests/smoke/generic_type_alias_nested_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-interface-property-valid"
+path = "tests/smoke/generic_interface_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-interface-property-mismatch"
+path = "tests/smoke/generic_interface_property_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-module-type-alias-import-valid"
+files = [
+  { file_name = "box.ts", source_text = "export type Box<T> = { value: T };" },
+  { file_name = "index.ts", source_text = "import { Box } from \"./box\";\nlet box: Box<string> = { value: \"ok\" };" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "generic-module-interface-import-valid"
+files = [
+  { file_name = "box.ts", source_text = "export interface Box<T> { value: T; }" },
+  { file_name = "index.ts", source_text = "import { Box } from \"./box\";\nlet box: Box<string> = { value: \"ok\" };" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "generic-function-declaration-parser-safe"
+path = "tests/smoke/generic_function_declaration_parser_safe.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-call-type-arguments-parser-safe"
+path = "tests/smoke/generic_call_type_arguments_parser_safe.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-arity-missing-argument"
+path = "tests/smoke/generic_arity_missing_argument.ts"
+expected_diagnostics = ["TS2314"]
+
+[[case]]
+name = "generic-unknown-type-argument-no-cascade"
+path = "tests/smoke/generic_unknown_type_argument_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "generic-default-type-argument-valid"
+path = "tests/smoke/generic_default_type_argument_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-default-type-argument-unknown-no-cascade"
+path = "tests/smoke/generic_default_type_argument_unknown_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "generic-non-generic-type-with-type-arguments"
+path = "tests/smoke/generic_non_generic_type_with_type_arguments.ts"
+expected_diagnostics = ["TS2315"]
+
+[[case]]
+name = "generic-duplicate-type-parameter"
+path = "tests/smoke/generic_duplicate_type_parameter.ts"
+expected_diagnostics = ["typescript-rust::duplicate-type-parameter"]
+
+[[case]]
+name = "generic-module-type-only-import-value-usage-unresolved"
+files = [
+  { file_name = "box.ts", source_text = "export type Box<T> = { value: T };" },
+  { file_name = "index.ts", source_text = "import type { Box } from \"./box\"; let value = Box;" },
+]
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "generic-module-private-helper-not-importable"
+files = [
+  { file_name = "box.ts", source_text = "type Internal<T> = { value: T }; export type Box<T> = Internal<T>;" },
+  { file_name = "index.ts", source_text = "import { Internal } from \"./box\";" },
+]
+expected_diagnostics = ["TS2305"]

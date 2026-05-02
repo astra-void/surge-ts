@@ -190,6 +190,14 @@ define_typescript_diagnostics_catalog! {
         argument_count: 1,
         support: CatalogOnly,
     },
+    GenericTypeRequiresTypeArguments => {
+        code: 2314,
+        key: "Generic_type_0_requires_1_type_argument_s",
+        category: Error,
+        message_template: "Generic type '{0}' requires {1} type argument(s).",
+        argument_count: 2,
+        support: CatalogOnly,
+    },
     TypeIsNotGeneric => {
         code: 2315,
         key: "Type_0_is_not_generic",

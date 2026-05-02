@@ -1,0 +1,1 @@
+class Identity<T> {}

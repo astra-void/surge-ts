@@ -29,17 +29,17 @@ pub(crate) fn infer_expression(
             InferredExpression::Known(Type::BooleanLiteral(*value))
         }
         ParsedExpression::UndefinedLiteral => InferredExpression::Known(Type::Undefined),
-        ParsedExpression::Identifier(name) => symbols
+        ParsedExpression::Identifier { name, span } => symbols
             .get(name)
             .map(|symbol| InferredExpression::Known(symbol.ty.clone()))
             .unwrap_or_else(|| InferredExpression::UnresolvedIdentifier {
                 name: name.clone(),
-                span: None,
+                span: *span,
             }),
-        ParsedExpression::ObjectLiteral(properties) => {
+        ParsedExpression::ObjectLiteral { properties, .. } => {
             InferredExpression::Known(infer_object_literal(properties, symbols))
         }
-        ParsedExpression::ArrayLiteral(elements) => infer_array_literal(elements, symbols),
+        ParsedExpression::ArrayLiteral { elements, .. } => infer_array_literal(elements, symbols),
         ParsedExpression::Unary {
             operator, operand, ..
         } => infer_unary_expression(*operator, operand, symbols),

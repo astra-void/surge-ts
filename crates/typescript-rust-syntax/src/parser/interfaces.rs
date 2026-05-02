@@ -3,6 +3,7 @@ use oxc_ast::ast::{TSInterfaceDeclaration, TSSignature};
 use crate::{ParsedInterfaceDeclaration, ParsedInterfaceMember};
 
 use super::spans::text_span_from_oxc_span;
+use super::types::parse_type_parameters;
 use super::types::parse_type_property_signature;
 
 pub(crate) fn parse_interface_declaration(
@@ -18,6 +19,7 @@ pub(crate) fn parse_interface_declaration(
     Some(ParsedInterfaceDeclaration {
         name: declaration.id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(declaration.id.span)),
+        type_parameters: parse_type_parameters(declaration.type_parameters.as_deref()),
         members,
     })
 }

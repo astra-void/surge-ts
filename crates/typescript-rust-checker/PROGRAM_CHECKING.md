@@ -5,7 +5,7 @@
 - `check_program(files: Vec<SourceFileInput>)`
 - `check_program_with_options(files: Vec<SourceFileInput>, options: CheckerOptions)`
 
-The API is intentionally narrow. It now parses a minimal import/export surface and applies a file-level module boundary, but it still stops short of module resolution.
+The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, and v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass.
 
 ## Public API
 
@@ -18,7 +18,9 @@ The checker crate keeps the existing single-file APIs and adds program-level wra
 - `SourceFileInput`
 - `CheckerOptions`
 
-These APIs remain stable in this phase.
+These APIs remain stable in this phase. v0.58 adds compatibility-report
+instrumentation in the CLI on top of these APIs without changing the checker
+surface.
 
 ## Global Script Model
 
@@ -26,10 +28,13 @@ Program mode treats the input files as one shared global script:
 
 - Top-level `type` aliases are shared across files.
 - Top-level `interface` declarations are shared across files.
+- Top-level generic aliases and interfaces are shared across files, with explicit type arguments substituted during lowering.
+- Defaults on generic aliases and interfaces are applied when explicit type arguments are omitted.
+- Constraints are parsed and retained but are not enforced in this phase.
 - Top-level function declarations are shared across files.
 - Function bodies can reference shared declarations from earlier or later files.
 - Top-level `let`, `const`, and `var` declarations remain file-local.
-- Imports and exports are parsed, but module resolution is still unsupported.
+- Relative named imports, type-only named imports, side-effect imports, and local named export lists are resolved across loaded `.ts` files.
 - Module files are isolated from the global-script prepass in this phase.
 - `declare` and ambient declarations are still unsupported.
 
@@ -39,7 +44,8 @@ Program mode treats the input files as one shared global script:
 - Declaration diagnostics keep the declaration file name.
 - Consuming expression diagnostics keep the consumer file name.
 - Script files participate in the global prepass.
-- Module files are checked with file-local type declarations and function signatures only.
+- Module files are checked with file-local type declarations and function signatures plus resolved module bindings.
+- Single-file checking still does not read sibling files.
 
 ## Diagnostic Order
 
@@ -48,13 +54,15 @@ Program diagnostics are emitted in a fixed order:
 1. Parser diagnostics in input-file order.
 2. Global type-declaration diagnostics in input-file order.
 3. Global function-signature diagnostics in input-file order.
-4. Per-file statement and function-body diagnostics in input-file order.
+4. Module export/import diagnostics in input-file order.
+5. Per-file statement and function-body diagnostics in input-file order.
 
 This ordering is part of the v0.55.1 compatibility contract.
 
 ## Type Declarations
 
 - Type aliases and interfaces are stored in one shared namespace.
+- Generic aliases and interfaces still live in that same namespace; arity errors are diagnosed on the type reference span and type-parameter references inside the declaration lower to the instantiated body.
 - The first declaration wins.
 - Later duplicates report TS2300 in the duplicate file.
 - Duplicate declarations do not replace the original declaration.
@@ -95,7 +103,18 @@ See [MODULES.md](./MODULES.md) for the import/export syntax surface, module-file
 - Diagnostics are grouped in loaded-file order.
 - Diagnostics for files not present in the loaded list are rendered at the end when possible.
 - `--showConfig` still prints the normalized config and exits successfully.
-- Positional single-file mode still uses the single-file checker APIs.
+- `--showSpans` prints the diagnostic code and span metadata before the rendered excerpt.
+- `--compatReport` prints a compatibility summary with loaded-file count,
+  total diagnostic count, counts by code, counts by file, and parser-error
+  grouping.
+- Generic type arguments on references are parsed and lowered for explicit
+  alias/interface instantiation, but generic inference is still intentionally
+  omitted.
+- Call-site type arguments are parsed and preserved for syntax stability, but the checker currently ignores them.
+- `--maxDiagnostics` limits rendered diagnostics but does not change the total
+  counts in the compatibility summary.
+- Positional single-file mode still uses the single-file checker APIs and does not resolve sibling files.
+- Diagnostic span policy lives in [DIAGNOSTIC_SPANS.md](./DIAGNOSTIC_SPANS.md).
 
 ## Upstream Virtual Files
 
@@ -107,4 +126,5 @@ The compatibility harness still splits `// @filename:` comments into virtual fil
 
 ## Next phase
 
-The next phase should add the import/export surface and module resolution on top of this program checker rather than reshaping the single-file APIs.
+The next phase should still be chosen from compatibility-report output rather
+than reshaping the single-file APIs.

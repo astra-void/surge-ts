@@ -1,9 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::rc::Rc;
 
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
 use typescript_rust_syntax::{
     ParsedFunctionType, ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedNamedType,
-    ParsedObjectType, ParsedType, TextSpan,
+    ParsedObjectType, ParsedType, ParsedTypeParameter, TextSpan,
 };
 use typescript_rust_types::{
     FunctionType, NumberLiteralType, ObjectProperty, ObjectType, Type, union_type,
@@ -12,6 +13,31 @@ use typescript_rust_types::{
 use crate::context::{CheckerContext, convert_span};
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
 
+pub(crate) type TypeParameterSubstitution = BTreeMap<String, Type>;
+
+pub(crate) fn report_duplicate_type_parameters(
+    type_parameters: &[ParsedTypeParameter],
+    ctx: &mut CheckerContext,
+) {
+    let mut seen = HashSet::new();
+
+    for type_parameter in type_parameters {
+        if !seen.insert(type_parameter.name.clone()) {
+            let mut diagnostic = Diagnostic::new(
+                DiagnosticCode::Custom("typescript-rust::duplicate-type-parameter"),
+                format!("Duplicate type parameter '{}'.", type_parameter.name),
+                ctx.file_name.clone(),
+            );
+
+            if let Some(span) = type_parameter.name_span.or(type_parameter.span) {
+                diagnostic = diagnostic.with_span(convert_span(span));
+            }
+
+            ctx.push(diagnostic);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedType {
     ty: Type,
@@ -19,14 +45,23 @@ struct ResolvedType {
 }
 
 pub(crate) fn map_parsed_type(parsed_type: ParsedType, ctx: &mut CheckerContext) -> Type {
+    map_parsed_type_with_substitution(parsed_type, ctx, &TypeParameterSubstitution::new())
+}
+
+pub(crate) fn map_parsed_type_with_substitution(
+    parsed_type: ParsedType,
+    ctx: &mut CheckerContext,
+    substitution: &TypeParameterSubstitution,
+) -> Type {
     let mut resolving = Vec::new();
-    resolve_parsed_type(parsed_type, ctx, &mut resolving).ty
+    resolve_parsed_type(parsed_type, ctx, &mut resolving, substitution).ty
 }
 
 fn resolve_parsed_type(
     parsed_type: ParsedType,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     match parsed_type {
         ParsedType::String => ResolvedType {
@@ -69,9 +104,11 @@ fn resolve_parsed_type(
             ty: Type::Void,
             had_error: false,
         },
-        ParsedType::Object(object_type) => resolve_object_type(object_type, ctx, resolving),
+        ParsedType::Object(object_type) => {
+            resolve_object_type(object_type, ctx, resolving, substitution)
+        }
         ParsedType::Array(element_type) => {
-            let resolved_element = resolve_parsed_type(*element_type, ctx, resolving);
+            let resolved_element = resolve_parsed_type(*element_type, ctx, resolving, substitution);
             if resolved_element.had_error {
                 return ResolvedType {
                     ty: Type::Unknown,
@@ -84,10 +121,14 @@ fn resolve_parsed_type(
                 had_error: false,
             }
         }
-        ParsedType::Tuple(elements) => resolve_tuple_type(elements, ctx, resolving),
-        ParsedType::Union(types) => resolve_union_type(types, ctx, resolving),
-        ParsedType::Function(function_type) => resolve_function_type(function_type, ctx, resolving),
-        ParsedType::Named(named_type) => resolve_named_type(named_type, ctx, resolving),
+        ParsedType::Tuple(elements) => resolve_tuple_type(elements, ctx, resolving, substitution),
+        ParsedType::Union(types) => resolve_union_type(types, ctx, resolving, substitution),
+        ParsedType::Function(function_type) => {
+            resolve_function_type(function_type, ctx, resolving, substitution)
+        }
+        ParsedType::Named(named_type) => {
+            resolve_named_type(named_type, ctx, resolving, substitution)
+        }
     }
 }
 
@@ -95,11 +136,12 @@ fn resolve_tuple_type(
     elements: Vec<ParsedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     let mut resolved_elements = Vec::new();
 
     for element in elements {
-        let resolved_element = resolve_parsed_type(element, ctx, resolving);
+        let resolved_element = resolve_parsed_type(element, ctx, resolving, substitution);
         if resolved_element.had_error {
             return ResolvedType {
                 ty: Type::Unknown,
@@ -120,11 +162,20 @@ fn resolve_function_type(
     function_type: ParsedFunctionType,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
+    let local_substitution = extend_substitution_with_type_parameters(
+        substitution,
+        &function_type.type_parameters,
+        ctx,
+        resolving,
+    );
+
     let mut parameters = Vec::new();
 
     for parameter in function_type.parameters {
-        let resolved_parameter = resolve_function_type_parameter(parameter, ctx, resolving);
+        let resolved_parameter =
+            resolve_function_type_parameter(parameter, ctx, resolving, &local_substitution);
         if resolved_parameter.had_error {
             return ResolvedType {
                 ty: Type::Unknown,
@@ -135,7 +186,12 @@ fn resolve_function_type(
         parameters.push(resolved_parameter.ty);
     }
 
-    let return_type = resolve_parsed_type(*function_type.return_type, ctx, resolving);
+    let return_type = resolve_parsed_type(
+        *function_type.return_type,
+        ctx,
+        resolving,
+        &local_substitution,
+    );
     if return_type.had_error {
         return ResolvedType {
             ty: Type::Unknown,
@@ -156,9 +212,10 @@ fn resolve_function_type_parameter(
     parameter: ParsedFunctionTypeParameter,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     let ParsedFunctionTypeParameter { ty, .. } = parameter;
-    let resolved = resolve_parsed_type(ty, ctx, resolving);
+    let resolved = resolve_parsed_type(ty, ctx, resolving, substitution);
     if resolved.had_error {
         return ResolvedType {
             ty: Type::Unknown,
@@ -176,11 +233,12 @@ fn resolve_object_type(
     object_type: ParsedObjectType,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     let mut properties = BTreeMap::new();
 
     for property in object_type.properties {
-        let property_type = resolve_parsed_type(property.ty, ctx, resolving);
+        let property_type = resolve_parsed_type(property.ty, ctx, resolving, substitution);
         if property_type.had_error {
             return ResolvedType {
                 ty: Type::Unknown,
@@ -207,11 +265,12 @@ fn resolve_union_type(
     types: Vec<ParsedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     let mut resolved_types = Vec::new();
 
     for ty in types {
-        let resolved = resolve_parsed_type(ty, ctx, resolving);
+        let resolved = resolve_parsed_type(ty, ctx, resolving, substitution);
         if resolved.had_error {
             return ResolvedType {
                 ty: Type::Unknown,
@@ -232,7 +291,15 @@ fn resolve_named_type(
     named_type: ParsedNamedType,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
+    if let Some(ty) = substitution.get(&named_type.name) {
+        return ResolvedType {
+            ty: ty.clone(),
+            had_error: false,
+        };
+    }
+
     let Some(declaration) = ctx.type_declarations.get(&named_type.name).cloned() else {
         emit_unknown_type_name(&named_type, ctx);
         return ResolvedType {
@@ -242,15 +309,29 @@ fn resolve_named_type(
     };
 
     match declaration {
-        TypeDeclarationInfo::Alias(alias) => resolve_type_alias(alias, ctx, resolving),
-        TypeDeclarationInfo::Interface(interface) => resolve_interface(interface, ctx, resolving),
+        TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
+            alias,
+            named_type.type_arguments,
+            ctx,
+            resolving,
+            substitution,
+        ),
+        TypeDeclarationInfo::Interface(interface) => resolve_interface(
+            interface,
+            named_type.type_arguments,
+            ctx,
+            resolving,
+            substitution,
+        ),
     }
 }
 
 fn resolve_type_alias(
     alias: TypeAliasInfo,
+    type_arguments: Vec<ParsedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     if resolving.iter().any(|name| name == &alias.name) {
         emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
@@ -261,8 +342,26 @@ fn resolve_type_alias(
     }
 
     resolving.push(alias.name.clone());
-    let resolved = with_file_name(ctx, &alias.file_name, |ctx| {
-        resolve_parsed_type(alias.ty, ctx, resolving)
+    let Some(local_substitution) = bind_type_arguments(
+        &alias.type_parameters,
+        type_arguments,
+        &alias.name,
+        alias.name_span,
+        ctx,
+        resolving,
+        substitution,
+    ) else {
+        resolving.pop();
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    };
+
+    let resolved = with_type_declarations(&alias.resolution_scope, ctx, |ctx| {
+        with_file_name(ctx, &alias.file_name, |ctx| {
+            resolve_parsed_type_with_substitution(alias.ty, ctx, resolving, &local_substitution)
+        })
     });
     resolving.pop();
 
@@ -278,8 +377,10 @@ fn resolve_type_alias(
 
 fn resolve_interface(
     interface: InterfaceInfo,
+    type_arguments: Vec<ParsedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     if resolving.iter().any(|name| name == &interface.name) {
         emit_type_declaration_cycle(&interface.name, interface.name_span, ctx);
@@ -290,8 +391,26 @@ fn resolve_interface(
     }
 
     resolving.push(interface.name.clone());
-    let resolved = with_file_name(ctx, &interface.file_name, |ctx| {
-        resolve_interface_members(&interface.members, ctx, resolving)
+    let Some(local_substitution) = bind_type_arguments(
+        &interface.type_parameters,
+        type_arguments,
+        &interface.name,
+        interface.name_span,
+        ctx,
+        resolving,
+        substitution,
+    ) else {
+        resolving.pop();
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    };
+
+    let resolved = with_type_declarations(&interface.resolution_scope, ctx, |ctx| {
+        with_file_name(ctx, &interface.file_name, |ctx| {
+            resolve_interface_members(&interface.members, ctx, resolving, &local_substitution)
+        })
     });
     resolving.pop();
 
@@ -309,11 +428,12 @@ fn resolve_interface_members(
     members: &[ParsedInterfaceMember],
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     let mut properties = BTreeMap::new();
 
     for member in members {
-        let property_type = resolve_parsed_type(member.ty.clone(), ctx, resolving);
+        let property_type = resolve_parsed_type(member.ty.clone(), ctx, resolving, substitution);
         if property_type.had_error {
             return ResolvedType {
                 ty: Type::Unknown,
@@ -336,9 +456,128 @@ fn resolve_interface_members(
     }
 }
 
+fn bind_type_arguments(
+    type_parameters: &[ParsedTypeParameter],
+    type_arguments: Vec<ParsedType>,
+    name: &str,
+    name_span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<String>,
+    parent_substitution: &TypeParameterSubstitution,
+) -> Option<TypeParameterSubstitution> {
+    if type_parameters.is_empty() {
+        if !type_arguments.is_empty() {
+            emit_type_is_not_generic(name, name_span, ctx);
+            return None;
+        }
+
+        return Some(TypeParameterSubstitution::new());
+    }
+
+    if type_arguments.len() > type_parameters.len() {
+        emit_generic_arity(name, type_parameters.len(), name_span, ctx);
+        return None;
+    }
+
+    let mut substitution = TypeParameterSubstitution::new();
+
+    for (index, parameter) in type_parameters.iter().enumerate() {
+        if let Some(argument) = type_arguments.get(index) {
+            let resolved_argument =
+                resolve_parsed_type(argument.clone(), ctx, resolving, parent_substitution);
+            if resolved_argument.had_error {
+                return None;
+            }
+
+            substitution
+                .entry(parameter.name.clone())
+                .or_insert(resolved_argument.ty);
+            continue;
+        }
+
+        let Some(default_type) = parameter.default_type.clone() else {
+            emit_generic_arity(name, type_parameters.len(), name_span, ctx);
+            return None;
+        };
+
+        let mut effective_substitution = parent_substitution.clone();
+        effective_substitution.extend(substitution.clone());
+
+        let resolved_default =
+            resolve_parsed_type(default_type, ctx, resolving, &effective_substitution);
+        if resolved_default.had_error {
+            return None;
+        }
+
+        substitution
+            .entry(parameter.name.clone())
+            .or_insert(resolved_default.ty);
+    }
+
+    Some(substitution)
+}
+
+fn extend_substitution_with_type_parameters(
+    parent_substitution: &TypeParameterSubstitution,
+    type_parameters: &[ParsedTypeParameter],
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<String>,
+) -> TypeParameterSubstitution {
+    let mut substitution = parent_substitution.clone();
+
+    for parameter in type_parameters {
+        let mut effective_substitution = parent_substitution.clone();
+        effective_substitution.extend(substitution.clone());
+
+        let resolved = parameter.default_type.clone().map(|default_type| {
+            resolve_parsed_type(default_type, ctx, resolving, &effective_substitution)
+        });
+
+        let ty = match resolved {
+            Some(resolved) if !resolved.had_error => resolved.ty,
+            Some(_) => Type::Unknown,
+            None => Type::Unknown,
+        };
+
+        substitution.entry(parameter.name.clone()).or_insert(ty);
+    }
+
+    substitution
+}
+
+fn resolve_parsed_type_with_substitution(
+    parsed_type: ParsedType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    resolve_parsed_type(parsed_type, ctx, resolving, substitution)
+}
+
 fn emit_unknown_type_name(named_type: &ParsedNamedType, ctx: &mut CheckerContext) {
     let mut diagnostic = Diagnostic::ts2304(&named_type.name, ctx.file_name.clone());
     if let Some(span) = named_type.span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+    ctx.push(diagnostic);
+}
+
+fn emit_type_is_not_generic(name: &str, name_span: Option<TextSpan>, ctx: &mut CheckerContext) {
+    let mut diagnostic = Diagnostic::ts2315(name, ctx.file_name.clone());
+    if let Some(span) = name_span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+    ctx.push(diagnostic);
+}
+
+fn emit_generic_arity(
+    name: &str,
+    arity: usize,
+    name_span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let mut diagnostic = Diagnostic::ts2314(name, arity, ctx.file_name.clone());
+    if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
     }
     ctx.push(diagnostic);
@@ -381,5 +620,21 @@ fn with_file_name<R>(
     ctx.set_file_name(file_name.to_string());
     let result = f(ctx);
     ctx.set_file_name(current_file_name);
+    result
+}
+
+fn with_type_declarations<R>(
+    type_declarations: &Option<Rc<crate::symbols::TypeDeclarationTable>>,
+    ctx: &mut CheckerContext,
+    f: impl FnOnce(&mut CheckerContext) -> R,
+) -> R {
+    let saved_type_declarations = ctx.type_declarations.clone();
+
+    if let Some(type_declarations) = type_declarations {
+        ctx.type_declarations = (**type_declarations).clone();
+    }
+
+    let result = f(ctx);
+    ctx.type_declarations = saved_type_declarations;
     result
 }

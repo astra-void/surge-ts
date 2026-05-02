@@ -136,6 +136,25 @@ impl Diagnostic {
         )
     }
 
+    pub fn ts2314(type_name: &str, arity: usize, file_name: impl Into<String>) -> Self {
+        Self::typescript(
+            TypeScriptDiagnosticKind::GenericTypeRequiresTypeArguments,
+            vec![
+                DiagnosticArg::Str(type_name.to_string()),
+                DiagnosticArg::Usize(arity),
+            ],
+            file_name,
+        )
+    }
+
+    pub fn ts2315(type_name: &str, file_name: impl Into<String>) -> Self {
+        Self::typescript(
+            TypeScriptDiagnosticKind::TypeIsNotGeneric,
+            vec![DiagnosticArg::Str(type_name.to_string())],
+            file_name,
+        )
+    }
+
     pub fn ts2304(name: &str, file_name: impl Into<String>) -> Self {
         Self::typescript(
             TypeScriptDiagnosticKind::CannotFindName,

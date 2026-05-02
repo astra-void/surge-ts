@@ -26,14 +26,29 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - Checker symbols are split into value symbols, type declarations, and scope handling.
 - The checker now also has a program-level entry point that precollects global
   script declarations across multiple files before statement checking begins.
-  It currently models shared global-script type aliases, interfaces, and
-  top-level functions while keeping top-level variables file-local.
-  It now also distinguishes module files from script files, keeping module
-  files isolated from the global-script sharing prepass.
-- Imports and exports now have a parsed syntax surface, but module resolution
-  remains a future checker/config concern rather than a graph-building feature.
+  It models shared global-script type aliases, interfaces, and top-level
+  functions while keeping top-level variables file-local.
+- Imports and exports now have a parsed syntax surface, and v0.57.1 hardens a
+  focused relative module-resolution-lite layer for loaded program files.
+  Module files remain isolated from the global-script sharing prepass, but
+  named relative imports, type-only imports, side-effect imports, and local
+  named export lists now bind across loaded `.ts` files with separate type and
+  value namespaces.
+- v0.59 adds a narrow generic syntax surface plus instantiation-lite for type
+  aliases and interfaces. v0.59.1 hardens parser recovery, default type
+  parameters, arity diagnostics, duplicate type-parameter handling, and
+  cross-file generic imports/exports while still keeping generic inference out
+  of scope.
+- v0.58 adds project compatibility reporting and diagnostic limiting so real
+  projects can be triaged without pretending the checker fully supports package
+  resolution or the broader TypeScript module surface yet.
+- The checker now has a diagnostic span policy document and span-focused
+  regression tests; future diagnostics should follow the same span policy
+  instead of adding ad-hoc wrapper spans.
 - Future phases should add new modules for interfaces, arrays/tuples, and imports/exports rather than re-expanding monolithic files; literal types are already represented and should be hardened in-place before broader type-system expansion.
 - Config, syntax, and checker logic should stay in their dedicated submodule trees rather than returning to crate-root files.
+- After v0.59.1, the next phase should be chosen from `--compatReport`
+  output, not from a fixed feature wish list.
 
 ## Suggested Homes For Future Features
 
@@ -42,4 +57,5 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - Literal types: `typescript-rust-syntax`, `typescript-rust-types`, and `typescript-rust-checker`
 - Imports and exports: `typescript-rust-syntax`, `typescript-rust-checker`, and `typescript-rust-config`
 - Program checking: `typescript-rust-checker` and CLI project mode
+- Compatibility reporting and triage: `typescript-rust-cli` and `typescript-rust-checker`
 - New diagnostics: `typescript-rust-diagnostics`

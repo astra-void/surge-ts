@@ -10,7 +10,7 @@ use crate::{
 
 use super::expressions::parse_expression;
 use super::spans::text_span_from_oxc_span;
-use super::types::parse_type_annotation;
+use super::types::{parse_type_annotation, parse_type_parameters};
 
 pub(crate) fn parse_function_declaration(
     function: &Function<'_>,
@@ -35,6 +35,7 @@ pub(crate) fn parse_function_declaration(
     Some(ParsedFunctionDeclaration {
         name: id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(id.span)),
+        type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
         parameters,
         return_type,
         body,

@@ -1,13 +1,13 @@
 use oxc_ast::ast::{
     PropertyKey, TSLiteral, TSLiteralType, TSPropertySignature, TSSignature, TSTupleElement,
-    TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeReference,
-    TSUnionType,
+    TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeParameter,
+    TSTypeParameterDeclaration, TSTypeParameterInstantiation, TSTypeReference, TSUnionType,
 };
 use oxc_span::GetSpan;
 
 use crate::{
     ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedType,
-    ParsedTypeAliasDeclaration,
+    ParsedTypeAliasDeclaration, ParsedTypeParameter,
 };
 
 use super::function_types::parse_function_type;
@@ -47,17 +47,19 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
 }
 
 fn parse_type_reference(type_reference: &TSTypeReference<'_>) -> Option<ParsedType> {
-    if type_reference.type_arguments.is_some() {
-        return None;
-    }
-
     let TSTypeName::IdentifierReference(identifier) = &type_reference.type_name else {
         return None;
+    };
+
+    let type_arguments = match type_reference.type_arguments.as_deref() {
+        Some(type_arguments) => parse_type_arguments(type_arguments)?,
+        None => Vec::new(),
     };
 
     Some(ParsedType::Named(ParsedNamedType {
         name: identifier.name.to_string(),
         span: Some(text_span_from_oxc_span(identifier.span)),
+        type_arguments,
     }))
 }
 
@@ -131,6 +133,36 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     ParsedType::Object(ParsedObjectType { properties })
 }
 
+pub(crate) fn parse_type_parameters(
+    type_parameters: Option<&TSTypeParameterDeclaration<'_>>,
+) -> Vec<ParsedTypeParameter> {
+    type_parameters
+        .map(|type_parameters| {
+            type_parameters
+                .params
+                .iter()
+                .map(parse_type_parameter)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_type_parameter(type_parameter: &TSTypeParameter<'_>) -> ParsedTypeParameter {
+    ParsedTypeParameter {
+        name: type_parameter.name.name.to_string(),
+        name_span: Some(text_span_from_oxc_span(type_parameter.name.span)),
+        constraint: type_parameter.constraint.as_ref().and_then(parse_type),
+        default_type: type_parameter.default.as_ref().and_then(parse_type),
+        span: Some(text_span_from_oxc_span(type_parameter.span)),
+    }
+}
+
+pub(crate) fn parse_type_arguments(
+    type_arguments: &TSTypeParameterInstantiation<'_>,
+) -> Option<Vec<ParsedType>> {
+    type_arguments.params.iter().map(parse_type).collect()
+}
+
 pub(crate) fn parse_type_property_signature(
     property_signature: &TSPropertySignature<'_>,
 ) -> Option<ParsedObjectTypeProperty> {
@@ -158,15 +190,12 @@ pub(crate) fn parse_type_property_signature(
 pub(crate) fn parse_type_alias_declaration(
     declaration: &TSTypeAliasDeclaration<'_>,
 ) -> Option<ParsedTypeAliasDeclaration> {
-    if declaration.type_parameters.is_some() {
-        return None;
-    }
-
     let ty = parse_type(&declaration.type_annotation)?;
 
     Some(ParsedTypeAliasDeclaration {
         name: declaration.id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(declaration.id.span)),
+        type_parameters: parse_type_parameters(declaration.type_parameters.as_deref()),
         ty,
         type_span: Some(text_span_from_oxc_span(declaration.type_annotation.span())),
     })

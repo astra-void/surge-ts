@@ -2,15 +2,12 @@ use crate::{ParsedFunctionType, ParsedFunctionTypeParameter};
 use oxc_ast::ast::{BindingPattern, FormalParameter, TSFunctionType};
 
 use super::spans::text_span_from_oxc_span;
-use super::types::parse_type_annotation;
+use super::types::{parse_type_annotation, parse_type_parameters};
 
 pub(crate) fn parse_function_type(
     function_type: &TSFunctionType<'_>,
 ) -> Option<ParsedFunctionType> {
-    if function_type.type_parameters.is_some()
-        || function_type.this_param.is_some()
-        || function_type.params.rest.is_some()
-    {
+    if function_type.this_param.is_some() || function_type.params.rest.is_some() {
         return None;
     }
 
@@ -26,6 +23,7 @@ pub(crate) fn parse_function_type(
     Some(ParsedFunctionType {
         parameters,
         return_type: Box::new(return_type),
+        type_parameters: parse_type_parameters(function_type.type_parameters.as_deref()),
     })
 }
 

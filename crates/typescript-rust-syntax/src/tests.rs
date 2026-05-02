@@ -506,10 +506,139 @@ fn parse_function_type_rest_param_unsupported_no_panic() {
 }
 
 #[test]
-fn parse_function_type_generic_unsupported_no_panic() {
+fn parse_function_type_generic_type_parameters_parsed() {
     let parsed = parse_source("type Fn = <T>(value: T) => T;", "example.ts");
 
     assert_eq!(parsed.file_name, "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+    let ParsedType::Function(function_type) = &alias.ty else {
+        panic!("expected a function type");
+    };
+
+    assert_eq!(function_type.type_parameters.len(), 1);
+    assert_eq!(function_type.parameters.len(), 1);
+}
+
+#[test]
+fn parse_function_type_parameter_one() {
+    let parsed = parse_source("type Fn = <T>(value: T) => T;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+    let ParsedType::Function(function_type) = &alias.ty else {
+        panic!("expected a function type");
+    };
+
+    assert_eq!(function_type.type_parameters.len(), 1);
+    assert_eq!(function_type.type_parameters[0].name, "T");
+}
+
+#[test]
+fn parse_function_type_parameter_multiple() {
+    let parsed = parse_source("type Fn = <A, B>(value: A) => B;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+    let ParsedType::Function(function_type) = &alias.ty else {
+        panic!("expected a function type");
+    };
+
+    assert_eq!(function_type.type_parameters.len(), 2);
+}
+
+#[test]
+fn parse_function_type_parameter_constraint() {
+    let parsed = parse_source("type Fn = <T extends string>(value: T) => T;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+    let ParsedType::Function(function_type) = &alias.ty else {
+        panic!("expected a function type");
+    };
+
+    assert_eq!(function_type.type_parameters[0].name, "T");
+    assert!(matches!(
+        function_type.type_parameters[0].constraint,
+        Some(ParsedType::String)
+    ));
+}
+
+#[test]
+fn parse_function_type_parameter_default() {
+    let parsed = parse_source("type Fn = <T = string>(value: T) => T;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+    let ParsedType::Function(function_type) = &alias.ty else {
+        panic!("expected a function type");
+    };
+
+    assert!(matches!(
+        function_type.type_parameters[0].default_type,
+        Some(ParsedType::String)
+    ));
+}
+
+#[test]
+fn parse_function_type_alias_outer_type_parameter() {
+    let parsed = parse_source("type Fn<T> = <U>(value: T) => U;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+    let ParsedType::Function(function_type) = &alias.ty else {
+        panic!("expected a function type");
+    };
+
+    assert_eq!(alias.type_parameters.len(), 1);
+    assert_eq!(function_type.type_parameters.len(), 1);
+}
+
+#[test]
+fn parse_type_parameter_missing_name_no_panic() {
+    let parsed = parse_source("type Box<> = string;", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_type_parameter_missing_close_angle_no_panic() {
+    let parsed = parse_source("type Box<T = string = { value: T };", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_type_parameter_missing_default_no_panic() {
+    let parsed = parse_source("type Box<T = > = string;", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_type_parameter_missing_constraint_no_panic() {
+    let parsed = parse_source("type Box<T extends> = string;", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_duplicate_type_parameter_names_parser_safe() {
+    let parsed = parse_source("type Pair<T, T> = [T, T];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_function_declaration_generic_type_parameters_parsed() {
+    let parsed = parse_source(
+        "function identity<T>(value: T): T { return value; }",
+        "example.ts",
+    );
+
+    assert_eq!(parsed.file_name, "example.ts");
+    let ParsedStatement::FunctionDeclaration(function) = &parsed.statements[0] else {
+        panic!("expected a function declaration");
+    };
+
+    assert_eq!(function.type_parameters.len(), 1);
+    assert_eq!(function.parameters.len(), 1);
 }
 
 #[test]
@@ -724,6 +853,26 @@ fn parse_type_alias_named_reference() {
 }
 
 #[test]
+fn parse_type_reference_type_arguments_parsed() {
+    let parsed = parse_source(
+        "type Box<T> = T; let value: Box<string> = \"ok\";",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert_eq!(named.type_arguments.len(), 1);
+    assert!(matches!(named.type_arguments[0], ParsedType::String));
+}
+
+#[test]
 fn parse_type_alias_named_reference_inside_object_property() {
     let parsed = parse_source(
         "type Name = string; type User = { name: Name };",
@@ -766,9 +915,92 @@ fn parse_type_alias_named_reference_inside_union() {
 }
 
 #[test]
-fn parse_type_alias_generic_unsupported_no_panic() {
+fn parse_type_alias_generic_type_parameters_parsed() {
     let parsed = parse_source("type Box<T> = T;", "example.ts");
     assert_eq!(parsed.file_name, "example.ts");
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert_eq!(alias.type_parameters.len(), 1);
+    let ParsedType::Named(named) = &alias.ty else {
+        panic!("expected a named type");
+    };
+    assert_eq!(named.name, "T");
+}
+
+#[test]
+fn parse_type_alias_type_parameter_one() {
+    let parsed = parse_source("type Box<T> = T;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert_eq!(alias.type_parameters.len(), 1);
+}
+
+#[test]
+fn parse_type_alias_type_parameter_multiple() {
+    let parsed = parse_source("type Pair<A, B> = [A, B];", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert_eq!(alias.type_parameters.len(), 2);
+}
+
+#[test]
+fn parse_type_alias_type_parameter_trailing_comma() {
+    let parsed = parse_source("type Pair<T,> = [T, T];", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert_eq!(alias.type_parameters.len(), 1);
+}
+
+#[test]
+fn parse_type_alias_type_parameter_constraint() {
+    let parsed = parse_source("type Box<T extends string> = T;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert!(matches!(
+        alias.type_parameters[0].constraint,
+        Some(ParsedType::String)
+    ));
+}
+
+#[test]
+fn parse_type_alias_type_parameter_default() {
+    let parsed = parse_source("type Box<T = string> = T;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert!(matches!(
+        alias.type_parameters[0].default_type,
+        Some(ParsedType::String)
+    ));
+}
+
+#[test]
+fn parse_type_alias_type_parameter_constraint_and_default() {
+    let parsed = parse_source("type Box<T extends string = string> = T;", "example.ts");
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert!(matches!(
+        alias.type_parameters[0].constraint,
+        Some(ParsedType::String)
+    ));
+    assert!(matches!(
+        alias.type_parameters[0].default_type,
+        Some(ParsedType::String)
+    ));
 }
 
 #[test]
@@ -911,10 +1143,72 @@ fn parse_interface_extends_unsupported_no_panic() {
 }
 
 #[test]
-fn parse_interface_generic_unsupported_no_panic() {
+fn parse_interface_generic_type_parameters_parsed() {
     let parsed = parse_source("interface Box<T> { value: T; }", "example.ts");
     assert_eq!(parsed.file_name, "example.ts");
     assert_eq!(parsed.statements.len(), 1);
+
+    let ParsedStatement::InterfaceDeclaration(interface) = &parsed.statements[0] else {
+        panic!("expected an interface declaration");
+    };
+
+    assert_eq!(interface.type_parameters.len(), 1);
+    let ParsedType::Named(named) = &interface.members[0].ty else {
+        panic!("expected a named member type");
+    };
+    assert_eq!(named.name, "T");
+}
+
+#[test]
+fn parse_interface_type_parameter_one() {
+    let parsed = parse_source("interface Box<T> { value: T; }", "example.ts");
+    let ParsedStatement::InterfaceDeclaration(interface) = &parsed.statements[0] else {
+        panic!("expected an interface declaration");
+    };
+
+    assert_eq!(interface.type_parameters.len(), 1);
+}
+
+#[test]
+fn parse_interface_type_parameter_multiple() {
+    let parsed = parse_source(
+        "interface Pair<A, B> { first: A; second: B; }",
+        "example.ts",
+    );
+    let ParsedStatement::InterfaceDeclaration(interface) = &parsed.statements[0] else {
+        panic!("expected an interface declaration");
+    };
+
+    assert_eq!(interface.type_parameters.len(), 2);
+}
+
+#[test]
+fn parse_interface_type_parameter_constraint() {
+    let parsed = parse_source(
+        "interface Box<T extends string> { value: T; }",
+        "example.ts",
+    );
+    let ParsedStatement::InterfaceDeclaration(interface) = &parsed.statements[0] else {
+        panic!("expected an interface declaration");
+    };
+
+    assert!(matches!(
+        interface.type_parameters[0].constraint,
+        Some(ParsedType::String)
+    ));
+}
+
+#[test]
+fn parse_interface_type_parameter_default() {
+    let parsed = parse_source("interface Box<T = string> { value: T; }", "example.ts");
+    let ParsedStatement::InterfaceDeclaration(interface) = &parsed.statements[0] else {
+        panic!("expected an interface declaration");
+    };
+
+    assert!(matches!(
+        interface.type_parameters[0].default_type,
+        Some(ParsedType::String)
+    ));
 }
 
 #[test]
@@ -990,6 +1284,244 @@ fn parse_property_call_no_args() {
     assert_eq!(object_name, "store");
     assert_eq!(property_name, "getState");
     assert!(arguments.is_empty());
+}
+
+#[test]
+fn parse_call_expression_type_arguments_parsed() {
+    let parsed = parse_source("identity<string>(\"ok\");", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    match &parsed.statements[0] {
+        ParsedStatement::Call(call) => {
+            assert_eq!(call.callee_name, "identity");
+            assert_eq!(call.type_arguments.len(), 1);
+            assert_eq!(call.arguments.len(), 1);
+        }
+        ParsedStatement::Expression(ParsedExpression::Call {
+            callee_name,
+            type_arguments,
+            arguments,
+            ..
+        }) => {
+            assert_eq!(callee_name, "identity");
+            assert_eq!(type_arguments.len(), 1);
+            assert_eq!(arguments.len(), 1);
+        }
+        _ => panic!("expected a call statement or call expression"),
+    }
+}
+
+#[test]
+fn parse_named_type_reference_type_argument_one() {
+    let parsed = parse_source(
+        "type Box<T> = T; let value: Box<string> = \"ok\";",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert_eq!(named.type_arguments.len(), 1);
+}
+
+#[test]
+fn parse_named_type_reference_type_argument_multiple() {
+    let parsed = parse_source(
+        "type Pair<A, B> = [A, B]; let value: Pair<string, number> = [\"a\", 1];",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert_eq!(named.type_arguments.len(), 2);
+}
+
+#[test]
+fn parse_named_type_reference_type_argument_nested() {
+    let parsed = parse_source(
+        "type Box<T> = { value: T }; let value: Box<Box<string>> = { value: { value: \"ok\" } };",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert_eq!(named.type_arguments.len(), 1);
+    assert!(matches!(named.type_arguments[0], ParsedType::Named(_)));
+}
+
+#[test]
+fn parse_named_type_reference_type_argument_union() {
+    let parsed = parse_source(
+        "type Box<T> = { value: T }; let value: Box<string | number> = { value: 1 };",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert!(matches!(named.type_arguments[0], ParsedType::Union(_)));
+}
+
+#[test]
+fn parse_named_type_reference_type_argument_tuple() {
+    let parsed = parse_source(
+        "type Box<T> = { value: T }; let value: Box<[string, number]> = { value: [\"a\", 1] };",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert!(matches!(named.type_arguments[0], ParsedType::Tuple(_)));
+}
+
+#[test]
+fn parse_named_type_reference_type_argument_function() {
+    let parsed = parse_source(
+        "type Box<T> = { value: T }; let value: Box<() => string> = { value: () => \"ok\" };",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert!(matches!(named.type_arguments[0], ParsedType::Function(_)));
+}
+
+#[test]
+fn parse_named_type_reference_type_argument_object() {
+    let parsed = parse_source(
+        "type Box<T> = { value: T }; let value: Box<{ name: string }> = { value: { name: \"ok\" } };",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert!(matches!(named.type_arguments[0], ParsedType::Object(_)));
+}
+
+#[test]
+fn parse_named_type_reference_type_argument_trailing_comma() {
+    let parsed = parse_source(
+        "type Box<T> = T; let value: Box<string,> = \"ok\";",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[1] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Named(named)) = variable.declared_type.as_ref() else {
+        panic!("expected a named type reference");
+    };
+
+    assert_eq!(named.type_arguments.len(), 1);
+}
+
+#[test]
+fn parse_named_type_reference_missing_close_angle_no_panic() {
+    let parsed = parse_source(
+        "type Box<T> = T; let value: Box<string = \"ok\";",
+        "example.ts",
+    );
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_named_type_reference_missing_type_argument_no_panic() {
+    let parsed = parse_source("type Box<T> = T; let value: Box<> = \"ok\";", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_call_expression_type_arguments_multiple() {
+    let parsed = parse_source("pair<string, number>(\"a\", 1);", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Call(call) = &parsed.statements[0] else {
+        panic!("expected a call statement");
+    };
+
+    assert_eq!(call.type_arguments.len(), 2);
+}
+
+#[test]
+fn parse_call_expression_type_arguments_nested() {
+    let parsed = parse_source("identity<Box<string>>(value);", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Call(call) = &parsed.statements[0] else {
+        panic!("expected a call statement");
+    };
+
+    assert_eq!(call.type_arguments.len(), 1);
+    assert!(matches!(call.type_arguments[0], ParsedType::Named(_)));
+}
+
+#[test]
+fn parse_call_expression_type_arguments_missing_close_angle_no_panic() {
+    let parsed = parse_source("identity<string(value);", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_call_expression_type_argument_parser_safe_or_pinned() {
+    let parsed = parse_source("store.getState<string>();", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Expression(ParsedExpression::PropertyCall { type_arguments, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+
+    assert_eq!(type_arguments.len(), 1);
 }
 
 #[test]
@@ -1671,7 +2203,7 @@ fn parse_array_literal_empty() {
 
     assert!(matches!(
         variable.initializer.as_ref(),
-        Some(ParsedExpression::ArrayLiteral(elements)) if elements.is_empty()
+        Some(ParsedExpression::ArrayLiteral { elements, .. }) if elements.is_empty()
     ));
 }
 
@@ -1684,7 +2216,8 @@ fn parse_array_literal_one_element() {
         panic!("expected a variable declaration");
     };
 
-    let Some(ParsedExpression::ArrayLiteral(elements)) = variable.initializer.as_ref() else {
+    let Some(ParsedExpression::ArrayLiteral { elements, .. }) = variable.initializer.as_ref()
+    else {
         panic!("expected an array literal");
     };
 
@@ -1702,7 +2235,7 @@ fn parse_array_literal_multiple_elements() {
 
     assert!(matches!(
         variable.initializer.as_ref(),
-        Some(ParsedExpression::ArrayLiteral(elements)) if elements.len() == 2
+        Some(ParsedExpression::ArrayLiteral { elements, .. }) if elements.len() == 2
     ));
 }
 
@@ -1717,7 +2250,7 @@ fn parse_array_literal_trailing_comma() {
 
     assert!(matches!(
         variable.initializer.as_ref(),
-        Some(ParsedExpression::ArrayLiteral(elements)) if elements.len() == 1
+        Some(ParsedExpression::ArrayLiteral { elements, .. }) if elements.len() == 1
     ));
 }
 
@@ -1732,8 +2265,8 @@ fn parse_array_literal_identifier_element() {
 
     assert!(matches!(
         variable.initializer.as_ref(),
-        Some(ParsedExpression::ArrayLiteral(elements))
-            if matches!(elements[0].expression, ParsedExpression::Identifier(_))
+        Some(ParsedExpression::ArrayLiteral { elements, .. })
+            if matches!(elements[0].expression, ParsedExpression::Identifier { .. })
     ));
 }
 
@@ -1748,7 +2281,7 @@ fn parse_array_literal_call_element() {
 
     assert!(matches!(
         variable.initializer.as_ref(),
-        Some(ParsedExpression::ArrayLiteral(elements))
+        Some(ParsedExpression::ArrayLiteral { elements, .. })
             if matches!(elements[0].expression, ParsedExpression::Call { .. })
     ));
 }
@@ -1764,7 +2297,7 @@ fn parse_array_literal_property_call_element() {
 
     assert!(matches!(
         variable.initializer.as_ref(),
-        Some(ParsedExpression::ArrayLiteral(elements))
+        Some(ParsedExpression::ArrayLiteral { elements, .. })
             if matches!(elements[0].expression, ParsedExpression::PropertyCall { .. })
     ));
 }
@@ -1780,7 +2313,7 @@ fn parse_array_literal_conditional_element() {
 
     assert!(matches!(
         variable.initializer.as_ref(),
-        Some(ParsedExpression::ArrayLiteral(elements))
+        Some(ParsedExpression::ArrayLiteral { elements, .. })
             if matches!(elements[0].expression, ParsedExpression::Conditional { .. })
     ));
 }
@@ -1796,8 +2329,8 @@ fn parse_array_literal_nested_array() {
 
     assert!(matches!(
         variable.initializer.as_ref(),
-        Some(ParsedExpression::ArrayLiteral(elements))
-            if matches!(elements[0].expression, ParsedExpression::ArrayLiteral(_))
+        Some(ParsedExpression::ArrayLiteral { elements, .. })
+            if matches!(elements[0].expression, ParsedExpression::ArrayLiteral { .. })
     ));
 }
 
@@ -1934,6 +2467,38 @@ fn parse_import_named_multiple() {
 }
 
 #[test]
+fn parse_import_named_trailing_comma() {
+    let parsed = parse_source("import { User, Role, } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named { specifiers, .. } = &import.kind else {
+        panic!("expected a named import");
+    };
+
+    assert_eq!(specifiers.len(), 2);
+}
+
+#[test]
+fn parse_import_named_empty_list() {
+    let parsed = parse_source("import {} from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named { specifiers, .. } = &import.kind else {
+        panic!("expected a named import");
+    };
+
+    assert!(specifiers.is_empty());
+}
+
+#[test]
 fn parse_import_named_alias() {
     let parsed = parse_source(
         "import { User as UserModel } from \"./user\";",
@@ -2018,6 +2583,27 @@ fn parse_import_type_named_alias() {
 }
 
 #[test]
+fn parse_import_type_named_trailing_comma() {
+    let parsed = parse_source("import type { User, Role, } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named {
+        is_type_only,
+        specifiers,
+    } = &import.kind
+    else {
+        panic!("expected a named import");
+    };
+
+    assert!(*is_type_only);
+    assert_eq!(specifiers.len(), 2);
+}
+
+#[test]
 fn parse_import_side_effect() {
     let parsed = parse_source("import \"./setup\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
@@ -2029,6 +2615,12 @@ fn parse_import_side_effect() {
 
     assert!(matches!(import.kind, ParsedImportKind::SideEffect));
     assert_eq!(import.module_specifier, "./setup");
+}
+
+#[test]
+fn parse_import_side_effect_marks_module() {
+    let parsed = parse_source("import \"./setup\";", "example.ts");
+    assert!(parsed.is_module);
 }
 
 #[test]
@@ -2216,6 +2808,24 @@ fn parse_export_variable_const_declaration() {
 }
 
 #[test]
+fn parse_export_const_declaration() {
+    let parsed = parse_source("export const name: string = \"Ada\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::VariableDeclaration(_)
+    ));
+}
+
+#[test]
 fn parse_export_variable_let_declaration() {
     let parsed = parse_source("export let count: number = 1;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
@@ -2234,7 +2844,43 @@ fn parse_export_variable_let_declaration() {
 }
 
 #[test]
+fn parse_export_let_declaration() {
+    let parsed = parse_source("export let count: number = 1;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::VariableDeclaration(_)
+    ));
+}
+
+#[test]
 fn parse_export_variable_var_declaration() {
+    let parsed = parse_source("export var value: boolean = true;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::VariableDeclaration(_)
+    ));
+}
+
+#[test]
+fn parse_export_var_declaration() {
     let parsed = parse_source("export var value: boolean = true;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
@@ -2339,6 +2985,30 @@ fn parse_export_type_named_alias() {
 }
 
 #[test]
+fn parse_export_type_named_multiple() {
+    let parsed = parse_source("export type { User, Role };", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+        is_type_only,
+        specifiers,
+        ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+
+    assert!(*is_type_only);
+    assert_eq!(specifiers.len(), 2);
+}
+
+#[test]
+fn parse_export_type_named_marks_module() {
+    let parsed = parse_source("export type { User };", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
 fn parse_export_empty() {
     let parsed = parse_source("export {};", "example.ts");
     assert!(parsed.parser_errors.is_empty());
@@ -2348,6 +3018,12 @@ fn parse_export_empty() {
         &parsed.statements[0],
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. })
     ));
+}
+
+#[test]
+fn parse_export_empty_marks_module() {
+    let parsed = parse_source("export {};", "example.ts");
+    assert!(parsed.is_module);
 }
 
 #[test]
@@ -2402,4 +3078,91 @@ fn parse_export_type_from_unsupported_no_panic() {
         &parsed.statements[0],
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
     ));
+}
+
+#[test]
+fn module_detection_plain_script_false() {
+    let parsed = parse_source("let value: string = \"ok\";", "example.ts");
+    assert!(!parsed.is_module);
+}
+
+#[test]
+fn module_detection_import_named_true() {
+    let parsed = parse_source("import { User } from \"./user\";", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_import_type_true() {
+    let parsed = parse_source("import type { User } from \"./user\";", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_import_side_effect_true() {
+    let parsed = parse_source("import \"./setup\";", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_import_unsupported_true() {
+    let parsed = parse_source("import User from \"./user\";", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_export_interface_true() {
+    let parsed = parse_source("export interface User { name: string; }", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_export_type_alias_true() {
+    let parsed = parse_source("export type Name = string;", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_export_function_true() {
+    let parsed = parse_source(
+        "export function getName(): string { return \"Ada\"; }",
+        "example.ts",
+    );
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_export_variable_true() {
+    let parsed = parse_source("export const value: number = 1;", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_export_named_true() {
+    let parsed = parse_source("export { User };", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_export_type_named_true() {
+    let parsed = parse_source("export type { User };", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_export_empty_true() {
+    let parsed = parse_source("export {};", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_export_unsupported_true() {
+    let parsed = parse_source("export default 1;", "example.ts");
+    assert!(parsed.is_module);
+}
+
+#[test]
+fn module_detection_oxc_source_type_module_true() {
+    let parsed = parse_source("export {};", "example.ts");
+    assert!(parsed.is_module);
 }

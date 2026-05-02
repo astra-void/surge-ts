@@ -4,8 +4,9 @@ use typescript_rust_types::{NumberLiteralType, Type, is_assignable_to, union_typ
 
 use super::call::{check_call_like, check_property_call_like};
 use super::ops;
-use crate::context::{CheckerContext, convert_span};
+use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, infer_expression};
+use crate::spans::{choose_span, diagnostic_with_syntax_span};
 use crate::symbols::SymbolTable;
 
 pub(crate) fn check_expression_statement(expression: ParsedExpression, ctx: &mut CheckerContext) {
@@ -20,7 +21,7 @@ pub(crate) fn evaluate_expression(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     match expression {
-        ParsedExpression::ArrayLiteral(elements) => {
+        ParsedExpression::ArrayLiteral { elements, .. } => {
             let inferred_expression = infer_expression(expression, symbols);
 
             for element in elements {
@@ -39,7 +40,16 @@ pub(crate) fn evaluate_expression(
             callee_name,
             callee_span,
             arguments,
-        } => match check_call_like(callee_name, *callee_span, arguments, symbols, ctx) {
+            ..
+        } => match check_call_like(
+            callee_name,
+            *callee_span,
+            None,
+            &[],
+            arguments,
+            symbols,
+            ctx,
+        ) {
             Some(return_type) => InferredExpression::Known(return_type),
             None => InferredExpression::Unknown,
         },
@@ -50,12 +60,14 @@ pub(crate) fn evaluate_expression(
             property_span,
             call_span,
             arguments,
+            ..
         } => match check_property_call_like(
             object_name,
             *object_span,
             property_name,
             *property_span,
             *call_span,
+            &[],
             arguments,
             symbols,
             ctx,
@@ -167,30 +179,21 @@ pub(crate) fn report_inferred_expression(
             }
         }
         InferredExpression::UnresolvedIdentifier { name, span } => {
-            let diagnostic_span = span.or(fallback_span);
-            let mut diagnostic = Diagnostic::ts2304(&name, ctx.file_name.clone());
-
-            if let Some(span) = diagnostic_span {
-                diagnostic = diagnostic.with_span(convert_span(span));
-            }
-
-            ctx.push(diagnostic);
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2304(&name, ctx.file_name.clone()),
+                choose_span(span, fallback_span),
+            ));
         }
         InferredExpression::MissingProperty {
             property_name,
             object_type,
             span,
         } => {
-            let diagnostic_span = span.or(fallback_span);
             let object_type_name = object_type.name();
-            let mut diagnostic =
-                Diagnostic::ts2339(&property_name, &object_type_name, ctx.file_name.clone());
-
-            if let Some(span) = diagnostic_span {
-                diagnostic = diagnostic.with_span(convert_span(span));
-            }
-
-            ctx.push(diagnostic);
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2339(&property_name, &object_type_name, ctx.file_name.clone()),
+                choose_span(span, fallback_span),
+            ));
         }
         InferredExpression::Unknown => {}
     }
@@ -206,12 +209,10 @@ fn evaluate_index_access(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let Some(symbol) = symbols.get(object_name).cloned() else {
-        let diagnostic = Diagnostic::ts2304(object_name, ctx.file_name.clone());
-        let diagnostic = match object_span.or(fallback_span) {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2304(object_name, ctx.file_name.clone()),
+            choose_span(object_span, fallback_span),
+        ));
         return InferredExpression::Unknown;
     };
 
@@ -234,17 +235,16 @@ fn evaluate_index_access(
                     None => {
                         let index_type_name = index_type.name();
                         let object_type_name = Type::Tuple(elements.to_vec()).name();
-                        let mut diagnostic = Diagnostic::ts2339(
+                        let diagnostic = Diagnostic::ts2339(
                             &index_type_name,
                             &object_type_name,
                             ctx.file_name.clone(),
                         );
 
-                        if let Some(span) = index_span.or(object_span).or(fallback_span) {
-                            diagnostic = diagnostic.with_span(convert_span(span));
-                        }
-
-                        ctx.push(diagnostic);
+                        ctx.push(diagnostic_with_syntax_span(
+                            diagnostic,
+                            choose_span(index_span, choose_span(object_span, fallback_span)),
+                        ));
                         InferredExpression::Unknown
                     }
                 };
@@ -253,17 +253,16 @@ fn evaluate_index_access(
             if !is_assignable_to(&index_type, &Type::Number) {
                 let index_type_name = index_type.name();
                 let expected_type_name = Type::Number.name();
-                let mut diagnostic = Diagnostic::ts2322(
+                let diagnostic = Diagnostic::ts2322(
                     &index_type_name,
                     &expected_type_name,
                     ctx.file_name.clone(),
                 );
 
-                if let Some(span) = index_span.or(object_span).or(fallback_span) {
-                    diagnostic = diagnostic.with_span(convert_span(span));
-                }
-
-                ctx.push(diagnostic);
+                ctx.push(diagnostic_with_syntax_span(
+                    diagnostic,
+                    choose_span(index_span, choose_span(object_span, fallback_span)),
+                ));
                 return InferredExpression::Unknown;
             }
 
@@ -286,17 +285,16 @@ fn evaluate_index_access(
             if !is_assignable_to(&index_type, &Type::Number) {
                 let index_type_name = index_type.name();
                 let expected_type_name = Type::Number.name();
-                let mut diagnostic = Diagnostic::ts2322(
+                let diagnostic = Diagnostic::ts2322(
                     &index_type_name,
                     &expected_type_name,
                     ctx.file_name.clone(),
                 );
 
-                if let Some(span) = index_span.or(object_span).or(fallback_span) {
-                    diagnostic = diagnostic.with_span(convert_span(span));
-                }
-
-                ctx.push(diagnostic);
+                ctx.push(diagnostic_with_syntax_span(
+                    diagnostic,
+                    choose_span(index_span, choose_span(object_span, fallback_span)),
+                ));
                 return InferredExpression::Unknown;
             }
 
@@ -314,14 +312,10 @@ fn evaluate_index_access(
         | Type::Undefined
         | Type::Union(_) => {
             let object_type_name = symbol.ty.name();
-            let mut diagnostic =
-                Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone());
-
-            if let Some(span) = object_span.or(fallback_span) {
-                diagnostic = diagnostic.with_span(convert_span(span));
-            }
-
-            ctx.push(diagnostic);
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone()),
+                choose_span(object_span, fallback_span),
+            ));
             InferredExpression::Unknown
         }
     }

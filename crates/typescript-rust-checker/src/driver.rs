@@ -6,6 +6,7 @@ use typescript_rust_syntax::{
 
 use crate::checks::{assign, call, expr, function as check_function, var};
 use crate::context::CheckerContext;
+use crate::infer::report_duplicate_type_parameters;
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
 
 pub fn check_source(source_text: &str, file_name: &str) -> Vec<Diagnostic> {
@@ -91,16 +92,32 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         }) => check_statement(*declaration, ctx),
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
+            let mut diagnostic = Diagnostic::new(
+                DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
+                "Unsupported module syntax.".to_string(),
+                ctx.file_name.clone(),
+            );
+
+            if let Some(span) = span {
+                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            }
+
+            ctx.push(diagnostic);
+        }
     }
 }
 
 pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut CheckerContext) {
+    report_duplicate_type_parameters(&alias.type_parameters, ctx);
+
     let info = TypeAliasInfo {
         name: alias.name.clone(),
         file_name: ctx.file_name.clone(),
         name_span: alias.name_span,
+        type_parameters: alias.type_parameters.clone(),
         ty: alias.ty.clone(),
+        resolution_scope: None,
     };
 
     if ctx
@@ -119,11 +136,15 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
 }
 
 pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mut CheckerContext) {
+    report_duplicate_type_parameters(&interface.type_parameters, ctx);
+
     let info = InterfaceInfo {
         name: interface.name.clone(),
         file_name: ctx.file_name.clone(),
         name_span: interface.name_span,
+        type_parameters: interface.type_parameters.clone(),
         members: interface.members.clone(),
+        resolution_scope: None,
     };
 
     if ctx

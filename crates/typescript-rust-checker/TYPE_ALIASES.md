@@ -21,5 +21,9 @@ Alias resolver model:
 - alias names are not preserved in `Type::name()` diagnostics yet
 
 Alias limitations:
-- no generics
-- no imports, exports, or module visibility
+- generic aliases now support explicit type arguments, defaults, and simple
+  type-parameter substitution
+- constraints are parsed and stored but are not enforced yet
+- no package, node_modules, or tsconfig-path resolution
+- no default, namespace, or star import/export semantics
+- program-mode relative module visibility only for loaded `.ts` files

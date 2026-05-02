@@ -3,8 +3,9 @@ use typescript_rust_syntax::{ParsedExpression, ParsedObjectProperty, TextSpan as
 use typescript_rust_types::{ObjectProperty, Type, is_assignable_to};
 
 use super::expr::evaluate_expression;
-use crate::context::{CheckerContext, convert_span};
+use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, infer_expression};
+use crate::spans::{choose_span, diagnostic_with_syntax_span};
 use crate::symbols::SymbolTable;
 
 #[derive(Clone, Copy)]
@@ -36,37 +37,39 @@ pub(crate) fn evaluate_expression_with_expected_type(
         );
     }
 
-    if let (Type::Tuple(expected_elements), ParsedExpression::ArrayLiteral(elements)) =
+    if let (Type::Tuple(expected_elements), ParsedExpression::ArrayLiteral { elements, span }) =
         (expected_type, expression)
     {
         return evaluate_tuple_literal_with_expected_type(
             elements,
             expected_elements,
-            fallback_span,
+            choose_span(*span, fallback_span),
             symbols,
             ctx,
         );
     }
 
-    if let (Type::Array(expected_element_type), ParsedExpression::ArrayLiteral(elements)) =
+    if let (Type::Array(expected_element_type), ParsedExpression::ArrayLiteral { elements, span }) =
         (expected_type, expression)
     {
         return evaluate_array_literal_with_expected_type(
             elements,
             expected_element_type,
-            fallback_span,
+            choose_span(*span, fallback_span),
             symbols,
             ctx,
         );
     }
 
-    if let (Type::Object(expected_object_type), ParsedExpression::ObjectLiteral(properties)) =
-        (expected_type, expression)
+    if let (
+        Type::Object(expected_object_type),
+        ParsedExpression::ObjectLiteral { properties, span },
+    ) = (expected_type, expression)
     {
         return evaluate_object_literal_with_expected_type(
             properties,
             expected_object_type,
-            fallback_span,
+            choose_span(*span, fallback_span),
             symbols,
             ctx,
         );
@@ -101,17 +104,16 @@ fn evaluate_array_literal_with_expected_type(
                 if !is_assignable_to(&actual_type, expected_element_type) {
                     let actual_type_name = actual_type.name();
                     let expected_type_name = expected_element_type.name();
-                    let mut diagnostic = Diagnostic::ts2322(
+                    let diagnostic = Diagnostic::ts2322(
                         &actual_type_name,
                         &expected_type_name,
                         ctx.file_name.clone(),
                     );
 
-                    if let Some(span) = element.span.or(fallback_span) {
-                        diagnostic = diagnostic.with_span(convert_span(span));
-                    }
-
-                    ctx.push(diagnostic);
+                    ctx.push(diagnostic_with_syntax_span(
+                        diagnostic,
+                        choose_span(element.span, fallback_span),
+                    ));
                     return InferredExpression::Unknown;
                 }
             }
@@ -137,14 +139,13 @@ fn evaluate_tuple_literal_with_expected_type(
         if index >= expected_elements.len() {
             let source_type_name = Type::Array(Box::new(Type::Unknown)).name();
             let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
-            let mut diagnostic =
+            let diagnostic =
                 Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());
 
-            if let Some(span) = element.span.or(fallback_span) {
-                diagnostic = diagnostic.with_span(convert_span(span));
-            }
-
-            ctx.push(diagnostic);
+            ctx.push(diagnostic_with_syntax_span(
+                diagnostic,
+                choose_span(element.span, fallback_span),
+            ));
             return InferredExpression::Unknown;
         }
 
@@ -167,17 +168,16 @@ fn evaluate_tuple_literal_with_expected_type(
                 if !is_assignable_to(&actual_type, expected_element_type) {
                     let actual_type_name = actual_type.name();
                     let expected_type_name = expected_element_type.name();
-                    let mut diagnostic = Diagnostic::ts2322(
+                    let diagnostic = Diagnostic::ts2322(
                         &actual_type_name,
                         &expected_type_name,
                         ctx.file_name.clone(),
                     );
 
-                    if let Some(span) = element.span.or(fallback_span) {
-                        diagnostic = diagnostic.with_span(convert_span(span));
-                    }
-
-                    ctx.push(diagnostic);
+                    ctx.push(diagnostic_with_syntax_span(
+                        diagnostic,
+                        choose_span(element.span, fallback_span),
+                    ));
                     return InferredExpression::Unknown;
                 }
             }
@@ -192,14 +192,10 @@ fn evaluate_tuple_literal_with_expected_type(
     if elements.len() != expected_elements.len() {
         let source_type_name = Type::Array(Box::new(Type::Unknown)).name();
         let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
-        let mut diagnostic =
+        let diagnostic =
             Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());
 
-        if let Some(span) = fallback_span {
-            diagnostic = diagnostic.with_span(convert_span(span));
-        }
-
-        ctx.push(diagnostic);
+        ctx.push(diagnostic_with_syntax_span(diagnostic, fallback_span));
         return InferredExpression::Unknown;
     }
 
@@ -217,17 +213,19 @@ fn evaluate_object_literal_with_expected_type(
         .iter()
         .find(|property| !expected_object_type.contains_property(&property.name))
     {
-        let mut diagnostic = Diagnostic::ts2353(
+        let diagnostic = Diagnostic::ts2353(
             &property.name,
             &Type::Object(expected_object_type.clone()).name(),
             ctx.file_name.clone(),
         );
 
-        if let Some(span) = property.span.or(fallback_span) {
-            diagnostic = diagnostic.with_span(convert_span(span));
-        }
-
-        ctx.push(diagnostic);
+        ctx.push(diagnostic_with_syntax_span(
+            diagnostic,
+            choose_span(
+                property.name_span,
+                choose_span(property.span, fallback_span),
+            ),
+        ));
         return InferredExpression::Unknown;
     }
 
@@ -241,7 +239,7 @@ fn evaluate_object_literal_with_expected_type(
 
         let inferred_property = evaluate_expression_with_expected_type(
             &property.value,
-            property.span,
+            property.value_span.or(property.span),
             Some(expected_property_type),
             ExpectedTypeDiagnostic::TypeNotAssignable,
             symbols,
@@ -257,17 +255,19 @@ fn evaluate_object_literal_with_expected_type(
                 if !is_assignable_to(&actual_type, expected_property_type) {
                     let actual_type_name = actual_type.name();
                     let expected_type_name = expected_property_type.name();
-                    let mut diagnostic = Diagnostic::ts2322(
+                    let diagnostic = Diagnostic::ts2322(
                         &actual_type_name,
                         &expected_type_name,
                         ctx.file_name.clone(),
                     );
 
-                    if let Some(span) = property.span.or(fallback_span) {
-                        diagnostic = diagnostic.with_span(convert_span(span));
-                    }
-
-                    ctx.push(diagnostic);
+                    ctx.push(diagnostic_with_syntax_span(
+                        diagnostic,
+                        choose_span(
+                            property.value_span,
+                            choose_span(property.span, fallback_span),
+                        ),
+                    ));
                     return InferredExpression::Unknown;
                 }
             }
@@ -290,18 +290,14 @@ fn evaluate_object_literal_with_expected_type(
     {
         let source_type_name = object_literal_source_type_name(properties, symbols).name();
         let target_type_name = Type::Object(expected_object_type.clone()).name();
-        let mut diagnostic = Diagnostic::ts2741(
+        let diagnostic = Diagnostic::ts2741(
             property_name,
             &source_type_name,
             &target_type_name,
             ctx.file_name.clone(),
         );
 
-        if let Some(span) = fallback_span {
-            diagnostic = diagnostic.with_span(convert_span(span));
-        }
-
-        ctx.push(diagnostic);
+        ctx.push(diagnostic_with_syntax_span(diagnostic, fallback_span));
         return InferredExpression::Unknown;
     }
 
@@ -466,7 +462,7 @@ fn push_expected_type_mismatch(
 ) {
     let source_type_name = source_type.name();
     let expected_type_name = expected_type.name();
-    let mut diagnostic = match diagnostic_kind {
+    let diagnostic = match diagnostic_kind {
         ExpectedTypeDiagnostic::TypeNotAssignable => Diagnostic::ts2322(
             &source_type_name,
             &expected_type_name,
@@ -479,9 +475,5 @@ fn push_expected_type_mismatch(
         ),
     };
 
-    if let Some(span) = span {
-        diagnostic = diagnostic.with_span(convert_span(span));
-    }
-
-    ctx.push(diagnostic);
+    ctx.push(diagnostic_with_syntax_span(diagnostic, span));
 }

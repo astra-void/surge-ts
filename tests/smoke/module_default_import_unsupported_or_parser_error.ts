@@ -1,0 +1,1 @@
+import DefaultThing from "./thing";
