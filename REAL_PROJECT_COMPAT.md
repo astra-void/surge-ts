@@ -1,7 +1,9 @@
 # Real Project Compatibility
 
 `v0.59.1` is still an instrumentation baseline for real-project compatibility,
-not a claim that large TypeScript packages pass.
+not a claim that large TypeScript packages pass. `v0.60` adds a TypeScript
+oracle comparison harness on top of that baseline so we can measure the current
+checker against a pinned compiler without changing the checker to chase parity.
 
 ## Local workflow
 
@@ -14,6 +16,7 @@ Example:
 ```bash
 mkdir -p .local-projects
 cargo run -p typescript-rust-cli -- --project .local-projects/<project>/tsconfig.json --compatReport --maxDiagnostics 200
+npm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --maxDiagnostics 200
 ```
 
 ## What the report tells you
@@ -27,6 +30,8 @@ The compatibility report is a triage tool. It helps separate the first-order blo
 5. Plain type mismatches
 
 The report does not guarantee that a project is expected to pass.
+The oracle comparison does not guarantee that message text or exact spans
+match; it starts with code, file, and line/column normalization first.
 
 ## Current baseline
 
@@ -44,6 +49,10 @@ The report does not guarantee that a project is expected to pass.
 - CommonJS or bundler semantics
 - generic constraints enforcement
 - generic call-site inference
+
+The oracle harness also stays away from those areas. It only measures the
+current surface against TypeScript diagnostics; it does not add new resolver or
+type-system behavior to make the numbers line up.
 
 The next phase should still be chosen from real report output, not from a fixed
 feature wish list. Generic aliases and interfaces now support explicit type

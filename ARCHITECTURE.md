@@ -45,6 +45,10 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - The checker now has a diagnostic span policy document and span-focused
   regression tests; future diagnostics should follow the same span policy
   instead of adding ad-hoc wrapper spans.
+- The workspace also has a committed TypeScript oracle comparison harness under
+  `scripts/oracle/` that measures diagnostic drift without changing checker
+  semantics. It is dev-only tooling and should not pull Node resolution or
+  language-service behavior into the Rust crates.
 - Future phases should add new modules for interfaces, arrays/tuples, and imports/exports rather than re-expanding monolithic files; literal types are already represented and should be hardened in-place before broader type-system expansion.
 - Config, syntax, and checker logic should stay in their dedicated submodule trees rather than returning to crate-root files.
 - After v0.59.1, the next phase should be chosen from `--compatReport`
