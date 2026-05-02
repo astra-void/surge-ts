@@ -36,6 +36,7 @@ pub enum ParsedType {
     NumberLiteral(String),
     BooleanLiteral(bool),
     Object(ParsedObjectType),
+    Array(Box<ParsedType>),
     Union(Vec<ParsedType>),
     Function(ParsedFunctionType),
     Named(ParsedNamedType),
@@ -104,6 +105,7 @@ pub enum ParsedExpression {
     UndefinedLiteral,
     Identifier(String),
     ObjectLiteral(Vec<ParsedObjectProperty>),
+    ArrayLiteral(Vec<ParsedArrayElement>),
     Unary {
         operator: ParsedUnaryOperator,
         operator_span: Option<TextSpan>,
@@ -140,9 +142,23 @@ pub enum ParsedExpression {
         property_name: String,
         property_span: Option<TextSpan>,
     },
+    IndexAccess {
+        object_name: String,
+        object_span: Option<TextSpan>,
+        index: Box<ParsedExpression>,
+        index_span: Option<TextSpan>,
+    },
     Call {
         callee_name: String,
         callee_span: Option<TextSpan>,
+        arguments: Vec<ParsedCallArgument>,
+    },
+    PropertyCall {
+        object_name: String,
+        object_span: Option<TextSpan>,
+        property_name: String,
+        property_span: Option<TextSpan>,
+        call_span: Option<TextSpan>,
         arguments: Vec<ParsedCallArgument>,
     },
     Unknown,
@@ -266,6 +282,12 @@ pub struct ParsedCall {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCallArgument {
+    pub expression: ParsedExpression,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedArrayElement {
     pub expression: ParsedExpression,
     pub span: Option<TextSpan>,
 }

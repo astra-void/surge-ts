@@ -152,6 +152,40 @@ pub(crate) fn check_expression_flow(
 
             FlowCheck::Clear
         }
+        ParsedExpression::PropertyCall {
+            object_name,
+            object_span,
+            arguments,
+            ..
+        } => {
+            if report_read_flow(
+                object_name,
+                object_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+            .is_blocked()
+            {
+                return FlowCheck::Blocked;
+            }
+
+            for argument in arguments {
+                if check_expression_flow(
+                    &argument.expression,
+                    argument.span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
+                .is_blocked()
+                {
+                    return FlowCheck::Blocked;
+                }
+            }
+
+            FlowCheck::Clear
+        }
         ParsedExpression::PropertyAccess {
             object_name,
             object_span,
@@ -284,6 +318,49 @@ pub(crate) fn check_expression_flow(
             }
 
             FlowCheck::Clear
+        }
+        ParsedExpression::ArrayLiteral(elements) => {
+            for element in elements {
+                if check_expression_flow(
+                    &element.expression,
+                    element.span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
+                .is_blocked()
+                {
+                    return FlowCheck::Blocked;
+                }
+            }
+
+            FlowCheck::Clear
+        }
+        ParsedExpression::IndexAccess {
+            object_name,
+            object_span,
+            index,
+            index_span,
+        } => {
+            if report_read_flow(
+                object_name,
+                object_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+            .is_blocked()
+            {
+                return FlowCheck::Blocked;
+            }
+
+            check_expression_flow(
+                index,
+                index_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
         }
         ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)

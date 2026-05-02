@@ -34,6 +34,7 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         (Type::Function(source), Type::Function(target)) => {
             is_function_assignable_to(source, target)
         }
+        (Type::Array(source), Type::Array(target)) => is_assignable_to(source, target),
         (Type::Union(from_union), Type::Union(to_union)) => {
             from_union.types.iter().all(|from_ty| {
                 to_union
@@ -111,7 +112,7 @@ pub fn object_assignability_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{NumberLiteralType, ObjectProperty, ObjectType, union_type};
+    use crate::{FunctionType, NumberLiteralType, ObjectProperty, ObjectType, union_type};
     use std::collections::BTreeMap;
 
     #[test]
@@ -386,5 +387,109 @@ mod tests {
         });
 
         assert!(!is_assignable_to(&source, &target));
+    }
+
+    #[test]
+    fn array_type_name_string() {
+        assert_eq!(Type::Array(Box::new(Type::String)).name(), "string[]");
+    }
+
+    #[test]
+    fn array_type_name_number() {
+        assert_eq!(Type::Array(Box::new(Type::Number)).name(), "number[]");
+    }
+
+    #[test]
+    fn array_type_name_literal() {
+        assert_eq!(
+            Type::Array(Box::new(Type::StringLiteral("ok".to_string()))).name(),
+            r#""ok"[]"#
+        );
+    }
+
+    #[test]
+    fn array_type_name_union() {
+        assert_eq!(
+            Type::Array(Box::new(union_type(vec![Type::String, Type::Number]))).name(),
+            "(string | number)[]"
+        );
+    }
+
+    #[test]
+    fn array_type_name_function() {
+        assert_eq!(
+            Type::Array(Box::new(Type::Function(FunctionType {
+                parameters: vec![],
+                return_type: Box::new(Type::String),
+            })))
+            .name(),
+            "(() => string)[]"
+        );
+    }
+
+    #[test]
+    fn array_assignable_same_element() {
+        assert!(is_assignable_to(
+            &Type::Array(Box::new(Type::String)),
+            &Type::Array(Box::new(Type::String))
+        ));
+    }
+
+    #[test]
+    fn array_not_assignable_different_element() {
+        assert!(!is_assignable_to(
+            &Type::Array(Box::new(Type::Number)),
+            &Type::Array(Box::new(Type::String))
+        ));
+    }
+
+    #[test]
+    fn array_any_element_assignability() {
+        assert!(is_assignable_to(
+            &Type::Array(Box::new(Type::Any)),
+            &Type::Array(Box::new(Type::String))
+        ));
+        assert!(is_assignable_to(
+            &Type::Array(Box::new(Type::String)),
+            &Type::Array(Box::new(Type::Any))
+        ));
+    }
+
+    #[test]
+    fn array_not_assignable_to_primitive() {
+        assert!(!is_assignable_to(
+            &Type::Array(Box::new(Type::String)),
+            &Type::String
+        ));
+    }
+
+    #[test]
+    fn primitive_not_assignable_to_array() {
+        assert!(!is_assignable_to(
+            &Type::String,
+            &Type::Array(Box::new(Type::String))
+        ));
+    }
+
+    #[test]
+    fn array_union_assignability_valid() {
+        assert!(is_assignable_to(
+            &union_type(vec![
+                Type::Array(Box::new(Type::String)),
+                Type::Array(Box::new(Type::Number))
+            ]),
+            &Type::Array(Box::new(union_type(vec![Type::String, Type::Number])))
+        ));
+    }
+
+    #[test]
+    fn array_union_assignability_mismatch() {
+        assert!(!is_assignable_to(
+            &Type::Array(Box::new(Type::Boolean)),
+            &union_type(vec![
+                Type::Array(Box::new(Type::String)),
+                Type::Array(Box::new(Type::Number))
+            ])
+        ));
     }
 }

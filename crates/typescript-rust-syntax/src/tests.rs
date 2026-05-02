@@ -971,3 +971,624 @@ fn parse_interface_malformed_member_no_panic() {
     let parsed = parse_source("interface User { name: ; }", "example.ts");
     assert_eq!(parsed.file_name, "example.ts");
 }
+
+#[test]
+fn parse_property_call_no_args() {
+    let parsed = parse_source("store.getState();", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Expression(ParsedExpression::PropertyCall {
+        object_name,
+        property_name,
+        arguments,
+        ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+
+    assert_eq!(object_name, "store");
+    assert_eq!(property_name, "getState");
+    assert!(arguments.is_empty());
+}
+
+#[test]
+fn parse_property_call_one_arg() {
+    let parsed = parse_source("store.setState(\"next\");", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+
+    assert_eq!(arguments.len(), 1);
+}
+
+#[test]
+fn parse_property_call_multiple_args() {
+    let parsed = parse_source("store.setState(\"next\", count, true);", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+
+    assert_eq!(arguments.len(), 3);
+}
+
+#[test]
+fn parse_property_call_argument_is_property_call() {
+    let parsed = parse_source("store.setState(store.getState());", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+
+    assert!(matches!(
+        arguments[0].expression,
+        ParsedExpression::PropertyCall { .. }
+    ));
+}
+
+#[test]
+fn parse_property_call_argument_is_call() {
+    let parsed = parse_source("store.setState(getState());", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+
+    assert!(matches!(
+        arguments[0].expression,
+        ParsedExpression::Call { .. }
+    ));
+}
+
+#[test]
+fn parse_property_call_argument_is_conditional() {
+    let parsed = parse_source("store.setState(true ? \"next\" : \"prev\");", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+
+    assert!(matches!(
+        arguments[0].expression,
+        ParsedExpression::Conditional { .. }
+    ));
+}
+
+#[test]
+fn parse_property_call_in_variable_initializer() {
+    let parsed = parse_source("let value = store.getState();", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::PropertyCall { .. })
+    ));
+}
+
+#[test]
+fn parse_property_call_in_return_statement() {
+    let parsed = parse_source("function read() { return store.getState(); }", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::FunctionDeclaration(function) = &parsed.statements[0] else {
+        panic!("expected a function declaration");
+    };
+
+    let ParsedFunctionBodyStatement::Return(return_statement) = &function.body[0] else {
+        panic!("expected a return statement");
+    };
+
+    assert!(matches!(
+        return_statement.expression.as_ref(),
+        Some(ParsedExpression::PropertyCall { .. })
+    ));
+}
+
+#[test]
+fn parse_property_call_in_assignment() {
+    let parsed = parse_source("value = store.getState();", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::Assignment(assignment) = &parsed.statements[0] else {
+        panic!("expected an assignment");
+    };
+
+    assert!(matches!(
+        assignment.value,
+        ParsedExpression::PropertyCall { .. }
+    ));
+}
+
+#[test]
+fn parse_property_call_in_conditional_branch() {
+    let parsed = parse_source(
+        "let value = true ? store.getState() : \"fallback\";",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedExpression::Conditional { when_true, .. }) = variable.initializer.as_ref()
+    else {
+        panic!("expected a conditional expression");
+    };
+
+    assert!(matches!(
+        when_true.as_ref(),
+        ParsedExpression::PropertyCall { .. }
+    ));
+}
+
+#[test]
+fn parse_property_call_method_shorthand_unsupported_no_panic() {
+    let parsed = parse_source(
+        "({ getState() { return \"ok\"; } }).getState();",
+        "example.ts",
+    );
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_call_missing_close_paren_no_panic() {
+    let parsed = parse_source("store.getState(", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_call_missing_property_name_no_panic() {
+    let parsed = parse_source("store.();", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_call_missing_object_no_panic() {
+    let parsed = parse_source(".getState();", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_call_nested_object_unsupported_no_panic() {
+    let parsed = parse_source("app.store.getState();", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_call_chained_unsupported_no_panic() {
+    let parsed = parse_source("store.getApi().getState();", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_call_optional_chaining_unsupported_no_panic() {
+    let parsed = parse_source("store.getState?.();", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_call_bracket_unsupported_no_panic() {
+    let parsed = parse_source("store[\"getState\"]();", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_array_type_string() {
+    let parsed = parse_source("let value: string[] = [];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Array(element)) = variable.declared_type.as_ref() else {
+        panic!("expected an array type");
+    };
+
+    assert!(matches!(&**element, ParsedType::String));
+}
+
+#[test]
+fn parse_array_type_number() {
+    let parsed = parse_source("let value: number[] = [];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.declared_type.as_ref(),
+        Some(ParsedType::Array(_))
+    ));
+}
+
+#[test]
+fn parse_array_type_boolean() {
+    let parsed = parse_source("let value: boolean[] = [];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.declared_type.as_ref(),
+        Some(ParsedType::Array(_))
+    ));
+}
+
+#[test]
+fn parse_array_type_undefined() {
+    let parsed = parse_source("let value: undefined[] = [];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.declared_type.as_ref(),
+        Some(ParsedType::Array(_))
+    ));
+}
+
+#[test]
+fn parse_array_type_void() {
+    let parsed = parse_source("let value: void[] = [];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.declared_type.as_ref(),
+        Some(ParsedType::Array(_))
+    ));
+}
+
+#[test]
+fn parse_array_type_literal_element() {
+    let parsed = parse_source("let value: \"ok\"[] = [\"ok\"];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedType::Array(element)) = variable.declared_type.as_ref() else {
+        panic!("expected an array type");
+    };
+
+    assert!(matches!(&**element, ParsedType::StringLiteral(_)));
+}
+
+#[test]
+fn parse_array_type_named_element() {
+    let parsed = parse_source("type Status = string[];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert!(matches!(alias.ty, ParsedType::Array(_)));
+}
+
+#[test]
+fn parse_array_type_object_element() {
+    let parsed = parse_source("type Store = { name: string }[];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert!(matches!(alias.ty, ParsedType::Array(_)));
+}
+
+#[test]
+fn parse_array_type_function_element() {
+    let parsed = parse_source("type Listeners = (() => void)[];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let Some(ParsedType::Array(element)) = Some(&alias.ty) else {
+        panic!("expected an array type");
+    };
+
+    assert!(matches!(&**element, ParsedType::Function(_)));
+}
+
+#[test]
+fn parse_array_type_union_element_if_supported() {
+    let parsed = parse_source("type Status = (\"idle\" | \"done\")[];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_array_type_nested_array() {
+    let parsed = parse_source("type Matrix = string[][];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert!(matches!(alias.ty, ParsedType::Array(_)));
+}
+
+#[test]
+fn parse_array_type_malformed_missing_close_bracket_no_panic() {
+    let parsed = parse_source("let value: string[ = [];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_array_type_empty_brackets_without_element_no_panic() {
+    let parsed = parse_source("let value: [] = [];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_array_type_array_generic_unsupported_no_panic() {
+    let parsed = parse_source("let value: Array<string> = [];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_type_unsupported_no_panic() {
+    let parsed = parse_source("type Pair = [string, number];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_array_literal_empty() {
+    let parsed = parse_source("let values = [];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::ArrayLiteral(elements)) if elements.is_empty()
+    ));
+}
+
+#[test]
+fn parse_array_literal_one_element() {
+    let parsed = parse_source("let values = [\"Ada\"];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedExpression::ArrayLiteral(elements)) = variable.initializer.as_ref() else {
+        panic!("expected an array literal");
+    };
+
+    assert_eq!(elements.len(), 1);
+}
+
+#[test]
+fn parse_array_literal_multiple_elements() {
+    let parsed = parse_source("let values = [\"Ada\", \"Grace\"];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::ArrayLiteral(elements)) if elements.len() == 2
+    ));
+}
+
+#[test]
+fn parse_array_literal_trailing_comma() {
+    let parsed = parse_source("let values = [\"Ada\",];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::ArrayLiteral(elements)) if elements.len() == 1
+    ));
+}
+
+#[test]
+fn parse_array_literal_identifier_element() {
+    let parsed = parse_source("let values = [name];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::ArrayLiteral(elements))
+            if matches!(elements[0].expression, ParsedExpression::Identifier(_))
+    ));
+}
+
+#[test]
+fn parse_array_literal_call_element() {
+    let parsed = parse_source("let values = [getState()];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::ArrayLiteral(elements))
+            if matches!(elements[0].expression, ParsedExpression::Call { .. })
+    ));
+}
+
+#[test]
+fn parse_array_literal_property_call_element() {
+    let parsed = parse_source("let values = [store.getState()];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::ArrayLiteral(elements))
+            if matches!(elements[0].expression, ParsedExpression::PropertyCall { .. })
+    ));
+}
+
+#[test]
+fn parse_array_literal_conditional_element() {
+    let parsed = parse_source("let values = [true ? \"a\" : \"b\"];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::ArrayLiteral(elements))
+            if matches!(elements[0].expression, ParsedExpression::Conditional { .. })
+    ));
+}
+
+#[test]
+fn parse_array_literal_nested_array() {
+    let parsed = parse_source("let values = [[1]];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::ArrayLiteral(elements))
+            if matches!(elements[0].expression, ParsedExpression::ArrayLiteral(_))
+    ));
+}
+
+#[test]
+fn parse_array_literal_missing_close_bracket_no_panic() {
+    let parsed = parse_source("let values = [\"Ada\";", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_array_literal_spread_unsupported_no_panic() {
+    let parsed = parse_source("let values = [...items];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_index_access_number_literal() {
+    let parsed = parse_source("let value = values[0];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::IndexAccess { .. })
+    ));
+}
+
+#[test]
+fn parse_index_access_identifier_index() {
+    let parsed = parse_source("let value = values[index];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    assert!(matches!(
+        variable.initializer.as_ref(),
+        Some(ParsedExpression::IndexAccess { .. })
+    ));
+}
+
+#[test]
+fn parse_index_access_in_variable_initializer() {
+    let parsed = parse_source("let value = values[0];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+}
+
+#[test]
+fn parse_index_access_in_return_statement() {
+    let parsed = parse_source("function read() { return values[0]; }", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+}
+
+#[test]
+fn parse_index_access_in_assignment() {
+    let parsed = parse_source("value = values[0];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+}
+
+#[test]
+fn parse_index_access_missing_close_bracket_no_panic() {
+    let parsed = parse_source("let value = values[0;", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_index_access_string_key_unsupported_or_no_panic() {
+    let parsed = parse_source("let value = values[\"0\"];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_nested_index_access_unsupported_no_panic() {
+    let parsed = parse_source("let value = values[0][1];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_property_index_access_unsupported_no_panic() {
+    let parsed = parse_source("let value = store.values[0];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}

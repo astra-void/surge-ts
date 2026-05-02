@@ -36,6 +36,18 @@ pub(crate) fn evaluate_expression_with_expected_type(
         );
     }
 
+    if let (Type::Array(expected_element_type), ParsedExpression::ArrayLiteral(elements)) =
+        (expected_type, expression)
+    {
+        return evaluate_array_literal_with_expected_type(
+            elements,
+            expected_element_type,
+            fallback_span,
+            symbols,
+            ctx,
+        );
+    }
+
     if let (Type::Object(expected_object_type), ParsedExpression::ObjectLiteral(properties)) =
         (expected_type, expression)
     {
@@ -49,6 +61,57 @@ pub(crate) fn evaluate_expression_with_expected_type(
     }
 
     evaluate_expression(expression, fallback_span, symbols, ctx)
+}
+
+fn evaluate_array_literal_with_expected_type(
+    elements: &[typescript_rust_syntax::ParsedArrayElement],
+    expected_element_type: &Type,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    for element in elements {
+        let inferred_element = evaluate_expression_with_expected_type(
+            &element.expression,
+            element.span,
+            Some(expected_element_type),
+            ExpectedTypeDiagnostic::TypeNotAssignable,
+            symbols,
+            ctx,
+        );
+
+        match inferred_element {
+            InferredExpression::Known(actual_type) => {
+                if actual_type == Type::Unknown {
+                    continue;
+                }
+
+                if !is_assignable_to(&actual_type, expected_element_type) {
+                    let actual_type_name = actual_type.name();
+                    let expected_type_name = expected_element_type.name();
+                    let mut diagnostic = Diagnostic::ts2322(
+                        &actual_type_name,
+                        &expected_type_name,
+                        ctx.file_name.clone(),
+                    );
+
+                    if let Some(span) = element.span.or(fallback_span) {
+                        diagnostic = diagnostic.with_span(convert_span(span));
+                    }
+
+                    ctx.push(diagnostic);
+                    return InferredExpression::Unknown;
+                }
+            }
+            InferredExpression::UnresolvedIdentifier { .. }
+            | InferredExpression::MissingProperty { .. }
+            | InferredExpression::Unknown => {
+                return InferredExpression::Unknown;
+            }
+        }
+    }
+
+    InferredExpression::Known(Type::Array(Box::new(expected_element_type.clone())))
 }
 
 fn evaluate_object_literal_with_expected_type(

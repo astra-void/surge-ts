@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use typescript_rust_syntax::{
-    ParsedBinaryOperator, ParsedExpression, ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
+    ParsedArrayElement, ParsedBinaryOperator, ParsedExpression, ParsedObjectProperty,
+    ParsedUnaryOperator, TextSpan,
 };
 use typescript_rust_types::{NumberLiteralType, ObjectProperty, ObjectType, Type, union_type};
 
@@ -36,6 +37,7 @@ pub(crate) fn infer_expression(
         ParsedExpression::ObjectLiteral(properties) => {
             InferredExpression::Known(infer_object_literal(properties, symbols))
         }
+        ParsedExpression::ArrayLiteral(elements) => infer_array_literal(elements, symbols),
         ParsedExpression::Unary {
             operator, operand, ..
         } => infer_unary_expression(*operator, operand, symbols),
@@ -66,6 +68,7 @@ pub(crate) fn infer_expression(
             property_span,
             symbols,
         ),
+        ParsedExpression::IndexAccess { .. } => InferredExpression::Unknown,
         ParsedExpression::Call { callee_name, .. } => match symbols.get(callee_name) {
             Some(symbol) => match &symbol.ty {
                 Type::Function(function_type) => {
@@ -76,6 +79,19 @@ pub(crate) fn infer_expression(
             },
             None => InferredExpression::Unknown,
         },
+        ParsedExpression::PropertyCall {
+            object_name,
+            object_span,
+            property_name,
+            property_span,
+            ..
+        } => infer_property_call(
+            object_name,
+            object_span,
+            property_name,
+            property_span,
+            symbols,
+        ),
         ParsedExpression::Unknown => InferredExpression::Unknown,
     }
 }
@@ -113,6 +129,7 @@ fn infer_unary_expression(
             | InferredExpression::Known(Type::NumberLiteral(_))
             | InferredExpression::Known(Type::BooleanLiteral(_))
             | InferredExpression::Known(Type::Object(_))
+            | InferredExpression::Known(Type::Array(_))
             | InferredExpression::Known(Type::Function(_))
             | InferredExpression::Known(Type::Union(_)) => InferredExpression::Unknown,
         },
@@ -133,50 +150,40 @@ fn infer_object_literal(properties: &[ParsedObjectProperty], symbols: &SymbolTab
     Type::Object(ObjectType { properties })
 }
 
+fn infer_array_literal(
+    elements: &[ParsedArrayElement],
+    symbols: &SymbolTable,
+) -> InferredExpression {
+    if elements.is_empty() {
+        return InferredExpression::Known(Type::Array(Box::new(Type::Any)));
+    }
+
+    let mut element_types = Vec::new();
+
+    for element in elements {
+        match infer_expression(&element.expression, symbols) {
+            InferredExpression::Known(Type::Any) => {
+                return InferredExpression::Known(Type::Array(Box::new(Type::Any)));
+            }
+            InferredExpression::Known(Type::Unknown)
+            | InferredExpression::UnresolvedIdentifier { .. }
+            | InferredExpression::MissingProperty { .. }
+            | InferredExpression::Unknown => {
+                return InferredExpression::Unknown;
+            }
+            InferredExpression::Known(ty) => element_types.push(ty),
+        }
+    }
+
+    InferredExpression::Known(Type::Array(Box::new(union_type(element_types))))
+}
+
 fn infer_object_property_value(
     parsed_expression: &ParsedExpression,
     symbols: &SymbolTable,
 ) -> Type {
-    match parsed_expression {
-        ParsedExpression::StringLiteral(value) => Type::StringLiteral(value.clone()),
-        ParsedExpression::NumberLiteral(value) => Type::NumberLiteral(NumberLiteralType {
-            value: value.clone(),
-        }),
-        ParsedExpression::BooleanLiteral(value) => Type::BooleanLiteral(*value),
-        ParsedExpression::UndefinedLiteral => Type::Undefined,
-        ParsedExpression::Identifier(name) => symbols
-            .get(name)
-            .map(|symbol| symbol.ty.clone())
-            .unwrap_or(Type::Unknown),
-        ParsedExpression::Binary {
-            operator,
-            left,
-            right,
-            ..
-        } => match infer_binary_expression(*operator, left, right, symbols) {
-            InferredExpression::Known(ty) => ty,
-            _ => Type::Unknown,
-        },
-        ParsedExpression::Logical { left, right, .. } => {
-            match infer_logical_expression(left, right, symbols) {
-                InferredExpression::Known(ty) => ty,
-                _ => Type::Unknown,
-            }
-        }
-        ParsedExpression::Conditional {
-            condition,
-            when_true,
-            when_false,
-            ..
-        } => match infer_conditional_expression(condition, when_true, when_false, symbols) {
-            InferredExpression::Known(ty) => ty,
-            _ => Type::Unknown,
-        },
-        ParsedExpression::Unary { .. } => match infer_expression(parsed_expression, symbols) {
-            InferredExpression::Known(ty) => ty,
-            _ => Type::Unknown,
-        },
-        ParsedExpression::Unknown => Type::Unknown,
+    match infer_expression(parsed_expression, symbols) {
+        InferredExpression::Known(ty) => ty,
         _ => Type::Unknown,
     }
 }
@@ -312,6 +319,7 @@ fn infer_property_access(
             }),
         Type::Unknown | Type::Any => InferredExpression::Unknown,
         Type::Function(_)
+        | Type::Array(_)
         | Type::String
         | Type::Number
         | Type::Boolean
@@ -325,6 +333,47 @@ fn infer_property_access(
             object_type: symbol.ty.clone(),
             span: *property_span,
         },
+    }
+}
+
+fn infer_property_call(
+    object_name: &str,
+    object_span: &Option<TextSpan>,
+    property_name: &str,
+    property_span: &Option<TextSpan>,
+    symbols: &SymbolTable,
+) -> InferredExpression {
+    let Some(symbol) = symbols.get(object_name) else {
+        return InferredExpression::UnresolvedIdentifier {
+            name: object_name.to_string(),
+            span: *object_span,
+        };
+    };
+
+    match &symbol.ty {
+        Type::Any => InferredExpression::Known(Type::Any),
+        Type::Unknown => InferredExpression::Unknown,
+        Type::Object(object_type) => match object_type.get_property_access_type(property_name) {
+            Some(Type::Function(function_type)) => {
+                InferredExpression::Known((*function_type.return_type).clone())
+            }
+            Some(Type::Any) => InferredExpression::Known(Type::Any),
+            Some(_) | None => InferredExpression::Unknown,
+        },
+        Type::Function(_)
+        | Type::Array(_)
+        | Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::Void
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Undefined
+        | Type::Union(_) => {
+            let _ = property_span;
+            InferredExpression::Unknown
+        }
     }
 }
 

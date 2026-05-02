@@ -19,6 +19,7 @@ pub enum Type {
     BooleanLiteral(bool),
     Function(FunctionType),
     Object(ObjectType),
+    Array(Box<Type>),
     Union(UnionType),
 }
 
@@ -65,6 +66,7 @@ impl Type {
                     format!("{{ {}; }}", properties)
                 }
             }
+            Type::Array(element) => format!("{}[]", array_element_name(element)),
             Type::Union(union) => {
                 if union.types.is_empty() {
                     return "unknown".to_string();
@@ -78,6 +80,13 @@ impl Type {
                     .join(" | ")
             }
         }
+    }
+}
+
+fn array_element_name(element: &Type) -> String {
+    match element {
+        Type::Union(_) | Type::Function(_) => format!("({})", element.name()),
+        _ => element.name(),
     }
 }
 
@@ -110,5 +119,25 @@ mod tests {
     #[test]
     fn void_type_name_is_void() {
         assert_eq!(Type::Void.name(), "void");
+    }
+
+    #[test]
+    fn array_type_name_is_stable() {
+        assert_eq!(Type::Array(Box::new(Type::String)).name(), "string[]");
+        assert_eq!(
+            Type::Array(Box::new(Type::Union(crate::UnionType {
+                types: vec![Type::String, Type::Number],
+            })))
+            .name(),
+            "(string | number)[]"
+        );
+        assert_eq!(
+            Type::Array(Box::new(Type::Function(FunctionType {
+                parameters: vec![],
+                return_type: Box::new(Type::String),
+            })))
+            .name(),
+            "(() => string)[]"
+        );
     }
 }

@@ -29,6 +29,9 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSUnknownKeyword(_) => Some(ParsedType::Unknown),
         TSType::TSLiteralType(literal_type) => Some(parse_literal_type(literal_type)),
         TSType::TSTypeLiteral(type_literal) => Some(parse_type_literal(type_literal)),
+        TSType::TSArrayType(array_type) => {
+            parse_type(&array_type.element_type).map(|ty| ParsedType::Array(Box::new(ty)))
+        }
         TSType::TSFunctionType(function_type) => {
             parse_function_type(function_type).map(ParsedType::Function)
         }

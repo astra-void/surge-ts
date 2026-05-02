@@ -1,7 +1,8 @@
 use oxc_ast::ast::{
-    Argument, BinaryExpression, BinaryOperator, ConditionalExpression, Expression,
-    LogicalExpression, LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKey,
-    PropertyKind, StaticMemberExpression, UnaryExpression, UnaryOperator,
+    Argument, ArrayExpression, BinaryExpression, BinaryOperator, ComputedMemberExpression,
+    ConditionalExpression, Expression, LogicalExpression, LogicalOperator, ObjectExpression,
+    ObjectPropertyKind, PropertyKey, PropertyKind, StaticMemberExpression, UnaryExpression,
+    UnaryOperator,
 };
 use oxc_span::{GetSpan, Span};
 
@@ -33,6 +34,9 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ObjectExpression(object_expression) => {
             ParsedExpression::ObjectLiteral(parse_object_properties(object_expression))
         }
+        Expression::ArrayExpression(array_expression) => {
+            parse_array_expression(array_expression).unwrap_or(ParsedExpression::Unknown)
+        }
         Expression::BinaryExpression(binary_expression) => {
             parse_binary_expression(binary_expression).unwrap_or(ParsedExpression::Unknown)
         }
@@ -49,15 +53,14 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
             parse_conditional_expression(conditional_expression)
                 .unwrap_or(ParsedExpression::Unknown)
         }
-        Expression::CallExpression(call_expression) => parse_call_expression(call_expression)
-            .map(|call| ParsedExpression::Call {
-                callee_name: call.callee_name,
-                callee_span: call.callee_span,
-                arguments: call.arguments,
-            })
-            .unwrap_or(ParsedExpression::Unknown),
+        Expression::CallExpression(call_expression) => {
+            parse_call_expression_expression(call_expression).unwrap_or(ParsedExpression::Unknown)
+        }
         Expression::StaticMemberExpression(member_expression) => {
             parse_static_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown)
+        }
+        Expression::ComputedMemberExpression(member_expression) => {
+            parse_computed_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown)
         }
         _ => ParsedExpression::Unknown,
     };
@@ -75,6 +78,39 @@ pub(crate) fn parse_call_expression(
         callee_span: call.callee_span,
         arguments: call.arguments,
     })
+}
+
+fn parse_call_expression_expression(
+    call_expression: &oxc_ast::ast::CallExpression<'_>,
+) -> Option<ParsedExpression> {
+    let arguments = call_expression
+        .arguments
+        .iter()
+        .map(parse_call_argument)
+        .collect::<Vec<_>>();
+
+    match &call_expression.callee {
+        Expression::Identifier(callee) => Some(ParsedExpression::Call {
+            callee_name: callee.name.to_string(),
+            callee_span: Some(text_span_from_oxc_span(callee.span)),
+            arguments,
+        }),
+        Expression::StaticMemberExpression(member_expression) => {
+            let Expression::Identifier(object_identifier) = &member_expression.object else {
+                return None;
+            };
+
+            Some(ParsedExpression::PropertyCall {
+                object_name: object_identifier.name.to_string(),
+                object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+                property_name: member_expression.property.name.to_string(),
+                property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+                call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                arguments,
+            })
+        }
+        _ => None,
+    }
 }
 
 struct ParsedCallExpressionParts {
@@ -151,18 +187,21 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             ParsedExpression::ObjectLiteral(parse_object_properties(object_expression)),
             argument.span(),
         ),
+        Argument::ArrayExpression(array_expression) => (
+            parse_array_expression(array_expression).unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
         Argument::CallExpression(call_expression) => (
-            parse_call_expression_parts(call_expression)
-                .map(|call| ParsedExpression::Call {
-                    callee_name: call.callee_name,
-                    callee_span: call.callee_span,
-                    arguments: call.arguments,
-                })
-                .unwrap_or(ParsedExpression::Unknown),
+            parse_call_expression_expression(call_expression).unwrap_or(ParsedExpression::Unknown),
             argument.span(),
         ),
         Argument::StaticMemberExpression(member_expression) => (
             parse_static_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
+        Argument::ComputedMemberExpression(member_expression) => (
+            parse_computed_member_expression(member_expression)
+                .unwrap_or(ParsedExpression::Unknown),
             argument.span(),
         ),
         _ => (ParsedExpression::Unknown, argument.span()),
@@ -297,6 +336,32 @@ fn parse_object_properties(object_expression: &ObjectExpression<'_>) -> Vec<Pars
         .collect()
 }
 
+fn parse_array_expression(array_expression: &ArrayExpression<'_>) -> Option<ParsedExpression> {
+    let mut elements = Vec::new();
+
+    for element in &array_expression.elements {
+        if element.is_spread() {
+            return None;
+        }
+
+        if element.is_elision() {
+            continue;
+        }
+
+        let Some(expression) = element.as_expression() else {
+            return None;
+        };
+
+        let (parsed_expression, span) = parse_expression(expression);
+        elements.push(crate::ParsedArrayElement {
+            expression: parsed_expression,
+            span: Some(text_span_from_oxc_span(span)),
+        });
+    }
+
+    Some(ParsedExpression::ArrayLiteral(elements))
+}
+
 pub(crate) fn parse_static_member_expression(
     member_expression: &StaticMemberExpression<'_>,
 ) -> Option<ParsedExpression> {
@@ -309,5 +374,22 @@ pub(crate) fn parse_static_member_expression(
         object_span: Some(text_span_from_oxc_span(object_identifier.span)),
         property_name: member_expression.property.name.to_string(),
         property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+    })
+}
+
+fn parse_computed_member_expression(
+    member_expression: &ComputedMemberExpression<'_>,
+) -> Option<ParsedExpression> {
+    let Expression::Identifier(object_identifier) = &member_expression.object else {
+        return None;
+    };
+
+    let (index, index_span) = parse_expression(&member_expression.expression);
+
+    Some(ParsedExpression::IndexAccess {
+        object_name: object_identifier.name.to_string(),
+        object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+        index: Box::new(index),
+        index_span: Some(text_span_from_oxc_span(index_span)),
     })
 }

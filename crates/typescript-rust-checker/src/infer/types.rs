@@ -70,6 +70,20 @@ fn resolve_parsed_type(
             had_error: false,
         },
         ParsedType::Object(object_type) => resolve_object_type(object_type, ctx, resolving),
+        ParsedType::Array(element_type) => {
+            let resolved_element = resolve_parsed_type(*element_type, ctx, resolving);
+            if resolved_element.had_error {
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                };
+            }
+
+            ResolvedType {
+                ty: Type::Array(Box::new(resolved_element.ty)),
+                had_error: false,
+            }
+        }
         ParsedType::Union(types) => resolve_union_type(types, ctx, resolving),
         ParsedType::Function(function_type) => resolve_function_type(function_type, ctx, resolving),
         ParsedType::Named(named_type) => resolve_named_type(named_type, ctx, resolving),

@@ -14,8 +14,8 @@ mod spans;
 mod types;
 
 use self::expressions::{
-    parse_conditional_expression, parse_expression, parse_static_member_expression,
-    parse_unary_expression,
+    parse_call_expression, parse_conditional_expression, parse_expression,
+    parse_static_member_expression, parse_unary_expression,
 };
 use self::functions::parse_function_declaration;
 use self::interfaces::parse_interface_declaration;
@@ -98,8 +98,16 @@ fn parse_expression_statement(
     expression_statement: &ExpressionStatement<'_>,
 ) -> Option<ParsedStatement> {
     match &expression_statement.expression {
-        Expression::CallExpression(call_expression) => {
-            self::expressions::parse_call_expression(call_expression).map(ParsedStatement::Call)
+        Expression::CallExpression(_) => {
+            if let Some(call) = parse_call_expression(match &expression_statement.expression {
+                Expression::CallExpression(call_expression) => call_expression,
+                _ => unreachable!(),
+            }) {
+                return Some(ParsedStatement::Call(call));
+            }
+
+            let (expression, _) = parse_expression(&expression_statement.expression);
+            Some(ParsedStatement::Expression(expression))
         }
         Expression::AssignmentExpression(assignment) => {
             parse_assignment_expression(assignment).map(ParsedStatement::Assignment)

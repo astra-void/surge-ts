@@ -1,8 +1,8 @@
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{ParsedExpression, TextSpan as SyntaxTextSpan};
-use typescript_rust_types::Type;
+use typescript_rust_types::{Type, is_assignable_to};
 
-use super::call::check_call_like;
+use super::call::{check_call_like, check_property_call_like};
 use super::ops;
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::{InferredExpression, infer_expression};
@@ -20,11 +20,46 @@ pub(crate) fn evaluate_expression(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     match expression {
+        ParsedExpression::ArrayLiteral(elements) => {
+            let inferred_expression = infer_expression(expression, symbols);
+
+            for element in elements {
+                let _ = evaluate_expression(
+                    &element.expression,
+                    element.span.or(fallback_span),
+                    symbols,
+                    ctx,
+                );
+            }
+
+            report_inferred_expression(inferred_expression.clone(), fallback_span, ctx);
+            inferred_expression
+        }
         ParsedExpression::Call {
             callee_name,
             callee_span,
             arguments,
         } => match check_call_like(callee_name, *callee_span, arguments, symbols, ctx) {
+            Some(return_type) => InferredExpression::Known(return_type),
+            None => InferredExpression::Unknown,
+        },
+        ParsedExpression::PropertyCall {
+            object_name,
+            object_span,
+            property_name,
+            property_span,
+            call_span,
+            arguments,
+        } => match check_property_call_like(
+            object_name,
+            *object_span,
+            property_name,
+            *property_span,
+            *call_span,
+            arguments,
+            symbols,
+            ctx,
+        ) {
             Some(return_type) => InferredExpression::Known(return_type),
             None => InferredExpression::Unknown,
         },
@@ -97,6 +132,94 @@ pub(crate) fn evaluate_expression(
                 evaluate_expression(when_false, when_false_span.or(fallback_span), symbols, ctx);
 
             ops::evaluate_conditional_expression(condition_result, true_result, false_result)
+        }
+        ParsedExpression::IndexAccess {
+            object_name,
+            object_span,
+            index,
+            index_span,
+        } => {
+            let Some(symbol) = symbols.get(object_name).cloned() else {
+                let diagnostic = Diagnostic::ts2304(object_name, ctx.file_name.clone());
+                let diagnostic = match object_span.or(fallback_span) {
+                    Some(span) => diagnostic.with_span(convert_span(span)),
+                    None => diagnostic,
+                };
+                ctx.push(diagnostic);
+                return InferredExpression::Unknown;
+            };
+
+            let index_result =
+                evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
+            let index_type = match index_result {
+                InferredExpression::Known(ty) => ty,
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. }
+                | InferredExpression::Unknown => return InferredExpression::Unknown,
+            };
+
+            match symbol.ty {
+                Type::Any => InferredExpression::Known(Type::Any),
+                Type::Unknown => InferredExpression::Unknown,
+                Type::Array(element_type) => {
+                    if !is_assignable_to(&index_type, &Type::Number) {
+                        let index_type_name = index_type.name();
+                        let expected_type_name = Type::Number.name();
+                        let mut diagnostic = Diagnostic::ts2322(
+                            &index_type_name,
+                            &expected_type_name,
+                            ctx.file_name.clone(),
+                        );
+
+                        if let Some(span) = index_span
+                            .as_ref()
+                            .copied()
+                            .or(*object_span)
+                            .or(fallback_span)
+                        {
+                            diagnostic = diagnostic.with_span(convert_span(span));
+                        }
+
+                        ctx.push(diagnostic);
+                        return InferredExpression::Unknown;
+                    }
+
+                    InferredExpression::Known((*element_type).clone())
+                }
+                Type::Object(_) => {
+                    let object_type_name = symbol.ty.name();
+                    let mut diagnostic =
+                        Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone());
+
+                    if let Some(span) = object_span.or(fallback_span) {
+                        diagnostic = diagnostic.with_span(convert_span(span));
+                    }
+
+                    ctx.push(diagnostic);
+                    InferredExpression::Unknown
+                }
+                Type::Function(_)
+                | Type::String
+                | Type::Number
+                | Type::Boolean
+                | Type::Void
+                | Type::StringLiteral(_)
+                | Type::NumberLiteral(_)
+                | Type::BooleanLiteral(_)
+                | Type::Undefined
+                | Type::Union(_) => {
+                    let object_type_name = symbol.ty.name();
+                    let mut diagnostic =
+                        Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone());
+
+                    if let Some(span) = object_span.or(fallback_span) {
+                        diagnostic = diagnostic.with_span(convert_span(span));
+                    }
+
+                    ctx.push(diagnostic);
+                    InferredExpression::Unknown
+                }
+            }
         }
         _ => {
             let inferred_expression = infer_expression(expression, symbols);
