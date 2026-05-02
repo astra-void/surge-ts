@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "name": "typescript-rust-workspace",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "oracle:tsc": "tsc --noEmit --pretty false",
+    "oracle:compare": "tsx scripts/oracle/compare-tsc.ts"
+  },
+  "devDependencies": {
+    "tsx": "4.21.0",
+    "typescript": "6.0.3"
+  }
+}
