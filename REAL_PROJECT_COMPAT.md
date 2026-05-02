@@ -71,9 +71,7 @@ and it is a quick standalone oracle rather than the main compatibility path.
 
 The next phase should still be chosen from oracle and compat-report output, not
 from a fixed feature wish list. Module syntax expansion now supports default,
-namespace, and re-export forms for relative `.ts` files. Likely follow-ups
+namespace, and re-export forms for relative `.ts` files. Package import stubbing is supported as of v0.63. Likely follow-ups
 include:
 
-- `v0.63 package import stubbing`
-- `v0.63 declaration-file surface`
-- `v0.63 lib/global type surface`
+- `v0.64 declaration/lib/global type surface`

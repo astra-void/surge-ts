@@ -41,6 +41,7 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
   of scope.
 - v0.58 adds project compatibility reporting and diagnostic limiting so real
   projects can be triaged without pretending the checker fully supports package
+  resolution (v0.63 package import stubbing helps reduce cascades here).
   resolution or the broader TypeScript module surface yet.
 - The checker now has a diagnostic span policy document and span-focused
   regression tests; future diagnostics should follow the same span policy
