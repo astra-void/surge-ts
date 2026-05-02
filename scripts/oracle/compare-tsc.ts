@@ -1,14 +1,14 @@
 #!/usr/bin/env tsx
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type Source = 'typescript' | 'typescript-rust';
+export type Source = 'typescript' | 'typescript-rust';
 
-type NormalizedDiagnostic = {
+export type NormalizedDiagnostic = {
   source: Source;
   code: string;
   fileName: string;
@@ -17,31 +17,33 @@ type NormalizedDiagnostic = {
   message?: string;
 };
 
-type CountBucket = {
+export type CountBucket = {
   key: string;
   typescript: number;
   typescriptRust: number;
 };
 
-type CountEntry = {
+export type CountEntry = {
   key: string;
   count: number;
 };
 
-type ComparisonResult = {
+export type DiagnosticTotals = {
+  total: number;
+  byCode: CountEntry[];
+  byFileCode: CountEntry[];
+  byFileCodeLine: CountEntry[];
+};
+
+export type ComparisonResult = {
   project: string;
-  typescript: {
-    total: number;
-    byCode: CountEntry[];
-    byFileCode: CountEntry[];
-    byFileCodeLine: CountEntry[];
+  tooling: {
+    typescriptVersion: string;
+    typescriptCommand: string;
+    typescriptRustCommand: string;
   };
-  typescriptRust: {
-    total: number;
-    byCode: CountEntry[];
-    byFileCode: CountEntry[];
-    byFileCodeLine: CountEntry[];
-  };
+  typescript: DiagnosticTotals;
+  typescriptRust: DiagnosticTotals;
   matches: {
     byCode: CountBucket[];
     onlyTypeScript: CountBucket[];
@@ -60,17 +62,24 @@ type ComparisonResult = {
   };
 };
 
-type ParsedArgs = {
+export type ParsedArgs = {
   projectInput?: string;
   json: boolean;
   failOnMismatch: boolean;
   maxDiagnostics?: number;
 };
 
+export type RunResult = {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+};
+
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
 const workspaceRoot = path.resolve(scriptDir, '../..');
-const npmCache = process.env.npm_config_cache ?? path.join(os.tmpdir(), 'codex-npm-cache');
+const npmCache = process.env.npm_config_cache ?? path.join(os.tmpdir(), 'npm-cache');
+const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
 
 const fixturePresets: Record<string, string> = {
   'generics-basic': path.join(workspaceRoot, 'tests/compat-projects/generics-basic/tsconfig.json'),
@@ -80,26 +89,11 @@ const fixturePresets: Record<string, string> = {
   'private-types': path.join(workspaceRoot, 'tests/compat-projects/private-types/tsconfig.json'),
 };
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const tsconfigPath = resolveProjectInput(args.projectInput);
-  const projectDir = path.dirname(tsconfigPath);
+export function main(argv = process.argv.slice(2)): void {
+  const args = parseArgs(argv);
+  const tsconfigPath = resolveProjectInput(args.projectInput as string);
   const projectDisplay = displayProjectPath(tsconfigPath);
-  const relativeTsconfig = normalizePosixPath(path.relative(projectDir, tsconfigPath) || path.basename(tsconfigPath));
-
-  const tsc = runTsc(projectDir, relativeTsconfig);
-  const rust = runTypeScriptRust(projectDir, relativeTsconfig, args.maxDiagnostics);
-
-  const tscDiagnostics = limitDiagnostics(
-    parseTypeScriptDiagnostics(tsc.output, projectDir),
-    args.maxDiagnostics,
-  );
-  const rustDiagnostics = limitDiagnostics(
-    parseTypeScriptRustDiagnostics(rust.output, projectDir),
-    args.maxDiagnostics,
-  );
-
-  const comparison = compareDiagnostics(projectDisplay, tscDiagnostics, rustDiagnostics);
+  const comparison = compareProject(tsconfigPath, projectDisplay, args.maxDiagnostics);
 
   if (args.json) {
     process.stdout.write(`${JSON.stringify(comparison, null, 2)}\n`);
@@ -113,7 +107,7 @@ function main() {
   }
 }
 
-function parseArgs(argv: string[]): ParsedArgs {
+export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     json: false,
     failOnMismatch: false,
@@ -122,10 +116,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
 
-    if (arg === '--') {
-      continue;
-    } else if (arg === '--help' || arg === '-h') {
+    if (arg === '--help' || arg === '-h') {
       printHelpAndExit();
+    } else if (arg === '--') {
+      continue;
     } else if (arg === '--project' || arg === '--fixture') {
       const value = argv[++index];
       if (!value) {
@@ -148,77 +142,70 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.maxDiagnostics = parsedValue;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown argument: ${arg}`);
-    } else if (!parsed.projectInput) {
-      parsed.projectInput = arg;
     } else {
-      throw new Error(`unexpected extra argument: ${arg}`);
+      throw new Error(`unexpected positional argument: ${arg}. Use --project <path-or-preset>.`);
     }
+  }
+
+  if (!parsed.projectInput) {
+    throw new Error('missing required --project <path-or-preset> argument');
   }
 
   return parsed;
 }
 
-function printHelpAndExit(): never {
-  process.stdout.write(
-    [
-      'Usage:',
-      '  pnpm run oracle:compare -- --project <tsconfig.json|preset>',
-      '  pnpm run oracle:compare -- <tsconfig.json|preset>',
-      '',
-      'Options:',
-      '  --project <path|preset>   Compare a tsconfig file or known fixture preset.',
-      '  --fixture <preset>        Alias for --project when passing a preset name.',
-      '  --maxDiagnostics <n>      Limit diagnostics on both sides before comparing.',
-      '  --json                    Emit machine-readable comparison output.',
-      '  --failOnMismatch          Exit with code 1 when code/file mismatches exist.',
-      '  --strictCodes             Alias for --failOnMismatch.',
-      '',
-      'Known presets:',
-      `  ${Object.keys(fixturePresets).join(', ')}`,
-      '',
-    ].join('\n'),
-  );
-  process.exit(0);
-}
-
-function resolveProjectInput(projectInput?: string): string {
-  if (!projectInput) {
-    throw new Error(
-      'missing project input. Pass --project <tsconfig.json|preset> or a positional tsconfig path.',
-    );
-  }
-
-  const candidate = projectInput;
-  const resolved = path.resolve(workspaceRoot, candidate);
-
-  if (existsSync(resolved)) {
-    const stats = statSync(resolved);
-    return stats.isDirectory() ? path.join(resolved, 'tsconfig.json') : resolved;
-  }
-
-  const preset = fixturePresets[candidate];
+export function resolveProjectInput(projectInput: string): string {
+  const preset = fixturePresets[projectInput];
   if (preset) {
     return preset;
   }
 
+  const candidate = path.isAbsolute(projectInput)
+    ? projectInput
+    : path.resolve(workspaceRoot, projectInput);
+
+  if (existsSync(candidate)) {
+    const stats = statSync(candidate);
+    if (stats.isFile()) {
+      return candidate;
+    }
+
+    const tsconfigPath = path.join(candidate, 'tsconfig.json');
+    if (existsSync(tsconfigPath)) {
+      return tsconfigPath;
+    }
+
+    throw new Error(`missing tsconfig.json at ${normalizePathForDisplay(tsconfigPath)}`);
+  }
+
+  if (looksLikePath(projectInput)) {
+    const tsconfigPath = candidate.endsWith('.json') ? candidate : path.join(candidate, 'tsconfig.json');
+    if (existsSync(tsconfigPath)) {
+      return tsconfigPath;
+    }
+
+    throw new Error(`missing tsconfig.json at ${normalizePathForDisplay(tsconfigPath)}`);
+  }
+
   throw new Error(
-    `could not resolve project input "${candidate}". Pass a tsconfig.json path or one of: ${Object.keys(
-      fixturePresets,
-    ).join(', ')}`,
+    `unknown project preset "${projectInput}". Known presets: ${Object.keys(fixturePresets).join(', ')}`,
   );
 }
 
-function displayProjectPath(tsconfigPath: string): string {
-  const relative = path.relative(workspaceRoot, tsconfigPath);
-  return relative.startsWith('..') ? normalizePosixPath(tsconfigPath) : normalizePosixPath(relative);
+export function compareProject(
+  tsconfigPath: string,
+  projectDisplay: string,
+  maxDiagnostics?: number,
+): ComparisonResult {
+  return executeComparison(tsconfigPath, projectDisplay, maxDiagnostics);
 }
 
-function runTsc(projectDir: string, relativeTsconfig: string): { output: string } {
+export function runTsc(tsconfigPath: string): RunResult {
   const result = spawnSync(
     'pnpm',
-    ['exec', 'tsc', '--noEmit', '--pretty', 'false', '--project', relativeTsconfig],
+    ['exec', 'tsc', '--noEmit', '--pretty', 'false', '--project', tsconfigPath],
     {
-      cwd: projectDir,
+      cwd: workspaceRoot,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -228,17 +215,17 @@ function runTsc(projectDir: string, relativeTsconfig: string): { output: string 
   );
 
   if (result.error) {
-    throw result.error;
+    throw new Error(`failed to run TypeScript compiler: ${result.error.message}`);
   }
 
-  return { output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
+  return {
+    exitCode: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
 }
 
-function runTypeScriptRust(
-  projectDir: string,
-  relativeTsconfig: string,
-  maxDiagnostics?: number,
-): { output: string } {
+export function runTypeScriptRust(tsconfigPath: string, maxDiagnostics?: number): RunResult {
   const args = [
     'run',
     '-q',
@@ -248,7 +235,7 @@ function runTypeScriptRust(
     'typescript-rust-cli',
     '--',
     '--project',
-    relativeTsconfig,
+    tsconfigPath,
     '--format',
     'json',
   ];
@@ -258,42 +245,51 @@ function runTypeScriptRust(
   }
 
   const result = spawnSync('cargo', args, {
-    cwd: projectDir,
+    cwd: workspaceRoot,
     encoding: 'utf8',
   });
 
   if (result.error) {
-    throw result.error;
+    throw new Error(`failed to run typescript-rust-cli: ${result.error.message}`);
   }
 
-  return { output: result.stdout ?? '' };
+  return {
+    exitCode: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
 }
 
-function parseTypeScriptDiagnostics(output: string, projectDir: string): NormalizedDiagnostic[] {
+export function parseTypeScriptDiagnostics(output: string, projectDir: string): NormalizedDiagnostic[] {
   const diagnostics: NormalizedDiagnostic[] = [];
   const lines = output.split(/\r?\n/);
 
-  for (const line of lines) {
-    const matched = line.match(/^(.*)\((\d+),(\d+)\): error (TS\d+): (.*)$/);
-    if (matched) {
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    if (!line) {
+      continue;
+    }
+
+    const fileDiagnostic = line.match(/^(.*)\((\d+),(\d+)\): error (TS\d+): (.*)$/);
+    if (fileDiagnostic) {
       diagnostics.push({
         source: 'typescript',
-        fileName: normalizeDiagnosticFileName(projectDir, matched[1]),
-        line: Number(matched[2]),
-        column: Number(matched[3]),
-        code: matched[4],
-        message: matched[5],
+        fileName: normalizeDiagnosticFileName(projectDir, fileDiagnostic[1]),
+        line: Number(fileDiagnostic[2]),
+        column: Number(fileDiagnostic[3]),
+        code: fileDiagnostic[4],
+        message: fileDiagnostic[5],
       });
       continue;
     }
 
-    const globalError = line.match(/^error (TS\d+): (.*)$/);
-    if (globalError) {
+    const globalDiagnostic = line.match(/^error (TS\d+): (.*)$/);
+    if (globalDiagnostic) {
       diagnostics.push({
         source: 'typescript',
         fileName: '',
-        code: globalError[1],
-        message: globalError[2],
+        code: globalDiagnostic[1],
+        message: globalDiagnostic[2],
       });
     }
   }
@@ -301,9 +297,22 @@ function parseTypeScriptDiagnostics(output: string, projectDir: string): Normali
   return diagnostics;
 }
 
-function parseTypeScriptRustDiagnostics(output: string, projectDir: string): NormalizedDiagnostic[] {
-  const parsed = JSON.parse(output) as { diagnostics?: unknown };
-  const diagnostics = Array.isArray(parsed.diagnostics) ? parsed.diagnostics : [];
+export function parseTypeScriptRustDiagnostics(
+  output: string,
+  projectDir: string,
+): NormalizedDiagnostic[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch (error) {
+    throw new Error(
+      `typescript-rust-cli did not emit valid JSON diagnostics.\n${formatParseFailure(output, error)}`,
+    );
+  }
+
+  const diagnostics = Array.isArray((parsed as { diagnostics?: unknown }).diagnostics)
+    ? ((parsed as { diagnostics: unknown[] }).diagnostics ?? [])
+    : [];
 
   return diagnostics.map((diagnostic) => {
     const entry = diagnostic as {
@@ -325,26 +334,64 @@ function parseTypeScriptRustDiagnostics(output: string, projectDir: string): Nor
   });
 }
 
-function normalizeDiagnosticFileName(projectDir: string, fileName: string): string {
+export function normalizeDiagnosticFileName(projectDir: string, fileName: string): string {
   if (!fileName) {
     return '';
   }
 
-  const absolute = path.isAbsolute(fileName) ? fileName : path.resolve(projectDir, fileName);
-  const relative = path.relative(projectDir, absolute);
+  const normalizedWorkspaceRoot = normalizePathForDisplay(workspaceRoot).replace(/\/+$/, '');
+  const normalizedProjectDir = isAbsolutePathLike(projectDir)
+    ? normalizePathForDisplay(projectDir).replace(/\/+$/, '')
+    : normalizePathForDisplay(path.resolve(projectDir)).replace(/\/+$/, '');
+  const workspaceRelativeProjectDir = normalizePathForDisplay(
+    path.relative(workspaceRoot, isAbsolutePathLike(projectDir) ? projectDir : path.resolve(projectDir)),
+  ).replace(/\/+$/, '');
+  const normalizedInputFileName = normalizePathForDisplay(fileName);
 
-  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
-    return normalizePosixPath(relative);
+  if (
+    workspaceRelativeProjectDir &&
+    normalizedInputFileName.startsWith(`${workspaceRelativeProjectDir}/`)
+  ) {
+    return normalizedInputFileName.slice(workspaceRelativeProjectDir.length + 1);
   }
 
-  return normalizePosixPath(fileName);
+  if (workspaceRelativeProjectDir && normalizedInputFileName === workspaceRelativeProjectDir) {
+    return path.basename(normalizedInputFileName);
+  }
+
+  let normalizedFileName = isAbsolutePathLike(fileName)
+    ? normalizedInputFileName
+    : normalizePathForDisplay(`${normalizedProjectDir}/${normalizedInputFileName}`);
+
+  if (normalizedFileName.startsWith(`${normalizedWorkspaceRoot}/`)) {
+    normalizedFileName = normalizedFileName.slice(normalizedWorkspaceRoot.length + 1);
+  }
+
+  if (workspaceRelativeProjectDir && normalizedFileName === workspaceRelativeProjectDir) {
+    return path.basename(normalizedFileName);
+  }
+
+  if (workspaceRelativeProjectDir && normalizedFileName.startsWith(`${workspaceRelativeProjectDir}/`)) {
+    return normalizedFileName.slice(workspaceRelativeProjectDir.length + 1);
+  }
+
+  if (normalizedFileName === normalizedProjectDir) {
+    return path.basename(normalizedFileName);
+  }
+
+  const projectPrefix = `${normalizedProjectDir}/`;
+  if (normalizedProjectDir && normalizedFileName.startsWith(projectPrefix)) {
+    return normalizedFileName.slice(projectPrefix.length);
+  }
+
+  return normalizedFileName;
 }
 
-function normalizePosixPath(value: string): string {
-  return value.split(path.sep).join('/');
+export function normalizePathForDisplay(value: string): string {
+  return value.replace(/\\/g, '/');
 }
 
-function limitDiagnostics(
+export function limitDiagnostics(
   diagnostics: NormalizedDiagnostic[],
   maxDiagnostics?: number,
 ): NormalizedDiagnostic[] {
@@ -355,7 +402,7 @@ function limitDiagnostics(
   return diagnostics.slice(0, maxDiagnostics);
 }
 
-function compareDiagnostics(
+export function compareDiagnostics(
   project: string,
   typescript: NormalizedDiagnostic[],
   typescriptRust: NormalizedDiagnostic[],
@@ -370,22 +417,15 @@ function compareDiagnostics(
 
   return {
     project,
-    typescript: {
-      total: typescript.length,
-      byCode: countEntriesFromCounts(countDiagnostics(typescript, keyByCode)),
-      byFileCode: countEntriesFromCounts(countDiagnostics(typescript, keyByFileCode)),
-      byFileCodeLine: countEntriesFromCounts(
-        countDiagnostics(typescript.filter(hasLineInfo), keyByFileCodeLine),
-      ),
+    tooling: {
+      typescriptVersion: pinnedTypeScriptVersion,
+      typescriptCommand: `pnpm exec tsc --noEmit --pretty false --project ${project}`,
+      typescriptRustCommand: `cargo run -q --manifest-path ${normalizePathForDisplay(
+        path.join(workspaceRoot, 'Cargo.toml'),
+      )} -p typescript-rust-cli -- --project ${project} --format json`,
     },
-    typescriptRust: {
-      total: typescriptRust.length,
-      byCode: countEntriesFromCounts(countDiagnostics(typescriptRust, keyByCode)),
-      byFileCode: countEntriesFromCounts(countDiagnostics(typescriptRust, keyByFileCode)),
-      byFileCodeLine: countEntriesFromCounts(
-        countDiagnostics(typescriptRust.filter(hasLineInfo), keyByFileCodeLine),
-      ),
-    },
+    typescript: summarizeDiagnostics(typescript),
+    typescriptRust: summarizeDiagnostics(typescriptRust),
     matches: {
       byCode: byCode.matches,
       onlyTypeScript: byCode.onlyTypeScript,
@@ -412,7 +452,18 @@ function compareDiagnostics(
   };
 }
 
-function compareBuckets(
+export function summarizeDiagnostics(diagnostics: NormalizedDiagnostic[]): DiagnosticTotals {
+  return {
+    total: diagnostics.length,
+    byCode: countEntriesFromCounts(countDiagnostics(diagnostics, keyByCode)),
+    byFileCode: countEntriesFromCounts(countDiagnostics(diagnostics, keyByFileCode)),
+    byFileCodeLine: countEntriesFromCounts(
+      countDiagnostics(diagnostics.filter(hasLineInfo), keyByFileCodeLine),
+    ),
+  };
+}
+
+export function compareBuckets(
   left: NormalizedDiagnostic[],
   right: NormalizedDiagnostic[],
   keyFn: (diagnostic: NormalizedDiagnostic) => string,
@@ -459,7 +510,7 @@ function compareBuckets(
   return { matches, onlyTypeScript, onlyTypeScriptRust };
 }
 
-function countDiagnostics(
+export function countDiagnostics(
   diagnostics: NormalizedDiagnostic[],
   keyFn: (diagnostic: NormalizedDiagnostic) => string,
 ): Map<string, number> {
@@ -473,40 +524,49 @@ function countDiagnostics(
   return counts;
 }
 
-function countEntriesFromCounts(counts: Map<string, number>): CountEntry[] {
+export function countEntriesFromCounts(counts: Map<string, number>): CountEntry[] {
   return [...counts.entries()]
     .map(([key, count]) => ({ key, count }))
     .sort((left, right) => left.key.localeCompare(right.key));
 }
 
-function keyByCode(diagnostic: NormalizedDiagnostic): string {
+export function keyByCode(diagnostic: NormalizedDiagnostic): string {
   return diagnostic.code;
 }
 
-function keyByFileCode(diagnostic: NormalizedDiagnostic): string {
+export function keyByFileCode(diagnostic: NormalizedDiagnostic): string {
   return `${diagnostic.fileName} :: ${diagnostic.code}`;
 }
 
-function keyByFileCodeLine(diagnostic: NormalizedDiagnostic): string {
-  const line = diagnostic.line ?? 0;
-  return `${diagnostic.fileName} :: ${diagnostic.code} :: line=${line}`;
+export function keyByFileCodeLine(diagnostic: NormalizedDiagnostic): string {
+  return `${diagnostic.fileName} :: ${diagnostic.code} :: line=${diagnostic.line ?? 0}`;
 }
 
-function hasLineInfo(diagnostic: NormalizedDiagnostic): boolean {
+export function hasLineInfo(diagnostic: NormalizedDiagnostic): boolean {
   return typeof diagnostic.line === 'number' && typeof diagnostic.column === 'number';
 }
 
-function renderComparisonText(comparison: ComparisonResult): string {
+export function renderComparisonText(comparison: ComparisonResult): string {
   const lines: string[] = [];
   lines.push('TypeScript oracle comparison');
   lines.push(`Project: ${comparison.project}`);
   lines.push('');
-  lines.push('Files:');
+  lines.push('Tooling:');
+  lines.push(`TypeScript version: ${comparison.tooling.typescriptVersion}`);
+  lines.push(`TypeScript command: ${comparison.tooling.typescriptCommand}`);
+  lines.push(`typescript-rust command: ${comparison.tooling.typescriptRustCommand}`);
+  lines.push('');
+  lines.push('Totals:');
   lines.push(`TypeScript diagnostics: ${comparison.typescript.total}`);
   lines.push(`typescript-rust diagnostics: ${comparison.typescriptRust.total}`);
   lines.push('');
   lines.push('By code:');
-  appendBucketSection(lines, comparison.matches.byCode, comparison.matches.onlyTypeScript, comparison.matches.onlyTypeScriptRust);
+  appendBucketSection(
+    lines,
+    comparison.matches.byCode,
+    comparison.matches.onlyTypeScript,
+    comparison.matches.onlyTypeScriptRust,
+  );
   lines.push('');
   lines.push('By file/code:');
   appendBucketSection(
@@ -543,12 +603,12 @@ function renderComparisonText(comparison: ComparisonResult): string {
   return `${lines.join('\n')}\n`;
 }
 
-function appendBucketSection(
+export function appendBucketSection(
   lines: string[],
   matches: CountBucket[],
   onlyTypeScript: CountBucket[],
   onlyTypeScriptRust: CountBucket[],
-) {
+): void {
   if (matches.length === 0 && onlyTypeScript.length === 0 && onlyTypeScriptRust.length === 0) {
     lines.push('  (none)');
     return;
@@ -579,7 +639,7 @@ function appendBucketSection(
   }
 }
 
-function formatBucketKey(key: string): string {
+export function formatBucketKey(key: string): string {
   const parts = key.split(' :: ');
   if (parts.length === 1) {
     return parts[0];
@@ -590,10 +650,84 @@ function formatBucketKey(key: string): string {
   return `${parts[0]} ${parts[1]} ${parts[2]}`;
 }
 
-try {
-  main();
-} catch (error) {
+export function displayProjectPath(tsconfigPath: string): string {
+  const relative = path.relative(workspaceRoot, tsconfigPath);
+  return relative.startsWith('..') ? normalizePathForDisplay(tsconfigPath) : normalizePathForDisplay(relative);
+}
+
+function printHelpAndExit(): never {
+  process.stdout.write(
+    [
+      'Usage:',
+      '  pnpm run oracle:compare -- --project <tsconfig.json|preset>',
+      '',
+      'Options:',
+      '  --project <path|preset>   Compare a tsconfig file or known fixture preset.',
+      '  --fixture <preset>        Alias for --project when passing a preset name.',
+      '  --maxDiagnostics <n>      Limit diagnostics on both sides before comparing.',
+      '  --json                    Emit machine-readable comparison output.',
+      '  --failOnMismatch          Exit with code 1 when code/file mismatches exist.',
+      '  --strictCodes             Alias for --failOnMismatch.',
+      '',
+      'Known presets:',
+      `  ${Object.keys(fixturePresets).join(', ')}`,
+      '',
+    ].join('\n'),
+  );
+  process.exit(0);
+}
+
+function formatParseFailure(output: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exit(1);
+  return [`Parse error: ${message}`, 'Output:', output.trim() || '(empty)'].join('\n');
+}
+
+function readPinnedTypeScriptVersion(): string {
+  const packageJsonPath = path.join(workspaceRoot, 'package.json');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+    devDependencies?: Record<string, string>;
+  };
+
+  return packageJson.devDependencies?.typescript ?? 'unknown';
+}
+
+function looksLikePath(value: string): boolean {
+  return value.includes('/') || value.includes('\\') || value.endsWith('.json') || value.startsWith('.');
+}
+
+function isAbsolutePathLike(value: string): boolean {
+  const normalized = normalizePathForDisplay(value);
+  return (
+    path.isAbsolute(value) ||
+    path.win32.isAbsolute(value) ||
+    normalized.startsWith('/') ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.startsWith('//')
+  );
+}
+
+function executeComparison(
+  tsconfigPath: string,
+  projectDisplay: string,
+  maxDiagnostics?: number,
+): ComparisonResult {
+  const projectDir = path.dirname(tsconfigPath);
+  const tsc = runTsc(tsconfigPath);
+  const rust = runTypeScriptRust(tsconfigPath, maxDiagnostics);
+  const rustOutput = rust.stdout.trim() ? rust.stdout : rust.stderr;
+
+  const tscDiagnostics = limitDiagnostics(parseTypeScriptDiagnostics(`${tsc.stdout}${tsc.stderr}`, projectDir), maxDiagnostics);
+  const rustDiagnostics = limitDiagnostics(parseTypeScriptRustDiagnostics(rustOutput, projectDir), maxDiagnostics);
+
+  return compareDiagnostics(projectDisplay, tscDiagnostics, rustDiagnostics);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  try {
+    main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
+  }
 }

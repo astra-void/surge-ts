@@ -1,7 +1,7 @@
 .vscode
 target
 digest.txt
-node_modules
+node_modules/
 .pnpm-store/
 dist
 coverage
@@ -11,3 +11,6 @@ coverage
 .DS_Store
 .idea
 .local-projects/
+pnpm-debug.log*
+npm-debug.log*
+ppnpm-debug.log*

@@ -64,4 +64,6 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 - Use `cargo run -p typescript-rust-cli -- --showSpans <file>` to inspect spans during development.
 - The TypeScript oracle comparison added in v0.60 compares code, file, and
   line/column first; it is a measurement baseline, not an exact span-parity
-  contract.
+  contract. The pinned TypeScript version can shift the oracle output, so
+  compare changes intentionally rather than treating the comparator as a
+  semantic contract.

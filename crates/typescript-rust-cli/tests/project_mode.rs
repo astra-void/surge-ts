@@ -1351,7 +1351,7 @@ fn cli_compat_report_with_max_diagnostics_counts_all() {
 }
 
 #[test]
-fn cli_compat_report_json_format() {
+fn cli_compat_report_format_json_still_report_shape() {
     let project = compat_project_root("package-imports").join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
     let (stdout, stderr) = run_cli(&[
@@ -1364,12 +1364,60 @@ fn cli_compat_report_json_format() {
 
     assert!(stderr.is_empty());
     let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let expected_root = compat_project_root("package-imports")
+        .to_string_lossy()
+        .to_string();
+    assert_eq!(parsed["rootDir"].as_str().unwrap(), expected_root);
     assert_eq!(parsed["filesLoaded"], Value::from(1));
     assert_eq!(parsed["diagnosticsTotal"], Value::from(3));
+    assert!(parsed["byCode"].is_array());
+    assert!(parsed["byFile"].is_array());
+    assert!(parsed["parserErrors"].is_array());
     assert_eq!(
         parsed["byCode"][0]["code"],
         Value::String("TS2307".to_string())
     );
+}
+
+#[test]
+fn cli_max_diagnostics_limits_json_diagnostics_but_not_report_counts() {
+    let root = temp_dir("project-json-max-diagnostics");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "let a: number = \"a\";");
+    write_file(&root, "src/b.ts", "let b: number = \"b\";");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let (diagnostics_stdout, diagnostics_stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--maxDiagnostics",
+        "1",
+    ]);
+    assert!(diagnostics_stderr.is_empty());
+    let diagnostics_json: Value = serde_json::from_str(&diagnostics_stdout).unwrap();
+    assert_eq!(diagnostics_json["diagnostics"].as_array().unwrap().len(), 1);
+
+    let (report_stdout, report_stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+        "--maxDiagnostics",
+        "1",
+    ]);
+    assert!(report_stderr.is_empty());
+    let report_json: Value = serde_json::from_str(&report_stdout).unwrap();
+    assert_eq!(report_json["diagnosticsTotal"], Value::from(2));
+    assert_eq!(report_json["byCode"][0]["count"], Value::from(2));
 }
 
 #[test]

@@ -1,15 +1,20 @@
 # Real Project Compatibility
 
-`v0.59.1` is still an instrumentation baseline for real-project compatibility,
+`v0.60.1` is still an instrumentation baseline for real-project compatibility,
 not a claim that large TypeScript packages pass. `v0.60` adds a TypeScript
 oracle comparison harness on top of that baseline so we can measure the current
 checker against a pinned compiler without changing the checker to chase parity.
+
+The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
+`cargo test` does not require `pnpm install`.
 
 ## Local workflow
 
 - Do not commit third-party project source.
 - Put disposable real-project experiments under `.local-projects/`.
 - Keep local copies out of committed tests and fixtures.
+- Keep the root TypeScript version pinned intentionally; changing it may shift
+  oracle output and should be done on purpose, not by accident.
 
 Example:
 
@@ -21,7 +26,8 @@ pnpm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --m
 
 ## What the report tells you
 
-The compatibility report is a triage tool. It helps separate the first-order blockers from the noise:
+The compatibility report is a triage tool. It helps separate the first-order
+blockers from the noise:
 
 1. Parser errors
 2. Unsupported module syntax
@@ -35,7 +41,7 @@ match; it starts with code, file, and line/column normalization first.
 
 ## Current baseline
 
-`v0.59` intentionally avoids:
+`v0.60.1` intentionally avoids:
 
 - package resolution
 - `node_modules` lookup
@@ -54,10 +60,11 @@ The oracle harness also stays away from those areas. It only measures the
 current surface against TypeScript diagnostics; it does not add new resolver or
 type-system behavior to make the numbers line up.
 
-The next phase should still be chosen from real report output, not from a fixed
-feature wish list. Generic aliases and interfaces now support explicit type
-arguments, defaults, and parser-safe constraints, but call-site type arguments
-remain parser-safe and ignored by the checker. Likely follow-ups include:
+The next phase should still be chosen from oracle and compat-report output, not
+from a fixed feature wish list. Generic aliases and interfaces now support
+explicit type arguments, defaults, and parser-safe constraints, but call-site
+type arguments remain parser-safe and ignored by the checker. Likely follow-ups
+include:
 
 - `v0.60 module syntax expansion`
 - `v0.60 package import stubbing`

@@ -67,7 +67,7 @@ fn cli_diagnostics_json_single_file() {
 }
 
 #[test]
-fn cli_diagnostics_json_project_normalizes_paths() {
+fn cli_diagnostics_json_project() {
     let root = temp_dir("json-project");
     write_file(
         &root,
@@ -97,7 +97,142 @@ fn cli_diagnostics_json_project_normalizes_paths() {
 }
 
 #[test]
-fn cli_diagnostics_text_output_unchanged_without_format() {
+fn cli_diagnostics_json_includes_code_file_message() {
+    let root = temp_dir("json-code-file-message");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/index.ts", "let value: string = 123;");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(stderr.is_empty());
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let diagnostic = &parsed["diagnostics"][0];
+    assert_eq!(diagnostic["code"], Value::String("TS2322".to_string()));
+    assert_eq!(
+        diagnostic["fileName"],
+        Value::String("src/index.ts".to_string())
+    );
+    assert!(!diagnostic["message"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn cli_diagnostics_json_includes_span_when_available() {
+    let root = temp_dir("json-span");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/index.ts", "let value: string = 123;");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(stderr.is_empty());
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let diagnostic = &parsed["diagnostics"][0];
+    assert!(diagnostic["span"]["start"].is_number());
+    assert!(diagnostic["span"]["end"].is_number());
+}
+
+#[test]
+fn cli_diagnostics_json_includes_line_column_when_available() {
+    let root = temp_dir("json-line-column");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/index.ts", "let value: string = 123;");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(stderr.is_empty());
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let diagnostic = &parsed["diagnostics"][0];
+    assert!(diagnostic["line"].as_u64().unwrap() >= 1);
+    assert!(diagnostic["column"].as_u64().unwrap() >= 1);
+}
+
+#[test]
+fn cli_diagnostics_json_empty_diagnostics() {
+    let root = temp_dir("json-empty-diagnostics");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/index.ts", "let value: string = \"ok\";");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(stderr.is_empty());
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["diagnostics"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn cli_format_json_does_not_require_compat_report() {
+    let root = temp_dir("json-format-no-compat-report");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/index.ts", "let value: string = 123;");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(stderr.is_empty());
+    assert!(serde_json::from_str::<Value>(&stdout).is_ok());
+}
+
+#[test]
+fn cli_show_spans_with_json_policy_pinned() {
+    let root = temp_dir("json-show-spans");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/index.ts", "let value: string = 123;");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (plain_stdout, plain_stderr) =
+        run_cli(&["--project", project.as_str(), "--format", "json"]);
+    let (spans_stdout, spans_stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--showSpans",
+        "--format",
+        "json",
+    ]);
+
+    assert!(plain_stderr.is_empty());
+    assert!(spans_stderr.is_empty());
+    assert_eq!(plain_stdout, spans_stdout);
+}
+
+#[test]
+fn cli_normal_output_unchanged_without_format_json() {
     let root = temp_dir("json-text-output");
     write_file(
         &root,
