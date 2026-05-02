@@ -1,6 +1,7 @@
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
 use typescript_rust_syntax::{
-    ParsedInterfaceDeclaration, ParsedStatement, ParsedTypeAliasDeclaration, parse_source,
+    ParsedExportDeclaration, ParsedInterfaceDeclaration, ParsedStatement,
+    ParsedTypeAliasDeclaration, parse_source,
 };
 
 use crate::checks::{assign, call, expr, function as check_function, var};
@@ -36,25 +37,7 @@ pub fn check_source_with_options(
     collect_type_declarations(&parsed.statements, &mut ctx);
 
     for statement in parsed.statements {
-        match statement {
-            ParsedStatement::VariableDeclaration(variable) => {
-                var::check_variable_declaration(variable, &mut ctx);
-            }
-            ParsedStatement::Assignment(assignment) => {
-                assign::check_assignment(assignment, &mut ctx);
-            }
-            ParsedStatement::FunctionDeclaration(function) => {
-                check_function::check_function_declaration(function, &mut ctx);
-            }
-            ParsedStatement::Call(call) => {
-                call::check_call(call, &mut ctx);
-            }
-            ParsedStatement::Expression(expression) => {
-                expr::check_expression_statement(expression, &mut ctx);
-            }
-            ParsedStatement::TypeAliasDeclaration(_) => {}
-            ParsedStatement::InterfaceDeclaration(_) => {}
-        }
+        check_statement(statement, &mut ctx);
     }
 
     ctx.finish()
@@ -62,21 +45,60 @@ pub fn check_source_with_options(
 
 pub(crate) fn collect_type_declarations(statements: &[ParsedStatement], ctx: &mut CheckerContext) {
     for statement in statements {
-        match statement {
-            ParsedStatement::TypeAliasDeclaration(alias) => {
-                collect_type_alias(alias, ctx);
-            }
-            ParsedStatement::InterfaceDeclaration(interface) => {
-                collect_interface(interface, ctx);
-            }
-            _ => {}
-        };
+        collect_type_declarations_from_statement(statement, ctx);
+    }
+}
+
+fn collect_type_declarations_from_statement(statement: &ParsedStatement, ctx: &mut CheckerContext) {
+    match statement {
+        ParsedStatement::TypeAliasDeclaration(alias) => {
+            collect_type_alias(alias, ctx);
+        }
+        ParsedStatement::InterfaceDeclaration(interface) => {
+            collect_interface(interface, ctx);
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+            declaration,
+            ..
+        }) => collect_type_declarations_from_statement(declaration.as_ref(), ctx),
+        _ => {}
+    }
+}
+
+fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
+    match statement {
+        ParsedStatement::VariableDeclaration(variable) => {
+            var::check_variable_declaration(variable, ctx);
+        }
+        ParsedStatement::Assignment(assignment) => {
+            assign::check_assignment(assignment, ctx);
+        }
+        ParsedStatement::FunctionDeclaration(function) => {
+            check_function::check_function_declaration(function, ctx);
+        }
+        ParsedStatement::Call(call) => {
+            call::check_call(call, ctx);
+        }
+        ParsedStatement::Expression(expression) => {
+            expr::check_expression_statement(expression, ctx);
+        }
+        ParsedStatement::TypeAliasDeclaration(_) => {}
+        ParsedStatement::InterfaceDeclaration(_) => {}
+        ParsedStatement::ImportDeclaration(_) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+            declaration,
+            ..
+        }) => check_statement(*declaration, ctx),
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. }) => {}
     }
 }
 
 pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut CheckerContext) {
     let info = TypeAliasInfo {
         name: alias.name.clone(),
+        file_name: ctx.file_name.clone(),
         name_span: alias.name_span,
         ty: alias.ty.clone(),
     };
@@ -99,6 +121,7 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
 pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mut CheckerContext) {
     let info = InterfaceInfo {
         name: interface.name.clone(),
+        file_name: ctx.file_name.clone(),
         name_span: interface.name_span,
         members: interface.members.clone(),
     };

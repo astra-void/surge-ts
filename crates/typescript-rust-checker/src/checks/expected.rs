@@ -36,6 +36,18 @@ pub(crate) fn evaluate_expression_with_expected_type(
         );
     }
 
+    if let (Type::Tuple(expected_elements), ParsedExpression::ArrayLiteral(elements)) =
+        (expected_type, expression)
+    {
+        return evaluate_tuple_literal_with_expected_type(
+            elements,
+            expected_elements,
+            fallback_span,
+            symbols,
+            ctx,
+        );
+    }
+
     if let (Type::Array(expected_element_type), ParsedExpression::ArrayLiteral(elements)) =
         (expected_type, expression)
     {
@@ -112,6 +124,86 @@ fn evaluate_array_literal_with_expected_type(
     }
 
     InferredExpression::Known(Type::Array(Box::new(expected_element_type.clone())))
+}
+
+fn evaluate_tuple_literal_with_expected_type(
+    elements: &[typescript_rust_syntax::ParsedArrayElement],
+    expected_elements: &[Type],
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    for (index, element) in elements.iter().enumerate() {
+        if index >= expected_elements.len() {
+            let source_type_name = Type::Array(Box::new(Type::Unknown)).name();
+            let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
+            let mut diagnostic =
+                Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());
+
+            if let Some(span) = element.span.or(fallback_span) {
+                diagnostic = diagnostic.with_span(convert_span(span));
+            }
+
+            ctx.push(diagnostic);
+            return InferredExpression::Unknown;
+        }
+
+        let expected_element_type = &expected_elements[index];
+        let inferred_element = evaluate_expression_with_expected_type(
+            &element.expression,
+            element.span,
+            Some(expected_element_type),
+            ExpectedTypeDiagnostic::TypeNotAssignable,
+            symbols,
+            ctx,
+        );
+
+        match inferred_element {
+            InferredExpression::Known(actual_type) => {
+                if actual_type == Type::Unknown {
+                    continue;
+                }
+
+                if !is_assignable_to(&actual_type, expected_element_type) {
+                    let actual_type_name = actual_type.name();
+                    let expected_type_name = expected_element_type.name();
+                    let mut diagnostic = Diagnostic::ts2322(
+                        &actual_type_name,
+                        &expected_type_name,
+                        ctx.file_name.clone(),
+                    );
+
+                    if let Some(span) = element.span.or(fallback_span) {
+                        diagnostic = diagnostic.with_span(convert_span(span));
+                    }
+
+                    ctx.push(diagnostic);
+                    return InferredExpression::Unknown;
+                }
+            }
+            InferredExpression::UnresolvedIdentifier { .. }
+            | InferredExpression::MissingProperty { .. }
+            | InferredExpression::Unknown => {
+                return InferredExpression::Unknown;
+            }
+        }
+    }
+
+    if elements.len() != expected_elements.len() {
+        let source_type_name = Type::Array(Box::new(Type::Unknown)).name();
+        let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
+        let mut diagnostic =
+            Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());
+
+        if let Some(span) = fallback_span {
+            diagnostic = diagnostic.with_span(convert_span(span));
+        }
+
+        ctx.push(diagnostic);
+        return InferredExpression::Unknown;
+    }
+
+    InferredExpression::Known(Type::Tuple(expected_elements.to_vec()))
 }
 
 fn evaluate_object_literal_with_expected_type(

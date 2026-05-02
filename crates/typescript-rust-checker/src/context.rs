@@ -35,6 +35,14 @@ impl CheckerContext {
         }
     }
 
+    pub(crate) fn set_file_name(&mut self, file_name: String) {
+        self.file_name = file_name;
+    }
+
+    pub(crate) fn set_symbols(&mut self, symbols: SymbolTable) {
+        self.symbols = symbols;
+    }
+
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
         self.diagnostics.push(diagnostic);
     }

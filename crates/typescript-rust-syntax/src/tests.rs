@@ -1329,7 +1329,17 @@ fn parse_array_type_function_element() {
 #[test]
 fn parse_array_type_union_element_if_supported() {
     let parsed = parse_source("type Status = (\"idle\" | \"done\")[];", "example.ts");
-    assert_eq!(parsed.file_name, "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let Some(ParsedType::Array(element)) = Some(&alias.ty) else {
+        panic!("expected an array type");
+    };
+
+    assert!(matches!(&**element, ParsedType::Union(types) if types.len() == 2));
 }
 
 #[test]
@@ -1363,8 +1373,290 @@ fn parse_array_type_array_generic_unsupported_no_panic() {
 }
 
 #[test]
-fn parse_tuple_type_unsupported_no_panic() {
+fn parse_tuple_type_one_element() {
+    let parsed = parse_source("type Pair = [string];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert_eq!(elements.len(), 1);
+    assert!(matches!(elements[0], ParsedType::String));
+}
+
+#[test]
+fn parse_tuple_type_empty_tuple_behavior_pinned() {
+    let parsed = parse_source("type Empty = [];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(elements.is_empty());
+}
+
+#[test]
+fn parse_tuple_type_two_elements() {
     let parsed = parse_source("type Pair = [string, number];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert_eq!(elements.len(), 2);
+    assert!(matches!(elements[0], ParsedType::String));
+    assert!(matches!(elements[1], ParsedType::Number));
+}
+
+#[test]
+fn parse_tuple_type_three_elements() {
+    let parsed = parse_source("type Trio = [string, number, boolean];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert_eq!(elements.len(), 3);
+}
+
+#[test]
+fn parse_tuple_type_string_number() {
+    let parsed = parse_source("let value: [string, number] = [\"Ada\", 36];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    let ParsedType::Tuple(elements) = variable.declared_type.as_ref().unwrap() else {
+        panic!("expected a tuple type annotation");
+    };
+
+    assert!(matches!(elements[0], ParsedType::String));
+    assert!(matches!(elements[1], ParsedType::Number));
+}
+
+#[test]
+fn parse_tuple_type_literal_element() {
+    let parsed = parse_source("type StatusPair = [\"idle\", number];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(matches!(elements[0], ParsedType::StringLiteral(_)));
+}
+
+#[test]
+fn parse_tuple_type_union_element_if_supported() {
+    let parsed = parse_source(
+        "type StatusPair = [\"idle\" | \"done\", number];",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(matches!(&elements[0], ParsedType::Union(types) if types.len() == 2));
+}
+
+#[test]
+fn parse_tuple_type_union_element() {
+    let parsed = parse_source(
+        "type StatusPair = [\"idle\" | \"done\", number];",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(matches!(&elements[0], ParsedType::Union(types) if types.len() == 2));
+}
+
+#[test]
+fn parse_tuple_type_object_element() {
+    let parsed = parse_source("type Pair = [{ name: string }, number];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(matches!(elements[0], ParsedType::Object(_)));
+}
+
+#[test]
+fn parse_tuple_type_function_element() {
+    let parsed = parse_source("type Pair = [() => void, string];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(matches!(elements[0], ParsedType::Function(_)));
+}
+
+#[test]
+fn parse_tuple_type_array_element() {
+    let parsed = parse_source("type Pair = [string[], number[]];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(matches!(elements[0], ParsedType::Array(_)));
+}
+
+#[test]
+fn parse_tuple_type_nested_tuple() {
+    let parsed = parse_source("type Pair = [[string, number], boolean];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(matches!(elements[0], ParsedType::Tuple(_)));
+}
+
+#[test]
+fn parse_tuple_type_trailing_comma() {
+    let parsed = parse_source("type Pair = [string, number,];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert_eq!(elements.len(), 2);
+}
+
+#[test]
+fn parse_tuple_type_empty_tuple() {
+    let parsed = parse_source("type Empty = [];", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Tuple(elements) = &alias.ty else {
+        panic!("expected a tuple type");
+    };
+
+    assert!(elements.is_empty());
+}
+
+#[test]
+fn parse_tuple_type_missing_close_bracket_no_panic() {
+    let parsed = parse_source("type Pair = [string, number;", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_type_missing_element_after_comma_no_panic() {
+    let parsed = parse_source("type Pair = [string, ];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_type_readonly_unsupported_no_panic() {
+    let parsed = parse_source("type Pair = readonly [string, number];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_type_optional_element_unsupported_no_panic() {
+    let parsed = parse_source("type Pair = [string?];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_type_labeled_element_unsupported_no_panic() {
+    let parsed = parse_source("type Pair = [name: string, age: number];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_type_rest_element_unsupported_no_panic() {
+    let parsed = parse_source("type Pair = [string, ...number[]];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_type_variadic_unsupported_no_panic() {
+    let parsed = parse_source("type Pair = [string, ...number[], boolean];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_nested_index_access_unsupported_no_panic() {
+    let parsed = parse_source("let value = values[0][1];", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_tuple_index_call_unsupported_no_panic() {
+    let parsed = parse_source("let value = values[0]();", "example.ts");
     assert_eq!(parsed.file_name, "example.ts");
 }
 
@@ -1591,4 +1883,523 @@ fn parse_nested_index_access_unsupported_no_panic() {
 fn parse_property_index_access_unsupported_no_panic() {
     let parsed = parse_source("let value = store.values[0];", "example.ts");
     assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_index_call_unsupported_no_panic() {
+    let parsed = parse_source("let value = values[0]();", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+}
+
+#[test]
+fn parse_import_named_one() {
+    let parsed = parse_source("import { User } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named {
+        is_type_only,
+        specifiers,
+    } = &import.kind
+    else {
+        panic!("expected a named import");
+    };
+
+    assert!(!*is_type_only);
+    assert_eq!(import.module_specifier, "./user");
+    assert_eq!(specifiers.len(), 1);
+    assert_eq!(specifiers[0].imported_name, "User");
+    assert_eq!(specifiers[0].local_name, "User");
+}
+
+#[test]
+fn parse_import_named_multiple() {
+    let parsed = parse_source("import { User, Role } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named { specifiers, .. } = &import.kind else {
+        panic!("expected a named import");
+    };
+
+    assert_eq!(specifiers.len(), 2);
+    assert_eq!(specifiers[0].imported_name, "User");
+    assert_eq!(specifiers[1].imported_name, "Role");
+}
+
+#[test]
+fn parse_import_named_alias() {
+    let parsed = parse_source(
+        "import { User as UserModel } from \"./user\";",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named { specifiers, .. } = &import.kind else {
+        panic!("expected a named import");
+    };
+
+    assert_eq!(specifiers.len(), 1);
+    assert_eq!(specifiers[0].imported_name, "User");
+    assert_eq!(specifiers[0].local_name, "UserModel");
+}
+
+#[test]
+fn parse_import_type_named_one() {
+    let parsed = parse_source("import type { User } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named {
+        is_type_only,
+        specifiers,
+    } = &import.kind
+    else {
+        panic!("expected a named import");
+    };
+
+    assert!(*is_type_only);
+    assert_eq!(specifiers.len(), 1);
+    assert_eq!(specifiers[0].imported_name, "User");
+}
+
+#[test]
+fn parse_import_type_named_multiple() {
+    let parsed = parse_source("import type { User, Role } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named { is_type_only, .. } = &import.kind else {
+        panic!("expected a named import");
+    };
+
+    assert!(*is_type_only);
+}
+
+#[test]
+fn parse_import_type_named_alias() {
+    let parsed = parse_source(
+        "import type { User as UserModel } from \"./user\";",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named {
+        is_type_only,
+        specifiers,
+    } = &import.kind
+    else {
+        panic!("expected a named import");
+    };
+
+    assert!(*is_type_only);
+    assert_eq!(specifiers[0].imported_name, "User");
+    assert_eq!(specifiers[0].local_name, "UserModel");
+}
+
+#[test]
+fn parse_import_side_effect() {
+    let parsed = parse_source("import \"./setup\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(parsed.is_module);
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    assert!(matches!(import.kind, ParsedImportKind::SideEffect));
+    assert_eq!(import.module_specifier, "./setup");
+}
+
+#[test]
+fn parse_import_missing_from_no_panic() {
+    let parsed = parse_source("import { User } \"./user\";", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+    assert!(!parsed.parser_errors.is_empty());
+}
+
+#[test]
+fn parse_import_missing_module_specifier_no_panic() {
+    let parsed = parse_source("import { User } from ;", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+    assert!(!parsed.parser_errors.is_empty());
+}
+
+#[test]
+fn parse_import_missing_close_brace_no_panic() {
+    let parsed = parse_source("import { User from \"./user\";", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+    assert!(!parsed.parser_errors.is_empty());
+}
+
+#[test]
+fn parse_import_trailing_comma() {
+    let parsed = parse_source("import { User, Role, } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named { specifiers, .. } = &import.kind else {
+        panic!("expected a named import");
+    };
+
+    assert_eq!(specifiers.len(), 2);
+}
+
+#[test]
+fn parse_import_empty_named_list() {
+    let parsed = parse_source("import {} from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    let ParsedImportKind::Named { specifiers, .. } = &import.kind else {
+        panic!("expected a named import");
+    };
+
+    assert!(specifiers.is_empty());
+}
+
+#[test]
+fn parse_import_default_unsupported_no_panic() {
+    let parsed = parse_source("import User from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    assert!(matches!(import.kind, ParsedImportKind::Unsupported));
+}
+
+#[test]
+fn parse_import_namespace_unsupported_no_panic() {
+    let parsed = parse_source("import * as user from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    assert!(matches!(import.kind, ParsedImportKind::Unsupported));
+}
+
+#[test]
+fn parse_import_default_plus_named_unsupported_no_panic() {
+    let parsed = parse_source("import User, { Role } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ImportDeclaration(import) = &parsed.statements[0] else {
+        panic!("expected an import declaration");
+    };
+
+    assert!(matches!(import.kind, ParsedImportKind::Unsupported));
+}
+
+#[test]
+fn parse_import_equals_require_unsupported_no_panic() {
+    let parsed = parse_source("import user = require(\"./user\");", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+    assert!(matches!(
+        parsed.statements.first(),
+        Some(ParsedStatement::ImportDeclaration(_))
+    ));
+}
+
+#[test]
+fn parse_dynamic_import_expression_unsupported_no_panic() {
+    let parsed = parse_source("import(\"./user\");", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        parsed.statements.first(),
+        Some(ParsedStatement::Expression(ParsedExpression::Unknown))
+    ));
+}
+
+#[test]
+fn parse_export_interface_declaration() {
+    let parsed = parse_source("export interface User { name: string; }", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::InterfaceDeclaration(_)
+    ));
+}
+
+#[test]
+fn parse_export_type_alias_declaration() {
+    let parsed = parse_source("export type UserId = string;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::TypeAliasDeclaration(_)
+    ));
+}
+
+#[test]
+fn parse_export_function_declaration() {
+    let parsed = parse_source(
+        "export function getName(): string { return \"Ada\"; }",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::FunctionDeclaration(_)
+    ));
+}
+
+#[test]
+fn parse_export_variable_const_declaration() {
+    let parsed = parse_source("export const name: string = \"Ada\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::VariableDeclaration(_)
+    ));
+}
+
+#[test]
+fn parse_export_variable_let_declaration() {
+    let parsed = parse_source("export let count: number = 1;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::VariableDeclaration(_)
+    ));
+}
+
+#[test]
+fn parse_export_variable_var_declaration() {
+    let parsed = parse_source("export var value: boolean = true;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+        declaration, ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+
+    assert!(matches!(
+        declaration.as_ref(),
+        ParsedStatement::VariableDeclaration(_)
+    ));
+}
+
+#[test]
+fn parse_export_named_one() {
+    let parsed = parse_source("export { User };", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+        specifiers,
+        module_specifier,
+        ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+
+    assert!(module_specifier.is_none());
+    assert_eq!(specifiers.len(), 1);
+    assert_eq!(specifiers[0].local_name, "User");
+    assert_eq!(specifiers[0].exported_name, "User");
+}
+
+#[test]
+fn parse_export_named_multiple() {
+    let parsed = parse_source("export { User, Role };", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { specifiers, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+
+    assert_eq!(specifiers.len(), 2);
+}
+
+#[test]
+fn parse_export_named_alias() {
+    let parsed = parse_source("export { User as UserModel };", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { specifiers, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+
+    assert_eq!(specifiers.len(), 1);
+    assert_eq!(specifiers[0].local_name, "User");
+    assert_eq!(specifiers[0].exported_name, "UserModel");
+}
+
+#[test]
+fn parse_export_type_named_one() {
+    let parsed = parse_source("export type { User };", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+        is_type_only,
+        specifiers,
+        ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+
+    assert!(*is_type_only);
+    assert_eq!(specifiers.len(), 1);
+}
+
+#[test]
+fn parse_export_type_named_alias() {
+    let parsed = parse_source("export type { User as UserModel };", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+        is_type_only,
+        specifiers,
+        ..
+    }) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+
+    assert!(*is_type_only);
+    assert_eq!(specifiers[0].local_name, "User");
+    assert_eq!(specifiers[0].exported_name, "UserModel");
+}
+
+#[test]
+fn parse_export_empty() {
+    let parsed = parse_source("export {};", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(parsed.is_module);
+
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. })
+    ));
+}
+
+#[test]
+fn parse_export_missing_brace_no_panic() {
+    let parsed = parse_source("export { User;", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+    assert!(!parsed.parser_errors.is_empty());
+}
+
+#[test]
+fn parse_export_missing_name_no_panic() {
+    let parsed = parse_source("export { as UserModel };", "example.ts");
+    assert_eq!(parsed.file_name, "example.ts");
+    assert!(!parsed.parser_errors.is_empty());
+}
+
+#[test]
+fn parse_export_default_unsupported_no_panic() {
+    let parsed = parse_source("export default 1;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
+    ));
+}
+
+#[test]
+fn parse_export_from_unsupported_no_panic() {
+    let parsed = parse_source("export { User } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
+    ));
+}
+
+#[test]
+fn parse_export_star_unsupported_no_panic() {
+    let parsed = parse_source("export * from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
+    ));
+}
+
+#[test]
+fn parse_export_type_from_unsupported_no_panic() {
+    let parsed = parse_source("export type { User } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
+    ));
 }

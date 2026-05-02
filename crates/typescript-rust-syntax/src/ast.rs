@@ -3,6 +3,7 @@ pub struct ParsedSource {
     pub file_name: String,
     pub statements: Vec<ParsedStatement>,
     pub parser_errors: Vec<String>,
+    pub is_module: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -14,6 +15,8 @@ pub enum ParsedStatement {
     Expression(ParsedExpression),
     TypeAliasDeclaration(ParsedTypeAliasDeclaration),
     InterfaceDeclaration(ParsedInterfaceDeclaration),
+    ImportDeclaration(ParsedImportDeclaration),
+    ExportDeclaration(ParsedExportDeclaration),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +40,7 @@ pub enum ParsedType {
     BooleanLiteral(bool),
     Object(ParsedObjectType),
     Array(Box<ParsedType>),
+    Tuple(Vec<ParsedType>),
     Union(Vec<ParsedType>),
     Function(ParsedFunctionType),
     Named(ParsedNamedType),
@@ -82,6 +86,57 @@ pub struct ParsedInterfaceMember {
     pub name_span: Option<TextSpan>,
     pub optional: bool,
     pub ty: ParsedType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedImportDeclaration {
+    pub kind: ParsedImportKind,
+    pub module_specifier: String,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedImportKind {
+    Named {
+        is_type_only: bool,
+        specifiers: Vec<ParsedImportSpecifier>,
+    },
+    SideEffect,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedImportSpecifier {
+    pub imported_name: String,
+    pub local_name: String,
+    pub name_span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ParsedExportDeclaration {
+    Statement {
+        declaration: Box<ParsedStatement>,
+        is_type_only: bool,
+    },
+    Named {
+        is_type_only: bool,
+        specifiers: Vec<ParsedExportSpecifier>,
+        module_specifier: Option<String>,
+        span: Option<TextSpan>,
+    },
+    Empty {
+        span: Option<TextSpan>,
+    },
+    Unsupported {
+        span: Option<TextSpan>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedExportSpecifier {
+    pub local_name: String,
+    pub exported_name: String,
+    pub name_span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -5,6 +5,7 @@ use typescript_rust_syntax::{ParsedInterfaceMember, ParsedType, TextSpan};
 #[derive(Debug, Clone)]
 pub(crate) struct TypeAliasInfo {
     pub(crate) name: String,
+    pub(crate) file_name: String,
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) ty: ParsedType,
 }
@@ -12,6 +13,7 @@ pub(crate) struct TypeAliasInfo {
 #[derive(Debug, Clone)]
 pub(crate) struct InterfaceInfo {
     pub(crate) name: String,
+    pub(crate) file_name: String,
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) members: Vec<ParsedInterfaceMember>,
 }
@@ -65,11 +67,13 @@ mod tests {
 
         let alias = TypeDeclarationInfo::Alias(TypeAliasInfo {
             name: "User".to_string(),
+            file_name: "a.ts".to_string(),
             name_span: None,
             ty: ParsedType::String,
         });
         let interface = TypeDeclarationInfo::Interface(InterfaceInfo {
             name: "User".to_string(),
+            file_name: "b.ts".to_string(),
             name_span: None,
             members: vec![],
         });

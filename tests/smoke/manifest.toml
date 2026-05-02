@@ -2425,6 +2425,36 @@ path = "tests/smoke/array_literal_nested_array_valid.ts"
 expected_diagnostics = []
 
 [[case]]
+name = "array-literal-mixed-assignment-mismatch"
+path = "tests/smoke/array_literal_mixed_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-literal-any-element-collapses-to-any-array"
+path = "tests/smoke/array_literal_any_element_collapses_to_any_array.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-literal-unknown-element-no-cascade"
+path = "tests/smoke/array_literal_unknown_element_no_cascade.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-literal-unresolved-element-no-cascade"
+path = "tests/smoke/array_literal_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "array-literal-preserves-const-literal-element"
+path = "tests/smoke/array_literal_preserves_const_literal_element.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-literal-let-widening-when-assigned-to-let"
+path = "tests/smoke/array_literal_let_widening_when_assigned_to_let.ts"
+expected_diagnostics = []
+
+[[case]]
 name = "array-contextual-variable-valid"
 path = "tests/smoke/array_contextual_variable_valid.ts"
 expected_diagnostics = []
@@ -2490,6 +2520,41 @@ path = "tests/smoke/array_contextual_conditional_branch_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "array-contextual-any-array-valid"
+path = "tests/smoke/array_contextual_any_array_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-contextual-unknown-array-policy-pinned"
+path = "tests/smoke/array_contextual_unknown_array_policy_pinned.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-contextual-assignment-unresolved-element-no-cascade"
+path = "tests/smoke/array_contextual_assignment_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "array-contextual-function-argument-unresolved-element-no-cascade"
+path = "tests/smoke/array_contextual_function_argument_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "array-contextual-function-return-unresolved-element-no-cascade"
+path = "tests/smoke/array_contextual_function_return_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "array-contextual-object-property-unresolved-element-no-cascade"
+path = "tests/smoke/array_contextual_object_property_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "array-contextual-conditional-branch-unresolved-no-cascade"
+path = "tests/smoke/array_contextual_conditional_branch_unresolved_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
 name = "array-index-access-string-valid"
 path = "tests/smoke/array_index_access_string_valid.ts"
 expected_diagnostics = []
@@ -2518,6 +2583,141 @@ expected_diagnostics = []
 name = "array-index-access-union-element-valid"
 path = "tests/smoke/array_index_access_union_element_valid.ts"
 expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-literal-element-mismatch"
+path = "tests/smoke/array_index_access_literal_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-union-element-mismatch"
+path = "tests/smoke/array_index_access_union_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-assignment-valid"
+path = "tests/smoke/array_index_access_assignment_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-assignment-mismatch"
+path = "tests/smoke/array_index_access_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-function-return-valid"
+path = "tests/smoke/array_index_access_function_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-function-return-mismatch"
+path = "tests/smoke/array_index_access_function_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-function-argument-valid"
+path = "tests/smoke/array_index_access_function_argument_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-function-argument-mismatch"
+path = "tests/smoke/array_index_access_function_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "array-index-access-conditional-valid"
+path = "tests/smoke/array_index_access_conditional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-conditional-mismatch"
+path = "tests/smoke/array_index_access_conditional_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-object-property-value-valid"
+path = "tests/smoke/array_index_access_object_property_value_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-object-property-value-mismatch"
+path = "tests/smoke/array_index_access_object_property_value_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-inferred-variable-valid"
+path = "tests/smoke/array_index_access_inferred_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-inferred-variable-mismatch"
+path = "tests/smoke/array_index_access_inferred_variable_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-inferred-object-literal-value-valid"
+path = "tests/smoke/array_index_access_inferred_object_literal_value_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-inferred-object-literal-value-mismatch"
+path = "tests/smoke/array_index_access_inferred_object_literal_value_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-inferred-conditional-valid"
+path = "tests/smoke/array_index_access_inferred_conditional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-inferred-conditional-mismatch"
+path = "tests/smoke/array_index_access_inferred_conditional_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-inferred-any-receiver-valid"
+path = "tests/smoke/array_index_access_inferred_any_receiver_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-inferred-unknown-receiver-no-cascade"
+path = "tests/smoke/array_index_access_inferred_unknown_receiver_no_cascade.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-any-receiver-assignment-valid"
+path = "tests/smoke/array_index_access_any_receiver_assignment_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-any-receiver-index-not-checked"
+path = "tests/smoke/array_index_access_any_receiver_index_not_checked.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-unknown-receiver-assignment-no-cascade"
+path = "tests/smoke/array_index_access_unknown_receiver_assignment_no_cascade.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-index-access-non-array-receiver-no-cascade"
+path = "tests/smoke/array_index_access_non_array_receiver_no_cascade.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "array-index-access-missing-property-receiver-no-cascade"
+path = "tests/smoke/array_index_access_missing_property_receiver_no_cascade.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "array-index-access-string-index-mismatch-no-root-cascade"
+path = "tests/smoke/array_index_access_string_index_mismatch_no_root_cascade.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-index-access-boolean-index-mismatch-no-root-cascade"
+path = "tests/smoke/array_index_access_boolean_index_mismatch_no_root_cascade.ts"
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "array-index-access-unresolved-object-no-cascade"
@@ -2555,6 +2755,16 @@ path = "tests/smoke/array_type_alias_element_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "array-type-alias-nested-array-valid"
+path = "tests/smoke/array_type_alias_nested_array_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-type-alias-unknown-element-no-cascade"
+path = "tests/smoke/array_type_alias_unknown_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
 name = "array-interface-property-valid"
 path = "tests/smoke/array_interface_property_valid.ts"
 expected_diagnostics = []
@@ -2565,6 +2775,11 @@ path = "tests/smoke/array_interface_property_element_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "array-interface-property-unknown-element-no-cascade"
+path = "tests/smoke/array_interface_property_unknown_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
 name = "array-object-type-property-valid"
 path = "tests/smoke/array_object_type_property_valid.ts"
 expected_diagnostics = []
@@ -2573,6 +2788,11 @@ expected_diagnostics = []
 name = "array-object-type-property-element-mismatch"
 path = "tests/smoke/array_object_type_property_element_mismatch.ts"
 expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-object-type-property-unknown-element-no-cascade"
+path = "tests/smoke/array_object_type_property_unknown_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
 
 [[case]]
 name = "array-function-parameter-valid"
@@ -2625,6 +2845,16 @@ path = "tests/smoke/array_function_type_index_access_assignment_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "array-function-type-index-access-inferred-valid"
+path = "tests/smoke/array_function_type_index_access_inferred_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-function-type-index-access-inferred-mismatch"
+path = "tests/smoke/array_function_type_index_access_inferred_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
 name = "array-interface-function-array-property-valid"
 path = "tests/smoke/array_interface_function_array_property_valid.ts"
 expected_diagnostics = []
@@ -2665,6 +2895,601 @@ path = "tests/smoke/array_union_with_undefined_element_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "tuple-contextual-variable-valid"
+path = "tests/smoke/tuple_contextual_variable_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-contextual-variable-too-few"
+path = "tests/smoke/tuple_contextual_variable_too_few.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-variable-too-many"
+path = "tests/smoke/tuple_contextual_variable_too_many.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-variable-element-mismatch"
+path = "tests/smoke/tuple_contextual_variable_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-variable-unresolved-element-no-cascade"
+path = "tests/smoke/tuple_contextual_variable_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-contextual-function-argument-valid"
+path = "tests/smoke/tuple_contextual_function_argument_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-contextual-assignment-valid"
+path = "tests/smoke/tuple_contextual_assignment_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-contextual-assignment-element-mismatch"
+path = "tests/smoke/tuple_contextual_assignment_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-assignment-length-mismatch"
+path = "tests/smoke/tuple_contextual_assignment_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-assignment-unresolved-element-no-cascade"
+path = "tests/smoke/tuple_contextual_assignment_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-length-too-few-variable-single-diagnostic"
+path = "tests/smoke/tuple_length_too_few_variable_single_diagnostic.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-length-too-many-variable-single-diagnostic"
+path = "tests/smoke/tuple_length_too_many_variable_single_diagnostic.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-length-too-few-argument-single-diagnostic"
+path = "tests/smoke/tuple_length_too_few_argument_single_diagnostic.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-length-too-many-argument-single-diagnostic"
+path = "tests/smoke/tuple_length_too_many_argument_single_diagnostic.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-length-too-few-return-single-diagnostic"
+path = "tests/smoke/tuple_length_too_few_return_single_diagnostic.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-length-too-many-return-single-diagnostic"
+path = "tests/smoke/tuple_length_too_many_return_single_diagnostic.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-length-mismatch-does-not-check-extra-unresolved-element"
+path = "tests/smoke/tuple_length_mismatch_does_not_check_extra_unresolved_element.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-function-argument-length-mismatch"
+path = "tests/smoke/tuple_contextual_function_argument_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-function-return-length-mismatch"
+path = "tests/smoke/tuple_contextual_function_return_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-object-property-length-mismatch"
+path = "tests/smoke/tuple_contextual_object_property_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-conditional-branch-length-mismatch"
+path = "tests/smoke/tuple_contextual_conditional_branch_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-conditional-branch-valid"
+path = "tests/smoke/tuple_contextual_conditional_branch_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-contextual-conditional-branch-mismatch"
+path = "tests/smoke/tuple_contextual_conditional_branch_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-conditional-branch-unresolved-no-cascade"
+path = "tests/smoke/tuple_contextual_conditional_branch_unresolved_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-index-access-second-valid"
+path = "tests/smoke/tuple_index_access_second_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-second-mismatch"
+path = "tests/smoke/tuple_index_access_second_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-literal-element-valid"
+path = "tests/smoke/tuple_index_access_literal_element_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-literal-element-mismatch"
+path = "tests/smoke/tuple_index_access_literal_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-union-element-valid"
+path = "tests/smoke/tuple_index_access_union_element_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-union-element-mismatch"
+path = "tests/smoke/tuple_index_access_union_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-function-element-valid"
+path = "tests/smoke/tuple_index_access_function_element_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-function-element-mismatch"
+path = "tests/smoke/tuple_index_access_function_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-non-literal-number-returns-union-mismatch"
+path = "tests/smoke/tuple_index_access_non_literal_number_returns_union_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-out-of-range-no-root-cascade"
+path = "tests/smoke/tuple_index_access_out_of_range_no_root_cascade.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "tuple-index-access-string-index-mismatch-no-root-cascade"
+path = "tests/smoke/tuple_index_access_string_index_mismatch_no_root_cascade.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-boolean-index-mismatch-no-root-cascade"
+path = "tests/smoke/tuple_index_access_boolean_index_mismatch_no_root_cascade.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-any-receiver-index-not-checked"
+path = "tests/smoke/tuple_index_access_any_receiver_index_not_checked.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-any-receiver-valid"
+path = "tests/smoke/tuple_index_access_any_receiver_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-unknown-receiver-no-cascade"
+path = "tests/smoke/tuple_index_access_unknown_receiver_no_cascade.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-inferred-variable-second-valid"
+path = "tests/smoke/tuple_index_access_inferred_variable_second_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-inferred-variable-second-mismatch"
+path = "tests/smoke/tuple_index_access_inferred_variable_second_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-inferred-variable-union-valid"
+path = "tests/smoke/tuple_index_access_inferred_variable_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-inferred-variable-union-mismatch"
+path = "tests/smoke/tuple_index_access_inferred_variable_union_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-inferred-object-literal-value-valid"
+path = "tests/smoke/tuple_index_access_inferred_object_literal_value_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-inferred-object-literal-value-mismatch"
+path = "tests/smoke/tuple_index_access_inferred_object_literal_value_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-inferred-conditional-valid"
+path = "tests/smoke/tuple_index_access_inferred_conditional_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-inferred-conditional-mismatch"
+path = "tests/smoke/tuple_index_access_inferred_conditional_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-inferred-any-receiver-valid"
+path = "tests/smoke/tuple_index_access_inferred_any_receiver_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-inferred-unknown-receiver-no-cascade"
+path = "tests/smoke/tuple_index_access_inferred_unknown_receiver_no_cascade.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-conditional-same-tuple-type-valid"
+path = "tests/smoke/tuple_conditional_same_tuple_type_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-conditional-different-tuple-types-union-valid"
+path = "tests/smoke/tuple_conditional_different_tuple_types_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-conditional-expected-tuple-length-mismatch"
+path = "tests/smoke/tuple_conditional_expected_tuple_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-conditional-index-access-valid"
+path = "tests/smoke/tuple_conditional_index_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-conditional-index-access-mismatch"
+path = "tests/smoke/tuple_conditional_index_access_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-conditional-inferred-index-access-valid"
+path = "tests/smoke/tuple_conditional_inferred_index_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-conditional-inferred-index-access-mismatch"
+path = "tests/smoke/tuple_conditional_inferred_index_access_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-type-alias-length-mismatch"
+path = "tests/smoke/tuple_type_alias_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-interface-property-length-mismatch"
+path = "tests/smoke/tuple_interface_property_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-object-type-property-length-mismatch"
+path = "tests/smoke/tuple_object_type_property_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-function-parameter-length-mismatch"
+path = "tests/smoke/tuple_function_parameter_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-function-return-length-mismatch"
+path = "tests/smoke/tuple_function_return_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-array-of-tuples-length-mismatch"
+path = "tests/smoke/tuple_array_of_tuples_length_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-array-element-index-access-valid"
+path = "tests/smoke/tuple_array_element_index_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-tuple-with-function-array-element-valid"
+path = "tests/smoke/tuple_tuple_with_function_array_element_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-array-of-tuples-no-nested-index-call-or-access"
+path = "tests/smoke/tuple_array_of_tuples_no_nested_index_call_or_access.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-function-type-element-return-mismatch"
+path = "tests/smoke/tuple_function_type_element_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-function-type-index-access-valid"
+path = "tests/smoke/tuple_function_type_index_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-function-type-index-access-assignment-mismatch"
+path = "tests/smoke/tuple_function_type_index_access_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-function-type-index-access-inferred-valid"
+path = "tests/smoke/tuple_function_type_index_access_inferred_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-function-type-index-access-inferred-mismatch"
+path = "tests/smoke/tuple_function_type_index_access_inferred_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-interface-function-tuple-property-valid"
+path = "tests/smoke/tuple_interface_function_tuple_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-interface-function-tuple-property-element-mismatch"
+path = "tests/smoke/tuple_interface_function_tuple_property_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-literal-union-index-access-valid"
+path = "tests/smoke/tuple_literal_union_index_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-literal-union-index-access-mismatch"
+path = "tests/smoke/tuple_literal_union_index_access_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-tuple-or-undefined-valid"
+path = "tests/smoke/tuple_tuple_or_undefined_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-tuple-or-undefined-mismatch"
+path = "tests/smoke/tuple_tuple_or_undefined_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-no-cascade-length-mismatch-no-element-cascade"
+path = "tests/smoke/tuple_no_cascade_length_mismatch_no_element_cascade.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-no-cascade-element-mismatch-no-root-cascade"
+path = "tests/smoke/tuple_no_cascade_element_mismatch_no_root_cascade.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-flow-element-use-before-declaration"
+path = "tests/smoke/tuple_flow_element_use_before_declaration.ts"
+expected_diagnostics = ["TS2448"]
+
+[[case]]
+name = "tuple-flow-index-receiver-use-before-declaration"
+path = "tests/smoke/tuple_flow_index_receiver_use_before_declaration.ts"
+expected_diagnostics = ["TS2448"]
+
+[[case]]
+name = "tuple-flow-index-expression-use-before-declaration"
+path = "tests/smoke/tuple_flow_index_expression_use_before_declaration.ts"
+expected_diagnostics = ["TS2448"]
+
+[[case]]
+name = "tuple-flow-nested-tuple-element-use-before-declaration"
+path = "tests/smoke/tuple_flow_nested_tuple_element_use_before_declaration.ts"
+expected_diagnostics = ["TS2448"]
+
+[[case]]
+name = "tuple-contextual-function-argument-element-mismatch"
+path = "tests/smoke/tuple_contextual_function_argument_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-function-argument-unresolved-element-no-cascade"
+path = "tests/smoke/tuple_contextual_function_argument_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-contextual-function-return-valid"
+path = "tests/smoke/tuple_contextual_function_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-contextual-function-return-element-mismatch"
+path = "tests/smoke/tuple_contextual_function_return_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-function-return-unresolved-element-no-cascade"
+path = "tests/smoke/tuple_contextual_function_return_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-contextual-object-property-valid"
+path = "tests/smoke/tuple_contextual_object_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-contextual-object-property-element-mismatch"
+path = "tests/smoke/tuple_contextual_object_property_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-object-property-unresolved-element-no-cascade"
+path = "tests/smoke/tuple_contextual_object_property_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-bare-array-literal-still-infers-array"
+path = "tests/smoke/tuple_bare_array_literal_still_infers_array.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-bare-array-literal-not-assignable-to-tuple-without-annotation"
+path = "tests/smoke/tuple_bare_array_literal_not_assignable_to_tuple_without_annotation.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-contextual-array-literal-gets-tuple-type"
+path = "tests/smoke/tuple_contextual_array_literal_gets_tuple_type.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-first-valid"
+path = "tests/smoke/tuple_index_access_first_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-first-mismatch"
+path = "tests/smoke/tuple_index_access_first_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-index-access-non-literal-number-returns-union-valid"
+path = "tests/smoke/tuple_index_access_non_literal_number_returns_union_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-index-access-out-of-range"
+path = "tests/smoke/tuple_index_access_out_of_range.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "tuple-index-access-unresolved-index-no-cascade"
+path = "tests/smoke/tuple_index_access_unresolved_index_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-index-access-unresolved-receiver-no-cascade"
+path = "tests/smoke/tuple_index_access_unresolved_receiver_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-index-access-non-tuple-non-array-receiver"
+path = "tests/smoke/tuple_index_access_non_tuple_non_array_receiver.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "tuple-type-alias-valid"
+path = "tests/smoke/tuple_type_alias_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-type-alias-element-mismatch"
+path = "tests/smoke/tuple_type_alias_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-type-alias-unknown-element-no-cascade"
+path = "tests/smoke/tuple_type_alias_unknown_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-interface-property-valid"
+path = "tests/smoke/tuple_interface_property_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-interface-property-element-mismatch"
+path = "tests/smoke/tuple_interface_property_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-interface-property-unknown-element-no-cascade"
+path = "tests/smoke/tuple_interface_property_unknown_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-array-of-tuples-valid"
+path = "tests/smoke/tuple_array_of_tuples_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-array-of-tuples-element-mismatch"
+path = "tests/smoke/tuple_array_of_tuples_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-tuple-with-array-element-valid"
+path = "tests/smoke/tuple_tuple_with_array_element_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-function-type-element-valid"
+path = "tests/smoke/tuple_function_type_element_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-function-type-element-parameter-mismatch"
+path = "tests/smoke/tuple_function_type_element_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-literal-element-type-valid"
+path = "tests/smoke/tuple_literal_element_type_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-literal-element-type-mismatch"
+path = "tests/smoke/tuple_literal_element_type_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-union-element-type-valid"
+path = "tests/smoke/tuple_union_element_type_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-union-element-type-mismatch"
+path = "tests/smoke/tuple_union_element_type_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-conditional-expected-tuple-valid"
+path = "tests/smoke/tuple_conditional_expected_tuple_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-conditional-expected-tuple-element-mismatch"
+path = "tests/smoke/tuple_conditional_expected_tuple_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-conditional-unresolved-element-no-cascade"
+path = "tests/smoke/tuple_conditional_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "tuple-flow-valid-after-assignment"
+path = "tests/smoke/tuple_flow_valid_after_assignment.ts"
+expected_diagnostics = []
+
+[[case]]
 name = "array-array-or-undefined-valid"
 path = "tests/smoke/array_array_or_undefined_valid.ts"
 expected_diagnostics = []
@@ -2692,6 +3517,31 @@ expected_diagnostics = []
 [[case]]
 name = "array-conditional-expected-array-element-mismatch"
 path = "tests/smoke/array_conditional_expected_array_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-conditional-unresolved-element-no-cascade"
+path = "tests/smoke/array_conditional_unresolved_element_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "array-conditional-index-access-valid"
+path = "tests/smoke/array_conditional_index_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-conditional-index-access-mismatch"
+path = "tests/smoke/array_conditional_index_access_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-conditional-inferred-index-access-valid"
+path = "tests/smoke/array_conditional_inferred_index_access_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-conditional-inferred-index-access-mismatch"
+path = "tests/smoke/array_conditional_inferred_index_access_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
@@ -2758,6 +3608,21 @@ expected_diagnostics = ["TS2448"]
 name = "array-flow-valid-after-assignment"
 path = "tests/smoke/array_flow_valid_after_assignment.ts"
 expected_diagnostics = []
+
+[[case]]
+name = "array-flow-index-receiver-declared-unassigned"
+path = "tests/smoke/array_flow_index_receiver_declared_unassigned.ts"
+expected_diagnostics = ["TS2454"]
+
+[[case]]
+name = "array-flow-index-expression-declared-unassigned"
+path = "tests/smoke/array_flow_index_expression_declared_unassigned.ts"
+expected_diagnostics = ["TS2454"]
+
+[[case]]
+name = "array-flow-nested-array-element-use-before-declaration"
+path = "tests/smoke/array_flow_nested_array_element_use_before_declaration.ts"
+expected_diagnostics = ["TS2448"]
 
 [[case]]
 name = "type-alias-duplicate-same-name-as-value-allowed"
@@ -4373,4 +5238,44 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "function-type-unresolved-conditional-no-cascade"
 path = "tests/smoke/function_type_unresolved_conditional_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-import-named-unresolved-type"
+path = "tests/smoke/module_import_named_unresolved_type.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-import-type-named-unresolved-type"
+path = "tests/smoke/module_import_type_named_unresolved_type.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "module-import-side-effect-valid"
+path = "tests/smoke/module_import_side_effect_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-export-interface-same-file-valid"
+path = "tests/smoke/module_export_interface_same_file_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-export-type-alias-same-file-valid"
+path = "tests/smoke/module_export_type_alias_same_file_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-export-function-same-file-valid"
+path = "tests/smoke/module_export_function_same_file_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-export-empty-valid"
+path = "tests/smoke/module_export_empty_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "module-imported-type-no-cascade"
+path = "tests/smoke/module_imported_type_no_cascade.ts"
 expected_diagnostics = ["TS2304"]

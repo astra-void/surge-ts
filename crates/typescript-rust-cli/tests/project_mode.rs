@@ -200,3 +200,330 @@ fn project_mode_package_extends_reports_ts7006_and_show_config_defaults() {
         Value::Bool(true)
     );
 }
+
+#[test]
+fn project_mode_cross_file_interface_valid() {
+    let root = temp_dir("project-cross-file-interface-valid");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "interface User { name: string; }");
+    write_file(&root, "src/b.ts", "let user: User = { name: \"Ada\" };");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.trim().is_empty());
+}
+
+#[test]
+fn project_mode_cross_file_interface_mismatch() {
+    let root = temp_dir("project-cross-file-interface-mismatch");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "interface User { name: string; }");
+    write_file(&root, "src/b.ts", "let user: User = { name: 123 };");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("src/b.ts"));
+    assert!(stdout.contains("TS2322"));
+    assert!(!stdout.contains("src/a.ts\nerror[TS2322]"));
+}
+
+#[test]
+fn project_mode_cross_file_type_alias_valid() {
+    let root = temp_dir("project-cross-file-type-alias-valid");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "type Name = string;");
+    write_file(&root, "src/b.ts", "let value: Name = \"Ada\";");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.trim().is_empty());
+}
+
+#[test]
+fn project_mode_uses_program_checker_for_cross_file_type_alias() {
+    let root = temp_dir("project-cross-file-type-alias-mismatch");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "type Name = string;");
+    write_file(&root, "src/b.ts", "let value: Name = 123;");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("src/b.ts"));
+    assert!(stdout.contains("TS2322"));
+    assert!(!stdout.contains("src/a.ts\nerror[TS2322]"));
+}
+
+#[test]
+fn project_mode_cross_file_function_valid() {
+    let root = temp_dir("project-cross-file-function-valid");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/a.ts",
+        "function getName(): string { return \"Ada\"; }",
+    );
+    write_file(&root, "src/b.ts", "let value: string = getName();");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.trim().is_empty());
+}
+
+#[test]
+fn project_mode_uses_program_checker_for_cross_file_function() {
+    let root = temp_dir("project-cross-file-function-mismatch");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/a.ts",
+        "function getName(): string { return \"Ada\"; }",
+    );
+    write_file(&root, "src/b.ts", "let value: number = getName();");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("src/b.ts"));
+    assert!(stdout.contains("TS2322"));
+    assert!(!stdout.contains("src/a.ts\nerror[TS2322]"));
+}
+
+#[test]
+fn project_mode_cross_file_function_return_mismatch() {
+    let root = temp_dir("project-cross-file-function-return-mismatch");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/a.ts",
+        "function getName(): string { return \"Ada\"; }",
+    );
+    write_file(&root, "src/b.ts", "let value: number = getName();");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("src/b.ts"));
+    assert!(stdout.contains("TS2322"));
+    assert!(!stdout.contains("src/a.ts\nerror[TS2322]"));
+}
+
+#[test]
+fn project_mode_diagnostics_grouped_by_file() {
+    let root = temp_dir("project-diagnostics-grouped");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "let a: number = \"x\";");
+    write_file(&root, "src/b.ts", "let b: number = \"y\";");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    let a_index = stdout.find("src/a.ts").expect("expected a.ts block");
+    let b_index = stdout.find("src/b.ts").expect("expected b.ts block");
+    assert!(a_index < b_index);
+}
+
+#[test]
+fn project_mode_top_level_variable_not_shared_policy() {
+    let root = temp_dir("project-top-level-variable-policy");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "let name = \"Ada\";");
+    write_file(&root, "src/b.ts", "let value: string = name;");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("src/b.ts"));
+    assert!(stdout.contains("TS2304"));
+}
+
+#[test]
+fn project_mode_parser_diagnostic_grouped_by_file() {
+    let root = temp_dir("project-parser-diagnostic-grouped");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "let value: string | = \"bad\";");
+    write_file(&root, "src/b.ts", "let ok: string = \"ok\";");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("src/a.ts"));
+    assert!(!stdout.contains("src/b.ts\nerror[typescript-rust::parser-error]"));
+}
+
+#[test]
+fn project_mode_single_file_position_arg_still_works() {
+    let root = temp_dir("project-single-file-position");
+    let file = root.join("index.ts");
+    fs::write(&file, "let value: string = 123;").unwrap();
+
+    let file = file.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&[file.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("TS2322"));
+}
+
+#[test]
+fn project_mode_exported_interface_not_global_yet() {
+    let root = temp_dir("project-exported-interface-not-global");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "export interface User { name: string; }");
+    write_file(&root, "src/b.ts", "let user: User = { name: \"Ada\" };");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("src/b.ts"));
+    assert!(stdout.contains("TS2304"));
+}
+
+#[test]
+fn project_mode_import_named_unresolved_until_resolution_phase() {
+    let root = temp_dir("project-import-named-unresolved");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/a.ts",
+        "import { User } from \"./user\";\nlet user: User = { name: \"Ada\" };",
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("src/a.ts"));
+    assert!(stdout.contains("TS2304"));
+}
+
+#[test]
+fn project_mode_import_side_effect_valid() {
+    let root = temp_dir("project-import-side-effect-valid");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/a.ts",
+        "import \"./setup\";\nlet value: string = \"ok\";",
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.trim().is_empty());
+}
+
+#[test]
+fn project_mode_empty_export_marks_module_current_policy() {
+    let root = temp_dir("project-empty-export-module");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "export {};\nlet value: string = \"ok\";");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.trim().is_empty());
+}
+
+#[test]
+fn project_mode_single_file_positional_export_valid() {
+    let root = temp_dir("project-single-file-export-valid");
+    let file = root.join("index.ts");
+    fs::write(
+        &file,
+        "export interface User { name: string; }\nlet user: User = { name: \"Ada\" };",
+    )
+    .unwrap();
+
+    let file = file.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&[file.as_str()]);
+
+    assert!(stderr.is_empty());
+    assert!(stdout.trim().is_empty());
+}

@@ -4,7 +4,9 @@ use typescript_rust_syntax::{
     ParsedArrayElement, ParsedBinaryOperator, ParsedExpression, ParsedObjectProperty,
     ParsedUnaryOperator, TextSpan,
 };
-use typescript_rust_types::{NumberLiteralType, ObjectProperty, ObjectType, Type, union_type};
+use typescript_rust_types::{
+    NumberLiteralType, ObjectProperty, ObjectType, Type, is_assignable_to, union_type,
+};
 
 use crate::symbols::SymbolTable;
 
@@ -68,7 +70,12 @@ pub(crate) fn infer_expression(
             property_span,
             symbols,
         ),
-        ParsedExpression::IndexAccess { .. } => InferredExpression::Unknown,
+        ParsedExpression::IndexAccess {
+            object_name,
+            object_span,
+            index,
+            index_span,
+        } => infer_index_access(object_name, object_span, index, index_span, symbols),
         ParsedExpression::Call { callee_name, .. } => match symbols.get(callee_name) {
             Some(symbol) => match &symbol.ty {
                 Type::Function(function_type) => {
@@ -130,6 +137,7 @@ fn infer_unary_expression(
             | InferredExpression::Known(Type::BooleanLiteral(_))
             | InferredExpression::Known(Type::Object(_))
             | InferredExpression::Known(Type::Array(_))
+            | InferredExpression::Known(Type::Tuple(_))
             | InferredExpression::Known(Type::Function(_))
             | InferredExpression::Known(Type::Union(_)) => InferredExpression::Unknown,
         },
@@ -176,6 +184,95 @@ fn infer_array_literal(
     }
 
     InferredExpression::Known(Type::Array(Box::new(union_type(element_types))))
+}
+
+fn infer_index_access(
+    object_name: &str,
+    object_span: &Option<TextSpan>,
+    index: &ParsedExpression,
+    index_span: &Option<TextSpan>,
+    symbols: &SymbolTable,
+) -> InferredExpression {
+    let Some(symbol) = symbols.get(object_name) else {
+        return InferredExpression::UnresolvedIdentifier {
+            name: object_name.to_string(),
+            span: *object_span,
+        };
+    };
+
+    match &symbol.ty {
+        Type::Any => InferredExpression::Known(Type::Any),
+        Type::Unknown => InferredExpression::Unknown,
+        Type::Tuple(elements) => infer_tuple_index_access(elements, index, index_span, symbols),
+        Type::Array(element_type) => {
+            let element_type = element_type.as_ref();
+            if matches!(element_type, Type::Unknown) {
+                return InferredExpression::Unknown;
+            }
+
+            let index_type = match infer_expression(index, symbols) {
+                InferredExpression::Known(ty) => ty,
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. }
+                | InferredExpression::Unknown => return InferredExpression::Unknown,
+            };
+
+            if !is_assignable_to(&index_type, &Type::Number) {
+                let _ = index_span;
+                return InferredExpression::Unknown;
+            }
+
+            InferredExpression::Known(element_type.clone())
+        }
+        Type::Object(_)
+        | Type::Function(_)
+        | Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::Void
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Undefined
+        | Type::Union(_) => InferredExpression::Unknown,
+    }
+}
+
+fn infer_tuple_index_access(
+    elements: &[Type],
+    index: &ParsedExpression,
+    index_span: &Option<TextSpan>,
+    symbols: &SymbolTable,
+) -> InferredExpression {
+    let index_type = match infer_expression(index, symbols) {
+        InferredExpression::Known(ty) => ty,
+        InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. }
+        | InferredExpression::Unknown => return InferredExpression::Unknown,
+    };
+
+    if let Some(index_value) = tuple_index_value(&index_type) {
+        return elements
+            .get(index_value)
+            .cloned()
+            .map(InferredExpression::Known)
+            .unwrap_or(InferredExpression::Unknown);
+    }
+
+    if is_assignable_to(&index_type, &Type::Number) {
+        return InferredExpression::Known(union_type(elements.to_vec()));
+    }
+
+    let _ = index_span;
+    InferredExpression::Unknown
+}
+
+fn tuple_index_value(index_type: &Type) -> Option<usize> {
+    let Type::NumberLiteral(NumberLiteralType { value }) = index_type else {
+        return None;
+    };
+
+    value.parse::<usize>().ok()
 }
 
 fn infer_object_property_value(
@@ -320,6 +417,7 @@ fn infer_property_access(
         Type::Unknown | Type::Any => InferredExpression::Unknown,
         Type::Function(_)
         | Type::Array(_)
+        | Type::Tuple(_)
         | Type::String
         | Type::Number
         | Type::Boolean
@@ -362,6 +460,7 @@ fn infer_property_call(
         },
         Type::Function(_)
         | Type::Array(_)
+        | Type::Tuple(_)
         | Type::String
         | Type::Number
         | Type::Boolean

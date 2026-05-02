@@ -35,6 +35,16 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
             is_function_assignable_to(source, target)
         }
         (Type::Array(source), Type::Array(target)) => is_assignable_to(source, target),
+        (Type::Tuple(source), Type::Tuple(target)) => {
+            source.len() == target.len()
+                && source
+                    .iter()
+                    .zip(target.iter())
+                    .all(|(source_ty, target_ty)| is_assignable_to(source_ty, target_ty))
+        }
+        (Type::Tuple(source), Type::Array(target)) => source
+            .iter()
+            .all(|source_ty| is_assignable_to(source_ty, target)),
         (Type::Union(from_union), Type::Union(to_union)) => {
             from_union.types.iter().all(|from_ty| {
                 to_union
@@ -436,6 +446,22 @@ mod tests {
     }
 
     #[test]
+    fn array_assignable_literal_element_to_base_element() {
+        assert!(is_assignable_to(
+            &Type::Array(Box::new(Type::StringLiteral("ok".to_string()))),
+            &Type::Array(Box::new(Type::String))
+        ));
+    }
+
+    #[test]
+    fn array_not_assignable_base_element_to_literal_element() {
+        assert!(!is_assignable_to(
+            &Type::Array(Box::new(Type::String)),
+            &Type::Array(Box::new(Type::StringLiteral("ok".to_string())))
+        ));
+    }
+
+    #[test]
     fn array_not_assignable_different_element() {
         assert!(!is_assignable_to(
             &Type::Array(Box::new(Type::Number)),
@@ -474,10 +500,7 @@ mod tests {
     #[test]
     fn array_union_assignability_valid() {
         assert!(is_assignable_to(
-            &union_type(vec![
-                Type::Array(Box::new(Type::String)),
-                Type::Array(Box::new(Type::Number))
-            ]),
+            &Type::Array(Box::new(union_type(vec![Type::String, Type::Number]))),
             &Type::Array(Box::new(union_type(vec![Type::String, Type::Number])))
         ));
     }
@@ -486,10 +509,232 @@ mod tests {
     fn array_union_assignability_mismatch() {
         assert!(!is_assignable_to(
             &Type::Array(Box::new(Type::Boolean)),
-            &union_type(vec![
-                Type::Array(Box::new(Type::String)),
-                Type::Array(Box::new(Type::Number))
+            &Type::Array(Box::new(union_type(vec![Type::String, Type::Number])))
+        ));
+    }
+
+    #[test]
+    fn array_function_element_assignability_valid() {
+        assert!(is_assignable_to(
+            &Type::Array(Box::new(Type::Function(FunctionType {
+                parameters: vec![],
+                return_type: Box::new(Type::Void),
+            }))),
+            &Type::Array(Box::new(Type::Function(FunctionType {
+                parameters: vec![],
+                return_type: Box::new(Type::Void),
+            })))
+        ));
+    }
+
+    #[test]
+    fn array_function_element_assignability_mismatch() {
+        assert!(!is_assignable_to(
+            &Type::Array(Box::new(Type::Function(FunctionType {
+                parameters: vec![Type::String],
+                return_type: Box::new(Type::Void),
+            }))),
+            &Type::Array(Box::new(Type::Function(FunctionType {
+                parameters: vec![],
+                return_type: Box::new(Type::Void),
+            })))
+        ));
+    }
+
+    #[test]
+    fn tuple_type_name_empty_if_supported() {
+        assert_eq!(Type::Tuple(vec![]).name(), "[]");
+    }
+
+    #[test]
+    fn tuple_type_name_one_element() {
+        assert_eq!(Type::Tuple(vec![Type::String]).name(), "[string]");
+    }
+
+    #[test]
+    fn tuple_type_name_two_elements() {
+        assert_eq!(
+            Type::Tuple(vec![Type::String, Type::Number]).name(),
+            "[string, number]"
+        );
+    }
+
+    #[test]
+    fn tuple_type_name_literal_element() {
+        assert_eq!(
+            Type::Tuple(vec![Type::StringLiteral("ok".to_string()), Type::Number]).name(),
+            r#"["ok", number]"#
+        );
+    }
+
+    #[test]
+    fn tuple_type_name_union_element() {
+        assert_eq!(
+            Type::Tuple(vec![
+                union_type(vec![Type::String, Type::Number]),
+                Type::Boolean
             ])
+            .name(),
+            "[string | number, boolean]"
+        );
+    }
+
+    #[test]
+    fn tuple_type_name_function_element() {
+        assert_eq!(
+            Type::Tuple(vec![
+                Type::Function(FunctionType {
+                    parameters: vec![],
+                    return_type: Box::new(Type::Void),
+                }),
+                Type::String,
+            ])
+            .name(),
+            "[() => void, string]"
+        );
+    }
+
+    #[test]
+    fn tuple_type_name_object_element() {
+        let mut properties = BTreeMap::new();
+        properties.insert("name".to_string(), ObjectProperty::required(Type::String));
+
+        assert_eq!(
+            Type::Tuple(vec![Type::Object(ObjectType { properties }), Type::Number]).name(),
+            "[{ name: string; }, number]"
+        );
+    }
+
+    #[test]
+    fn tuple_type_name_array_element() {
+        assert_eq!(
+            Type::Tuple(vec![Type::Array(Box::new(Type::String)), Type::Number]).name(),
+            "[string[], number]"
+        );
+    }
+
+    #[test]
+    fn tuple_type_name_nested_tuple() {
+        assert_eq!(
+            Type::Tuple(vec![
+                Type::Tuple(vec![Type::String, Type::Number]),
+                Type::Boolean,
+            ])
+            .name(),
+            "[[string, number], boolean]"
+        );
+    }
+
+    #[test]
+    fn tuple_assignable_same_shape() {
+        assert!(is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::Number]),
+            &Type::Tuple(vec![Type::String, Type::Number])
+        ));
+    }
+
+    #[test]
+    fn tuple_assignable_literal_to_base() {
+        assert!(is_assignable_to(
+            &Type::Tuple(vec![
+                Type::StringLiteral("ok".to_string()),
+                Type::NumberLiteral(NumberLiteralType {
+                    value: "1".to_string(),
+                })
+            ]),
+            &Type::Tuple(vec![Type::String, Type::Number])
+        ));
+    }
+
+    #[test]
+    fn tuple_not_assignable_base_to_literal() {
+        assert!(!is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::Number]),
+            &Type::Tuple(vec![
+                Type::StringLiteral("ok".to_string()),
+                Type::NumberLiteral(NumberLiteralType {
+                    value: "1".to_string(),
+                })
+            ])
+        ));
+    }
+
+    #[test]
+    fn tuple_not_assignable_different_length_too_short() {
+        assert!(!is_assignable_to(
+            &Type::Tuple(vec![Type::String]),
+            &Type::Tuple(vec![Type::String, Type::Number])
+        ));
+    }
+
+    #[test]
+    fn tuple_not_assignable_different_length_too_long() {
+        assert!(!is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::Number]),
+            &Type::Tuple(vec![Type::String])
+        ));
+    }
+
+    #[test]
+    fn tuple_not_assignable_element_mismatch() {
+        assert!(!is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::String]),
+            &Type::Tuple(vec![Type::String, Type::Number])
+        ));
+    }
+
+    #[test]
+    fn tuple_assignable_to_array_when_elements_compatible() {
+        assert!(is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::StringLiteral("ok".to_string())]),
+            &Type::Array(Box::new(Type::String))
+        ));
+    }
+
+    #[test]
+    fn tuple_not_assignable_to_array_when_element_mismatch() {
+        assert!(!is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::Number]),
+            &Type::Array(Box::new(Type::String))
+        ));
+    }
+
+    #[test]
+    fn array_not_assignable_to_tuple() {
+        assert!(!is_assignable_to(
+            &Type::Array(Box::new(Type::String)),
+            &Type::Tuple(vec![Type::String, Type::String])
+        ));
+    }
+
+    #[test]
+    fn tuple_any_assignability() {
+        assert!(is_assignable_to(
+            &Type::Any,
+            &Type::Tuple(vec![Type::String, Type::Number])
+        ));
+        assert!(is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::Number]),
+            &Type::Any
+        ));
+    }
+
+    #[test]
+    fn tuple_union_assignability_valid() {
+        assert!(is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::Number]),
+            &union_type(vec![
+                Type::Tuple(vec![Type::String, Type::Number]),
+                Type::String
+            ])
+        ));
+    }
+
+    #[test]
+    fn tuple_union_assignability_mismatch() {
+        assert!(!is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::Number]),
+            &union_type(vec![Type::Tuple(vec![Type::String, Type::String])])
         ));
     }
 }

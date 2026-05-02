@@ -1,10 +1,13 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
 
 use serde::Deserialize;
-use typescript_rust_checker::{CheckerOptions, check_source, check_source_with_options};
+use typescript_rust_checker::{
+    CheckerOptions, SourceFileInput, check_program, check_source, check_source_with_options,
+};
 use typescript_rust_diagnostics::render_diagnostics;
 
 struct VirtualFile {
@@ -112,21 +115,32 @@ fn active_upstream_cases_emit_expected_codes() {
             ),
         };
 
-        let mut diagnostics = Vec::new();
-        let mut rendered_by_virtual_file = Vec::new();
+        let diagnostics = if case.mode == "virtual_files" {
+            let inputs = virtual_files
+                .iter()
+                .map(|virtual_file| SourceFileInput {
+                    file_name: virtual_file.file_name.clone(),
+                    source_text: virtual_file.source_text.clone(),
+                })
+                .collect();
 
-        for virtual_file in &virtual_files {
-            let file_diagnostics = check_source(&virtual_file.source_text, &virtual_file.file_name);
-            rendered_by_virtual_file.push(format!(
-                "virtual file: {}\n{}",
-                virtual_file.file_name,
-                render_diagnostics(&file_diagnostics, &virtual_file.source_text)
-            ));
-            diagnostics.extend(file_diagnostics);
-        }
+            check_program(inputs)
+        } else {
+            let mut diagnostics = Vec::new();
+
+            for virtual_file in &virtual_files {
+                diagnostics.extend(check_source(
+                    &virtual_file.source_text,
+                    &virtual_file.file_name,
+                ));
+            }
+
+            diagnostics
+        };
+
+        let rendered_diagnostics = render_virtual_file_diagnostics(&virtual_files, &diagnostics);
 
         let actual_codes = diagnostic_codes(&diagnostics);
-        let rendered_diagnostics = rendered_by_virtual_file.join("\n\n");
 
         assert_eq!(
             actual_codes,
@@ -244,6 +258,68 @@ fn diagnostic_codes(diagnostics: &[typescript_rust_diagnostics::Diagnostic]) -> 
         .collect()
 }
 
+fn render_virtual_file_diagnostics(
+    virtual_files: &[VirtualFile],
+    diagnostics: &[typescript_rust_diagnostics::Diagnostic],
+) -> String {
+    let mut sources_by_file = HashMap::new();
+    for virtual_file in virtual_files {
+        sources_by_file.insert(
+            virtual_file.file_name.clone(),
+            virtual_file.source_text.clone(),
+        );
+    }
+
+    let mut diagnostics_by_file: HashMap<String, Vec<typescript_rust_diagnostics::Diagnostic>> =
+        HashMap::new();
+    for diagnostic in diagnostics {
+        diagnostics_by_file
+            .entry(diagnostic.file_name.clone())
+            .or_default()
+            .push(diagnostic.clone());
+    }
+
+    let mut rendered = Vec::new();
+    for virtual_file in virtual_files {
+        let Some(file_diagnostics) = diagnostics_by_file.remove(&virtual_file.file_name) else {
+            continue;
+        };
+
+        if file_diagnostics.is_empty() {
+            continue;
+        }
+
+        let Some(source_text) = sources_by_file.get(&virtual_file.file_name) else {
+            continue;
+        };
+
+        rendered.push(format!(
+            "virtual file: {}\n{}",
+            virtual_file.file_name,
+            render_diagnostics(&file_diagnostics, source_text)
+        ));
+    }
+
+    if !diagnostics_by_file.is_empty() {
+        let mut remaining = diagnostics_by_file.into_iter().collect::<Vec<_>>();
+        remaining.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for (file_name, file_diagnostics) in remaining {
+            if file_diagnostics.is_empty() {
+                continue;
+            }
+
+            rendered.push(format!(
+                "virtual file: {}\n{}",
+                file_name,
+                render_diagnostics(&file_diagnostics, "")
+            ));
+        }
+    }
+
+    rendered.join("\n\n")
+}
+
 fn split_typescript_testdata_virtual_files(source: &str, fallback_name: &str) -> Vec<VirtualFile> {
     const MARKER_PREFIX: &str = "// @filename:";
 
@@ -303,4 +379,80 @@ fn workspace_root() -> PathBuf {
         .join("..")
         .canonicalize()
         .unwrap_or_else(|error| panic!("failed to resolve workspace root: {error}"))
+}
+
+#[test]
+fn program_virtual_files_cross_file_type_reference() {
+    let source = r#"
+// @filename: a.ts
+type Name = string;
+// @filename: b.ts
+let value: Name = "Ada";
+"#;
+    let virtual_files = split_typescript_testdata_virtual_files(source, "fallback.ts");
+    let diagnostics = check_program(
+        virtual_files
+            .iter()
+            .map(|virtual_file| SourceFileInput {
+                file_name: virtual_file.file_name.clone(),
+                source_text: virtual_file.source_text.clone(),
+            })
+            .collect(),
+    );
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(
+        virtual_files
+            .iter()
+            .map(|virtual_file| virtual_file.file_name.clone())
+            .collect::<Vec<_>>(),
+        vec!["a.ts".to_string(), "b.ts".to_string()]
+    );
+}
+
+#[test]
+fn program_virtual_files_diagnostics_preserve_virtual_file_names() {
+    let source = r#"
+// @filename: a.ts
+type Name = string;
+// @filename: b.ts
+let value: Name = 123;
+"#;
+    let virtual_files = split_typescript_testdata_virtual_files(source, "fallback.ts");
+    let diagnostics = check_program(
+        virtual_files
+            .iter()
+            .map(|virtual_file| SourceFileInput {
+                file_name: virtual_file.file_name.clone(),
+                source_text: virtual_file.source_text.clone(),
+            })
+            .collect(),
+    );
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2322"]);
+    assert_eq!(diagnostics[0].file_name, "b.ts");
+}
+
+#[test]
+fn program_virtual_files_order_is_marker_order() {
+    let source = r#"
+// @filename: b.ts
+let b: number = "x";
+// @filename: a.ts
+let a: number = "y";
+"#;
+    let virtual_files = split_typescript_testdata_virtual_files(source, "fallback.ts");
+    let diagnostics = check_program(
+        virtual_files
+            .iter()
+            .map(|virtual_file| SourceFileInput {
+                file_name: virtual_file.file_name.clone(),
+                source_text: virtual_file.source_text.clone(),
+            })
+            .collect(),
+    );
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2322", "TS2322"]);
+    assert_eq!(diagnostics[0].file_name, "b.ts");
+    assert_eq!(diagnostics[1].file_name, "a.ts");
 }

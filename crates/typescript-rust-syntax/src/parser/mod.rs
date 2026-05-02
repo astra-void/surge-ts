@@ -1,53 +1,106 @@
 use oxc_ast::ast::{
-    AssignmentOperator, AssignmentTarget, Declaration, Expression, ExpressionStatement, Statement,
-    VariableDeclaration, VariableDeclarationKind,
+    AssignmentOperator, AssignmentTarget, Declaration, Expression, ExpressionStatement,
+    ModuleDeclaration, Statement, VariableDeclaration, VariableDeclarationKind,
 };
 
-use crate::{ParsedAssignment, ParsedStatement, ParsedVariableDeclaration, ParsedVariableKind};
+use crate::{
+    ParsedAssignment, ParsedExportDeclaration, ParsedStatement, ParsedVariableDeclaration,
+    ParsedVariableKind,
+};
 
 mod entry;
+mod exports;
 mod expressions;
 mod function_types;
 mod functions;
+mod imports;
 mod interfaces;
 mod spans;
 mod types;
 
+use self::exports::parse_export_named_declaration;
 use self::expressions::{
     parse_call_expression, parse_conditional_expression, parse_expression,
     parse_static_member_expression, parse_unary_expression,
 };
 use self::functions::parse_function_declaration;
+use self::imports::{parse_import_declaration, parse_import_equals_declaration};
 use self::interfaces::parse_interface_declaration;
 use self::spans::text_span_from_oxc_span;
 use self::types::{parse_type_alias_declaration, parse_type_annotation};
 pub use entry::parse_source;
 
 fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
+    if let Some(module_declaration) = statement.as_module_declaration() {
+        return parse_module_declaration(module_declaration);
+    }
+
+    if let Some(declaration) = statement.as_declaration() {
+        return parse_declaration(declaration);
+    }
+
     match statement {
         Statement::ExpressionStatement(expression_statement) => {
             parse_expression_statement(expression_statement).map(|statement| vec![statement])
         }
-        _ => {
-            let declaration = statement.as_declaration()?;
+        _ => None,
+    }
+}
 
-            match declaration {
-                Declaration::VariableDeclaration(declaration) => {
-                    Some(parse_variable_declaration(declaration))
-                }
-                Declaration::FunctionDeclaration(function) => parse_function_declaration(function)
-                    .map(|function| vec![ParsedStatement::FunctionDeclaration(function)]),
-                Declaration::TSTypeAliasDeclaration(type_alias) => {
-                    parse_type_alias_declaration(type_alias)
-                        .map(|type_alias| vec![ParsedStatement::TypeAliasDeclaration(type_alias)])
-                }
-                Declaration::TSInterfaceDeclaration(interface) => {
-                    parse_interface_declaration(interface)
-                        .map(|interface| vec![ParsedStatement::InterfaceDeclaration(interface)])
-                }
-                _ => None,
-            }
+fn parse_module_declaration(
+    module_declaration: &ModuleDeclaration<'_>,
+) -> Option<Vec<ParsedStatement>> {
+    match module_declaration {
+        ModuleDeclaration::ImportDeclaration(import) => parse_import_declaration(import)
+            .map(|import| vec![ParsedStatement::ImportDeclaration(import)]),
+        ModuleDeclaration::ExportNamedDeclaration(export) => parse_export_named_declaration(export),
+        ModuleDeclaration::ExportDefaultDeclaration(export) => {
+            Some(vec![ParsedStatement::ExportDeclaration(
+                ParsedExportDeclaration::Unsupported {
+                    span: Some(text_span_from_oxc_span(export.span)),
+                },
+            )])
         }
+        ModuleDeclaration::ExportAllDeclaration(export) => {
+            Some(vec![ParsedStatement::ExportDeclaration(
+                ParsedExportDeclaration::Unsupported {
+                    span: Some(text_span_from_oxc_span(export.span)),
+                },
+            )])
+        }
+        ModuleDeclaration::TSExportAssignment(export) => {
+            Some(vec![ParsedStatement::ExportDeclaration(
+                ParsedExportDeclaration::Unsupported {
+                    span: Some(text_span_from_oxc_span(export.span)),
+                },
+            )])
+        }
+        ModuleDeclaration::TSNamespaceExportDeclaration(export) => {
+            Some(vec![ParsedStatement::ExportDeclaration(
+                ParsedExportDeclaration::Unsupported {
+                    span: Some(text_span_from_oxc_span(export.span)),
+                },
+            )])
+        }
+    }
+}
+
+fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatement>> {
+    match declaration {
+        Declaration::VariableDeclaration(declaration) => {
+            Some(parse_variable_declaration(declaration))
+        }
+        Declaration::FunctionDeclaration(function) => parse_function_declaration(function)
+            .map(|function| vec![ParsedStatement::FunctionDeclaration(function)]),
+        Declaration::TSTypeAliasDeclaration(type_alias) => parse_type_alias_declaration(type_alias)
+            .map(|type_alias| vec![ParsedStatement::TypeAliasDeclaration(type_alias)]),
+        Declaration::TSInterfaceDeclaration(interface) => parse_interface_declaration(interface)
+            .map(|interface| vec![ParsedStatement::InterfaceDeclaration(interface)]),
+        Declaration::TSImportEqualsDeclaration(import_equals) => {
+            parse_import_equals_declaration(import_equals)
+                .map(|import| vec![ParsedStatement::ImportDeclaration(import)])
+        }
+        _ => None,
     }
 }
 
@@ -121,7 +174,10 @@ fn parse_expression_statement(
         Expression::StaticMemberExpression(member_expression) => {
             parse_static_member_expression(member_expression).map(ParsedStatement::Expression)
         }
-        _ => None,
+        _ => {
+            let (expression, _) = parse_expression(&expression_statement.expression);
+            Some(ParsedStatement::Expression(expression))
+        }
     }
 }
 

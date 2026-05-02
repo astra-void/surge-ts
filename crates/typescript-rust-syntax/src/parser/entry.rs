@@ -10,7 +10,7 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
     let parser = Parser::new(&allocator, source_text, source_type);
     let parsed = parser.parse();
 
-    let statements = parsed
+    let statements: Vec<crate::ParsedStatement> = parsed
         .program
         .body
         .iter()
@@ -24,9 +24,19 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
         .map(|error| error.to_string())
         .collect();
 
+    let is_module = parsed.program.source_type.is_module()
+        || statements.iter().any(|statement| {
+            matches!(
+                statement,
+                crate::ParsedStatement::ImportDeclaration(_)
+                    | crate::ParsedStatement::ExportDeclaration(_)
+            )
+        });
+
     ParsedSource {
         file_name: file_name.to_string(),
         statements,
         parser_errors,
+        is_module,
     }
 }

@@ -1,8 +1,10 @@
-use std::{fs, path::PathBuf, process::ExitCode};
+use std::{collections::HashMap, fs, path::PathBuf, process::ExitCode};
 
 use clap::{Error, Parser, error::ErrorKind};
 use serde_json::{Map, Value};
-use typescript_rust_checker::{CheckerOptions, check_source_with_options};
+use typescript_rust_checker::{
+    CheckerOptions, SourceFileInput, check_program_with_options, check_source_with_options,
+};
 use typescript_rust_config::{TsConfigLoadOptions, load_tsconfig};
 use typescript_rust_diagnostics::render_diagnostics;
 
@@ -92,7 +94,10 @@ fn run_project_mode(project: PathBuf, show_config: bool) -> ExitCode {
         no_implicit_any: loaded.compiler_options.no_implicit_any,
     };
 
-    for file_path in loaded.files {
+    let mut inputs = Vec::with_capacity(loaded.files.len());
+    let mut sources = Vec::with_capacity(loaded.files.len());
+
+    for file_path in &loaded.files {
         let source_text = match fs::read_to_string(&file_path) {
             Ok(source_text) => source_text,
             Err(error) => {
@@ -101,17 +106,56 @@ fn run_project_mode(project: PathBuf, show_config: bool) -> ExitCode {
             }
         };
 
-        let diagnostics =
-            check_source_with_options(&source_text, &file_path.to_string_lossy(), checker_options);
-        if diagnostics.is_empty() {
+        let file_name = file_path.to_string_lossy().into_owned();
+        inputs.push(SourceFileInput {
+            file_name: file_name.clone(),
+            source_text: source_text.clone(),
+        });
+        sources.push((file_path.clone(), file_name, source_text));
+    }
+
+    let diagnostics = check_program_with_options(inputs, checker_options);
+    let mut diagnostics_by_file: HashMap<String, Vec<typescript_rust_diagnostics::Diagnostic>> =
+        HashMap::new();
+
+    for diagnostic in diagnostics {
+        diagnostics_by_file
+            .entry(diagnostic.file_name.clone())
+            .or_default()
+            .push(diagnostic);
+    }
+
+    for (file_path, file_name, source_text) in sources {
+        let Some(file_diagnostics) = diagnostics_by_file.remove(&file_name) else {
+            continue;
+        };
+
+        if file_diagnostics.is_empty() {
             continue;
         }
 
         println!(
             "{}\n{}",
             file_path.display(),
-            render_diagnostics(&diagnostics, &source_text)
+            render_diagnostics(&file_diagnostics, &source_text)
         );
+    }
+
+    if !diagnostics_by_file.is_empty() {
+        let mut remaining_diagnostics = diagnostics_by_file.into_iter().collect::<Vec<_>>();
+        remaining_diagnostics.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for (file_name, file_diagnostics) in remaining_diagnostics {
+            if file_diagnostics.is_empty() {
+                continue;
+            }
+
+            println!(
+                "{}\n{}",
+                file_name,
+                render_diagnostics(&file_diagnostics, "")
+            );
+        }
     }
 
     ExitCode::SUCCESS

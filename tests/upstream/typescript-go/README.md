@@ -20,6 +20,8 @@ Rules:
 
 Some upstream TypeScript compiler fixtures use `// @filename:` comments to describe virtual multi-file test cases.
 
-The checker core still does not understand this virtual file format. The compatibility test harness includes a small test-only splitter for these fixtures, so such cases can run in `virtual_files` mode without adding multi-file semantics to the checker itself.
+The compatibility test harness still includes a small test-only splitter for these fixtures. In `virtual_files` mode, the split files are passed to the program checker so shared global-script declarations can be checked across file boundaries.
 
 This is useful for early diagnostic-code compatibility, but it is not full upstream baseline compatibility.
+
+The checker now parses a minimal import/export surface and treats files with import/export syntax as module files, but it still does not resolve modules or imports. Module files remain isolated from the global-script prepass in this phase.

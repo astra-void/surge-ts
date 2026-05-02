@@ -24,6 +24,14 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
   that surface small until extends, members, and merging are intentionally added.
 - Checker inference is split into expression inference and parsed type resolution.
 - Checker symbols are split into value symbols, type declarations, and scope handling.
+- The checker now also has a program-level entry point that precollects global
+  script declarations across multiple files before statement checking begins.
+  It currently models shared global-script type aliases, interfaces, and
+  top-level functions while keeping top-level variables file-local.
+  It now also distinguishes module files from script files, keeping module
+  files isolated from the global-script sharing prepass.
+- Imports and exports now have a parsed syntax surface, but module resolution
+  remains a future checker/config concern rather than a graph-building feature.
 - Future phases should add new modules for interfaces, arrays/tuples, and imports/exports rather than re-expanding monolithic files; literal types are already represented and should be hardened in-place before broader type-system expansion.
 - Config, syntax, and checker logic should stay in their dedicated submodule trees rather than returning to crate-root files.
 
@@ -33,4 +41,5 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - Arrays and tuples: `typescript-rust-syntax`, `typescript-rust-types`, and `typescript-rust-checker`
 - Literal types: `typescript-rust-syntax`, `typescript-rust-types`, and `typescript-rust-checker`
 - Imports and exports: `typescript-rust-syntax`, `typescript-rust-checker`, and `typescript-rust-config`
+- Program checking: `typescript-rust-checker` and CLI project mode
 - New diagnostics: `typescript-rust-diagnostics`

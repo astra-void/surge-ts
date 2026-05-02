@@ -1,6 +1,6 @@
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{ParsedExpression, TextSpan as SyntaxTextSpan};
-use typescript_rust_types::{Type, is_assignable_to};
+use typescript_rust_types::{NumberLiteralType, Type, is_assignable_to, union_type};
 
 use super::call::{check_call_like, check_property_call_like};
 use super::ops;
@@ -138,89 +138,15 @@ pub(crate) fn evaluate_expression(
             object_span,
             index,
             index_span,
-        } => {
-            let Some(symbol) = symbols.get(object_name).cloned() else {
-                let diagnostic = Diagnostic::ts2304(object_name, ctx.file_name.clone());
-                let diagnostic = match object_span.or(fallback_span) {
-                    Some(span) => diagnostic.with_span(convert_span(span)),
-                    None => diagnostic,
-                };
-                ctx.push(diagnostic);
-                return InferredExpression::Unknown;
-            };
-
-            let index_result =
-                evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
-            let index_type = match index_result {
-                InferredExpression::Known(ty) => ty,
-                InferredExpression::UnresolvedIdentifier { .. }
-                | InferredExpression::MissingProperty { .. }
-                | InferredExpression::Unknown => return InferredExpression::Unknown,
-            };
-
-            match symbol.ty {
-                Type::Any => InferredExpression::Known(Type::Any),
-                Type::Unknown => InferredExpression::Unknown,
-                Type::Array(element_type) => {
-                    if !is_assignable_to(&index_type, &Type::Number) {
-                        let index_type_name = index_type.name();
-                        let expected_type_name = Type::Number.name();
-                        let mut diagnostic = Diagnostic::ts2322(
-                            &index_type_name,
-                            &expected_type_name,
-                            ctx.file_name.clone(),
-                        );
-
-                        if let Some(span) = index_span
-                            .as_ref()
-                            .copied()
-                            .or(*object_span)
-                            .or(fallback_span)
-                        {
-                            diagnostic = diagnostic.with_span(convert_span(span));
-                        }
-
-                        ctx.push(diagnostic);
-                        return InferredExpression::Unknown;
-                    }
-
-                    InferredExpression::Known((*element_type).clone())
-                }
-                Type::Object(_) => {
-                    let object_type_name = symbol.ty.name();
-                    let mut diagnostic =
-                        Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone());
-
-                    if let Some(span) = object_span.or(fallback_span) {
-                        diagnostic = diagnostic.with_span(convert_span(span));
-                    }
-
-                    ctx.push(diagnostic);
-                    InferredExpression::Unknown
-                }
-                Type::Function(_)
-                | Type::String
-                | Type::Number
-                | Type::Boolean
-                | Type::Void
-                | Type::StringLiteral(_)
-                | Type::NumberLiteral(_)
-                | Type::BooleanLiteral(_)
-                | Type::Undefined
-                | Type::Union(_) => {
-                    let object_type_name = symbol.ty.name();
-                    let mut diagnostic =
-                        Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone());
-
-                    if let Some(span) = object_span.or(fallback_span) {
-                        diagnostic = diagnostic.with_span(convert_span(span));
-                    }
-
-                    ctx.push(diagnostic);
-                    InferredExpression::Unknown
-                }
-            }
-        }
+        } => evaluate_index_access(
+            object_name,
+            *object_span,
+            index,
+            *index_span,
+            fallback_span,
+            symbols,
+            ctx,
+        ),
         _ => {
             let inferred_expression = infer_expression(expression, symbols);
             report_inferred_expression(inferred_expression.clone(), fallback_span, ctx);
@@ -268,4 +194,143 @@ pub(crate) fn report_inferred_expression(
         }
         InferredExpression::Unknown => {}
     }
+}
+
+fn evaluate_index_access(
+    object_name: &str,
+    object_span: Option<SyntaxTextSpan>,
+    index: &ParsedExpression,
+    index_span: Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let Some(symbol) = symbols.get(object_name).cloned() else {
+        let diagnostic = Diagnostic::ts2304(object_name, ctx.file_name.clone());
+        let diagnostic = match object_span.or(fallback_span) {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+        return InferredExpression::Unknown;
+    };
+
+    match symbol.ty {
+        Type::Any => InferredExpression::Known(Type::Any),
+        Type::Unknown => InferredExpression::Unknown,
+        Type::Tuple(elements) => {
+            let index_result =
+                evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
+            let index_type = match index_result {
+                InferredExpression::Known(ty) => ty,
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. }
+                | InferredExpression::Unknown => return InferredExpression::Unknown,
+            };
+
+            if let Some(index_value) = tuple_index_value(&index_type) {
+                return match elements.get(index_value).cloned() {
+                    Some(element_type) => InferredExpression::Known(element_type),
+                    None => {
+                        let index_type_name = index_type.name();
+                        let object_type_name = Type::Tuple(elements.to_vec()).name();
+                        let mut diagnostic = Diagnostic::ts2339(
+                            &index_type_name,
+                            &object_type_name,
+                            ctx.file_name.clone(),
+                        );
+
+                        if let Some(span) = index_span.or(object_span).or(fallback_span) {
+                            diagnostic = diagnostic.with_span(convert_span(span));
+                        }
+
+                        ctx.push(diagnostic);
+                        InferredExpression::Unknown
+                    }
+                };
+            }
+
+            if !is_assignable_to(&index_type, &Type::Number) {
+                let index_type_name = index_type.name();
+                let expected_type_name = Type::Number.name();
+                let mut diagnostic = Diagnostic::ts2322(
+                    &index_type_name,
+                    &expected_type_name,
+                    ctx.file_name.clone(),
+                );
+
+                if let Some(span) = index_span.or(object_span).or(fallback_span) {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+
+                ctx.push(diagnostic);
+                return InferredExpression::Unknown;
+            }
+
+            InferredExpression::Known(union_type(elements.to_vec()))
+        }
+        Type::Array(element_type) => {
+            if matches!(element_type.as_ref(), Type::Unknown) {
+                return InferredExpression::Unknown;
+            }
+
+            let index_result =
+                evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
+            let index_type = match index_result {
+                InferredExpression::Known(ty) => ty,
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. }
+                | InferredExpression::Unknown => return InferredExpression::Unknown,
+            };
+
+            if !is_assignable_to(&index_type, &Type::Number) {
+                let index_type_name = index_type.name();
+                let expected_type_name = Type::Number.name();
+                let mut diagnostic = Diagnostic::ts2322(
+                    &index_type_name,
+                    &expected_type_name,
+                    ctx.file_name.clone(),
+                );
+
+                if let Some(span) = index_span.or(object_span).or(fallback_span) {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+
+                ctx.push(diagnostic);
+                return InferredExpression::Unknown;
+            }
+
+            InferredExpression::Known((*element_type).clone())
+        }
+        Type::Object(_)
+        | Type::Function(_)
+        | Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::Void
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Undefined
+        | Type::Union(_) => {
+            let object_type_name = symbol.ty.name();
+            let mut diagnostic =
+                Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone());
+
+            if let Some(span) = object_span.or(fallback_span) {
+                diagnostic = diagnostic.with_span(convert_span(span));
+            }
+
+            ctx.push(diagnostic);
+            InferredExpression::Unknown
+        }
+    }
+}
+
+fn tuple_index_value(index_type: &Type) -> Option<usize> {
+    let Type::NumberLiteral(NumberLiteralType { value }) = index_type else {
+        return None;
+    };
+
+    value.parse::<usize>().ok()
 }

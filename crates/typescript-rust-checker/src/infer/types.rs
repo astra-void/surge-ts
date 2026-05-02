@@ -84,9 +84,35 @@ fn resolve_parsed_type(
                 had_error: false,
             }
         }
+        ParsedType::Tuple(elements) => resolve_tuple_type(elements, ctx, resolving),
         ParsedType::Union(types) => resolve_union_type(types, ctx, resolving),
         ParsedType::Function(function_type) => resolve_function_type(function_type, ctx, resolving),
         ParsedType::Named(named_type) => resolve_named_type(named_type, ctx, resolving),
+    }
+}
+
+fn resolve_tuple_type(
+    elements: Vec<ParsedType>,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<String>,
+) -> ResolvedType {
+    let mut resolved_elements = Vec::new();
+
+    for element in elements {
+        let resolved_element = resolve_parsed_type(element, ctx, resolving);
+        if resolved_element.had_error {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: true,
+            };
+        }
+
+        resolved_elements.push(resolved_element.ty);
+    }
+
+    ResolvedType {
+        ty: Type::Tuple(resolved_elements),
+        had_error: false,
     }
 }
 
@@ -235,7 +261,9 @@ fn resolve_type_alias(
     }
 
     resolving.push(alias.name.clone());
-    let resolved = resolve_parsed_type(alias.ty, ctx, resolving);
+    let resolved = with_file_name(ctx, &alias.file_name, |ctx| {
+        resolve_parsed_type(alias.ty, ctx, resolving)
+    });
     resolving.pop();
 
     if resolved.had_error {
@@ -262,7 +290,9 @@ fn resolve_interface(
     }
 
     resolving.push(interface.name.clone());
-    let resolved = resolve_interface_members(&interface.members, ctx, resolving);
+    let resolved = with_file_name(ctx, &interface.file_name, |ctx| {
+        resolve_interface_members(&interface.members, ctx, resolving)
+    });
     resolving.pop();
 
     if resolved.had_error {
@@ -340,4 +370,16 @@ fn emit_type_declaration_cycle(name: &str, name_span: Option<TextSpan>, ctx: &mu
     }
 
     ctx.push(diagnostic);
+}
+
+fn with_file_name<R>(
+    ctx: &mut CheckerContext,
+    file_name: &str,
+    f: impl FnOnce(&mut CheckerContext) -> R,
+) -> R {
+    let current_file_name = ctx.file_name.clone();
+    ctx.set_file_name(file_name.to_string());
+    let result = f(ctx);
+    ctx.set_file_name(current_file_name);
+    result
 }

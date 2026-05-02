@@ -1,6 +1,7 @@
 use oxc_ast::ast::{
-    PropertyKey, TSLiteral, TSLiteralType, TSPropertySignature, TSSignature, TSType,
-    TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeReference, TSUnionType,
+    PropertyKey, TSLiteral, TSLiteralType, TSPropertySignature, TSSignature, TSTupleElement,
+    TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeReference,
+    TSUnionType,
 };
 use oxc_span::GetSpan;
 
@@ -32,6 +33,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSArrayType(array_type) => {
             parse_type(&array_type.element_type).map(|ty| ParsedType::Array(Box::new(ty)))
         }
+        TSType::TSTupleType(tuple_type) => parse_tuple_type(tuple_type),
         TSType::TSFunctionType(function_type) => {
             parse_function_type(function_type).map(ParsedType::Function)
         }
@@ -88,6 +90,27 @@ fn parse_union_type(union_type: &TSUnionType<'_>) -> ParsedType {
     }
 
     ParsedType::Union(types)
+}
+
+fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
+    let mut elements = Vec::new();
+
+    for element in &tuple_type.element_types {
+        match element {
+            TSTupleElement::TSNamedTupleMember(_)
+            | TSTupleElement::TSOptionalType(_)
+            | TSTupleElement::TSRestType(_) => return None,
+            _ => {
+                let Some(parsed_element) = parse_type(element.as_ts_type()?) else {
+                    return None;
+                };
+
+                elements.push(parsed_element);
+            }
+        }
+    }
+
+    Some(ParsedType::Tuple(elements))
 }
 
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {

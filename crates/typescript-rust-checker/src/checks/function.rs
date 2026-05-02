@@ -1,8 +1,8 @@
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedAssignment, ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
-    ParsedIfStatement, ParsedReturnStatement, ParsedVariableDeclaration, ParsedVariableKind,
-    ParsedWhileStatement,
+    ParsedFunctionParameter, ParsedIfStatement, ParsedReturnStatement, ParsedType,
+    ParsedVariableDeclaration, ParsedVariableKind, ParsedWhileStatement,
 };
 use typescript_rust_types::{FunctionType, Type, is_assignable_to};
 
@@ -21,19 +21,11 @@ use crate::flow::{
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
-pub(crate) fn check_function_declaration(
-    function: ParsedFunctionDeclaration,
+fn map_function_signature(
+    parameters: &[ParsedFunctionParameter],
+    return_type: Option<&ParsedType>,
     ctx: &mut CheckerContext,
-) {
-    let ParsedFunctionDeclaration {
-        name,
-        name_span,
-        parameters,
-        return_type,
-        body,
-        ..
-    } = function;
-
+) -> FunctionType {
     let parameter_types = parameters
         .iter()
         .map(|parameter| {
@@ -47,12 +39,11 @@ pub(crate) fn check_function_declaration(
         .collect::<Vec<_>>();
 
     let function_return_type = return_type
-        .as_ref()
         .map(|return_type| map_parsed_type(return_type.clone(), ctx))
         .unwrap_or(Type::Unknown);
 
     if ctx.options.no_implicit_any {
-        for parameter in &parameters {
+        for parameter in parameters {
             if parameter.declared_type.is_none() {
                 let diagnostic = Diagnostic::ts7006(&parameter.name, ctx.file_name.clone());
                 let diagnostic = match parameter.name_span {
@@ -65,37 +56,64 @@ pub(crate) fn check_function_declaration(
         }
     }
 
-    if matches!(
-        ctx.symbols.get(&name),
-        Some(existing) if matches!(existing.kind, SymbolKind::Function)
-    ) {
-        let diagnostic = Diagnostic::ts2393(ctx.file_name.clone());
-        let diagnostic = match name_span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-
-        ctx.push(diagnostic);
+    FunctionType {
+        parameters: parameter_types,
+        return_type: Box::new(function_return_type),
     }
+}
 
-    ctx.symbols.insert(
-        name,
-        SymbolInfo {
-            ty: Type::Function(FunctionType {
-                parameters: parameter_types.clone(),
-                return_type: Box::new(function_return_type.clone()),
-            }),
-            kind: SymbolKind::Function,
-        },
+fn register_function_signature(
+    name: String,
+    function_type: FunctionType,
+    symbols: &mut SymbolTable,
+    replace_existing: bool,
+) -> bool {
+    let duplicate = matches!(
+        symbols.get(&name),
+        Some(existing) if matches!(existing.kind, SymbolKind::Function)
     );
 
+    if duplicate && !replace_existing {
+        return true;
+    }
+
+    if !duplicate || replace_existing {
+        symbols.insert(
+            name,
+            SymbolInfo {
+                ty: Type::Function(function_type),
+                kind: SymbolKind::Function,
+            },
+        );
+    }
+
+    duplicate
+}
+
+fn check_function_body_with_signature(
+    name: String,
+    parameters: Vec<ParsedFunctionParameter>,
+    body: Vec<ParsedFunctionBodyStatement>,
+    function_type: &FunctionType,
+    ctx: &mut CheckerContext,
+) {
     let body_flow = analyze_function_body_flow(&body);
 
     let mut scopes = ScopeStack::from_root(ctx.symbols.clone());
+    scopes.insert_current(
+        name,
+        SymbolInfo {
+            ty: Type::Function(function_type.clone()),
+            kind: SymbolKind::Function,
+        },
+    );
     scopes.push_child();
     let mut flow_state = FunctionFlowState::new();
 
-    for (parameter, parameter_type) in parameters.into_iter().zip(parameter_types.into_iter()) {
+    for (parameter, parameter_type) in parameters
+        .into_iter()
+        .zip(function_type.parameters.iter().cloned())
+    {
         scopes.insert_current(
             parameter.name,
             SymbolInfo {
@@ -107,17 +125,93 @@ pub(crate) fn check_function_declaration(
 
     check_function_body(
         body,
-        Some(function_return_type.clone()),
+        Some((*function_type.return_type).clone()),
         &mut scopes,
         &mut flow_state,
         ctx,
     );
 
-    // Finalize the synthesized missing-return diagnostic after body checking so
-    // statement-level diagnostics come out first in the final ordering.
-    if should_check_missing_return(&function_return_type) {
+    if should_check_missing_return(function_type.return_type.as_ref()) {
         emit_missing_return_diagnostic(body_flow, ctx);
     }
+}
+
+pub(crate) fn collect_function_declaration_signature(
+    function: &ParsedFunctionDeclaration,
+    symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    let FunctionType {
+        parameters,
+        return_type,
+    } = map_function_signature(&function.parameters, function.return_type.as_ref(), ctx);
+    let function_type = FunctionType {
+        parameters,
+        return_type,
+    };
+
+    let duplicate =
+        register_function_signature(function.name.clone(), function_type.clone(), symbols, false);
+
+    if duplicate {
+        let diagnostic = Diagnostic::ts2393(ctx.file_name.clone());
+        let diagnostic = match function.name_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+
+        ctx.push(diagnostic);
+    }
+
+    function_type
+}
+
+pub(crate) fn check_function_declaration(
+    function: ParsedFunctionDeclaration,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedFunctionDeclaration {
+        name,
+        name_span,
+        parameters,
+        return_type,
+        body,
+        ..
+    } = function;
+
+    let function_type = map_function_signature(&parameters, return_type.as_ref(), ctx);
+
+    let duplicate = {
+        let symbols = &mut ctx.symbols;
+        register_function_signature(name.clone(), function_type.clone(), symbols, true)
+    };
+
+    if duplicate {
+        let diagnostic = Diagnostic::ts2393(ctx.file_name.clone());
+        let diagnostic = match name_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+
+        ctx.push(diagnostic);
+    }
+
+    check_function_body_with_signature(name, parameters, body, &function_type, ctx);
+}
+
+pub(crate) fn check_function_declaration_body(
+    function: ParsedFunctionDeclaration,
+    function_type: &FunctionType,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedFunctionDeclaration {
+        name,
+        parameters,
+        body,
+        ..
+    } = function;
+
+    check_function_body_with_signature(name, parameters, body, function_type, ctx);
 }
 
 fn should_check_missing_return(return_type: &Type) -> bool {
