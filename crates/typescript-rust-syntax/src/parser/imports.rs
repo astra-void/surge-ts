@@ -25,30 +25,97 @@ pub(crate) fn parse_import_declaration(
     };
 
     let mut parsed_specifiers = Vec::new();
+    let mut parsed_default_specifier = None;
+    let mut parsed_namespace_specifier = None;
 
     for specifier in specifiers {
-        let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier else {
-            return Some(ParsedImportDeclaration {
-                kind: ParsedImportKind::Unsupported,
-                module_specifier,
-                module_specifier_span,
-                span,
-            });
-        };
+        match specifier {
+            ImportDeclarationSpecifier::ImportSpecifier(specifier) => {
+                let Some(parsed_specifier) = parse_import_specifier(specifier.as_ref()) else {
+                    return Some(ParsedImportDeclaration {
+                        kind: ParsedImportKind::Unsupported,
+                        module_specifier,
+                        module_specifier_span,
+                        span,
+                    });
+                };
 
-        let Some(parsed_specifier) = parse_import_specifier(specifier.as_ref()) else {
-            return Some(ParsedImportDeclaration {
-                kind: ParsedImportKind::Unsupported,
-                module_specifier,
-                module_specifier_span,
-                span,
-            });
-        };
+                parsed_specifiers.push(parsed_specifier);
+            }
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => {
+                if parsed_default_specifier.is_some() || parsed_namespace_specifier.is_some() {
+                    return Some(ParsedImportDeclaration {
+                        kind: ParsedImportKind::Unsupported,
+                        module_specifier,
+                        module_specifier_span,
+                        span,
+                    });
+                }
 
-        parsed_specifiers.push(parsed_specifier);
+                parsed_default_specifier = Some(ParsedImportKind::Default {
+                    local_name: specifier.local.name.to_string(),
+                    name_span: Some(text_span_from_oxc_span(specifier.local.span)),
+                });
+            }
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier) => {
+                if parsed_default_specifier.is_some()
+                    || parsed_namespace_specifier.is_some()
+                    || !parsed_specifiers.is_empty()
+                {
+                    return Some(ParsedImportDeclaration {
+                        kind: ParsedImportKind::Unsupported,
+                        module_specifier,
+                        module_specifier_span,
+                        span,
+                    });
+                }
+
+                parsed_namespace_specifier = Some(ParsedImportKind::Namespace {
+                    local_name: specifier.local.name.to_string(),
+                    name_span: Some(text_span_from_oxc_span(specifier.local.span)),
+                });
+            }
+        }
     }
 
     let is_type_only = matches!(declaration.import_kind, ImportOrExportKind::Type);
+
+    if is_type_only && (parsed_default_specifier.is_some() || parsed_namespace_specifier.is_some())
+    {
+        return Some(ParsedImportDeclaration {
+            kind: ParsedImportKind::Unsupported,
+            module_specifier,
+            module_specifier_span,
+            span,
+        });
+    }
+
+    if let Some(default_specifier) = parsed_default_specifier {
+        if !parsed_specifiers.is_empty() {
+            return Some(ParsedImportDeclaration {
+                kind: ParsedImportKind::Unsupported,
+                module_specifier,
+                module_specifier_span,
+                span,
+            });
+        }
+
+        return Some(ParsedImportDeclaration {
+            kind: default_specifier,
+            module_specifier,
+            module_specifier_span,
+            span,
+        });
+    }
+
+    if let Some(namespace_specifier) = parsed_namespace_specifier {
+        return Some(ParsedImportDeclaration {
+            kind: namespace_specifier,
+            module_specifier,
+            module_specifier_span,
+            span,
+        });
+    }
 
     Some(ParsedImportDeclaration {
         kind: ParsedImportKind::Named {

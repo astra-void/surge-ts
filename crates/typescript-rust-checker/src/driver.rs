@@ -1,7 +1,7 @@
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
 use typescript_rust_syntax::{
-    ParsedExportDeclaration, ParsedInterfaceDeclaration, ParsedStatement,
-    ParsedTypeAliasDeclaration, parse_source,
+    ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedInterfaceDeclaration,
+    ParsedStatement, ParsedTypeAliasDeclaration, parse_source,
 };
 
 use crate::checks::{assign, call, expr, function as check_function, var};
@@ -85,12 +85,78 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         }
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
-        ParsedStatement::ImportDeclaration(_) => {}
+        ParsedStatement::ImportDeclaration(import) => {
+            let mut diagnostic = Diagnostic::new(
+                DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
+                "Unsupported module syntax.".to_string(),
+                ctx.file_name.clone(),
+            );
+
+            if let Some(span) = import.span.or(import.module_specifier_span) {
+                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            }
+
+            ctx.push(diagnostic);
+        }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
             declaration,
             ..
         }) => check_statement(*declaration, ctx),
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+            module_specifier: Some(_),
+            span,
+            ..
+        }) => {
+            let mut diagnostic = Diagnostic::new(
+                DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
+                "Unsupported module syntax.".to_string(),
+                ctx.file_name.clone(),
+            );
+
+            if let Some(span) = span {
+                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            }
+
+            ctx.push(diagnostic);
+        }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration,
+            span,
+        }) => match declaration {
+            ParsedDefaultExportDeclaration::Function(function) => {
+                check_function::check_function_declaration(function, ctx);
+            }
+            ParsedDefaultExportDeclaration::Expression(expression) => {
+                expr::check_expression_statement(expression, ctx);
+            }
+            ParsedDefaultExportDeclaration::Unsupported { .. } => {
+                let mut diagnostic = Diagnostic::new(
+                    DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
+                    "Unsupported module syntax.".to_string(),
+                    ctx.file_name.clone(),
+                );
+
+                if let Some(span) = span {
+                    diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                }
+
+                ctx.push(diagnostic);
+            }
+        },
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All { span, .. }) => {
+            let mut diagnostic = Diagnostic::new(
+                DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
+                "Unsupported module syntax.".to_string(),
+                ctx.file_name.clone(),
+            );
+
+            if let Some(span) = span {
+                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            }
+
+            ctx.push(diagnostic);
+        }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
             let mut diagnostic = Diagnostic::new(

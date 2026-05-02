@@ -39,7 +39,7 @@ fn write_file(root: &PathBuf, relative: &str, contents: &str) {
 }
 
 #[test]
-fn cli_diagnostics_json_single_file() {
+fn cli_diagnostics_json_single_file_positional() {
     let root = temp_dir("json-single-file");
     let file = root.join("index.ts");
     fs::write(&file, "let value: string = 123;").unwrap();
@@ -205,7 +205,7 @@ fn cli_format_json_does_not_require_compat_report() {
 }
 
 #[test]
-fn cli_show_spans_with_json_policy_pinned() {
+fn cli_diagnostics_json_single_file_positional_with_show_spans_policy() {
     let root = temp_dir("json-show-spans");
     write_file(
         &root,
@@ -232,21 +232,15 @@ fn cli_show_spans_with_json_policy_pinned() {
 }
 
 #[test]
-fn cli_normal_output_unchanged_without_format_json() {
-    let root = temp_dir("json-text-output");
-    write_file(
-        &root,
-        "tsconfig.json",
-        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
-    );
-    write_file(&root, "src/index.ts", "let value: string = 123;");
+fn cli_diagnostics_json_single_file_normal_output_unchanged() {
+    let root = temp_dir("json-single-file-text-output");
+    let file = root.join("index.ts");
+    fs::write(&file, "let value: string = 123;").unwrap();
 
-    let project = root.join("tsconfig.json");
-    let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let file = file.to_string_lossy().into_owned();
+    let (stdout, stderr) = run_cli(&[file.as_str()]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("TS2322"));
-    assert!(stdout.contains("src/index.ts"));
     assert!(!stdout.trim_start().starts_with('{'));
 }

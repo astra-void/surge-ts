@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 
 import {
+  buildTypeScriptCommand,
+  buildTypeScriptRustCommand,
   compareDiagnostics,
   countDiagnostics,
   parseArgs,
   parseTypeScriptDiagnostics,
   parseTypeScriptRustDiagnostics,
-  resolveProjectInput,
-} from './compare-tsc.ts';
+  renderComparisonText,
+  resolveOracleMode,
+  resolveFilePath,
+  resolveProjectPresetOrPath,
+} from './compare-tsc';
 
 function run() {
   oracle_parse_tsc_single_line();
@@ -23,8 +29,28 @@ function run() {
   oracle_compare_match();
   oracle_compare_only_typescript();
   oracle_compare_only_typescript_rust();
+  oracle_args_requires_project_or_file();
+  oracle_args_rejects_project_and_file_together();
+  oracle_args_rejects_ts_file_as_project();
+  oracle_args_rejects_tsx_file_as_project();
+  oracle_args_rejects_js_file_as_project();
+  oracle_args_rejects_tsconfig_as_file();
+  oracle_args_accepts_project_preset();
+  oracle_args_accepts_project_tsconfig_path();
+  oracle_args_accepts_file_ts_path();
+  oracle_args_rejects_file_tsx_path_current_policy();
+  oracle_args_rejects_file_js_path_current_policy();
+  oracle_args_rejects_missing_file_path();
+  oracle_args_rejects_missing_project_path();
   oracle_unknown_project_fails_cleanly();
   oracle_parse_args_strict_codes_alias();
+  oracle_builds_tsc_project_command_with_project();
+  oracle_builds_tsc_file_command_without_project();
+  oracle_builds_rust_project_command_with_project();
+  oracle_builds_rust_file_command_positional();
+  oracle_output_includes_mode_project();
+  oracle_output_includes_mode_file();
+  oracle_json_output_includes_mode();
 }
 
 function oracle_parse_tsc_single_line() {
@@ -167,6 +193,7 @@ function oracle_count_by_file_code_line() {
 function oracle_compare_match() {
   const comparison = compareDiagnostics(
     'project',
+    'project',
     [{ source: 'typescript', code: 'TS2322', fileName: 'src/a.ts', line: 3, column: 12 }],
     [{ source: 'typescript-rust', code: 'TS2322', fileName: 'src/a.ts', line: 3, column: 12 }],
   );
@@ -178,6 +205,7 @@ function oracle_compare_match() {
 
 function oracle_compare_only_typescript() {
   const comparison = compareDiagnostics(
+    'project',
     'project',
     [{ source: 'typescript', code: 'TS2322', fileName: 'src/a.ts' }],
     [],
@@ -191,6 +219,7 @@ function oracle_compare_only_typescript() {
 function oracle_compare_only_typescript_rust() {
   const comparison = compareDiagnostics(
     'project',
+    'project',
     [],
     [{ source: 'typescript-rust', code: 'TS2322', fileName: 'src/a.ts' }],
   );
@@ -202,14 +231,177 @@ function oracle_compare_only_typescript_rust() {
 
 function oracle_unknown_project_fails_cleanly() {
   assert.throws(
-    () => resolveProjectInput('does-not-exist'),
-    /unknown project preset "does-not-exist"/,
+    () => resolveProjectPresetOrPath('does-not-exist'),
+    /unknown oracle project preset: does-not-exist/,
   );
 }
 
 function oracle_parse_args_strict_codes_alias() {
   const parsed = parseArgs(['--project', 'generics-basic', '--strictCodes']);
   assert.equal(parsed.failOnMismatch, true);
+}
+
+function oracle_args_requires_project_or_file() {
+  const parsed = parseArgs([]);
+  assert.throws(() => resolveOracleMode(parsed), /choose exactly one of --project or --file/);
+}
+
+function oracle_args_rejects_project_and_file_together() {
+  const parsed = parseArgs(['--project', 'generics-basic', '--file', 'examples/basic.ts']);
+  assert.throws(() => resolveOracleMode(parsed), /choose exactly one of --project or --file/);
+}
+
+function oracle_args_rejects_ts_file_as_project() {
+  const parsed = parseArgs(['--project', 'examples/basic.ts']);
+  assert.throws(
+    () => resolveOracleMode(parsed),
+    /--project expects a preset name or tsconfig\.json path\. For single files, use --file examples\/basic\.ts\./,
+  );
+}
+
+function oracle_args_rejects_tsx_file_as_project() {
+  const parsed = parseArgs(['--project', 'examples/basic.tsx']);
+  assert.throws(
+    () => resolveOracleMode(parsed),
+    /--project expects a preset name or tsconfig\.json path\. For single files, use --file examples\/basic\.tsx\./,
+  );
+}
+
+function oracle_args_rejects_js_file_as_project() {
+  const parsed = parseArgs(['--project', 'examples/basic.js']);
+  assert.throws(
+    () => resolveOracleMode(parsed),
+    /--project expects a preset name or tsconfig\.json path\. For single files, use --file examples\/basic\.js\./,
+  );
+}
+
+function oracle_args_rejects_tsconfig_as_file() {
+  const parsed = parseArgs(['--file', 'tests/compat-projects/generics-basic/tsconfig.json']);
+  assert.throws(
+    () => resolveOracleMode(parsed),
+    /--file expects a TypeScript source file, not tsconfig\.json\. For projects, use --project\./,
+  );
+}
+
+function oracle_args_accepts_project_preset() {
+  const parsed = parseArgs(['--project', 'generics-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/generics-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_project_tsconfig_path() {
+  const parsed = parseArgs(['--project', 'tests/compat-projects/generics-basic/tsconfig.json']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/generics-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_file_ts_path() {
+  const parsed = parseArgs(['--file', 'examples/basic.ts']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'file');
+  assert.equal(mode.resolvedFile, path.resolve('examples/basic.ts'));
+}
+
+function oracle_args_rejects_file_tsx_path_current_policy() {
+  const parsed = parseArgs(['--file', 'examples/basic.tsx']);
+  assert.throws(
+    () => resolveOracleMode(parsed),
+    /--file currently supports \.ts source files only\. Received examples\/basic\.tsx\./,
+  );
+}
+
+function oracle_args_rejects_file_js_path_current_policy() {
+  const parsed = parseArgs(['--file', 'examples/basic.js']);
+  assert.throws(
+    () => resolveOracleMode(parsed),
+    /--file currently supports \.ts source files only\. Received examples\/basic\.js\./,
+  );
+}
+
+function oracle_args_rejects_missing_file_path() {
+  assert.throws(
+    () => resolveFilePath('examples/missing.ts'),
+    /missing TypeScript source file: .*examples\/missing\.ts/,
+  );
+}
+
+function oracle_args_rejects_missing_project_path() {
+  assert.throws(
+    () => resolveProjectPresetOrPath('examples/missing-tsconfig.json'),
+    /missing tsconfig\.json at .*examples\/missing-tsconfig\.json/,
+  );
+}
+
+function oracle_builds_tsc_project_command_with_project() {
+  assert.equal(
+    buildTypeScriptCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json'),
+    'pnpm exec tsc --noEmit --pretty false --project tests/compat-projects/generics-basic/tsconfig.json',
+  );
+}
+
+function oracle_builds_tsc_file_command_without_project() {
+  assert.equal(
+    buildTypeScriptCommand('file', 'examples/basic.ts'),
+    'pnpm exec tsc --noEmit --pretty false examples/basic.ts',
+  );
+}
+
+function oracle_builds_rust_project_command_with_project() {
+  assert.equal(
+    buildTypeScriptRustCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json'),
+    `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/generics-basic/tsconfig.json --format json`,
+  );
+}
+
+function oracle_builds_rust_file_command_positional() {
+  assert.equal(
+    buildTypeScriptRustCommand('file', 'examples/basic.ts'),
+    `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --format json examples/basic.ts`,
+  );
+}
+
+function oracle_output_includes_mode_project() {
+  const comparison = compareDiagnostics(
+    'project',
+    'tests/compat-projects/generics-basic/tsconfig.json',
+    [],
+    [],
+  );
+
+  const rendered = renderComparisonText(comparison);
+  assert.ok(rendered.includes('Mode: project'));
+  assert.ok(rendered.includes('Project: tests/compat-projects/generics-basic/tsconfig.json'));
+}
+
+function oracle_output_includes_mode_file() {
+  const comparison = compareDiagnostics('file', 'examples/basic.ts', [], []);
+
+  const rendered = renderComparisonText(comparison);
+  assert.ok(rendered.includes('Mode: file'));
+  assert.ok(rendered.includes('File: examples/basic.ts'));
+}
+
+function oracle_json_output_includes_mode() {
+  const project = compareDiagnostics('project', 'tests/compat-projects/generics-basic/tsconfig.json', [], []);
+  const file = compareDiagnostics('file', 'examples/basic.ts', [], []);
+
+  assert.equal(project.mode, 'project');
+  assert.equal(project.project, 'tests/compat-projects/generics-basic/tsconfig.json');
+  assert.equal(project.file, null);
+  assert.equal(file.mode, 'file');
+  assert.equal(file.project, null);
+  assert.equal(file.file, 'examples/basic.ts');
 }
 
 run();

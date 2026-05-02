@@ -1640,22 +1640,109 @@ fn module_non_relative_no_cascade_call_usage() {
 
 #[test]
 fn module_default_import_parser_safe_or_pinned() {
-    let diagnostics = program(&[("index.ts", "import DefaultThing from \"./thing\";")]);
+    let diagnostics = program(&[
+        (
+            "user.ts",
+            "export default function getName(): string { return \"Ada\"; }",
+        ),
+        (
+            "index.ts",
+            "import DefaultThing from \"./user\";\nlet name: string = DefaultThing();",
+        ),
+    ]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_default_import_missing_default_export() {
+    let diagnostics = program(&[
+        ("user.ts", "export const getName: string = \"Ada\";"),
+        (
+            "index.ts",
+            "import getName from \"./user\";\nlet name = getName;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn module_default_import_missing_module() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import getName from \"./missing\";\nlet name = getName;",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+}
+
+#[test]
+fn module_default_import_no_cascade_value_usage() {
+    let diagnostics = program(&[
+        ("user.ts", "export const getName: string = \"Ada\";"),
+        ("index.ts", "import getName from \"./user\";\ngetName;"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
 }
 
 #[test]
 fn module_namespace_import_parser_safe_or_pinned() {
-    let diagnostics = program(&[("index.ts", "import * as ns from \"./thing\";")]);
+    let diagnostics = program(&[
+        (
+            "user.ts",
+            "export function getName(): string { return \"Ada\"; }",
+        ),
+        (
+            "index.ts",
+            "import * as ns from \"./user\";\nlet name: string = ns.getName();",
+        ),
+    ]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_namespace_import_variable_property_valid() {
+    let diagnostics = program(&[
+        ("user.ts", "export const version: number = 1;"),
+        (
+            "index.ts",
+            "import * as ns from \"./user\";\nlet version: number = ns.version;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_namespace_import_default_property_valid_or_pinned() {
+    let diagnostics = program(&[
+        ("user.ts", "export default 123;"),
+        (
+            "index.ts",
+            "import * as ns from \"./user\";\nlet version: number = ns.default;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_namespace_import_missing_property_ts2339() {
+    let diagnostics = program(&[
+        (
+            "user.ts",
+            "export function getName(): string { return \"Ada\"; }",
+        ),
+        (
+            "index.ts",
+            "import * as ns from \"./user\";\nlet value = ns.missing;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
 }
 
 #[test]
@@ -1673,52 +1760,248 @@ fn module_mixed_default_named_import_parser_safe() {
 
 #[test]
 fn module_export_default_expression_parser_safe() {
-    let diagnostics = program(&[("index.ts", "export default 123;")]);
+    let diagnostics = program(&[
+        ("user.ts", "export default 123;"),
+        (
+            "index.ts",
+            "import value from \"./user\";\nlet name: number = value;",
+        ),
+    ]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
 fn module_export_default_function_parser_safe() {
-    let diagnostics = program(&[("index.ts", "export default function makeThing() {}")]);
+    let diagnostics = program(&[
+        (
+            "user.ts",
+            "export default function makeThing() { return \"Ada\"; }",
+        ),
+        (
+            "index.ts",
+            "import value from \"./user\";\nlet name: string = value();",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_export_default_expression_string_import_valid() {
+    let diagnostics = program(&[
+        ("user.ts", "export default \"Ada\";"),
+        (
+            "index.ts",
+            "import value from \"./user\";\nlet name: string = value;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_export_default_duplicate_pinned() {
+    let diagnostics = program(&[("index.ts", "export default 123;\nexport default 456;")]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::duplicate-default-export"]
+    );
+}
+
+#[test]
+fn module_export_default_class_unsupported_no_panic() {
+    let diagnostics = program(&[("index.ts", "export default class Foo {}")]);
 
     assert_eq!(
         codes(&diagnostics),
         vec!["typescript-rust::unsupported-module-syntax"]
     );
+}
+
+#[test]
+fn module_export_default_function_local_name_policy_pinned() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "export default function getName(): string { return \"Ada\"; }\nlet name: string = getName();",
+    )]);
+
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
 fn module_re_export_named_parser_safe_or_pinned() {
-    let diagnostics = program(&[("index.ts", "export { Foo } from \"./foo\";")]);
+    let diagnostics = program(&[
+        ("foo.ts", "export interface Foo { name: string; }"),
+        ("index.ts", "export { Foo } from \"./foo\";"),
+        (
+            "app.ts",
+            "import { Foo } from \"./index\";\nlet value: Foo = { name: \"Ada\" };",
+        ),
+    ]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_named_function_valid() {
+    let diagnostics = program(&[
+        (
+            "foo.ts",
+            "export function getName(): string { return \"Ada\"; }",
+        ),
+        ("index.ts", "export { getName } from \"./foo\";"),
+        (
+            "app.ts",
+            "import { getName } from \"./index\";\nlet name: string = getName();",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_named_variable_valid() {
+    let diagnostics = program(&[
+        ("foo.ts", "export const version: number = 1;"),
+        ("index.ts", "export { version } from \"./foo\";"),
+        (
+            "app.ts",
+            "import { version } from \"./index\";\nlet value: number = version;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_named_alias_valid() {
+    let diagnostics = program(&[
+        ("foo.ts", "export interface Foo { name: string; }"),
+        ("index.ts", "export { Foo as FooModel } from \"./foo\";"),
+        (
+            "app.ts",
+            "import { FooModel } from \"./index\";\nlet value: FooModel = { name: \"Ada\" };",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_named_missing_member() {
+    let diagnostics = program(&[
+        ("foo.ts", "export const version: number = 1;"),
+        ("index.ts", "export { Foo } from \"./foo\";"),
+        (
+            "app.ts",
+            "import { Foo } from \"./index\";\nlet value: Foo = { name: \"Ada\" };",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
 }
 
 #[test]
 fn module_re_export_type_named_parser_safe_or_pinned() {
-    let diagnostics = program(&[("index.ts", "export type { Foo } from \"./foo\";")]);
+    let diagnostics = program(&[
+        ("foo.ts", "export interface Foo { name: string; }"),
+        ("index.ts", "export type { Foo } from \"./foo\";"),
+        (
+            "app.ts",
+            "import type { Foo } from \"./index\";\nlet value: Foo = { name: \"Ada\" };",
+        ),
+    ]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_type_named_alias_valid() {
+    let diagnostics = program(&[
+        ("foo.ts", "export interface Foo { name: string; }"),
+        (
+            "index.ts",
+            "export type { Foo as FooModel } from \"./foo\";",
+        ),
+        (
+            "app.ts",
+            "import type { FooModel } from \"./index\";\nlet value: FooModel = { name: \"Ada\" };",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_type_named_value_only_missing_type() {
+    let diagnostics = program(&[
+        ("foo.ts", "export const Foo: string = \"Ada\";"),
+        ("index.ts", "export type { Foo } from \"./foo\";"),
+        (
+            "app.ts",
+            "import type { Foo } from \"./index\";\nlet value: Foo = { name: \"Ada\" };",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
 }
 
 #[test]
 fn module_re_export_star_parser_safe_or_pinned() {
-    let diagnostics = program(&[("index.ts", "export * from \"./foo\";")]);
+    let diagnostics = program(&[
+        (
+            "foo.ts",
+            "export function makeThing(): string { return \"Ada\"; }",
+        ),
+        ("index.ts", "export * from \"./foo\";"),
+        (
+            "app.ts",
+            "import { makeThing } from \"./index\";\nlet value: string = makeThing();",
+        ),
+    ]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_star_missing_module() {
+    let diagnostics = program(&[("index.ts", "export * from \"./missing\";")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+}
+
+#[test]
+fn module_re_export_star_conflict_policy_pinned() {
+    let diagnostics = program(&[
+        ("a.ts", "export const name: string = \"Ada\";"),
+        ("b.ts", "export const name: number = 1;"),
+        ("index.ts", "export * from \"./a\";\nexport * from \"./b\";"),
+        (
+            "app.ts",
+            "import { name } from \"./index\";\nlet value: string = name;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_star_local_explicit_wins() {
+    let diagnostics = program(&[
+        ("other.ts", "export const name: number = 1;"),
+        (
+            "index.ts",
+            "export const name: string = \"Ada\";\nexport * from \"./other\";",
+        ),
+        (
+            "app.ts",
+            "import { name } from \"./index\";\nlet value: string = name;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
@@ -1738,9 +2021,6 @@ fn module_unsupported_syntax_single_diagnostic_no_cascade() {
         "import DefaultThing from \"./thing\";\nlet ok: string = \"ok\";",
     )]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
     assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
 }

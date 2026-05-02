@@ -859,6 +859,86 @@ fn span_module_missing_export_points_to_import_specifier() {
 }
 
 #[test]
+fn span_module_default_import_missing_export_points_to_default_name() {
+    let diagnostics = check_program(vec![
+        SourceFileInput {
+            file_name: "user.ts".to_string(),
+            source_text: "export const getName: string = \"Ada\";".to_string(),
+        },
+        SourceFileInput {
+            file_name: "index.ts".to_string(),
+            source_text: "import getName from \"./user\";".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2305".to_string(),
+            "index.ts".to_string(),
+            Some(span("import getName from \"./user\";", "getName")),
+        )]
+    );
+}
+
+#[test]
+fn span_module_default_import_missing_module_points_to_module_specifier() {
+    let diagnostics = check_program(vec![SourceFileInput {
+        file_name: "index.ts".to_string(),
+        source_text: "import getName from \"./missing\";".to_string(),
+    }]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2307".to_string(),
+            "index.ts".to_string(),
+            Some(span("import getName from \"./missing\";", "\"./missing\"")),
+        )]
+    );
+}
+
+#[test]
+fn span_re_export_missing_module_points_to_module_specifier() {
+    let diagnostics = check_program(vec![SourceFileInput {
+        file_name: "index.ts".to_string(),
+        source_text: "export { User } from \"./missing\";".to_string(),
+    }]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2307".to_string(),
+            "index.ts".to_string(),
+            Some(span("export { User } from \"./missing\";", "\"./missing\"")),
+        )]
+    );
+}
+
+#[test]
+fn span_re_export_missing_member_points_to_export_specifier() {
+    let diagnostics = check_program(vec![
+        SourceFileInput {
+            file_name: "user.ts".to_string(),
+            source_text: "export const value = 1;".to_string(),
+        },
+        SourceFileInput {
+            file_name: "index.ts".to_string(),
+            source_text: "export { User } from \"./user\";".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2305".to_string(),
+            "index.ts".to_string(),
+            Some(span("export { User } from \"./user\";", "User")),
+        )]
+    );
+}
+
+#[test]
 fn span_module_export_list_missing_local_points_to_export_name() {
     let diagnostics = check_program(vec![SourceFileInput {
         file_name: "index.ts".to_string(),
@@ -888,6 +968,66 @@ fn span_module_side_effect_missing_points_to_module_specifier() {
             "TS2307".to_string(),
             "index.ts".to_string(),
             Some(span("import \"./missing\";", "\"./missing\"")),
+        )]
+    );
+}
+
+#[test]
+fn span_module_namespace_import_missing_module_points_to_module_specifier() {
+    let diagnostics = check_program(vec![SourceFileInput {
+        file_name: "index.ts".to_string(),
+        source_text: "import * as ns from \"./missing\";".to_string(),
+    }]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2307".to_string(),
+            "index.ts".to_string(),
+            Some(span("import * as ns from \"./missing\";", "\"./missing\"")),
+        )]
+    );
+}
+
+#[test]
+fn span_module_namespace_import_missing_property_points_to_property_name() {
+    let diagnostics = check_program(vec![
+        SourceFileInput {
+            file_name: "user.ts".to_string(),
+            source_text: "export function getName(): string { return \"Ada\"; }".to_string(),
+        },
+        SourceFileInput {
+            file_name: "index.ts".to_string(),
+            source_text: "import * as ns from \"./user\"; let value = ns.missing;".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2339".to_string(),
+            "index.ts".to_string(),
+            Some(span(
+                "import * as ns from \"./user\"; let value = ns.missing;",
+                "missing"
+            )),
+        )]
+    );
+}
+
+#[test]
+fn span_star_re_export_missing_module_points_to_module_specifier() {
+    let diagnostics = check_program(vec![SourceFileInput {
+        file_name: "index.ts".to_string(),
+        source_text: "export * from \"./missing\";".to_string(),
+    }]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2307".to_string(),
+            "index.ts".to_string(),
+            Some(span("export * from \"./missing\";", "\"./missing\"")),
         )]
     );
 }
@@ -932,7 +1072,39 @@ fn span_module_non_relative_points_to_module_specifier() {
 
 #[test]
 fn span_module_unsupported_syntax_points_to_syntax_or_pinned() {
-    let source = "import DefaultThing from \"./thing\";";
+    let source = "export * as Foo from \"./foo\";";
+    let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
+        file_name: "example.ts".to_string(),
+        source_text: source.to_string(),
+    }]);
+
+    assert_single_span(
+        source,
+        diagnostics,
+        "typescript-rust::unsupported-module-syntax",
+        span(source, source),
+    );
+}
+
+#[test]
+fn span_default_export_duplicate_points_to_default_keyword_or_export_span() {
+    let source = "export default 123;\nexport default 456;";
+    let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
+        file_name: "example.ts".to_string(),
+        source_text: source.to_string(),
+    }]);
+
+    assert_single_span(
+        source,
+        diagnostics,
+        "typescript-rust::duplicate-default-export",
+        span(source, "export default 456;"),
+    );
+}
+
+#[test]
+fn span_module_re_export_star_as_points_to_export_span_or_module_specifier() {
+    let source = "export * as Foo from \"./foo\";";
     let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
         file_name: "example.ts".to_string(),
         source_text: source.to_string(),

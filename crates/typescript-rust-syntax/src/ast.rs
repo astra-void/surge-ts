@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedSource {
     pub file_name: String,
     pub statements: Vec<ParsedStatement>,
@@ -6,7 +6,7 @@ pub struct ParsedSource {
     pub is_module: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParsedStatement {
     VariableDeclaration(ParsedVariableDeclaration),
     Assignment(ParsedAssignment),
@@ -115,6 +115,14 @@ pub enum ParsedImportKind {
         is_type_only: bool,
         specifiers: Vec<ParsedImportSpecifier>,
     },
+    Default {
+        local_name: String,
+        name_span: Option<TextSpan>,
+    },
+    Namespace {
+        local_name: String,
+        name_span: Option<TextSpan>,
+    },
     SideEffect,
     Unsupported,
 }
@@ -126,7 +134,7 @@ pub struct ParsedImportSpecifier {
     pub name_span: Option<TextSpan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParsedExportDeclaration {
     Statement {
         declaration: Box<ParsedStatement>,
@@ -136,6 +144,16 @@ pub enum ParsedExportDeclaration {
         is_type_only: bool,
         specifiers: Vec<ParsedExportSpecifier>,
         module_specifier: Option<String>,
+        module_specifier_span: Option<TextSpan>,
+        span: Option<TextSpan>,
+    },
+    Default {
+        declaration: ParsedDefaultExportDeclaration,
+        span: Option<TextSpan>,
+    },
+    All {
+        module_specifier: String,
+        module_specifier_span: Option<TextSpan>,
         span: Option<TextSpan>,
     },
     Empty {
@@ -151,6 +169,13 @@ pub struct ParsedExportSpecifier {
     pub local_name: String,
     pub exported_name: String,
     pub name_span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedDefaultExportDeclaration {
+    Function(ParsedFunctionDeclaration),
+    Expression(ParsedExpression),
+    Unsupported { span: Option<TextSpan> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,7 +314,7 @@ pub struct TextSpan {
     pub end: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedVariableDeclaration {
     pub kind: ParsedVariableKind,
     pub name: String,
@@ -299,7 +324,7 @@ pub struct ParsedVariableDeclaration {
     pub initializer_span: Option<TextSpan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedAssignment {
     pub target_name: String,
     pub target_span: Option<TextSpan>,
@@ -307,7 +332,7 @@ pub struct ParsedAssignment {
     pub value_span: Option<TextSpan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedFunctionDeclaration {
     pub name: String,
     pub name_span: Option<TextSpan>,
@@ -317,7 +342,7 @@ pub struct ParsedFunctionDeclaration {
     pub body: Vec<ParsedFunctionBodyStatement>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParsedFunctionBodyStatement {
     VariableDeclaration(ParsedVariableDeclaration),
     Return(ParsedReturnStatement),
@@ -328,13 +353,13 @@ pub enum ParsedFunctionBodyStatement {
     While(ParsedWhileStatement),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedReturnStatement {
     pub expression: Option<ParsedExpression>,
     pub expression_span: Option<TextSpan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedIfStatement {
     pub condition: ParsedExpression,
     pub condition_span: Option<TextSpan>,
@@ -342,21 +367,21 @@ pub struct ParsedIfStatement {
     pub else_body: Vec<ParsedFunctionBodyStatement>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedWhileStatement {
     pub condition: ParsedExpression,
     pub condition_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedFunctionParameter {
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub declared_type: Option<ParsedType>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCall {
     pub callee_name: String,
     pub callee_span: Option<TextSpan>,

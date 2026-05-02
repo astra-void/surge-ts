@@ -36,7 +36,9 @@ export type DiagnosticTotals = {
 };
 
 export type ComparisonResult = {
-  project: string;
+  mode: 'project' | 'file';
+  project: string | null;
+  file: string | null;
   tooling: {
     typescriptVersion: string;
     typescriptCommand: string;
@@ -64,10 +66,23 @@ export type ComparisonResult = {
 
 export type ParsedArgs = {
   projectInput?: string;
+  fileInput?: string;
   json: boolean;
   failOnMismatch: boolean;
   maxDiagnostics?: number;
 };
+
+export type OracleMode =
+  | {
+      kind: 'project';
+      project: string;
+      resolvedTsconfig: string;
+    }
+  | {
+      kind: 'file';
+      file: string;
+      resolvedFile: string;
+    };
 
 export type RunResult = {
   exitCode: number | null;
@@ -91,9 +106,11 @@ const fixturePresets: Record<string, string> = {
 
 export function main(argv = process.argv.slice(2)): void {
   const args = parseArgs(argv);
-  const tsconfigPath = resolveProjectInput(args.projectInput as string);
-  const projectDisplay = displayProjectPath(tsconfigPath);
-  const comparison = compareProject(tsconfigPath, projectDisplay, args.maxDiagnostics);
+  const mode = resolveOracleMode(args);
+  const comparison =
+    mode.kind === 'project'
+      ? compareProject(mode.resolvedTsconfig, displayComparisonTargetPath(mode.resolvedTsconfig), args.maxDiagnostics)
+      : compareFile(mode.resolvedFile, displayComparisonTargetPath(mode.resolvedFile), args.maxDiagnostics);
 
   if (args.json) {
     process.stdout.write(`${JSON.stringify(comparison, null, 2)}\n`);
@@ -126,6 +143,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
         throw new Error(`${arg} requires a value`);
       }
       parsed.projectInput = value;
+    } else if (arg === '--file') {
+      const value = argv[++index];
+      if (!value) {
+        throw new Error('--file requires a value');
+      }
+      parsed.fileInput = value;
     } else if (arg === '--json') {
       parsed.json = true;
     } else if (arg === '--failOnMismatch' || arg === '--strictCodes') {
@@ -143,53 +166,124 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown argument: ${arg}`);
     } else {
-      throw new Error(`unexpected positional argument: ${arg}. Use --project <path-or-preset>.`);
+      throw new Error(`unexpected positional argument: ${arg}. Use --project <path-or-preset> or --file <path>.`);
     }
-  }
-
-  if (!parsed.projectInput) {
-    throw new Error('missing required --project <path-or-preset> argument');
   }
 
   return parsed;
 }
 
-export function resolveProjectInput(projectInput: string): string {
+export function resolveOracleMode(args: ParsedArgs): OracleMode {
+  const hasProject = args.projectInput !== undefined;
+  const hasFile = args.fileInput !== undefined;
+
+  if (hasProject === hasFile) {
+    throw new Error('choose exactly one of --project or --file.');
+  }
+
+  if (hasProject) {
+    const projectInput = args.projectInput as string;
+    const resolvedTsconfig = resolveProjectPresetOrPath(projectInput);
+    return {
+      kind: 'project',
+      project: projectInput,
+      resolvedTsconfig,
+    };
+  }
+
+  const fileInput = args.fileInput as string;
+  const resolvedFile = resolveFilePath(fileInput);
+  return {
+    kind: 'file',
+    file: fileInput,
+    resolvedFile,
+  };
+}
+
+export function resolveProjectPresetOrPath(projectInput: string): string {
   const preset = fixturePresets[projectInput];
   if (preset) {
     return preset;
   }
 
-  const candidate = path.isAbsolute(projectInput)
-    ? projectInput
-    : path.resolve(workspaceRoot, projectInput);
+  if (isSourceFilePath(projectInput)) {
+    throw new Error(
+      `--project expects a preset name or tsconfig.json path. For single files, use --file ${projectInput}.`,
+    );
+  }
 
-  if (existsSync(candidate)) {
-    const stats = statSync(candidate);
-    if (stats.isFile()) {
-      return candidate;
+  if (isTsConfigPath(projectInput)) {
+    const tsconfigPath = resolveWorkspacePath(projectInput);
+    if (!existsSync(tsconfigPath) || !statSync(tsconfigPath).isFile()) {
+      throw new Error(`missing tsconfig.json at ${normalizePathForDisplay(tsconfigPath)}`);
     }
 
-    const tsconfigPath = path.join(candidate, 'tsconfig.json');
-    if (existsSync(tsconfigPath)) {
-      return tsconfigPath;
-    }
-
-    throw new Error(`missing tsconfig.json at ${normalizePathForDisplay(tsconfigPath)}`);
+    return tsconfigPath;
   }
 
   if (looksLikePath(projectInput)) {
-    const tsconfigPath = candidate.endsWith('.json') ? candidate : path.join(candidate, 'tsconfig.json');
-    if (existsSync(tsconfigPath)) {
-      return tsconfigPath;
+    const candidate = resolveWorkspacePath(projectInput);
+    if (existsSync(candidate)) {
+      const stats = statSync(candidate);
+      if (stats.isDirectory()) {
+        const tsconfigPath = path.join(candidate, 'tsconfig.json');
+        if (existsSync(tsconfigPath) && statSync(tsconfigPath).isFile()) {
+          return tsconfigPath;
+        }
+
+        throw new Error(`missing tsconfig.json at ${normalizePathForDisplay(tsconfigPath)}`);
+      }
+
+      if (stats.isFile() && isTsConfigPath(candidate)) {
+        return candidate;
+      }
     }
 
+    if (projectInput.endsWith('.json')) {
+      if (path.basename(projectInput).toLowerCase().includes('tsconfig')) {
+        throw new Error(`missing tsconfig.json at ${normalizePathForDisplay(candidate)}`);
+      }
+
+      throw new Error(
+        `--project expects a preset name or tsconfig.json path. For single files, use --file ${projectInput}.`,
+      );
+    }
+
+    const tsconfigPath = path.join(candidate, 'tsconfig.json');
     throw new Error(`missing tsconfig.json at ${normalizePathForDisplay(tsconfigPath)}`);
   }
 
-  throw new Error(
-    `unknown project preset "${projectInput}". Known presets: ${Object.keys(fixturePresets).join(', ')}`,
-  );
+  throw new Error(`unknown oracle project preset: ${projectInput}`);
+}
+
+export function resolveFilePath(fileInput: string): string {
+  if (isTsConfigPath(fileInput)) {
+    throw new Error('--file expects a TypeScript source file, not tsconfig.json. For projects, use --project.');
+  }
+
+  if (fileInput.toLowerCase().endsWith('.d.ts')) {
+    throw new Error(`--file currently supports .ts source files only. Received ${fileInput}.`);
+  }
+
+  const extension = path.extname(fileInput).toLowerCase();
+  if (extension !== '.ts') {
+    if (isSourceFilePath(fileInput)) {
+      throw new Error(`--file currently supports .ts source files only. Received ${fileInput}.`);
+    }
+
+    throw new Error(`--file currently supports .ts source files only. Received ${fileInput}.`);
+  }
+
+  const resolvedFile = resolveWorkspacePath(fileInput);
+  if (!existsSync(resolvedFile) || !statSync(resolvedFile).isFile()) {
+    throw new Error(`missing TypeScript source file: ${normalizePathForDisplay(resolvedFile)}`);
+  }
+
+  return resolvedFile;
+}
+
+export function resolveProjectInput(projectInput: string): string {
+  return resolveProjectPresetOrPath(projectInput);
 }
 
 export function compareProject(
@@ -197,22 +291,40 @@ export function compareProject(
   projectDisplay: string,
   maxDiagnostics?: number,
 ): ComparisonResult {
-  return executeComparison(tsconfigPath, projectDisplay, maxDiagnostics);
+  return executeComparison(
+    {
+      kind: 'project',
+      project: projectDisplay,
+      resolvedTsconfig: tsconfigPath,
+    },
+    maxDiagnostics,
+  );
 }
 
-export function runTsc(tsconfigPath: string): RunResult {
-  const result = spawnSync(
-    'pnpm',
-    ['exec', 'tsc', '--noEmit', '--pretty', 'false', '--project', tsconfigPath],
+export function compareFile(filePath: string, fileDisplay: string, maxDiagnostics?: number): ComparisonResult {
+  return executeComparison(
     {
-      cwd: workspaceRoot,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        npm_config_cache: npmCache,
-      },
+      kind: 'file',
+      file: fileDisplay,
+      resolvedFile: filePath,
     },
+    maxDiagnostics,
   );
+}
+
+export function runTsc(mode: OracleMode): RunResult {
+  const args =
+    mode.kind === 'project'
+      ? ['exec', 'tsc', '--noEmit', '--pretty', 'false', '--project', mode.resolvedTsconfig]
+      : ['exec', 'tsc', '--noEmit', '--pretty', 'false', mode.resolvedFile];
+  const result = spawnSync('pnpm', args, {
+    cwd: workspaceRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      npm_config_cache: npmCache,
+    },
+  });
 
   if (result.error) {
     throw new Error(`failed to run TypeScript compiler: ${result.error.message}`);
@@ -225,7 +337,7 @@ export function runTsc(tsconfigPath: string): RunResult {
   };
 }
 
-export function runTypeScriptRust(tsconfigPath: string, maxDiagnostics?: number): RunResult {
+export function runTypeScriptRust(mode: OracleMode, maxDiagnostics?: number): RunResult {
   const args = [
     'run',
     '-q',
@@ -234,11 +346,32 @@ export function runTypeScriptRust(tsconfigPath: string, maxDiagnostics?: number)
     '-p',
     'typescript-rust-cli',
     '--',
-    '--project',
-    tsconfigPath,
-    '--format',
-    'json',
   ];
+
+  if (mode.kind === 'project') {
+    args.push('--project', mode.resolvedTsconfig);
+    args.push('--format', 'json');
+  } else {
+    args.push('--format', 'json');
+    if (maxDiagnostics !== undefined) {
+      args.push('--maxDiagnostics', String(maxDiagnostics));
+    }
+    args.push(mode.resolvedFile);
+    const result = spawnSync('cargo', args, {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+    });
+
+    if (result.error) {
+      throw new Error(`failed to run typescript-rust-cli: ${result.error.message}`);
+    }
+
+    return {
+      exitCode: result.status,
+      stdout: result.stdout ?? '',
+      stderr: result.stderr ?? '',
+    };
+  }
 
   if (maxDiagnostics !== undefined) {
     args.push('--maxDiagnostics', String(maxDiagnostics));
@@ -403,7 +536,8 @@ export function limitDiagnostics(
 }
 
 export function compareDiagnostics(
-  project: string,
+  mode: 'project' | 'file',
+  targetDisplay: string,
   typescript: NormalizedDiagnostic[],
   typescriptRust: NormalizedDiagnostic[],
 ): ComparisonResult {
@@ -416,13 +550,13 @@ export function compareDiagnostics(
   );
 
   return {
-    project,
+    mode,
+    project: mode === 'project' ? targetDisplay : null,
+    file: mode === 'file' ? targetDisplay : null,
     tooling: {
       typescriptVersion: pinnedTypeScriptVersion,
-      typescriptCommand: `pnpm exec tsc --noEmit --pretty false --project ${project}`,
-      typescriptRustCommand: `cargo run -q --manifest-path ${normalizePathForDisplay(
-        path.join(workspaceRoot, 'Cargo.toml'),
-      )} -p typescript-rust-cli -- --project ${project} --format json`,
+      typescriptCommand: buildTypeScriptCommand(mode, targetDisplay),
+      typescriptRustCommand: buildTypeScriptRustCommand(mode, targetDisplay),
     },
     typescript: summarizeDiagnostics(typescript),
     typescriptRust: summarizeDiagnostics(typescriptRust),
@@ -450,6 +584,24 @@ export function compareDiagnostics(
           : null,
     },
   };
+}
+
+export function buildTypeScriptCommand(mode: 'project' | 'file', targetDisplay: string): string {
+  if (mode === 'project') {
+    return `pnpm exec tsc --noEmit --pretty false --project ${targetDisplay}`;
+  }
+
+  return `pnpm exec tsc --noEmit --pretty false ${targetDisplay}`;
+}
+
+export function buildTypeScriptRustCommand(mode: 'project' | 'file', targetDisplay: string): string {
+  const cargoToml = normalizePathForDisplay(path.join(workspaceRoot, 'Cargo.toml'));
+
+  if (mode === 'project') {
+    return `cargo run -q --manifest-path ${cargoToml} -p typescript-rust-cli -- --project ${targetDisplay} --format json`;
+  }
+
+  return `cargo run -q --manifest-path ${cargoToml} -p typescript-rust-cli -- --format json ${targetDisplay}`;
 }
 
 export function summarizeDiagnostics(diagnostics: NormalizedDiagnostic[]): DiagnosticTotals {
@@ -549,7 +701,8 @@ export function hasLineInfo(diagnostic: NormalizedDiagnostic): boolean {
 export function renderComparisonText(comparison: ComparisonResult): string {
   const lines: string[] = [];
   lines.push('TypeScript oracle comparison');
-  lines.push(`Project: ${comparison.project}`);
+  lines.push(`Mode: ${comparison.mode}`);
+  lines.push(comparison.mode === 'project' ? `Project: ${comparison.project}` : `File: ${comparison.file}`);
   lines.push('');
   lines.push('Tooling:');
   lines.push(`TypeScript version: ${comparison.tooling.typescriptVersion}`);
@@ -660,9 +813,11 @@ function printHelpAndExit(): never {
     [
       'Usage:',
       '  pnpm run oracle:compare -- --project <tsconfig.json|preset>',
+      '  pnpm run oracle:compare -- --file <source.ts>',
       '',
       'Options:',
       '  --project <path|preset>   Compare a tsconfig file or known fixture preset.',
+      '  --file <path>             Compare a single TypeScript source file.',
       '  --fixture <preset>        Alias for --project when passing a preset name.',
       '  --maxDiagnostics <n>      Limit diagnostics on both sides before comparing.',
       '  --json                    Emit machine-readable comparison output.',
@@ -671,6 +826,14 @@ function printHelpAndExit(): never {
       '',
       'Known presets:',
       `  ${Object.keys(fixturePresets).join(', ')}`,
+      '',
+      'Project mode examples:',
+      '  pnpm run oracle:compare -- --project generics-basic',
+      '  pnpm run oracle:compare -- --project tests/compat-projects/generics-basic/tsconfig.json',
+      '',
+      'File mode examples:',
+      '  pnpm run oracle:compare -- --file examples/basic.ts',
+      '  pnpm run oracle:compare -- --file examples/assignment.ts',
       '',
     ].join('\n'),
   );
@@ -695,6 +858,18 @@ function looksLikePath(value: string): boolean {
   return value.includes('/') || value.includes('\\') || value.endsWith('.json') || value.startsWith('.');
 }
 
+export function isSourceFilePath(value: string): boolean {
+  return ['.ts', '.tsx', '.js', '.mts', '.cts'].includes(path.extname(value).toLowerCase());
+}
+
+export function isTsConfigPath(value: string): boolean {
+  return path.basename(normalizePathForDisplay(value)).toLowerCase() === 'tsconfig.json';
+}
+
+export function resolveWorkspacePath(value: string): string {
+  return path.isAbsolute(value) ? value : path.resolve(workspaceRoot, value);
+}
+
 function isAbsolutePathLike(value: string): boolean {
   const normalized = normalizePathForDisplay(value);
   return (
@@ -707,19 +882,32 @@ function isAbsolutePathLike(value: string): boolean {
 }
 
 function executeComparison(
-  tsconfigPath: string,
-  projectDisplay: string,
+  mode: OracleMode,
   maxDiagnostics?: number,
 ): ComparisonResult {
-  const projectDir = path.dirname(tsconfigPath);
-  const tsc = runTsc(tsconfigPath);
-  const rust = runTypeScriptRust(tsconfigPath, maxDiagnostics);
+  const comparisonPath = mode.kind === 'project' ? mode.resolvedTsconfig : mode.resolvedFile;
+  const comparisonDisplay = displayComparisonTargetPath(comparisonPath);
+  const projectDir = path.dirname(comparisonPath);
+  const tsc = runTsc(mode);
+  const rust = runTypeScriptRust(mode, maxDiagnostics);
   const rustOutput = rust.stdout.trim() ? rust.stdout : rust.stderr;
 
-  const tscDiagnostics = limitDiagnostics(parseTypeScriptDiagnostics(`${tsc.stdout}${tsc.stderr}`, projectDir), maxDiagnostics);
+  const tscDiagnostics = limitDiagnostics(
+    parseTypeScriptDiagnostics(`${tsc.stdout}${tsc.stderr}`, projectDir),
+    maxDiagnostics,
+  );
   const rustDiagnostics = limitDiagnostics(parseTypeScriptRustDiagnostics(rustOutput, projectDir), maxDiagnostics);
 
-  return compareDiagnostics(projectDisplay, tscDiagnostics, rustDiagnostics);
+  return compareDiagnostics(mode.kind, comparisonDisplay, tscDiagnostics, rustDiagnostics);
+}
+
+export function displayComparisonTargetPath(targetPath: string): string {
+  return displayPath(targetPath);
+}
+
+function displayPath(targetPath: string): string {
+  const relative = path.relative(workspaceRoot, targetPath);
+  return relative.startsWith('..') ? normalizePathForDisplay(targetPath) : normalizePathForDisplay(relative);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

@@ -2677,7 +2677,7 @@ fn parse_import_empty_named_list() {
 }
 
 #[test]
-fn parse_import_default_unsupported_no_panic() {
+fn parse_import_default() {
     let parsed = parse_source("import User from \"./user\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
@@ -2685,11 +2685,14 @@ fn parse_import_default_unsupported_no_panic() {
         panic!("expected an import declaration");
     };
 
-    assert!(matches!(import.kind, ParsedImportKind::Unsupported));
+    assert!(matches!(
+        import.kind,
+        ParsedImportKind::Default { ref local_name, .. } if local_name == "User"
+    ));
 }
 
 #[test]
-fn parse_import_namespace_unsupported_no_panic() {
+fn parse_import_namespace() {
     let parsed = parse_source("import * as user from \"./user\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
@@ -2697,7 +2700,10 @@ fn parse_import_namespace_unsupported_no_panic() {
         panic!("expected an import declaration");
     };
 
-    assert!(matches!(import.kind, ParsedImportKind::Unsupported));
+    assert!(matches!(
+        import.kind,
+        ParsedImportKind::Namespace { ref local_name, .. } if local_name == "user"
+    ));
 }
 
 #[test]
@@ -3041,38 +3047,90 @@ fn parse_export_missing_name_no_panic() {
 }
 
 #[test]
-fn parse_export_default_unsupported_no_panic() {
+fn parse_export_default_expression() {
     let parsed = parse_source("export default 1;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Expression(ParsedExpression::NumberLiteral(value)),
+            ..
+        }) if value == "1"
     ));
 }
 
 #[test]
-fn parse_export_from_unsupported_no_panic() {
+fn parse_export_default_function() {
+    let parsed = parse_source(
+        "export default function getName(): string { return \"Ada\"; }",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Function(_),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn parse_export_default_class_unsupported_no_panic() {
+    let parsed = parse_source("export default class Foo {}", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Unsupported { .. },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn parse_export_named_from() {
     let parsed = parse_source("export { User } from \"./user\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+            module_specifier: Some(module_specifier),
+            ..
+        }) if module_specifier == "./user"
     ));
 }
 
 #[test]
-fn parse_export_star_unsupported_no_panic() {
+fn parse_export_type_named_from() {
+    let parsed = parse_source("export type { User } from \"./user\";", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+            is_type_only: true,
+            module_specifier: Some(module_specifier),
+            ..
+        }) if module_specifier == "./user"
+    ));
+}
+
+#[test]
+fn parse_export_star_from() {
     let parsed = parse_source("export * from \"./user\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
+            module_specifier,
+            ..
+        }) if module_specifier == "./user"
     ));
 }
 
 #[test]
-fn parse_export_type_from_unsupported_no_panic() {
-    let parsed = parse_source("export type { User } from \"./user\";", "example.ts");
+fn parse_export_star_as_from_unsupported_no_panic() {
+    let parsed = parse_source("export * as Foo from \"./foo\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],

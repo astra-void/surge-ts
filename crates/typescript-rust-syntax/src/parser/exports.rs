@@ -1,10 +1,18 @@
 use oxc_ast::ast::{
-    Declaration, ExportNamedDeclaration, ExportSpecifier, ImportOrExportKind, ModuleExportName,
+    Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind,
+    ExportNamedDeclaration, ExportSpecifier, ImportOrExportKind, ModuleExportName,
 };
 use oxc_span::GetSpan;
 
-use crate::{ParsedExportDeclaration, ParsedExportSpecifier, ParsedStatement};
+use crate::{
+    ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedExportSpecifier,
+    ParsedExpression, ParsedStatement,
+};
 
+use super::expressions::{
+    parse_array_expression, parse_conditional_expression, parse_expression,
+    parse_object_properties, parse_static_member_expression, parse_unary_expression,
+};
 use super::spans::text_span_from_oxc_span;
 use super::{
     parse_function_declaration, parse_interface_declaration, parse_type_alias_declaration,
@@ -16,13 +24,13 @@ pub(crate) fn parse_export_named_declaration(
 ) -> Option<Vec<ParsedStatement>> {
     let span = Some(text_span_from_oxc_span(declaration.span));
 
-    if declaration.source.is_some() {
-        return Some(vec![ParsedStatement::ExportDeclaration(
-            ParsedExportDeclaration::Unsupported { span },
-        )]);
-    }
-
     if let Some(wrapped_declaration) = declaration.declaration.as_ref() {
+        if declaration.source.is_some() {
+            return Some(vec![ParsedStatement::ExportDeclaration(
+                ParsedExportDeclaration::Unsupported { span },
+            )]);
+        }
+
         return parse_exported_declaration(wrapped_declaration, declaration.export_kind).or_else(
             || {
                 Some(vec![ParsedStatement::ExportDeclaration(
@@ -54,7 +62,155 @@ pub(crate) fn parse_export_named_declaration(
         ParsedExportDeclaration::Named {
             is_type_only: matches!(declaration.export_kind, ImportOrExportKind::Type),
             specifiers,
-            module_specifier: None,
+            module_specifier: declaration
+                .source
+                .as_ref()
+                .map(|source| source.value.to_string()),
+            module_specifier_span: declaration
+                .source
+                .as_ref()
+                .map(|source| text_span_from_oxc_span(source.span)),
+            span,
+        },
+    )])
+}
+
+pub(crate) fn parse_export_default_declaration(
+    declaration: &ExportDefaultDeclaration<'_>,
+) -> Option<Vec<ParsedStatement>> {
+    let span = Some(text_span_from_oxc_span(declaration.span));
+
+    let parsed_declaration = match &declaration.declaration {
+        ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+            let Some(function) = parse_function_declaration(function) else {
+                return Some(vec![ParsedStatement::ExportDeclaration(
+                    ParsedExportDeclaration::Default {
+                        declaration: ParsedDefaultExportDeclaration::Unsupported {
+                            span: Some(text_span_from_oxc_span(declaration.span)),
+                        },
+                        span,
+                    },
+                )]);
+            };
+
+            ParsedDefaultExportDeclaration::Function(function)
+        }
+        ExportDefaultDeclarationKind::BooleanLiteral(boolean_literal) => {
+            ParsedDefaultExportDeclaration::Expression(ParsedExpression::BooleanLiteral(
+                boolean_literal.value,
+            ))
+        }
+        ExportDefaultDeclarationKind::NumericLiteral(numeric_literal) => {
+            ParsedDefaultExportDeclaration::Expression(ParsedExpression::NumberLiteral(
+                numeric_literal.value.to_string(),
+            ))
+        }
+        ExportDefaultDeclarationKind::StringLiteral(string_literal) => {
+            ParsedDefaultExportDeclaration::Expression(ParsedExpression::StringLiteral(
+                string_literal.value.to_string(),
+            ))
+        }
+        ExportDefaultDeclarationKind::Identifier(identifier) => {
+            ParsedDefaultExportDeclaration::Expression(ParsedExpression::Identifier {
+                name: identifier.name.to_string(),
+                span: Some(text_span_from_oxc_span(identifier.span)),
+            })
+        }
+        ExportDefaultDeclarationKind::ObjectExpression(object_expression) => {
+            ParsedDefaultExportDeclaration::Expression(ParsedExpression::ObjectLiteral {
+                properties: parse_object_properties(object_expression),
+                span: Some(text_span_from_oxc_span(object_expression.span())),
+            })
+        }
+        ExportDefaultDeclarationKind::ArrayExpression(array_expression) => {
+            let Some(parsed_expression) = parse_array_expression(array_expression) else {
+                return Some(vec![ParsedStatement::ExportDeclaration(
+                    ParsedExportDeclaration::Default {
+                        declaration: ParsedDefaultExportDeclaration::Unsupported { span },
+                        span,
+                    },
+                )]);
+            };
+
+            ParsedDefaultExportDeclaration::Expression(parsed_expression)
+        }
+        ExportDefaultDeclarationKind::UnaryExpression(unary_expression) => {
+            let Some(parsed_expression) = parse_unary_expression(unary_expression) else {
+                return Some(vec![ParsedStatement::ExportDeclaration(
+                    ParsedExportDeclaration::Default {
+                        declaration: ParsedDefaultExportDeclaration::Unsupported { span },
+                        span,
+                    },
+                )]);
+            };
+
+            ParsedDefaultExportDeclaration::Expression(parsed_expression)
+        }
+        ExportDefaultDeclarationKind::ConditionalExpression(conditional_expression) => {
+            let Some(parsed_expression) = parse_conditional_expression(conditional_expression)
+            else {
+                return Some(vec![ParsedStatement::ExportDeclaration(
+                    ParsedExportDeclaration::Default {
+                        declaration: ParsedDefaultExportDeclaration::Unsupported { span },
+                        span,
+                    },
+                )]);
+            };
+
+            ParsedDefaultExportDeclaration::Expression(parsed_expression)
+        }
+        ExportDefaultDeclarationKind::StaticMemberExpression(member_expression) => {
+            let Some(parsed_expression) = parse_static_member_expression(member_expression) else {
+                return Some(vec![ParsedStatement::ExportDeclaration(
+                    ParsedExportDeclaration::Default {
+                        declaration: ParsedDefaultExportDeclaration::Unsupported { span },
+                        span,
+                    },
+                )]);
+            };
+
+            ParsedDefaultExportDeclaration::Expression(parsed_expression)
+        }
+        ExportDefaultDeclarationKind::ParenthesizedExpression(parenthesized_expression) => {
+            let (parsed_expression, _) = parse_expression(&parenthesized_expression.expression);
+            ParsedDefaultExportDeclaration::Expression(parsed_expression)
+        }
+        _ => {
+            return Some(vec![ParsedStatement::ExportDeclaration(
+                ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Unsupported { span },
+                    span,
+                },
+            )]);
+        }
+    };
+
+    Some(vec![ParsedStatement::ExportDeclaration(
+        ParsedExportDeclaration::Default {
+            declaration: parsed_declaration,
+            span,
+        },
+    )])
+}
+
+pub(crate) fn parse_export_all_declaration(
+    declaration: &ExportAllDeclaration<'_>,
+) -> Option<Vec<ParsedStatement>> {
+    let span = Some(text_span_from_oxc_span(declaration.span));
+    let module_specifier = declaration.source.value.to_string();
+    let module_specifier_span = Some(text_span_from_oxc_span(declaration.source.span));
+
+    if declaration.exported.is_some() || matches!(declaration.export_kind, ImportOrExportKind::Type)
+    {
+        return Some(vec![ParsedStatement::ExportDeclaration(
+            ParsedExportDeclaration::Unsupported { span },
+        )]);
+    }
+
+    Some(vec![ParsedStatement::ExportDeclaration(
+        ParsedExportDeclaration::All {
+            module_specifier,
+            module_specifier_span,
             span,
         },
     )])

@@ -3,7 +3,8 @@ use std::rc::Rc;
 
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
 use typescript_rust_syntax::{
-    ParsedExportDeclaration, ParsedFunctionDeclaration, ParsedStatement, parse_source,
+    ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedFunctionDeclaration,
+    ParsedStatement, parse_source,
 };
 use typescript_rust_types::FunctionType;
 
@@ -11,7 +12,8 @@ use crate::checks::{assign, call, expr, function as check_function, var};
 use crate::context::{CheckerContext, CheckerOptions};
 use crate::driver::collect_type_declarations;
 use crate::modules::{
-    ModuleExportTable, ModuleImportBindings, build_module_export_table, resolve_module_imports,
+    ModuleExportTable, ModuleImportBindings, build_module_export_table,
+    resolve_module_export_tables, resolve_module_imports,
 };
 use crate::symbols::{SymbolTable, TypeDeclarationTable};
 
@@ -42,7 +44,7 @@ struct ModuleAnalysis {
     local_type_declarations: TypeDeclarationTable,
     local_symbols: SymbolTable,
     local_function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
-    export_table: ModuleExportTable,
+    local_export_table: ModuleExportTable,
 }
 
 pub fn check_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
@@ -76,14 +78,16 @@ pub fn check_program_with_options(
         &mut ctx,
     );
     let module_analyses = collect_module_analyses(&parsed_files, &mut ctx);
-    let module_export_tables = module_analyses
+    let local_module_export_tables = module_analyses
         .iter()
         .map(|analysis| {
             analysis
                 .as_ref()
-                .map(|analysis| analysis.export_table.clone())
+                .map(|analysis| analysis.local_export_table.clone())
         })
         .collect::<Vec<_>>();
+    let module_export_tables =
+        resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
     let module_resolution_scopes = module_analyses
         .iter()
         .map(|analysis| {
@@ -217,7 +221,7 @@ fn collect_module_analyses(
             local_type_declarations,
             local_symbols,
             local_function_signatures,
-            export_table,
+            local_export_table: export_table,
         }));
     }
 
@@ -364,6 +368,21 @@ fn collect_function_signature_from_statement(
             function_signatures,
             ctx,
         ),
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Function(function),
+            ..
+        }) => {
+            let function_type =
+                check_function::collect_function_declaration_signature(function, symbols, ctx);
+            function_signatures.insert(
+                FunctionDeclarationLocation {
+                    file_index,
+                    statement_index,
+                },
+                function_type,
+            );
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default { .. }) => {}
         _ => {}
     }
 }
@@ -428,6 +447,37 @@ fn check_program_statement(
             ctx,
         ),
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration,
+            ..
+        }) => match declaration {
+            ParsedDefaultExportDeclaration::Function(function) => {
+                check_program_function_declaration(
+                    function,
+                    file_index,
+                    statement_index,
+                    function_signatures,
+                    ctx,
+                );
+            }
+            ParsedDefaultExportDeclaration::Expression(expression) => {
+                expr::check_expression_statement(expression, ctx);
+            }
+            ParsedDefaultExportDeclaration::Unsupported { span } => {
+                let mut diagnostic = Diagnostic::new(
+                    DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
+                    "Unsupported module syntax.".to_string(),
+                    ctx.file_name.clone(),
+                );
+
+                if let Some(span) = span {
+                    diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                }
+
+                ctx.push(diagnostic);
+            }
+        },
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
             let mut diagnostic = Diagnostic::new(

@@ -3,8 +3,8 @@ use std::rc::Rc;
 
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
 use typescript_rust_syntax::{
-    ParsedExportDeclaration, ParsedImportDeclaration, ParsedImportKind, ParsedStatement,
-    ParsedType, TextSpan,
+    ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedImportDeclaration,
+    ParsedImportKind, ParsedStatement, ParsedType, TextSpan,
 };
 
 use crate::context::{CheckerContext, convert_span};
@@ -31,6 +31,8 @@ pub(crate) struct ModuleResolution {
 pub(crate) struct ModuleExportTable {
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) symbols: SymbolTable,
+    pub(crate) default_symbol: Option<SymbolInfo>,
+    pub(crate) has_unresolved_star_export: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,6 +107,7 @@ pub(crate) fn build_module_export_table(
 
     let mut type_declarations = TypeDeclarationTable::new();
     let mut symbols = SymbolTable::new();
+    let mut default_symbol = None;
 
     for statement in &parsed_file.statements {
         collect_exports_from_statement(
@@ -114,6 +117,7 @@ pub(crate) fn build_module_export_table(
             local_symbols,
             &mut type_declarations,
             &mut symbols,
+            &mut default_symbol,
             ctx,
         );
     }
@@ -121,7 +125,30 @@ pub(crate) fn build_module_export_table(
     ModuleExportTable {
         type_declarations,
         symbols,
+        default_symbol,
     }
+}
+
+pub(crate) fn resolve_module_export_tables(
+    parsed_files: &[ParsedProgramFile],
+    local_module_export_tables: &[Option<ModuleExportTable>],
+    ctx: &mut CheckerContext,
+) -> Vec<Option<ModuleExportTable>> {
+    let mut resolved_module_export_tables = vec![None; parsed_files.len()];
+    let mut resolving = vec![false; parsed_files.len()];
+
+    for file_index in 0..parsed_files.len() {
+        let _ = resolve_module_export_table(
+            file_index,
+            parsed_files,
+            local_module_export_tables,
+            &mut resolved_module_export_tables,
+            &mut resolving,
+            ctx,
+        );
+    }
+
+    resolved_module_export_tables
 }
 
 pub(crate) fn resolve_module_imports(
@@ -156,6 +183,262 @@ pub(crate) fn resolve_module_imports(
         type_declarations,
         symbols,
     }
+}
+
+fn resolve_module_export_table(
+    file_index: usize,
+    parsed_files: &[ParsedProgramFile],
+    local_module_export_tables: &[Option<ModuleExportTable>],
+    resolved_module_export_tables: &mut [Option<ModuleExportTable>],
+    resolving: &mut [bool],
+    ctx: &mut CheckerContext,
+) -> Option<ModuleExportTable> {
+    if let Some(resolved) = resolved_module_export_tables[file_index].clone() {
+        return Some(resolved);
+    }
+
+    let Some(local_export_table) = local_module_export_tables[file_index].clone() else {
+        return None;
+    };
+
+    if resolving[file_index] {
+        return Some(local_export_table);
+    }
+
+    resolving[file_index] = true;
+    ctx.set_file_name(parsed_files[file_index].file_name.clone());
+
+    let mut resolved_export_table = local_export_table;
+
+    for statement in &parsed_files[file_index].statements {
+        match statement {
+            ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+                is_type_only,
+                specifiers,
+                module_specifier: Some(module_specifier),
+                module_specifier_span,
+                ..
+            }) => {
+                let Some(resolved_module) = resolve_relative_module(
+                    &parsed_files[file_index].file_name,
+                    module_specifier,
+                    parsed_files,
+                ) else {
+                    emit_unresolved_export_module_diagnostic(
+                        ctx,
+                        module_specifier,
+                        *module_specifier_span,
+                    );
+
+                    for specifier in specifiers {
+                        if *is_type_only {
+                            insert_unknown_type_import(
+                                &mut resolved_export_table.type_declarations,
+                                &specifier.exported_name,
+                                ctx.file_name.clone(),
+                                specifier.name_span,
+                            );
+                            continue;
+                        }
+
+                        insert_unknown_type_import(
+                            &mut resolved_export_table.type_declarations,
+                            &specifier.exported_name,
+                            ctx.file_name.clone(),
+                            specifier.name_span,
+                        );
+                        insert_unknown_value_import(
+                            &specifier.exported_name,
+                            &mut resolved_export_table.symbols,
+                        );
+                    }
+
+                    continue;
+                };
+
+                let Some(target_export_table) = resolve_module_export_table(
+                    resolved_module.resolved_file_index,
+                    parsed_files,
+                    local_module_export_tables,
+                    resolved_module_export_tables,
+                    resolving,
+                    ctx,
+                ) else {
+                    for specifier in specifiers {
+                        emit_missing_export_diagnostic(
+                            ctx,
+                            module_specifier,
+                            &specifier.local_name,
+                            specifier.name_span,
+                        );
+
+                        if *is_type_only {
+                            insert_unknown_type_import(
+                                &mut resolved_export_table.type_declarations,
+                                &specifier.exported_name,
+                                ctx.file_name.clone(),
+                                specifier.name_span,
+                            );
+                            continue;
+                        }
+
+                        insert_unknown_type_import(
+                            &mut resolved_export_table.type_declarations,
+                            &specifier.exported_name,
+                            ctx.file_name.clone(),
+                            specifier.name_span,
+                        );
+                        insert_unknown_value_import(
+                            &specifier.exported_name,
+                            &mut resolved_export_table.symbols,
+                        );
+                    }
+
+                    continue;
+                };
+
+                for specifier in specifiers {
+                    let type_export = target_export_table
+                        .type_declarations
+                        .get(&specifier.local_name)
+                        .cloned();
+                    let value_export = target_export_table
+                        .symbols
+                        .get(&specifier.local_name)
+                        .cloned();
+
+                    if *is_type_only {
+                        if let Some(type_export) = type_export {
+                            export_local_type_declaration(
+                                &type_export,
+                                &specifier.exported_name,
+                                &mut resolved_export_table.type_declarations,
+                            );
+                            continue;
+                        }
+
+                        emit_missing_export_diagnostic(
+                            ctx,
+                            module_specifier,
+                            &specifier.local_name,
+                            specifier.name_span,
+                        );
+                        insert_unknown_type_import(
+                            &mut resolved_export_table.type_declarations,
+                            &specifier.exported_name,
+                            ctx.file_name.clone(),
+                            specifier.name_span,
+                        );
+                        continue;
+                    }
+
+                    let mut found = false;
+
+                    if let Some(type_export) = type_export {
+                        export_local_type_declaration(
+                            &type_export,
+                            &specifier.exported_name,
+                            &mut resolved_export_table.type_declarations,
+                        );
+                        found = true;
+                    }
+
+                    if let Some(value_export) = value_export {
+                        let _ = resolved_export_table
+                            .symbols
+                            .insert(specifier.exported_name.clone(), value_export);
+                        found = true;
+                    }
+
+                    if !found {
+                        if target_export_table.has_unresolved_star_export {
+                            insert_unknown_type_import(
+                                &mut resolved_export_table.type_declarations,
+                                &specifier.exported_name,
+                                ctx.file_name.clone(),
+                                specifier.name_span,
+                            );
+                            insert_unknown_value_import(
+                                &specifier.exported_name,
+                                &mut resolved_export_table.symbols,
+                            );
+                            continue;
+                        }
+
+                        emit_missing_export_diagnostic(
+                            ctx,
+                            module_specifier,
+                            &specifier.local_name,
+                            specifier.name_span,
+                        );
+                        insert_unknown_type_import(
+                            &mut resolved_export_table.type_declarations,
+                            &specifier.exported_name,
+                            ctx.file_name.clone(),
+                            specifier.name_span,
+                        );
+                        insert_unknown_value_import(
+                            &specifier.exported_name,
+                            &mut resolved_export_table.symbols,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for statement in &parsed_files[file_index].statements {
+        let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
+            module_specifier,
+            module_specifier_span,
+            ..
+        }) = statement
+        else {
+            continue;
+        };
+
+        let Some(resolved_module) = resolve_relative_module(
+            &parsed_files[file_index].file_name,
+            module_specifier,
+            parsed_files,
+        ) else {
+            emit_unresolved_export_module_diagnostic(ctx, module_specifier, *module_specifier_span);
+            resolved_export_table.has_unresolved_star_export = true;
+            continue;
+        };
+
+        let Some(target_export_table) = resolve_module_export_table(
+            resolved_module.resolved_file_index,
+            parsed_files,
+            local_module_export_tables,
+            resolved_module_export_tables,
+            resolving,
+            ctx,
+        ) else {
+            continue;
+        };
+
+        for (name, declaration) in target_export_table.type_declarations.iter() {
+            if resolved_export_table.type_declarations.get(name).is_none() {
+                let _ = resolved_export_table
+                    .type_declarations
+                    .insert(name.clone(), declaration.clone());
+            }
+        }
+
+        for (name, symbol) in target_export_table.symbols.iter() {
+            if resolved_export_table.symbols.get(name).is_none() {
+                resolved_export_table
+                    .symbols
+                    .insert(name.clone(), symbol.clone());
+            }
+        }
+    }
+
+    resolving[file_index] = false;
+    resolved_module_export_tables[file_index] = Some(resolved_export_table.clone());
+    Some(resolved_export_table)
 }
 
 fn collect_exportable_value_symbols(
@@ -216,6 +499,7 @@ fn collect_exports_from_statement(
     local_symbols: &SymbolTable,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
+    default_symbol: &mut Option<SymbolInfo>,
     ctx: &mut CheckerContext,
 ) {
     match statement {
@@ -229,13 +513,19 @@ fn collect_exports_from_statement(
             local_symbols,
             type_declarations,
             symbols,
+            default_symbol,
             ctx,
         ),
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
             is_type_only,
             specifiers,
+            module_specifier,
             ..
         }) => {
+            if module_specifier.is_some() {
+                return;
+            }
+
             for specifier in specifiers {
                 if *is_type_only {
                     export_local_type_name(
@@ -274,6 +564,43 @@ fn collect_exports_from_statement(
                 }
             }
         }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration,
+            span,
+        }) => match declaration {
+            ParsedDefaultExportDeclaration::Function(function) => {
+                if let Some(symbol) = local_symbols.get(&function.name) {
+                    if default_symbol.is_some() {
+                        push_duplicate_default_export_diagnostic(ctx, function.name_span.or(*span));
+                    } else {
+                        *default_symbol = Some(symbol.clone());
+                    }
+                } else {
+                    push_duplicate_default_export_diagnostic(ctx, function.name_span.or(*span));
+                }
+            }
+            ParsedDefaultExportDeclaration::Expression(expression) => {
+                if default_symbol.is_some() {
+                    push_duplicate_default_export_diagnostic(ctx, *span);
+                    return;
+                }
+
+                let ty = crate::infer::infer_expression(expression, exportable_values);
+                let ty = match ty {
+                    crate::infer::InferredExpression::Known(ty) => ty,
+                    crate::infer::InferredExpression::Unknown
+                    | crate::infer::InferredExpression::UnresolvedIdentifier { .. }
+                    | crate::infer::InferredExpression::MissingProperty { .. } => Type::Unknown,
+                };
+
+                *default_symbol = Some(SymbolInfo {
+                    ty,
+                    kind: SymbolKind::Const,
+                });
+            }
+            ParsedDefaultExportDeclaration::Unsupported { .. } => {}
+        },
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All { .. }) => {}
         ParsedStatement::TypeAliasDeclaration(alias) => {
             export_local_type_name(
                 &alias.name,
@@ -321,6 +648,79 @@ fn resolve_import_declaration(
     match &import.kind {
         ParsedImportKind::Unsupported => {
             emit_unsupported_module_syntax_diagnostic(ctx, import);
+            return;
+        }
+        ParsedImportKind::Default {
+            local_name,
+            name_span,
+        } => {
+            let Some(resolved) =
+                resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
+            else {
+                emit_unresolved_module_diagnostic(ctx, import);
+                insert_unknown_value_import(local_name, symbols);
+                return;
+            };
+
+            let Some(Some(export_table)) = module_export_tables.get(resolved.resolved_file_index)
+            else {
+                emit_missing_export_diagnostic(
+                    ctx,
+                    &import.module_specifier,
+                    "default",
+                    *name_span,
+                );
+                insert_unknown_value_import(local_name, symbols);
+                return;
+            };
+
+            let Some(default_symbol) = export_table.default_symbol.clone() else {
+                emit_missing_export_diagnostic(
+                    ctx,
+                    &import.module_specifier,
+                    "default",
+                    *name_span,
+                );
+                insert_unknown_value_import(local_name, symbols);
+                return;
+            };
+
+            if local_symbols.get(local_name).is_none() {
+                symbols.insert(local_name.clone(), default_symbol);
+            }
+            return;
+        }
+        ParsedImportKind::Namespace {
+            local_name,
+            name_span: _,
+        } => {
+            let Some(resolved) =
+                resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
+            else {
+                emit_unresolved_module_diagnostic(ctx, import);
+                insert_unknown_value_import(local_name, symbols);
+                return;
+            };
+
+            let namespace_type = module_export_tables
+                .get(resolved.resolved_file_index)
+                .and_then(|table| table.as_ref())
+                .map(namespace_export_object_type)
+                .unwrap_or_else(|| {
+                    Type::Object(typescript_rust_types::ObjectType {
+                        properties: std::collections::BTreeMap::new(),
+                    })
+                });
+
+            if local_symbols.get(local_name).is_none() {
+                symbols.insert(
+                    local_name.clone(),
+                    SymbolInfo {
+                        ty: namespace_type,
+                        kind: SymbolKind::Const,
+                    },
+                );
+            }
             return;
         }
         ParsedImportKind::SideEffect => {
@@ -571,6 +971,61 @@ fn insert_unknown_value_import(local_name: &str, symbols: &mut SymbolTable) {
             kind: SymbolKind::Var,
         },
     );
+}
+
+fn namespace_export_object_type(export_table: &ModuleExportTable) -> Type {
+    let mut properties = std::collections::BTreeMap::new();
+
+    for (name, symbol) in export_table.symbols.iter() {
+        properties.insert(
+            name.clone(),
+            typescript_rust_types::ObjectProperty::required(symbol.ty.clone()),
+        );
+    }
+
+    if let Some(default_symbol) = &export_table.default_symbol {
+        properties.insert(
+            "default".to_string(),
+            typescript_rust_types::ObjectProperty::required(default_symbol.ty.clone()),
+        );
+    }
+
+    Type::Object(typescript_rust_types::ObjectType { properties })
+}
+
+fn push_duplicate_default_export_diagnostic(ctx: &mut CheckerContext, name_span: Option<TextSpan>) {
+    let mut diagnostic = Diagnostic::new(
+        DiagnosticCode::Custom("typescript-rust::duplicate-default-export"),
+        "Duplicate default export.".to_string(),
+        ctx.file_name.clone(),
+    );
+
+    if let Some(span) = name_span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+
+    ctx.push(diagnostic);
+}
+
+fn emit_unresolved_export_module_diagnostic(
+    ctx: &mut CheckerContext,
+    module_specifier: &str,
+    module_specifier_span: Option<TextSpan>,
+) {
+    let mut diagnostic = Diagnostic::new(
+        DiagnosticCode::TypeScript(2307),
+        format!(
+            "Cannot find module '{}' or its corresponding type declarations.",
+            module_specifier
+        ),
+        ctx.file_name.clone(),
+    );
+
+    if let Some(span) = module_specifier_span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+
+    ctx.push(diagnostic);
 }
 
 fn emit_unresolved_module_diagnostic(ctx: &mut CheckerContext, import: &ParsedImportDeclaration) {

@@ -419,7 +419,9 @@ pub(crate) fn parse_unary_expression(
     })
 }
 
-fn parse_object_properties(object_expression: &ObjectExpression<'_>) -> Vec<ParsedObjectProperty> {
+pub(crate) fn parse_object_properties(
+    object_expression: &ObjectExpression<'_>,
+) -> Vec<ParsedObjectProperty> {
     object_expression
         .properties
         .iter()
@@ -449,7 +451,9 @@ fn parse_object_properties(object_expression: &ObjectExpression<'_>) -> Vec<Pars
         .collect()
 }
 
-fn parse_array_expression(array_expression: &ArrayExpression<'_>) -> Option<ParsedExpression> {
+pub(crate) fn parse_array_expression(
+    array_expression: &ArrayExpression<'_>,
+) -> Option<ParsedExpression> {
     let mut elements = Vec::new();
 
     for element in &array_expression.elements {

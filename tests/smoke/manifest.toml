@@ -5499,17 +5499,17 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "module-import-named-unresolved-type"
 path = "tests/smoke/module_import_named_unresolved_type.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-import-type-named-unresolved-type"
 path = "tests/smoke/module_import_type_named_unresolved_type.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-import-side-effect-valid"
 path = "tests/smoke/module_import_side_effect_valid.ts"
-expected_diagnostics = []
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 
 [[case]]
 name = "module-export-interface-same-file-valid"
@@ -5534,17 +5534,17 @@ expected_diagnostics = []
 [[case]]
 name = "module-imported-type-no-cascade"
 path = "tests/smoke/module_imported_type_no_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-import-named-unresolved-value"
 path = "tests/smoke/module_import_named_unresolved_value.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-import-alias-unresolved-local-name"
 path = "tests/smoke/module_import_alias_unresolved_local_name.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-export-variable-same-file-valid"
@@ -5574,7 +5574,7 @@ expected_diagnostics = []
 [[case]]
 name = "module-imported-function-no-cascade"
 path = "tests/smoke/module_imported_function_no_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-module-does-not-see-script-global"
@@ -5589,27 +5589,27 @@ expected_diagnostics = []
 [[case]]
 name = "module-non-relative-named-import-no-cascade"
 path = "tests/smoke/module_non_relative_named_import_no_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-non-relative-type-import-no-cascade"
 path = "tests/smoke/module_non_relative_type_import_no_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-non-relative-side-effect-import"
 path = "tests/smoke/module_non_relative_side_effect_import.ts"
-expected_diagnostics = []
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 
 [[case]]
 name = "module-default-import-unsupported-or-parser-error"
 path = "tests/smoke/module_default_import_unsupported_or_parser_error.ts"
-expected_diagnostics = []
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 
 [[case]]
 name = "module-namespace-import-unsupported-or-parser-error"
 path = "tests/smoke/module_namespace_import_unsupported_or_parser_error.ts"
-expected_diagnostics = []
+expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
 
 [[case]]
 name = "module-re-export-named-unsupported-or-parser-error"

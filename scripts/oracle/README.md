@@ -36,6 +36,13 @@ Compare one of the built-in presets:
 pnpm run oracle:compare -- --project generics-basic
 ```
 
+Compare a single standalone source file:
+
+```bash
+pnpm run oracle:compare -- --file examples/basic.ts
+pnpm run oracle:compare -- --file examples/assignment.ts
+```
+
 Compare a disposable local project:
 
 ```bash
@@ -50,8 +57,8 @@ pnpm run oracle:test
 
 ## What it does
 
-- Runs `pnpm exec tsc --noEmit --pretty false --project <tsconfig>`.
-- Runs `cargo run -q --manifest-path Cargo.toml -p typescript-rust-cli -- --project <tsconfig> --format json`.
+- Project mode runs `pnpm exec tsc --noEmit --pretty false --project <tsconfig>` and `cargo run -q --manifest-path Cargo.toml -p typescript-rust-cli -- --project <tsconfig> --format json`.
+- File mode runs `pnpm exec tsc --noEmit --pretty false <file>` and `cargo run -q --manifest-path Cargo.toml -p typescript-rust-cli -- --format json <file>`.
 - Normalizes both diagnostic streams to code, file name, line, and column when
   available.
 - Compares code counts first, then `(fileName, code)` counts, then
@@ -64,8 +71,24 @@ pnpm run oracle:test
 - It does not add package resolution, `node_modules` lookup, `paths` /
   `baseUrl`, `lib.d.ts`, declaration files, project references, or any broader
   TypeScript parity work.
+- File mode currently only accepts `.ts` files. Project mode is still the
+  preferred oracle for multi-file compatibility checks, and file mode may drift
+  from project mode because single-file TypeScript runs use default compiler
+  options unless you add explicit flags later.
 - It is a measurement tool, not a claim that the checker fully matches
   TypeScript.
+
+## Common Mistake
+
+This is invalid:
+
+```bash
+pnpm run oracle:compare -- --project examples/basic.ts
+```
+
+`--project` expects a preset name or `tsconfig.json` path. Use `--file` for a
+single source file. This prevents TypeScript from treating `.ts` files as
+`tsconfig` inputs and emitting misleading config diagnostics.
 
 ## Output levels
 
