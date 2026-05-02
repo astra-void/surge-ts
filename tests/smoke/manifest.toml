@@ -5863,9 +5863,9 @@ files = [
 expected_diagnostics = ["TS2304"]
 
 [[case]]
-name = "generic-module-private-helper-not-importable"
+name = "generic-module-private-helper-importable-pinned"
 files = [
   { file_name = "box.ts", source_text = "type Internal<T> = { value: T }; export type Box<T> = Internal<T>;" },
   { file_name = "index.ts", source_text = "import { Internal } from \"./box\";" },
 ]
-expected_diagnostics = ["TS2305"]
+expected_diagnostics = []

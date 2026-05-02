@@ -23,6 +23,32 @@ fn span(source: &str, needle: &str) -> (usize, usize) {
     (start, start + needle.len())
 }
 
+fn span_nth(source: &str, needle: &str, nth: usize) -> (usize, usize) {
+    let start = source
+        .match_indices(needle)
+        .nth(nth)
+        .map(|(start, _)| start)
+        .unwrap_or_else(|| panic!("missing {nth} occurrence of {needle:?} in {source:?}"));
+    (start, start + needle.len())
+}
+
+fn assert_single_span(
+    source: &str,
+    diagnostics: Vec<Diagnostic>,
+    code: &str,
+    expected_span: (usize, usize),
+) {
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            code.to_string(),
+            "example.ts".to_string(),
+            Some(expected_span)
+        )],
+        "source: {source}"
+    );
+}
+
 #[test]
 fn span_generic_arity_missing_points_to_type_reference_name() {
     let source = "type Box<T> = { value: T }; let box: Box = { value: \"ok\" };";

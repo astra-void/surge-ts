@@ -5,7 +5,8 @@ use std::{fs, path::PathBuf, process::ExitCode};
 use clap::{Error, Parser, error::ErrorKind};
 use report::{
     ReportFormat, build_project_compatibility_report, render_project_compatibility_report_json,
-    render_project_compatibility_report_text, render_project_diagnostics_preview,
+    render_project_compatibility_report_text, render_project_diagnostics_json,
+    render_project_diagnostics_preview,
 };
 use serde_json::{Map, Value};
 use typescript_rust_checker::{
@@ -49,14 +50,6 @@ fn main() -> ExitCode {
         Error::raw(
             ErrorKind::InvalidValue,
             "--maxDiagnostics must be greater than 0",
-        )
-        .exit();
-    }
-
-    if cli.format.is_some() && !cli.compat_report {
-        Error::raw(
-            ErrorKind::MissingRequiredArgument,
-            "--format requires --compatReport",
         )
         .exit();
     }
@@ -108,6 +101,7 @@ fn main() -> ExitCode {
         file_path,
         cli.no_implicit_any,
         cli.show_spans,
+        cli.format.unwrap_or(ReportFormat::Text),
         cli.max_diagnostics,
     )
 }
@@ -116,6 +110,7 @@ fn run_single_file_mode(
     file_path: PathBuf,
     no_implicit_any: bool,
     show_spans: bool,
+    format: ReportFormat,
     max_diagnostics: Option<usize>,
 ) -> ExitCode {
     let source_text = match fs::read_to_string(&file_path) {
@@ -131,16 +126,28 @@ fn run_single_file_mode(
         &file_path.to_string_lossy(),
         CheckerOptions { no_implicit_any },
     );
-    println!(
-        "{}",
-        render_single_file_diagnostics(
-            &file_path,
-            &diagnostics,
-            &source_text,
-            show_spans,
-            max_diagnostics
-        )
-    );
+    match format {
+        ReportFormat::Text => println!(
+            "{}",
+            render_single_file_diagnostics(
+                &file_path,
+                &diagnostics,
+                &source_text,
+                show_spans,
+                max_diagnostics
+            )
+        ),
+        ReportFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&render_single_file_diagnostics_json(
+                &file_path,
+                &diagnostics,
+                &source_text,
+                max_diagnostics
+            ))
+            .unwrap()
+        ),
+    }
 
     ExitCode::SUCCESS
 }
@@ -219,10 +226,30 @@ fn run_project_mode(
         return ExitCode::SUCCESS;
     }
 
-    let preview =
-        render_project_diagnostics_preview(&diagnostics, &sources, show_spans, max_diagnostics);
-    if !preview.is_empty() {
-        println!("{}", preview);
+    match format {
+        ReportFormat::Text => {
+            let preview = render_project_diagnostics_preview(
+                &diagnostics,
+                &sources,
+                show_spans,
+                max_diagnostics,
+            );
+            if !preview.is_empty() {
+                println!("{}", preview);
+            }
+        }
+        ReportFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&render_project_diagnostics_json(
+                    &loaded,
+                    &diagnostics,
+                    &sources,
+                    max_diagnostics
+                ))
+                .unwrap()
+            );
+        }
     }
 
     ExitCode::SUCCESS
@@ -259,6 +286,58 @@ fn render_single_file_diagnostics(
     } else {
         rendered
     }
+}
+
+fn render_single_file_diagnostics_json(
+    file_path: &std::path::Path,
+    diagnostics: &[typescript_rust_diagnostics::Diagnostic],
+    source_text: &str,
+    max_diagnostics: Option<usize>,
+) -> Value {
+    let limit = max_diagnostics.unwrap_or(usize::MAX);
+    let diagnostics = diagnostics
+        .iter()
+        .take(limit)
+        .map(|diagnostic| build_single_file_diagnostic_json(file_path, diagnostic, source_text))
+        .collect::<Vec<_>>();
+
+    let mut root = Map::new();
+    root.insert("diagnostics".to_string(), Value::Array(diagnostics));
+
+    Value::Object(root)
+}
+
+fn build_single_file_diagnostic_json(
+    file_path: &std::path::Path,
+    diagnostic: &typescript_rust_diagnostics::Diagnostic,
+    source_text: &str,
+) -> Value {
+    let mut item = Map::new();
+    item.insert(
+        "code".to_string(),
+        Value::String(diagnostic.code.to_string()),
+    );
+    item.insert(
+        "fileName".to_string(),
+        Value::String(file_path.display().to_string()),
+    );
+    item.insert(
+        "message".to_string(),
+        Value::String(diagnostic.message.clone()),
+    );
+
+    if let Some(span) = diagnostic.span {
+        let mut span_json = Map::new();
+        span_json.insert("start".to_string(), Value::from(span.start as u64));
+        span_json.insert("end".to_string(), Value::from(span.end as u64));
+        item.insert("span".to_string(), Value::Object(span_json));
+
+        let (line, column) = line_col_from_offset(source_text, span.start);
+        item.insert("line".to_string(), Value::from(line as u64));
+        item.insert("column".to_string(), Value::from(column as u64));
+    }
+
+    Value::Object(item)
 }
 
 fn build_show_config_json(loaded: &typescript_rust_config::LoadedTsConfig) -> Value {

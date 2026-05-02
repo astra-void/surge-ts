@@ -70,6 +70,25 @@ pub fn build_project_compatibility_report(
     }
 }
 
+pub fn render_project_diagnostics_json(
+    loaded: &LoadedTsConfig,
+    diagnostics: &[Diagnostic],
+    sources: &[(PathBuf, String, String)],
+    max_diagnostics: Option<usize>,
+) -> Value {
+    let limit = max_diagnostics.unwrap_or(usize::MAX);
+    let diagnostics = diagnostics
+        .iter()
+        .take(limit)
+        .map(|diagnostic| render_diagnostic_json(loaded, diagnostic, sources))
+        .collect::<Vec<_>>();
+
+    let mut root = Map::new();
+    root.insert("diagnostics".to_string(), Value::Array(diagnostics));
+
+    Value::Object(root)
+}
+
 pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityReport) -> String {
     let mut lines = Vec::new();
     lines.push("Compatibility report".to_string());
@@ -321,7 +340,7 @@ fn render_diagnostic_with_span(diagnostic: &Diagnostic, source_text: &str) -> St
     format!("{header}\n{}", diagnostic.render(source_text))
 }
 
-fn line_col_from_offset(source_text: &str, offset: usize) -> (usize, usize) {
+pub(crate) fn line_col_from_offset(source_text: &str, offset: usize) -> (usize, usize) {
     let mut line = 1usize;
     let mut column = 1usize;
     let target = offset.min(source_text.len());
@@ -340,6 +359,51 @@ fn line_col_from_offset(source_text: &str, offset: usize) -> (usize, usize) {
     }
 
     (line, column)
+}
+
+fn render_diagnostic_json(
+    loaded: &LoadedTsConfig,
+    diagnostic: &Diagnostic,
+    sources: &[(PathBuf, String, String)],
+) -> Value {
+    let mut item = Map::new();
+    item.insert(
+        "code".to_string(),
+        Value::String(diagnostic.code.to_string()),
+    );
+    item.insert(
+        "fileName".to_string(),
+        Value::String(report_path_label(&loaded.root_dir, &diagnostic.file_name)),
+    );
+    item.insert(
+        "message".to_string(),
+        Value::String(diagnostic.message.clone()),
+    );
+
+    if let Some(span) = diagnostic.span {
+        let mut span_json = Map::new();
+        span_json.insert("start".to_string(), Value::from(span.start as u64));
+        span_json.insert("end".to_string(), Value::from(span.end as u64));
+        item.insert("span".to_string(), Value::Object(span_json));
+
+        if let Some(source_text) = source_text_for_diagnostic(sources, &diagnostic.file_name) {
+            let (line, column) = line_col_from_offset(source_text, span.start);
+            item.insert("line".to_string(), Value::from(line as u64));
+            item.insert("column".to_string(), Value::from(column as u64));
+        }
+    }
+
+    Value::Object(item)
+}
+
+fn source_text_for_diagnostic<'a>(
+    sources: &'a [(PathBuf, String, String)],
+    file_name: &str,
+) -> Option<&'a str> {
+    sources
+        .iter()
+        .find(|(_, source_file_name, _)| source_file_name == file_name)
+        .map(|(_, _, source_text)| source_text.as_str())
 }
 
 fn sort_counts(counts: HashMap<String, usize>) -> Vec<CompatReportCountEntry> {

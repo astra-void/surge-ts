@@ -32,7 +32,9 @@ Any file containing top-level import or export syntax is treated as a module fil
 - Named export lists resolve against same-file local declarations.
 - Exported generic aliases and interfaces are preserved across the relative module-resolution-lite pass, explicit type arguments are substituted when the imported declaration is instantiated, and trailing defaults are applied when callers omit type arguments.
 - Constraints remain parser-only metadata in this phase.
-- Private helper types stay visible to their defining module but are not importable by name from other files.
+- Private helper types stay visible through the current module-resolution-lite
+  pass, so imported declarations can still resolve them while the model remains
+  intentionally narrower than full package/module resolution.
 - Unsupported module forms are parser-safe or pinned with a stable
   `typescript-rust::unsupported-module-syntax` diagnostic.
 

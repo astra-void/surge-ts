@@ -62,3 +62,6 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 - When the smaller span is unavailable, use the policy's pinned wrapper span and keep the code stable.
 - The span-focused regression tests in `tests/spans.rs` and `tests/example_spans.rs` are the baseline for this policy.
 - Use `cargo run -p typescript-rust-cli -- --showSpans <file>` to inspect spans during development.
+- The TypeScript oracle comparison added in v0.60 compares code, file, and
+  line/column first; it is a measurement baseline, not an exact span-parity
+  contract.

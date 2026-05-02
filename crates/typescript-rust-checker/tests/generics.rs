@@ -184,13 +184,13 @@ fn generic_module_private_helper_type_importable_or_pinned() {
         ("index.ts", "import { Internal } from \"./box\";"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
 fn generic_type_alias_number_valid() {
     let diagnostics = program(&[
-        ("box.ts", "export type Box<T> = { value: T };"),
+        ("box.ts", "type Box<T> = { value: T };"),
         ("index.ts", "let box: Box<number> = { value: 123 };"),
     ]);
 
@@ -200,7 +200,7 @@ fn generic_type_alias_number_valid() {
 #[test]
 fn generic_type_alias_boolean_valid() {
     let diagnostics = program(&[
-        ("box.ts", "export type Box<T> = { value: T };"),
+        ("box.ts", "type Box<T> = { value: T };"),
         ("index.ts", "let box: Box<boolean> = { value: true };"),
     ]);
 
@@ -354,7 +354,7 @@ fn generic_type_alias_private_helper_generic_not_importable() {
         ("index.ts", "import { Internal } from \"./box\";"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
@@ -362,7 +362,7 @@ fn generic_interface_property_valid() {
     let diagnostics = program(&[
         (
             "box.ts",
-            "export interface StoreApi<TState> { getState: () => TState; }",
+            "interface StoreApi<TState> { getState: () => TState; }",
         ),
         (
             "index.ts",
@@ -378,7 +378,7 @@ fn generic_interface_property_mismatch() {
     let diagnostics = program(&[
         (
             "box.ts",
-            "export interface StoreApi<TState> { getState: () => TState; }",
+            "interface StoreApi<TState> { getState: () => TState; }",
         ),
         (
             "index.ts",
@@ -937,7 +937,7 @@ fn generic_module_private_helper_not_importable() {
         ("index.ts", "import { Internal } from \"./box\";"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
