@@ -16,7 +16,7 @@ Example:
 ```bash
 mkdir -p .local-projects
 cargo run -p typescript-rust-cli -- --project .local-projects/<project>/tsconfig.json --compatReport --maxDiagnostics 200
-npm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --maxDiagnostics 200
+pnpm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --maxDiagnostics 200
 ```
 
 ## What the report tells you

@@ -122,7 +122,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
 
-    if (arg === '--help' || arg === '-h') {
+    if (arg === '--') {
+      continue;
+    } else if (arg === '--help' || arg === '-h') {
       printHelpAndExit();
     } else if (arg === '--project' || arg === '--fixture') {
       const value = argv[++index];
@@ -160,8 +162,8 @@ function printHelpAndExit(): never {
   process.stdout.write(
     [
       'Usage:',
-      '  npm run oracle:compare -- --project <tsconfig.json|preset>',
-      '  npm run oracle:compare -- <tsconfig.json|preset>',
+      '  pnpm run oracle:compare -- --project <tsconfig.json|preset>',
+      '  pnpm run oracle:compare -- <tsconfig.json|preset>',
       '',
       'Options:',
       '  --project <path|preset>   Compare a tsconfig file or known fixture preset.',
@@ -213,8 +215,8 @@ function displayProjectPath(tsconfigPath: string): string {
 
 function runTsc(projectDir: string, relativeTsconfig: string): { output: string } {
   const result = spawnSync(
-    'npm',
-    ['exec', '--', 'tsc', '--noEmit', '--pretty', 'false', '--project', relativeTsconfig],
+    'pnpm',
+    ['exec', 'tsc', '--noEmit', '--pretty', 'false', '--project', relativeTsconfig],
     {
       cwd: projectDir,
       encoding: 'utf8',

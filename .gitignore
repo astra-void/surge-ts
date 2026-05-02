@@ -2,6 +2,7 @@
 target
 digest.txt
 node_modules
+.pnpm-store/
 dist
 coverage
 *.log

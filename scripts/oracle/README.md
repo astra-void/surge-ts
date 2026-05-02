@@ -7,30 +7,30 @@ compiler.
 ## Install
 
 ```bash
-npm install
+pnpm install
 ```
 
-The repo uses `package-lock.json` for reproducible dev-tool installs. `node_modules/`
-stays untracked.
+The repo uses `pnpm-lock.yaml` for reproducible dev-tool installs.
+`node_modules/` stays untracked.
 
 ## Run
 
 Compare a committed fixture:
 
 ```bash
-npm run oracle:compare -- --project tests/compat-projects/generics-basic/tsconfig.json
+pnpm run oracle:compare -- --project tests/compat-projects/generics-basic/tsconfig.json
 ```
 
 Compare one of the built-in presets:
 
 ```bash
-npm run oracle:compare -- --project generics-basic
+pnpm run oracle:compare -- --project generics-basic
 ```
 
 Compare a disposable local project:
 
 ```bash
-npm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --maxDiagnostics 200
+pnpm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --maxDiagnostics 200
 ```
 
 ## What it does
