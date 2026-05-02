@@ -54,7 +54,7 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
   behavior into the Rust crates.
 - Future phases should add new modules for interfaces, arrays/tuples, and imports/exports rather than re-expanding monolithic files; literal types are already represented and should be hardened in-place before broader type-system expansion.
 - Config, syntax, and checker logic should stay in their dedicated submodule trees rather than returning to crate-root files.
-- After v0.60.1, the next phase should be chosen from `--compatReport`
+- After v0.61, the next phase should still be chosen from `--compatReport`
   output, not from a fixed feature wish list.
 
 ## Suggested Homes For Future Features

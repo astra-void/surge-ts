@@ -45,7 +45,7 @@ does not misread the file as a config input.
 
 ## Current baseline
 
-`v0.60.1` intentionally avoids:
+`v0.61` intentionally avoids:
 
 - package resolution
 - `node_modules` lookup
@@ -59,6 +59,8 @@ does not misread the file as a config input.
 - CommonJS or bundler semantics
 - generic constraints enforcement
 - generic call-site inference
+- mixed default + named imports
+- default class exports
 
 The oracle harness also stays away from those areas. It only measures the
 current surface against TypeScript diagnostics; it does not add new resolver or
@@ -67,11 +69,9 @@ File mode is intentionally narrow: it only accepts `.ts` source files for now,
 and it is a quick standalone oracle rather than the main compatibility path.
 
 The next phase should still be chosen from oracle and compat-report output, not
-from a fixed feature wish list. Generic aliases and interfaces now support
-explicit type arguments, defaults, and parser-safe constraints, but call-site
-type arguments remain parser-safe and ignored by the checker. Likely follow-ups
+from a fixed feature wish list. Module syntax expansion now supports default,
+namespace, and re-export forms for relative `.ts` files. Likely follow-ups
 include:
 
-- `v0.60 module syntax expansion`
-- `v0.60 package import stubbing`
-- `v0.60 declaration-file surface`
+- `v0.62 package import stubbing`
+- `v0.62 declaration-file surface`
