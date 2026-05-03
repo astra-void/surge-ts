@@ -75,3 +75,5 @@ namespace, and re-export forms for relative `.ts` files. Package import stubbing
 include:
 
 - `v0.64 declaration/lib/global type surface`
+
+v0.64 adds declaration ingestion foundation (`.d.ts` loading, ambient globals, and ambient modules).

@@ -22,36 +22,7 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - Minimal interfaces are currently implemented as shared type declarations that
   lower to object types in the syntax/checker split; future phases should keep
   that surface small until extends, members, and merging are intentionally added.
-- Checker inference is split into expression inference and parsed type resolution.
-- Checker symbols are split into value symbols, type declarations, and scope handling.
-- The checker now also has a program-level entry point that precollects global
-  script declarations across multiple files before statement checking begins.
-  It models shared global-script type aliases, interfaces, and top-level
-  functions while keeping top-level variables file-local.
-- Imports and exports now have a parsed syntax surface, and v0.57.1 hardens a
-  focused relative module-resolution-lite layer for loaded program files.
-  Module files remain isolated from the global-script sharing prepass, but
-  named relative imports, type-only imports, side-effect imports, and local
-  named export lists now bind across loaded `.ts` files with separate type and
-  value namespaces.
-- v0.59 adds a narrow generic syntax surface plus instantiation-lite for type
-  aliases and interfaces. v0.59.1 hardens parser recovery, default type
-  parameters, arity diagnostics, duplicate type-parameter handling, and
-  cross-file generic imports/exports while still keeping generic inference out
-  of scope.
-- v0.58 adds project compatibility reporting and diagnostic limiting so real
-  projects can be triaged without pretending the checker fully supports package
-  resolution (v0.63 package import stubbing helps reduce cascades here).
-  resolution or the broader TypeScript module surface yet.
-- The checker now has a diagnostic span policy document and span-focused
-  regression tests; future diagnostics should follow the same span policy
-  instead of adding ad-hoc wrapper spans.
-- The workspace also has a committed TypeScript oracle comparison harness under
-  `scripts/oracle/` that measures diagnostic drift without changing checker
-  semantics. It now has explicit project and single-file modes plus input
-  validation so `.ts` files are not accidentally treated as `tsconfig` inputs.
-  It is dev-only tooling with a pinned TypeScript version and a committed
-  `pnpm-lock.yaml`; it should not pull Node resolution or language-service
+- Checker inference is split into expression inference and parsed type resolution or language-service
   behavior into the Rust crates.
 - Future phases should add new modules for interfaces, arrays/tuples, and imports/exports rather than re-expanding monolithic files; literal types are already represented and should be hardened in-place before broader type-system expansion.
 - Config, syntax, and checker logic should stay in their dedicated submodule trees rather than returning to crate-root files.
@@ -69,3 +40,6 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - Oracle comparison: `scripts/oracle/compare-tsc.ts` for project and file mode
   validation (including --ignoreConfig for standalone file checking) plus diagnostic drift measurement
 - New diagnostics: `typescript-rust-diagnostics` (including CLI-only diagnostics like TS5112)
+
+## Declaration Ingestion
+v0.64 adds a foundation for `.d.ts` files, enabling ambient external modules and ambient globals.
