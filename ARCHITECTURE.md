@@ -9,7 +9,7 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 | `typescript-rust-syntax` | Parse TypeScript source into a simplified AST |
 | `typescript-rust-types` | Core type representation, display, unions, and assignability |
 | `typescript-rust-checker` | Semantic checking and diagnostic emission |
-| `typescript-rust-diagnostics` | Diagnostic codes, catalog, constructors, and rendering |
+| `typescript-rust-diagnostics` | Diagnostic codes, catalog, generated accessors, and rendering |
 | `typescript-rust-config` | `tsconfig.json` loading, normalization, and file discovery |
 | `typescript-rust-cli` | CLI orchestration |
 
@@ -39,7 +39,19 @@ v0.48 introduced the crate-level module split across types, diagnostics, config,
 - Compatibility reporting and triage: `typescript-rust-cli` and `typescript-rust-checker`
 - Oracle comparison: `scripts/oracle/compare-tsc.ts` for project and file mode
   validation (including --ignoreConfig for standalone file checking) plus diagnostic drift measurement
-- New diagnostics: `typescript-rust-diagnostics` (including CLI-only diagnostics like TS5112)
+- New diagnostics: `typescript-rust-diagnostics` (catalog-driven, including CLI-only diagnostics like TS5112)
+
+## Diagnostics
+
+Diagnostics are catalog-driven in `typescript-rust-diagnostics`.
+The Rust accessors are generated from `diagnostic-messages.json`, and spans remain a checker/parser concern rather than a catalog concern.
 
 ## Declaration Ingestion
-v0.64 adds a foundation for `.d.ts` files, enabling ambient external modules and ambient globals.
+v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable before any package or lib discovery work lands.
+
+- Loaded `.d.ts` files can contribute ambient globals and exact `declare module "pkg"` blocks.
+- Ambient modules resolve before package import stubbing fallback.
+- Default exports, namespace imports, named re-exports, type-only re-exports, and star re-exports are pinned for the supported ambient-module subset.
+- Duplicate ambient module and duplicate ambient global behavior is intentionally first-wins / pinned rather than full declaration merging.
+- Unsupported declaration syntax stays parser-safe and emits a stable pinned diagnostic.
+- No `node_modules`, `package.json`, `@types`, or `lib.d.ts` discovery is added here.

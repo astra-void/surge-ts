@@ -33,26 +33,31 @@ blockers from the noise:
 
 1. Parser errors
 2. Unsupported module syntax
-3. Non-relative package imports
+3. Non-relative package imports and side-effect import diagnostics
 4. Missing global/lib symbols or unsupported generic syntax
 5. Plain type mismatches
 
 The report does not guarantee that a project is expected to pass.
 The oracle comparison does not guarantee that message text or exact spans
 match; it starts with code, file, and line/column normalization first.
+Diagnostic codes and messages are catalog-driven in `typescript-rust-diagnostics`,
+so catalog updates can legitimately move oracle output even when checker
+semantics stay the same.
 Use `--project` for `tsconfig.json`-based projects and `--file` for single
 source files. Passing a `.ts` file to `--project` is rejected now so TypeScript
 does not misread the file as a config input.
 
 ## Current baseline
 
-`v0.61` intentionally avoids:
+The current baseline still intentionally avoids:
 
 - package resolution
 - `node_modules` lookup
 - `paths` / `baseUrl`
-- lib.d.ts modeling
-- declaration files
+- lib.d.ts modeling or auto-loading
+- full declaration-file semantics
+- `@types` discovery
+- package.json `types` / `exports` / `main`
 - project references
 - incremental or watch behavior
 - generic inference and generic classes
@@ -63,6 +68,18 @@ does not misread the file as a config input.
 - mixed default + named imports
 - default class exports
 
+The current declaration and diagnostic baseline includes:
+
+- exact ambient `declare module "pkg"` blocks are supported
+- ambient modules resolve before package stubbing
+- default import, namespace import, and re-export behavior for ambient modules is pinned
+- duplicate ambient module and duplicate ambient global behavior is pinned, not merged
+- unsupported declaration syntax remains parser-safe and emits stable diagnostics
+- TS2882 is catalog-backed and is emitted for unresolved side-effect imports such as `import "reflect-metadata";`
+- ordinary missing package imports still produce TS2307 by default
+- `--stubExternalModules` suppresses non-relative missing-module diagnostics, including the side-effect TS2882 form, while leaving relative missing modules unchanged
+- package.json, `node_modules`, `@types`, and lib.d.ts discovery are still out of scope
+
 The oracle harness also stays away from those areas. It only measures the
 current surface against TypeScript diagnostics; it does not add new resolver or
 type-system behavior to make the numbers line up.
@@ -70,10 +87,8 @@ File mode is intentionally narrow: it only accepts `.ts` source files for now,
 and it is a quick standalone oracle rather than the main compatibility path.
 
 The next phase should still be chosen from oracle and compat-report output, not
-from a fixed feature wish list. Module syntax expansion now supports default,
-namespace, and re-export forms for relative `.ts` files. Package import stubbing is supported as of v0.63. Likely follow-ups
-include:
-
-- `v0.64 declaration/lib/global type surface`
-
-v0.64 adds declaration ingestion foundation (`.d.ts` loading, ambient globals, and ambient modules).
+from a fixed feature wish list. Module syntax expansion, package import
+stubbing, declaration-file ingestion, ambient declaration hardening, and the
+diagnostic catalog/codegen foundation are implemented. Likely follow-ups are
+diagnostic expansion or a package declaration entrypoint foundation; neither
+should imply full package resolution by default.
