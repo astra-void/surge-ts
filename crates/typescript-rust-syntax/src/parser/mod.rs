@@ -204,8 +204,18 @@ fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedSt
     use oxc_span::GetSpan;
     let module_specifier = match &module.id {
         TSModuleDeclarationName::StringLiteral(literal) => literal.value.to_string(),
-        _ => return vec![],
+        _ => {
+            return vec![ParsedStatement::UnsupportedDeclaration {
+                span: Some(text_span_from_oxc_span(module.span)),
+            }];
+        }
     };
+
+    if module_specifier.contains('*') {
+        return vec![ParsedStatement::UnsupportedDeclaration {
+            span: Some(text_span_from_oxc_span(module.span)),
+        }];
+    }
 
     let statements = match &module.body {
         Some(TSModuleDeclarationBody::TSModuleBlock(block)) => block
@@ -214,7 +224,11 @@ fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedSt
             .filter_map(parse_statement)
             .flatten()
             .collect(),
-        _ => vec![],
+        _ => {
+            return vec![ParsedStatement::UnsupportedDeclaration {
+                span: Some(text_span_from_oxc_span(module.span)),
+            }];
+        }
     };
 
     vec![ParsedStatement::DeclareModuleDeclaration(

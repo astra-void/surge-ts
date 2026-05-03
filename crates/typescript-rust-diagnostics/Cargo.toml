@@ -7,4 +7,6 @@ edition = "2024"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
+typescript-rust-diagnostics-codegen = { path = "../typescript-rust-diagnostics-codegen" }

@@ -29,6 +29,8 @@ function run() {
   oracle_compare_match();
   oracle_compare_only_typescript();
   oracle_compare_only_typescript_rust();
+  oracle_package_imports_ts2882_line5_match();
+  oracle_package_imports_stub_external_modules_ts2882_policy();
   oracle_args_requires_project_or_file();
   oracle_args_rejects_project_and_file_together();
   oracle_args_rejects_ts_file_as_project();
@@ -36,6 +38,8 @@ function run() {
   oracle_args_rejects_js_file_as_project();
   oracle_args_rejects_tsconfig_as_file();
   oracle_args_accepts_project_preset();
+  oracle_args_accepts_declarations_basic_project_preset();
+  oracle_args_accepts_declarations_hardening_project_preset();
   oracle_args_accepts_project_tsconfig_path();
   oracle_args_accepts_file_ts_path();
   oracle_args_rejects_file_tsx_path_current_policy();
@@ -45,8 +49,12 @@ function run() {
   oracle_unknown_project_fails_cleanly();
   oracle_parse_args_strict_codes_alias();
   oracle_builds_tsc_project_command_with_project();
+  oracle_builds_tsc_project_command_with_declarations_basic_preset();
+  oracle_builds_tsc_project_command_with_declarations_hardening_preset();
   oracle_builds_tsc_file_command_without_project();
   oracle_builds_rust_project_command_with_project();
+  oracle_builds_rust_project_command_with_declarations_basic_preset();
+  oracle_builds_rust_project_command_with_declarations_hardening_preset();
   oracle_builds_rust_file_command_positional();
   oracle_output_includes_mode_project();
   oracle_output_includes_mode_file();
@@ -236,6 +244,42 @@ function oracle_compare_only_typescript_rust() {
   assert.equal(comparison.matches.onlyTypeScriptRust.length, 1);
 }
 
+function oracle_package_imports_ts2882_line5_match() {
+  const tscDiagnostics = [
+    { source: 'typescript' as const, code: 'TS2307', fileName: 'src/index.ts', line: 1, column: 19 },
+    { source: 'typescript' as const, code: 'TS2882', fileName: 'src/index.ts', line: 5, column: 8 },
+  ];
+  const rustDiagnostics = [
+    { source: 'typescript-rust' as const, code: 'TS2307', fileName: 'src/index.ts', line: 1, column: 19 },
+    { source: 'typescript-rust' as const, code: 'TS2882', fileName: 'src/index.ts', line: 5, column: 8 },
+  ];
+
+  const comparison = compareDiagnostics(
+    'project',
+    'tests/compat-projects/package-imports/tsconfig.json',
+    tscDiagnostics,
+    rustDiagnostics,
+  );
+
+  assert.equal(comparison.summary.byCodeMatch, true);
+  assert.equal(comparison.summary.byFileCodeMatch, true);
+  assert.equal(comparison.summary.byFileCodeLineMatch, true);
+}
+
+function oracle_package_imports_stub_external_modules_ts2882_policy() {
+  const comparison = compareDiagnostics(
+    'project',
+    'tests/compat-projects/package-imports/tsconfig.json',
+    [{ source: 'typescript' as const, code: 'TS2882', fileName: 'src/index.ts', line: 5, column: 8 }],
+    [],
+    false,
+    true,
+  );
+
+  assert.equal(comparison.typescriptRustOptions?.stubExternalModules, true);
+  assert.equal(comparison.matches.onlyTypeScript[0].key, 'TS2882');
+}
+
 function oracle_unknown_project_fails_cleanly() {
   assert.throws(
     () => resolveProjectPresetOrPath('does-not-exist'),
@@ -301,6 +345,28 @@ function oracle_args_accepts_project_preset() {
   );
 }
 
+function oracle_args_accepts_declarations_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'declarations-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/declarations-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_declarations_hardening_project_preset() {
+  const parsed = parseArgs(['--project', 'declarations-hardening']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/declarations-hardening/tsconfig.json'),
+  );
+}
+
 function oracle_args_accepts_project_tsconfig_path() {
   const parsed = parseArgs(['--project', 'tests/compat-projects/generics-basic/tsconfig.json']);
   const mode = resolveOracleMode(parsed);
@@ -357,6 +423,20 @@ function oracle_builds_tsc_project_command_with_project() {
   );
 }
 
+function oracle_builds_tsc_project_command_with_declarations_basic_preset() {
+  assert.equal(
+    buildTypeScriptCommand('project', 'tests/compat-projects/declarations-basic/tsconfig.json'),
+    'pnpm exec tsc --noEmit --pretty false --project tests/compat-projects/declarations-basic/tsconfig.json',
+  );
+}
+
+function oracle_builds_tsc_project_command_with_declarations_hardening_preset() {
+  assert.equal(
+    buildTypeScriptCommand('project', 'tests/compat-projects/declarations-hardening/tsconfig.json'),
+    'pnpm exec tsc --noEmit --pretty false --project tests/compat-projects/declarations-hardening/tsconfig.json',
+  );
+}
+
 function oracle_builds_tsc_file_command_without_project() {
   assert.equal(
     buildTypeScriptCommand('file', 'examples/basic.ts'),
@@ -368,6 +448,20 @@ function oracle_builds_rust_project_command_with_project() {
   assert.equal(
     buildTypeScriptRustCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json'),
     `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/generics-basic/tsconfig.json --format json`,
+  );
+}
+
+function oracle_builds_rust_project_command_with_declarations_basic_preset() {
+  assert.equal(
+    buildTypeScriptRustCommand('project', 'tests/compat-projects/declarations-basic/tsconfig.json'),
+    `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/declarations-basic/tsconfig.json --format json`,
+  );
+}
+
+function oracle_builds_rust_project_command_with_declarations_hardening_preset() {
+  assert.equal(
+    buildTypeScriptRustCommand('project', 'tests/compat-projects/declarations-hardening/tsconfig.json'),
+    `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/declarations-hardening/tsconfig.json --format json`,
   );
 }
 

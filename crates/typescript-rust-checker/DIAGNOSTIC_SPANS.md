@@ -12,8 +12,9 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2304 unresolved type name | type name token span |
 | TS2305 missing default export | default import name span |
 | TS2305 missing exported member | imported specifier name span |
-| TS2307 unresolved relative module | module specifier string span |
-| TS2307 non-relative module import | module specifier string span, or unsupported-module span when syntax is not modeled |
+| TS2307 unresolved ordinary relative module | module specifier string span |
+| TS2307 non-relative ordinary module import | module specifier string span, or unsupported-module span when syntax is not modeled |
+| TS2882 unresolved side-effect import | module specifier string span |
 | TS2314 generic type arity mismatch | type reference name span, pinned |
 | TS2315 non-generic type with type arguments | type reference name span, pinned |
 | typescript-rust::duplicate-type-parameter | duplicate type-parameter name span |
@@ -43,13 +44,14 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2367 no-overlap equality | operator or whole expression span, pinned |
 | TS2872/TS2873 truthiness | condition or literal span |
 | typescript-rust::duplicate-default-export | default keyword or export statement span, pinned |
+| typescript-rust::unsupported-declaration | keyword or full statement span, pinned |
 | typescript-rust::unsupported-module-syntax | import/export statement span, pinned |
 | parser-error | parser-provided best-effort span when available; otherwise no span |
 
 ## Notes
 
 - Successful relative imports bind the available type and/or value namespace. Namespace misuse underlines the local usage site, while failed module/export lookups underline the import/export token itself.
-- TS2305 should underline the imported specifier name. TS2307 should underline the module specifier string.
+- TS2305 should underline the imported specifier name. TS2307 and TS2882 should underline the module specifier string.
 - TS2314/TS2315 should stay pinned to the type reference name; v0.59 uses
   these as stable arity diagnostics for generic alias/interface references.
 - Missing default exports underline the default-import identifier, and missing
@@ -58,17 +60,25 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
   re-export members underline the exported specifier name.
 - Namespace import property failures underline the property name, while
   namespace import module failures underline the module specifier string.
+- Ambient namespace import missing-property failures underline the property access span on the consumer side.
 - Star re-export module failures underline the module specifier string.
+- Ambient modules support default imports when the default export exists; missing defaults use TS2305 and the default-import identifier span.
+- Ambient module re-exports use the same specifier/member span rules as relative modules when the source ambient module is declared.
 - `export * as Foo from ...` stays parser-safe or pinned rather than adding a
   separate span policy in this phase.
 - Duplicate generic type parameters use a custom checker diagnostic and should
   underline the repeated name span, not the declaration keyword.
 - Call-expression type arguments are parsed for syntax stability, but v0.59
   ignores them in checker flow, so no dedicated diagnostic span is emitted yet.
-- Non-relative package-style imports intentionally do not resolve. They either
-  emit TS2307, are stubbed via `--stubExternalModules` (v0.63), or
-  emit TS2307 with the module specifier span or a pinned unsupported-module
-  diagnostic for parser-safe unsupported syntax.
+- Non-relative package-style imports intentionally do not resolve. Ordinary
+  missing imports emit TS2307. Missing side-effect imports emit catalog-backed
+  TS2882 and use the same module-specifier span. `--stubExternalModules`
+  suppresses both non-relative missing-module forms while preserving stubs.
+  Unsupported syntax still uses the pinned unsupported-module diagnostic.
+- Ambient `declare module "pkg"` blocks resolve before package stubbing; missing
+  exports from a declared ambient module still underline the imported specifier
+  and use TS2305.
+- Duplicate ambient module/global behavior is pinned rather than merged, so spans stay attached to the first-wins declaration or duplicate site used by the checker.
 - Side-effect imports never bind names, so downstream unresolved-identifier diagnostics are still usage-site diagnostics.
 - Nested contextual errors should prefer the most specific span available inside arrays, tuples, objects, calls, and property accesses.
 - When the smaller span is unavailable, use the policy's pinned wrapper span and keep the code stable.
@@ -80,5 +90,6 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
   compare changes intentionally rather than treating the comparator as a
   semantic contract.
 
-- **Unsupported Declaration Syntax**: `typescript-rust::unsupported-declaration` points to the syntax token.
+- **Unsupported Declaration Syntax**: `typescript-rust::unsupported-declaration` points to the syntax token in loaded declaration files.
 - **Ambient Module Fallback**: Missing exports point to the import specifier.
+- These custom `typescript-rust::*` diagnostics are catalog entries like the `TSxxxx` codes, but their spans are still decided at the callsite.

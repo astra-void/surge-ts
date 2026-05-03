@@ -599,8 +599,8 @@ fn config_includes_d_ts_from_files_list() {
 }
 
 #[test]
-fn config_excludes_node_modules_d_ts() {
-    let root = temp_dir("config_excludes_node_modules_d_ts");
+fn config_excludes_node_modules_d_ts_by_default() {
+    let root = temp_dir("config_excludes_node_modules_d_ts_by_default");
     write_file(
         &root,
         "tsconfig.json",
@@ -618,4 +618,87 @@ fn config_excludes_node_modules_d_ts() {
         .map(|p| p.file_name().unwrap().to_str().unwrap())
         .collect();
     assert_eq!(names, vec!["index.ts"]);
+}
+
+#[test]
+fn config_includes_mixed_ts_and_d_ts() {
+    let root = temp_dir("config_includes_mixed_ts_and_d_ts");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+        "include": ["**/*"]
+    }"#,
+    );
+    write_file(&root, "index.ts", "");
+    write_file(&root, "globals.d.ts", "");
+
+    let config = load_tsconfig(TsConfigLoadOptions {
+        project: root.join("tsconfig.json"),
+    });
+
+    assert_eq!(config.diagnostics.len(), 0);
+    let mut names: Vec<String> = config
+        .files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["globals.d.ts", "index.ts"]);
+}
+
+#[test]
+fn config_does_not_auto_load_typescript_lib() {
+    let root = temp_dir("config_does_not_auto_load_typescript_lib");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+        "compilerOptions": { "lib": ["es2015"] },
+        "include": ["**/*"]
+    }"#,
+    );
+    write_file(&root, "index.ts", "");
+
+    let config = load_tsconfig(TsConfigLoadOptions {
+        project: root.join("tsconfig.json"),
+    });
+
+    assert_eq!(config.diagnostics.len(), 0);
+    let mut names: Vec<String> = config
+        .files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["index.ts"]);
+}
+
+#[test]
+fn config_d_ts_does_not_require_allow_js() {
+    let root = temp_dir("config_d_ts_does_not_require_allow_js");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+        "compilerOptions": { "allowJs": false },
+        "include": ["**/*"]
+    }"#,
+    );
+    write_file(&root, "index.ts", "");
+    write_file(&root, "globals.d.ts", "");
+    write_file(&root, "util.js", "");
+
+    let config = load_tsconfig(TsConfigLoadOptions {
+        project: root.join("tsconfig.json"),
+    });
+
+    assert_eq!(config.diagnostics.len(), 0);
+    let mut names: Vec<String> = config
+        .files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["globals.d.ts", "index.ts"]);
 }

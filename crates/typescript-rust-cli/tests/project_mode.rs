@@ -57,6 +57,34 @@ fn compat_project_root(name: &str) -> PathBuf {
     workspace_root().join("tests/compat-projects").join(name)
 }
 
+fn run_cli_json(args: &[&str]) -> Value {
+    let (stdout, stderr) = run_cli(args);
+    assert!(stderr.is_empty());
+    serde_json::from_str(&stdout).unwrap()
+}
+
+fn json_diagnostics(parsed: &Value) -> &[Value] {
+    parsed["diagnostics"]
+        .as_array()
+        .map(|items| items.as_slice())
+        .unwrap()
+}
+
+fn json_diagnostic_codes(parsed: &Value) -> Vec<String> {
+    json_diagnostics(parsed)
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn json_diagnostic_lines(parsed: &Value, code: &str) -> Vec<Option<u64>> {
+    json_diagnostics(parsed)
+        .iter()
+        .filter(|diagnostic| diagnostic["code"].as_str() == Some(code))
+        .map(|diagnostic| diagnostic["line"].as_u64())
+        .collect()
+}
+
 #[test]
 fn project_mode_maps_strict_to_no_implicit_any() {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1355,7 +1383,8 @@ fn cli_compat_report_project_counts_by_code() {
     assert!(stdout.contains("Compatibility report"));
     assert!(stdout.contains("Files loaded: 1"));
     assert!(stdout.contains("Diagnostics: 8"));
-    assert!(stdout.contains("TS2307  8"));
+    assert!(stdout.contains("TS2307  7"));
+    assert!(stdout.contains("TS2882  1"));
 }
 
 #[test]
@@ -1523,7 +1552,64 @@ fn compat_project_package_imports_report_stable() {
     assert!(stderr.is_empty());
     assert!(stdout.contains("Compatibility report"));
     assert!(stdout.contains("Diagnostics: 8"));
-    assert!(stdout.contains("TS2307  8"));
+    assert!(stdout.contains("TS2307  7"));
+    assert!(stdout.contains("TS2882  1"));
+}
+
+#[test]
+fn package_imports_line5_ts2882_matches_typescript() {
+    let project = compat_project_root("package-imports").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2882"), vec![Some(5)]);
+}
+
+#[test]
+fn package_imports_default_no_extra_ts2307_for_ts2882_case() {
+    let project = compat_project_root("package-imports").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let mut ts2307_lines = json_diagnostic_lines(&parsed, "TS2307");
+    ts2307_lines.sort();
+
+    assert_eq!(
+        ts2307_lines,
+        vec![
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(7),
+            Some(8),
+            Some(9),
+        ]
+    );
+}
+
+#[test]
+fn package_imports_other_package_imports_remain_ts2307_cli() {
+    let project = compat_project_root("package-imports").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2307").len(), 7);
+}
+
+#[test]
+fn package_imports_stub_external_modules_ts2882_policy_pinned_cli() {
+    let project = compat_project_root("package-imports").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--stubExternalModules",
+        "--format",
+        "json",
+    ]);
+
+    assert!(json_diagnostic_lines(&parsed, "TS2307").is_empty());
+    assert!(json_diagnostic_lines(&parsed, "TS2882").is_empty());
 }
 
 #[test]
@@ -1564,7 +1650,8 @@ fn compat_project_report_counts_by_code() {
     let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--compatReport"]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.contains("TS2307  8"));
+    assert!(stdout.contains("TS2307  7"));
+    assert!(stdout.contains("TS2882  1"));
 }
 
 #[test]
@@ -1751,58 +1838,121 @@ fn compat_report_external_module_stubs_json() {
 
 #[test]
 fn cli_project_loads_d_ts_files() {
-    let (stdout, _) = run_cli(&[
+    let parsed = run_cli_json(&[
         "--project",
         "../../tests/compat-projects/declarations-basic/tsconfig.json",
         "--compatReport",
+        "--format",
+        "json",
     ]);
-    assert!(stdout.contains("Declaration files loaded: 2"));
+    assert_eq!(parsed["declarationFilesLoaded"], Value::from(2));
+
+    let ambient_modules = parsed["ambientExternalModules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ambient_modules,
+        vec!["pkg".to_string(), "pkg/subpath".to_string()]
+    );
 }
 
 #[test]
 fn cli_project_declaration_global_type_valid() {
-    assert!(true);
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2304");
+    assert!(!lines.contains(&Some(5)));
+    assert!(!lines.contains(&Some(8)));
 }
 
 #[test]
 fn cli_project_declaration_global_function_valid() {
-    assert!(true);
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2304");
+    assert!(!lines.contains(&Some(17)));
 }
 
 #[test]
 fn cli_project_ambient_module_import_valid() {
-    let (stdout, _) = run_cli(&[
+    let parsed = run_cli_json(&[
         "--project",
         "../../tests/compat-projects/declarations-basic/tsconfig.json",
         "--compatReport",
+        "--format",
+        "json",
     ]);
-    assert!(stdout.contains("Ambient external modules: 2"));
+
+    let ambient_modules = parsed["ambientExternalModules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ambient_modules,
+        vec!["pkg".to_string(), "pkg/subpath".to_string()]
+    );
 }
 
 #[test]
 fn cli_project_ambient_module_missing_export() {
-    assert!(true);
+    let root = temp_dir("cli_project_ambient_module_missing_export");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+          "include": ["src/**/*.ts", "types/**/*.d.ts"]
+        }"#,
+    );
+    write_file(&root, "src/index.ts", "import { missing } from \"pkg\";");
+    write_file(
+        &root,
+        "types/pkg.d.ts",
+        "declare module \"pkg\" { export const foo: number; }",
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2305"), vec![Some(1)]);
 }
 
 #[test]
 fn cli_project_ambient_module_unknown_package_fallback_default() {
-    let (stdout, _) = run_cli(&[
+    let parsed = run_cli_json(&[
         "--project",
         "../../tests/compat-projects/declarations-basic/tsconfig.json",
-        "--compatReport",
+        "--format",
+        "json",
     ]);
-    assert!(stdout.contains("missing-pkg"));
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2307"), vec![Some(3)]);
 }
 
 #[test]
 fn cli_project_ambient_module_unknown_package_fallback_stub_external_modules() {
-    let (stdout, _) = run_cli(&[
+    let parsed = run_cli_json(&[
         "--project",
         "../../tests/compat-projects/declarations-basic/tsconfig.json",
-        "--compatReport",
         "--stubExternalModules",
+        "--format",
+        "json",
     ]);
-    assert!(!stdout.contains("error[TS2307]"));
+    assert!(json_diagnostic_lines(&parsed, "TS2307").is_empty());
+    assert!(json_diagnostic_codes(&parsed).contains(&"TS2322".to_string()));
 }
 
 #[test]
@@ -1824,6 +1974,165 @@ fn cli_project_declaration_format_json() {
         "--format",
         "json",
     ]);
-    assert!(stdout.contains("\"declarationFilesLoaded\""));
-    assert!(stdout.contains("\"ambientExternalModules\""));
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["declarationFilesLoaded"], Value::from(2));
+
+    let ambient_modules = parsed["ambientExternalModules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ambient_modules,
+        vec!["pkg".to_string(), "pkg/subpath".to_string()]
+    );
+}
+#[test]
+fn cli_declarations_basic_loads_globals_d_ts() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(!codes.contains(&"TS2304".to_string()));
+    assert!(codes.contains(&"TS2322".to_string()));
+}
+
+#[test]
+fn cli_declarations_basic_loads_pkg_d_ts() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    let pkg_diagnostics = json_diagnostics(&parsed)
+        .iter()
+        .filter(|diagnostic| diagnostic["code"].as_str() == Some("TS2307"))
+        .count();
+    assert_eq!(pkg_diagnostics, 1);
+    assert!(codes.contains(&"TS2307".to_string()));
+}
+
+#[test]
+fn cli_declarations_basic_no_ts2307_for_declared_pkg() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    assert_eq!(lines, vec![Some(3)]);
+}
+
+#[test]
+fn cli_declarations_basic_no_ts2307_for_declared_subpath() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    assert!(!lines.contains(&Some(2)));
+}
+
+#[test]
+fn cli_declarations_basic_missing_pkg_fallback_ts2307() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    assert_eq!(lines, vec![Some(3)]);
+}
+
+#[test]
+fn cli_declarations_basic_stub_external_modules_suppresses_only_missing_pkg() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--stubExternalModules",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(!codes.contains(&"TS2307".to_string()));
+    assert!(codes.contains(&"TS2322".to_string()));
+}
+
+#[test]
+fn cli_declarations_basic_format_json_stable() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let diagnostics = json_diagnostics(&parsed);
+    assert!(!diagnostics.is_empty());
+    for diagnostic in diagnostics {
+        assert!(diagnostic.get("code").is_some());
+        assert!(diagnostic.get("fileName").is_some());
+        assert!(diagnostic.get("message").is_some());
+    }
+}
+
+#[test]
+fn cli_declarations_hardening_loads_ambient_modules() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-hardening/tsconfig.json",
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["declarationFilesLoaded"], Value::from(1));
+
+    let ambient_modules = parsed["ambientExternalModules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ambient_modules,
+        vec![
+            "barrel-pkg".to_string(),
+            "barrel-star-pkg".to_string(),
+            "barrel-type-pkg".to_string(),
+            "merge-pkg".to_string(),
+            "pkg-default".to_string(),
+            "pkg-default-function".to_string(),
+            "pkg-ns".to_string(),
+            "source-pkg".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn cli_declarations_hardening_no_diagnostics() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/declarations-hardening/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    assert!(json_diagnostic_codes(&parsed).is_empty());
 }

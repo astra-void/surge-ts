@@ -1605,11 +1605,57 @@ fn module_non_relative_type_import_ts2307() {
 }
 
 #[test]
-fn module_non_relative_side_effect_import_ts2307() {
+fn ts2882_side_effect_import_emits_ts2882() {
     let diagnostics = program(&[("index.ts", "import \"pkg\";\nlet ok: string = \"ok\";")]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2882"]);
     assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
+}
+
+#[test]
+fn ts2882_side_effect_import_does_not_emit_ts2307() {
+    let diagnostics = program(&[("index.ts", "import \"pkg\";\nlet ok: string = \"ok\";")]);
+
+    assert!(!codes(&diagnostics).contains(&"TS2307".to_string()));
+}
+
+#[test]
+fn package_imports_other_package_imports_remain_ts2307() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import React from \"react\";\nimport type { StoreApi } from \"zustand\";\nexport * from \"zustand/middleware\";",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307", "TS2307", "TS2307"]);
+}
+
+#[test]
+fn package_imports_stub_external_modules_ts2882_policy_pinned() {
+    let mut options = CheckerOptions::default();
+    options.stub_external_modules = true;
+
+    let diagnostics = program_with_options(
+        &[("index.ts", "import \"pkg\";\nlet ok: string = \"ok\";")],
+        options,
+    );
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn package_imports_stub_external_modules_keeps_relative_ts2882() {
+    let mut options = CheckerOptions::default();
+    options.stub_external_modules = true;
+
+    let diagnostics = program_with_options(
+        &[(
+            "index.ts",
+            "import \"./missing\";\nlet ok: string = \"ok\";",
+        )],
+        options,
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS2882"]);
 }
 
 #[test]
@@ -2307,6 +2353,7 @@ fn single_file_external_named_import_stub_mode_suppresses_ts2307() {
     let mut options = CheckerOptions::default();
     options.stub_external_modules = true;
     let diagnostics = check_source_with_options(source, "test.ts", options);
+    println!("{:?}", diagnostics);
     assert_eq!(diagnostics.len(), 0);
 }
 
@@ -2331,6 +2378,7 @@ fn single_file_external_type_only_import_stub_mode_suppresses_ts2307() {
     let mut options = CheckerOptions::default();
     options.stub_external_modules = true;
     let diagnostics = check_source_with_options(source, "test.ts", options);
+    println!("{:?}", diagnostics);
     assert_eq!(diagnostics.len(), 0);
 }
 
@@ -2355,6 +2403,7 @@ fn single_file_external_default_import_stub_mode_suppresses_ts2307() {
     let mut options = CheckerOptions::default();
     options.stub_external_modules = true;
     let diagnostics = check_source_with_options(source, "test.ts", options);
+    println!("{:?}", diagnostics);
     assert_eq!(diagnostics.len(), 0);
 }
 
@@ -2379,6 +2428,7 @@ fn single_file_external_namespace_import_stub_mode_suppresses_ts2307() {
     let mut options = CheckerOptions::default();
     options.stub_external_modules = true;
     let diagnostics = check_source_with_options(source, "test.ts", options);
+    println!("{:?}", diagnostics);
     assert_eq!(diagnostics.len(), 0);
 }
 
@@ -2424,4 +2474,696 @@ fn program_stub_external_modules_keeps_relative_missing_module_ts2307() {
     let result = check_program_with_options(files, options);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].code.to_string(), "TS2307");
+}
+
+#[test]
+fn ambient_module_resolves_before_package_stub_default() {
+    let diagnostics = program(&[
+        ("src/index.ts", "import { foo } from \"pkg\";"),
+        (
+            "types/pkg.d.ts",
+            "declare module \"pkg\" { export const foo: number; }",
+        ),
+    ]);
+    println!("{:?}", diagnostics);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn ambient_module_resolves_before_package_stub_with_stub_external_modules() {
+    let diagnostics = program_with_options(
+        &[
+            ("src/index.ts", "import { foo } from \"pkg\";"),
+            (
+                "types/pkg.d.ts",
+                "declare module \"pkg\" { export const foo: number; }",
+            ),
+        ],
+        CheckerOptions {
+            stub_external_modules: true,
+            ..Default::default()
+        },
+    );
+    println!("{:?}", diagnostics);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn ambient_module_missing_export_ts2305_not_ts2307() {
+    let diagnostics = program(&[
+        ("src/index.ts", "import { missing } from \"pkg\";"),
+        (
+            "types/pkg.d.ts",
+            "declare module \"pkg\" { export const foo: number; }",
+        ),
+    ]);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(codes(&diagnostics)[0], "TS2305");
+}
+
+#[test]
+fn ambient_module_missing_export_ts2305_not_ts2307_with_stub_external_modules() {
+    let diagnostics = program_with_options(
+        &[
+            ("src/index.ts", "import { missing } from \"pkg\";"),
+            (
+                "types/pkg.d.ts",
+                "declare module \"pkg\" { export const foo: number; }",
+            ),
+        ],
+        CheckerOptions {
+            stub_external_modules: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(codes(&diagnostics)[0], "TS2305");
+}
+
+#[test]
+fn ambient_module_exact_specifier_only() {
+    let diagnostics = program(&[
+        ("src/index.ts", "import { foo } from \"pkg/subpath\";"),
+        (
+            "types/pkg.d.ts",
+            "declare module \"pkg\" { export const foo: number; }",
+        ),
+    ]);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(codes(&diagnostics)[0], "TS2307");
+}
+
+#[test]
+fn ambient_module_unknown_specifier_fallback_ts2307() {
+    let diagnostics = program(&[
+        ("src/index.ts", "import { missing } from \"missing-pkg\";"),
+        (
+            "types/pkg.d.ts",
+            "declare module \"pkg\" { export const foo: number; }",
+        ),
+    ]);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(codes(&diagnostics)[0], "TS2307");
+}
+
+#[test]
+fn ambient_module_unknown_specifier_stub_external_modules_suppresses_ts2307() {
+    let diagnostics = program_with_options(
+        &[
+            ("src/index.ts", "import { missing } from \"missing-pkg\";"),
+            (
+                "types/pkg.d.ts",
+                "declare module \"pkg\" { export const foo: number; }",
+            ),
+        ],
+        CheckerOptions {
+            stub_external_modules: true,
+            ..Default::default()
+        },
+    );
+    println!("{:?}", diagnostics);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn ambient_module_default_export_value_valid() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import value from \"pkg-default\"; let ok: string = value;",
+        ),
+        (
+            "types/pkg-default.d.ts",
+            "declare module \"pkg-default\" { export const value: string; export default value; }",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_default_export_value_mismatch() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import value from \"pkg-default\"; let bad: number = value;",
+        ),
+        (
+            "types/pkg-default.d.ts",
+            "declare module \"pkg-default\" { export const value: string; export default value; }",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn ambient_module_default_import_missing_default_ts2305() {
+    let diagnostics = program(&[
+        ("src/index.ts", "import value from \"pkg-default\";"),
+        (
+            "types/pkg-default.d.ts",
+            "declare module \"pkg-default\" { export const value: string; }",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn ambient_module_default_import_missing_module_fallback_ts2307() {
+    let diagnostics = program(&[("src/index.ts", "import value from \"missing-pkg\";")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+}
+
+#[test]
+fn ambient_module_default_import_missing_module_stub_external_suppresses_ts2307() {
+    let diagnostics = program_with_options(
+        &[("src/index.ts", "import value from \"missing-pkg\";")],
+        CheckerOptions {
+            stub_external_modules: true,
+            ..Default::default()
+        },
+    );
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_default_export_function_valid_or_pinned() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import getName from \"pkg-default-function\"; let name: string = getName();",
+        ),
+        (
+            "types/pkg-default-function.d.ts",
+            "declare module \"pkg-default-function\" { export default function getName(): string; }",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_namespace_import_value_property_valid() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import * as pkg from \"pkg-ns\"; let ok: string = pkg.value; let name: string = pkg.getName();",
+        ),
+        (
+            "types/pkg-ns.d.ts",
+            "declare module \"pkg-ns\" { export const value: string; export function getName(): string; export interface User { name: string; } }",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_namespace_import_missing_property_ts2339() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import * as pkg from \"pkg-ns\"; let missing = pkg.missing;",
+        ),
+        (
+            "types/pkg-ns.d.ts",
+            "declare module \"pkg-ns\" { export const value: string; export function getName(): string; }",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+}
+
+#[test]
+fn ambient_module_namespace_import_type_export_not_value_property() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import * as pkg from \"pkg-ns\"; let user = pkg.User;",
+        ),
+        (
+            "types/pkg-ns.d.ts",
+            "declare module \"pkg-ns\" { export interface User { name: string; } }",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+}
+
+#[test]
+fn ambient_module_namespace_import_default_property_valid_or_pinned() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import * as pkg from \"pkg-default\"; let ok: string = pkg.default;",
+        ),
+        (
+            "types/pkg-default.d.ts",
+            "declare module \"pkg-default\" { export const value: string; export default value; }",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_namespace_import_unknown_module_fallback_ts2307() {
+    let diagnostics = program(&[("src/index.ts", "import * as pkg from \"missing-pkg\";")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+}
+
+#[test]
+fn ambient_module_namespace_import_unknown_module_stub_external_suppresses_ts2307() {
+    let diagnostics = program_with_options(
+        &[("src/index.ts", "import * as pkg from \"missing-pkg\";")],
+        CheckerOptions {
+            stub_external_modules: true,
+            ..Default::default()
+        },
+    );
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_missing_named_export_no_assignment_cascade() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import { missing } from \"pkg\"; let x: number = missing;",
+        ),
+        (
+            "types/pkg.d.ts",
+            "declare module \"pkg\" { export const value: string; }",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn ambient_module_missing_named_export_no_call_cascade() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import { missing } from \"pkg\"; missing();",
+        ),
+        (
+            "types/pkg.d.ts",
+            "declare module \"pkg\" { export const value: string; }",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn ambient_module_missing_named_export_no_property_cascade() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import { missing } from \"pkg\"; missing.property;",
+        ),
+        (
+            "types/pkg.d.ts",
+            "declare module \"pkg\" { export const value: string; }",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn ambient_module_missing_type_export_no_cascade() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import type { missing } from \"pkg\"; type X = missing;",
+        ),
+        (
+            "types/pkg.d.ts",
+            "declare module \"pkg\" { export const value: string; }",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn ambient_module_named_re_export_value_valid() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import { User, value } from \"barrel-pkg\"; let user: User = { name: value };",
+        ),
+        (
+            "types/ambient.d.ts",
+            r#"
+            declare module "source-pkg" {
+                export interface User { name: string; }
+                export const value: string;
+            }
+
+            declare module "barrel-pkg" {
+                export { User, value } from "source-pkg";
+            }
+            "#,
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_type_only_re_export_valid() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import type { User } from \"barrel-type-pkg\"; let user: User = { name: \"Ada\" };",
+        ),
+        (
+            "types/ambient.d.ts",
+            r#"
+            declare module "source-pkg" {
+                export interface User { name: string; }
+            }
+
+            declare module "barrel-type-pkg" {
+                export type { User } from "source-pkg";
+            }
+            "#,
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_star_re_export_valid_or_pinned() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import { User, value } from \"barrel-star-pkg\"; let user: User = { name: value };",
+        ),
+        (
+            "types/ambient.d.ts",
+            r#"
+            declare module "source-pkg" {
+                export interface User { name: string; }
+                export const value: string;
+            }
+
+            declare module "barrel-star-pkg" {
+                export * from "source-pkg";
+            }
+            "#,
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_re_export_missing_member_ts2305() {
+    let diagnostics = program(&[
+        ("src/index.ts", "import { missing } from \"barrel-pkg\";"),
+        (
+            "types/ambient.d.ts",
+            r#"
+            declare module "source-pkg" {
+                export const value: string;
+            }
+
+            declare module "barrel-pkg" {
+                export { missing } from "source-pkg";
+            }
+            "#,
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn ambient_module_re_export_unknown_source_stub_external_modules_behavior() {
+    let diagnostics = program_with_options(
+        &[
+            ("src/index.ts", "import { User } from \"barrel-pkg\";"),
+            (
+                "types/ambient.d.ts",
+                r#"
+                declare module "barrel-pkg" {
+                    export { User } from "missing-pkg";
+                }
+                "#,
+            ),
+        ],
+        CheckerOptions {
+            stub_external_modules: true,
+            ..Default::default()
+        },
+    );
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_duplicate_declarations_merge_policy() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import { a, b } from \"merge-pkg\"; let okA: string = a; let okB: number = b;",
+        ),
+        (
+            "types/ambient.d.ts",
+            r#"
+            declare module "merge-pkg" {
+                export const a: string;
+            }
+
+            declare module "merge-pkg" {
+                export const b: number;
+            }
+            "#,
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_duplicate_default_export_policy_pinned() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import value from \"dup-default-pkg\"; let ok: string = value;",
+        ),
+        (
+            "types/ambient.d.ts",
+            r#"
+            declare module "dup-default-pkg" {
+                export default "first";
+            }
+
+            declare module "dup-default-pkg" {
+                export default 123;
+            }
+            "#,
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_module_duplicate_type_export_policy_pinned() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "import type { User } from \"dup-type-pkg\"; let ok: User = { name: \"Ada\" };",
+        ),
+        (
+            "types/ambient.d.ts",
+            r#"
+            declare module "dup-type-pkg" {
+                export interface User { name: string; }
+            }
+
+            declare module "dup-type-pkg" {
+                export interface User { name: number; }
+            }
+            "#,
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_global_duplicate_const_policy_pinned() {
+    let diagnostics = program(&[
+        ("src/index.ts", "let ok: string = value;"),
+        ("types/a.d.ts", "declare const value: string;"),
+        ("types/b.d.ts", "declare const value: number;"),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn ambient_global_duplicate_function_policy_pinned() {
+    let diagnostics = program(&[
+        ("src/index.ts", "let ok: string = getName();"),
+        ("types/a.d.ts", "declare function getName(): string;"),
+        ("types/b.d.ts", "declare function getName(): number;"),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
+}
+
+#[test]
+fn ambient_global_user_source_shadow_or_duplicate_policy_pinned() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "let user: User = { name: \"Ada\" }; let value: string = User;",
+        ),
+        (
+            "types/globals.d.ts",
+            "declare interface User { name: string; } declare const User: string;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn declaration_file_does_not_run_statement_body_checks() {
+    let diagnostics = program(&[
+        ("src/index.ts", "let x: number = 1;"),
+        ("types/globals.d.ts", "const missingInit: number;"),
+    ]);
+    println!("{:?}", diagnostics);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn declaration_file_ambient_globals_are_visible_in_program() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "let id: ID = \"ok\"; let user: User = { name: \"Ada\" };",
+        ),
+        (
+            "types/globals.d.ts",
+            "declare type ID = string; declare interface User { name: string; }",
+        ),
+    ]);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn declaration_file_type_alias_no_statement_check() {
+    let diagnostics = program(&[
+        ("src/index.ts", "let ok: Name = \"Ada\";"),
+        ("types/globals.d.ts", "declare type Name = string;"),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn declaration_file_interface_no_statement_check() {
+    let diagnostics = program(&[
+        ("src/index.ts", "let ok: User = { name: \"Ada\" };"),
+        (
+            "types/globals.d.ts",
+            "declare interface User { name: string; }",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn declaration_file_declare_function_no_body_valid() {
+    let diagnostics = program(&[("types/globals.d.ts", "declare function foo(): number;")]);
+    println!("{:?}", diagnostics);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn declaration_file_declare_const_no_initializer_valid() {
+    let diagnostics = program(&[("types/globals.d.ts", "declare const foo: number;")]);
+    println!("{:?}", diagnostics);
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn declaration_file_unsupported_syntax_still_reports() {
+    let diagnostics = program(&[("types/globals.d.ts", "declare class Foo {}")]);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        codes(&diagnostics)[0],
+        "typescript-rust::unsupported-declaration"
+    ); // Pinned unsupported diagnostic
+}
+
+#[test]
+fn declaration_file_unsupported_enum_still_reports() {
+    let diagnostics = program(&[("types/globals.d.ts", "declare enum E {}")]);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-declaration"]
+    );
+}
+
+#[test]
+fn declaration_file_unsupported_namespace_still_reports() {
+    let diagnostics = program(&[("types/globals.d.ts", "declare namespace N {}")]);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-declaration"]
+    );
+}
+
+#[test]
+fn declaration_file_unsupported_global_still_reports() {
+    let diagnostics = program(&[("types/globals.d.ts", "declare global {}")]);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-declaration"]
+    );
+}
+
+#[test]
+fn declaration_file_unsupported_export_equals_still_reports() {
+    let diagnostics = program(&[("types/globals.d.ts", "export = Foo;")]);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-declaration"]
+    );
+}
+
+#[test]
+fn declaration_file_unsupported_import_equals_still_reports() {
+    let diagnostics = program(&[("types/globals.d.ts", "import Foo = require(\"foo\");")]);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-declaration"]
+    );
+}
+
+#[test]
+fn declaration_file_unsupported_wildcard_module_still_reports() {
+    let diagnostics = program(&[("types/globals.d.ts", "declare module \"*\" {}")]);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["typescript-rust::unsupported-declaration"]
+    );
 }

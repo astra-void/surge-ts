@@ -5599,7 +5599,7 @@ expected_diagnostics = ["TS2307"]
 [[case]]
 name = "module-non-relative-side-effect-import"
 path = "tests/smoke/module_non_relative_side_effect_import.ts"
-expected_diagnostics = ["TS2307"]
+expected_diagnostics = ["TS2882"]
 
 [[case]]
 name = "module-default-import-non-relative-unsupported"
@@ -6053,8 +6053,8 @@ file = "external_namespace_import_reports_ts2307_no_cascade.ts"
 diagnostics = [2307]
 
 [[test]]
-file = "external_side_effect_import_reports_ts2307.ts"
-diagnostics = [2307]
+file = "external_side_effect_import_reports_ts2882.ts"
+diagnostics = [2882]
 
 [[test]]
 file = "external_re_export_named_reports_ts2307_no_cascade.ts"

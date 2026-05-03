@@ -5,7 +5,7 @@
 - `check_program(files: Vec<SourceFileInput>)`
 - `check_program_with_options(files: Vec<SourceFileInput>, options: CheckerOptions)`
 
-The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, and v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files.
+The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, and v0.65 hardens the ambient declaration path for loaded `.d.ts` files.
 
 ## Public API
 
@@ -37,7 +37,11 @@ Program mode treats the input files as one shared global script:
 - Top-level `let`, `const`, and `var` declarations remain file-local.
 - Relative named imports, type-only named imports, default imports, namespace imports, side-effect imports, local named export lists, named re-exports, type-only re-exports, and star re-exports are resolved across loaded `.ts` files.
 - Module files are isolated from the global-script prepass in this phase.
-- `declare` and ambient declarations are still unsupported.
+- Loaded `.d.ts` files can contribute the v0.64 ambient subset: simple global type/interface/value/function declarations and exact `declare module "pkg"` blocks.
+- Ambient modules resolve before package import stubbing fallback.
+- Default exports, namespace imports, named re-exports, type-only re-exports, and star re-exports inside exact ambient modules are pinned in this phase.
+- Duplicate ambient modules and duplicate ambient globals are first-wins / pinned rather than merged.
+- Full declaration-file semantics, declaration merging, lib.d.ts loading, `@types`, package.json discovery, and package discovery remain unsupported.
 
 ## What is shared
 
@@ -46,6 +50,7 @@ Program mode treats the input files as one shared global script:
 - Consuming expression diagnostics keep the consumer file name.
 - Script files participate in the global prepass.
 - Module files are checked with file-local type declarations and function signatures plus resolved module bindings.
+- Loaded declaration files are checked as ambient inputs, not as normal runtime files.
 - Single-file checking still does not read sibling files.
 
 ## Diagnostic Order
@@ -131,4 +136,4 @@ The next phase should still be chosen from compatibility-report output rather
 than reshaping the single-file APIs.
 
 ## Ambient Globals
-Ambient globals from `.d.ts` files are gathered into `ambient_global_symbols` and mixed into modules and scripts.
+Ambient globals from loaded `.d.ts` files are gathered into `ambient_global_symbols` and `ambient_global_type_declarations`, then mixed into modules and scripts.

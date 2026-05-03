@@ -3139,6 +3139,36 @@ fn parse_export_star_as_from_unsupported_no_panic() {
 }
 
 #[test]
+fn parse_declare_namespace_is_unsupported() {
+    let parsed = parse_source("declare namespace N {}", "example.d.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::UnsupportedDeclaration { .. }
+    ));
+}
+
+#[test]
+fn parse_declare_global_is_unsupported() {
+    let parsed = parse_source("declare global {}", "example.d.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::UnsupportedDeclaration { .. }
+    ));
+}
+
+#[test]
+fn parse_declare_module_wildcard_is_unsupported() {
+    let parsed = parse_source("declare module \"*\" {}", "example.d.ts");
+    assert!(parsed.parser_errors.is_empty());
+    assert!(matches!(
+        &parsed.statements[0],
+        ParsedStatement::UnsupportedDeclaration { .. }
+    ));
+}
+
+#[test]
 fn module_detection_plain_script_false() {
     let parsed = parse_source("let value: string = \"ok\";", "example.ts");
     assert!(!parsed.is_module);

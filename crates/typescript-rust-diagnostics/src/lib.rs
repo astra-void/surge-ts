@@ -4,12 +4,14 @@ mod catalog;
 mod category;
 mod code;
 mod diagnostic;
+mod generated;
 mod render;
 
 pub use catalog::*;
 pub use category::*;
 pub use code::*;
 pub use diagnostic::*;
+pub use generated::*;
 pub use render::*;
 
 #[cfg(test)]

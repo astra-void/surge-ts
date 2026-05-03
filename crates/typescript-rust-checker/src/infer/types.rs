@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
-use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
+use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedFunctionType, ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedNamedType,
     ParsedObjectType, ParsedType, ParsedTypeParameter, TextSpan,
@@ -23,9 +23,8 @@ pub(crate) fn report_duplicate_type_parameters(
 
     for type_parameter in type_parameters {
         if !seen.insert(type_parameter.name.clone()) {
-            let mut diagnostic = Diagnostic::new(
-                DiagnosticCode::Custom("typescript-rust::duplicate-type-parameter"),
-                format!("Duplicate type parameter '{}'.", type_parameter.name),
+            let mut diagnostic = Diagnostic::typescript_rust_duplicate_type_parameter(
+                type_parameter.name.clone(),
                 ctx.file_name.clone(),
             );
 
@@ -584,11 +583,7 @@ fn emit_generic_arity(
 }
 
 fn emit_type_alias_cycle(name: &str, name_span: Option<TextSpan>, ctx: &mut CheckerContext) {
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticCode::Custom("typescript-rust::type-alias-cycle"),
-        format!("Type alias '{name}' circularly references itself."),
-        ctx.file_name.clone(),
-    );
+    let mut diagnostic = Diagnostic::typescript_rust_type_alias_cycle(name, ctx.file_name.clone());
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -598,11 +593,8 @@ fn emit_type_alias_cycle(name: &str, name_span: Option<TextSpan>, ctx: &mut Chec
 }
 
 fn emit_type_declaration_cycle(name: &str, name_span: Option<TextSpan>, ctx: &mut CheckerContext) {
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticCode::Custom("typescript-rust::type-declaration-cycle"),
-        format!("Type declaration '{name}' circularly references itself."),
-        ctx.file_name.clone(),
-    );
+    let mut diagnostic =
+        Diagnostic::typescript_rust_type_declaration_cycle(name, ctx.file_name.clone());
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));

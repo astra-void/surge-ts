@@ -4,6 +4,7 @@ members = [
   "crates/typescript-rust-syntax",
   "crates/typescript-rust-checker",
   "crates/typescript-rust-diagnostics",
+  "crates/typescript-rust-diagnostics-codegen",
   "crates/typescript-rust-types",
   "crates/typescript-rust-config",
 ]

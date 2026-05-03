@@ -1010,7 +1010,7 @@ fn span_module_export_list_missing_local_points_to_export_name() {
 }
 
 #[test]
-fn span_module_side_effect_missing_points_to_module_specifier() {
+fn span_module_side_effect_missing_ts2882_points_to_module_specifier() {
     let diagnostics = check_program(vec![SourceFileInput {
         file_name: "index.ts".to_string(),
         source_text: "import \"./missing\";".to_string(),
@@ -1019,7 +1019,7 @@ fn span_module_side_effect_missing_points_to_module_specifier() {
     assert_eq!(
         diagnostic_tuples(&diagnostics),
         vec![(
-            "TS2307".to_string(),
+            "TS2882".to_string(),
             "index.ts".to_string(),
             Some(span("import \"./missing\";", "\"./missing\"")),
         )]
@@ -1125,6 +1125,140 @@ fn span_module_non_relative_points_to_module_specifier() {
 }
 
 #[test]
+fn span_ts2882_points_to_side_effect_module_specifier() {
+    let source = "import \"reflect-metadata\";";
+    let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
+        file_name: "example.ts".to_string(),
+        source_text: source.to_string(),
+    }]);
+
+    assert_single_span(
+        source,
+        diagnostics,
+        "TS2882",
+        span(source, "\"reflect-metadata\""),
+    );
+}
+
+#[test]
+fn span_ambient_module_missing_export_points_to_import_specifier() {
+    let diagnostics = check_program(vec![
+        typescript_rust_checker::SourceFileInput {
+            file_name: "types/pkg.d.ts".to_string(),
+            source_text: "declare module \"pkg\" { export const foo: number; }".to_string(),
+        },
+        typescript_rust_checker::SourceFileInput {
+            file_name: "example.ts".to_string(),
+            source_text: "import { missing } from \"pkg\";".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2305".to_string(),
+            "example.ts".to_string(),
+            Some(span("import { missing } from \"pkg\";", "missing")),
+        )]
+    );
+}
+
+#[test]
+fn span_ambient_module_missing_default_points_to_default_import_name() {
+    let diagnostics = check_program(vec![
+        typescript_rust_checker::SourceFileInput {
+            file_name: "types/pkg.d.ts".to_string(),
+            source_text: "declare module \"pkg\" { export const foo: number; }".to_string(),
+        },
+        typescript_rust_checker::SourceFileInput {
+            file_name: "example.ts".to_string(),
+            source_text: "import foo from \"pkg\";".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2305".to_string(),
+            "example.ts".to_string(),
+            Some(span("import foo from \"pkg\";", "foo")),
+        )]
+    );
+}
+
+#[test]
+fn span_ambient_module_namespace_missing_property_points_to_property() {
+    let diagnostics = check_program(vec![
+        typescript_rust_checker::SourceFileInput {
+            file_name: "types/pkg.d.ts".to_string(),
+            source_text: "declare module \"pkg\" { export const foo: number; }".to_string(),
+        },
+        typescript_rust_checker::SourceFileInput {
+            file_name: "example.ts".to_string(),
+            source_text: "import * as pkg from \"pkg\"; let value = pkg.missing;".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2339".to_string(),
+            "example.ts".to_string(),
+            Some(span(
+                "import * as pkg from \"pkg\"; let value = pkg.missing;",
+                "missing",
+            )),
+        )]
+    );
+}
+
+#[test]
+fn span_ambient_module_missing_named_export_points_to_import_specifier() {
+    let diagnostics = check_program(vec![
+        typescript_rust_checker::SourceFileInput {
+            file_name: "types/pkg.d.ts".to_string(),
+            source_text: "declare module \"pkg\" { export const foo: number; }".to_string(),
+        },
+        typescript_rust_checker::SourceFileInput {
+            file_name: "example.ts".to_string(),
+            source_text: "import { missing } from \"pkg\";".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2305".to_string(),
+            "example.ts".to_string(),
+            Some(span("import { missing } from \"pkg\";", "missing")),
+        )]
+    );
+}
+
+#[test]
+fn span_ambient_module_missing_type_export_points_to_import_specifier() {
+    let diagnostics = check_program(vec![
+        typescript_rust_checker::SourceFileInput {
+            file_name: "types/pkg.d.ts".to_string(),
+            source_text: "declare module \"pkg\" { export const foo: number; }".to_string(),
+        },
+        typescript_rust_checker::SourceFileInput {
+            file_name: "example.ts".to_string(),
+            source_text: "import type { missing } from \"pkg\";".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "TS2305".to_string(),
+            "example.ts".to_string(),
+            Some(span("import type { missing } from \"pkg\";", "missing")),
+        )]
+    );
+}
+
+#[test]
 fn span_module_unsupported_syntax_points_to_syntax_or_pinned() {
     let source = "export * as Foo from \"./foo\";";
     let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
@@ -1169,6 +1303,60 @@ fn span_module_re_export_star_as_points_to_export_span_or_module_specifier() {
         diagnostics,
         "typescript-rust::unsupported-module-syntax",
         span(source, source),
+    );
+}
+
+#[test]
+fn span_unsupported_declare_class_points_to_keyword_or_statement() {
+    let source = "declare class Foo {}";
+    let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
+        file_name: "example.d.ts".to_string(),
+        source_text: source.to_string(),
+    }]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "typescript-rust::unsupported-declaration".to_string(),
+            "example.d.ts".to_string(),
+            Some(span(source, source)),
+        )]
+    );
+}
+
+#[test]
+fn span_unsupported_declare_namespace_points_to_keyword_or_statement() {
+    let source = "declare namespace N {}";
+    let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
+        file_name: "example.d.ts".to_string(),
+        source_text: source.to_string(),
+    }]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "typescript-rust::unsupported-declaration".to_string(),
+            "example.d.ts".to_string(),
+            Some(span(source, source)),
+        )]
+    );
+}
+
+#[test]
+fn span_unsupported_wildcard_declare_module_points_to_module_specifier_or_statement() {
+    let source = "declare module \"*\" {}";
+    let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
+        file_name: "example.d.ts".to_string(),
+        source_text: source.to_string(),
+    }]);
+
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![(
+            "typescript-rust::unsupported-declaration".to_string(),
+            "example.d.ts".to_string(),
+            Some(span(source, source)),
+        )]
     );
 }
 
@@ -1380,6 +1568,7 @@ fn span_external_side_effect_import_points_to_module_specifier() {
     let options = CheckerOptions::default();
     let diagnostics = check_source_with_options(source, "test.ts", options);
     assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code.to_string(), "TS2882");
     let span = diagnostics[0].span.as_ref().unwrap();
     assert_eq!(&source[span.start..span.end], "\"pkg\"");
 }

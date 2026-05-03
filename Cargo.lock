@@ -826,7 +826,17 @@ name = "typescript-rust-diagnostics"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "toml",
+ "typescript-rust-diagnostics-codegen",
+]
+
+[[package]]
+name = "typescript-rust-diagnostics-codegen"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -6,7 +6,7 @@ use crate::ParsedSource;
 
 pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
     let allocator = Allocator::default();
-    let source_type = SourceType::ts();
+    let source_type = SourceType::from_path(file_name).unwrap_or_else(|_| SourceType::ts());
     let parser = Parser::new(&allocator, source_text, source_type);
     let parsed = parser.parse();
 

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
+use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedFunctionDeclaration,
-    ParsedStatement, parse_source,
+    ParsedImportKind, ParsedStatement, TextSpan, parse_source,
 };
 use typescript_rust_types::FunctionType;
 
@@ -45,6 +45,13 @@ struct ModuleAnalysis {
     local_symbols: SymbolTable,
     local_function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     local_export_table: ModuleExportTable,
+}
+
+#[derive(Debug, Clone)]
+struct AmbientModuleEntry {
+    module_specifier: String,
+    file: ParsedProgramFile,
+    raw_export_table: ModuleExportTable,
 }
 
 pub fn check_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
@@ -140,8 +147,7 @@ fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
         ctx.set_file_name(parsed_file.file_name.clone());
 
         for message in &parsed_file.parser_errors {
-            ctx.push(Diagnostic::new(
-                DiagnosticCode::Custom("typescript-rust::parser-error"),
+            ctx.push(Diagnostic::typescript_rust_parser_error(
                 message.clone(),
                 parsed_file.file_name.clone(),
             ));
@@ -167,7 +173,7 @@ fn collect_global_function_signatures(
     ctx: &mut CheckerContext,
 ) {
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-        if parsed_file.is_module && !parsed_file.file_name.ends_with(".d.ts") {
+        if parsed_file.is_module || parsed_file.file_name.ends_with(".d.ts") {
             continue;
         }
 
@@ -244,6 +250,7 @@ fn check_program_files(
         ctx.set_file_name(parsed_file.file_name.clone());
 
         if parsed_file.file_name.ends_with(".d.ts") {
+            emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
             continue;
         }
 
@@ -486,11 +493,8 @@ fn check_program_statement(
                 expr::check_expression_statement(expression, ctx);
             }
             ParsedDefaultExportDeclaration::Unsupported { span } => {
-                let mut diagnostic = Diagnostic::new(
-                    DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-                    "Unsupported module syntax.".to_string(),
-                    ctx.file_name.clone(),
-                );
+                let mut diagnostic =
+                    Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());
 
                 if let Some(span) = span {
                     diagnostic = diagnostic.with_span(crate::context::convert_span(span));
@@ -502,13 +506,12 @@ fn check_program_statement(
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
         ParsedStatement::DeclareModuleDeclaration(_) => {}
-        ParsedStatement::UnsupportedDeclaration { .. } => {}
+        ParsedStatement::UnsupportedDeclaration { span } => {
+            emit_unsupported_declaration_diagnostic(ctx, span);
+        }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
-            let mut diagnostic = Diagnostic::new(
-                DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-                "Unsupported module syntax.".to_string(),
-                ctx.file_name.clone(),
-            );
+            let mut diagnostic =
+                Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());
 
             if let Some(span) = span {
                 diagnostic = diagnostic.with_span(crate::context::convert_span(span));
@@ -517,6 +520,57 @@ fn check_program_statement(
             ctx.push(diagnostic);
         }
     }
+}
+
+fn emit_unsupported_declaration_diagnostics(
+    statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) {
+    for statement in statements {
+        emit_unsupported_declaration_diagnostic_from_statement(statement, ctx);
+    }
+}
+
+fn emit_unsupported_declaration_diagnostic_from_statement(
+    statement: &ParsedStatement,
+    ctx: &mut CheckerContext,
+) {
+    match statement {
+        ParsedStatement::UnsupportedDeclaration { span } => {
+            emit_unsupported_declaration_diagnostic(ctx, *span);
+        }
+        ParsedStatement::ImportDeclaration(import)
+            if matches!(import.kind, ParsedImportKind::Unsupported) =>
+        {
+            emit_unsupported_declaration_diagnostic(
+                ctx,
+                import.span.or(import.module_specifier_span),
+            );
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
+            emit_unsupported_declaration_diagnostic(ctx, *span);
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Unsupported { span },
+            span: declaration_span,
+        }) => {
+            emit_unsupported_declaration_diagnostic(ctx, (*span).or(*declaration_span));
+        }
+        ParsedStatement::DeclareModuleDeclaration(module) => {
+            emit_unsupported_declaration_diagnostics(&module.statements, ctx);
+        }
+        _ => {}
+    }
+}
+
+fn emit_unsupported_declaration_diagnostic(ctx: &mut CheckerContext, span: Option<TextSpan>) {
+    let mut diagnostic = Diagnostic::typescript_rust_unsupported_declaration(ctx.file_name.clone());
+
+    if let Some(span) = span {
+        diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+    }
+
+    ctx.push(diagnostic);
 }
 
 fn check_program_function_declaration(
@@ -550,7 +604,7 @@ fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
         let saved_type_declarations =
             std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
         collect_type_declarations(&parsed_file.statements, ctx);
-        let mut ambient_td = ctx.type_declarations.clone();
+        let ambient_td = ctx.type_declarations.clone();
         ctx.type_declarations = saved_type_declarations;
 
         for (name, decl) in ambient_td.iter() {
@@ -593,157 +647,243 @@ fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                     .as_ref()
                     .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
                     .unwrap_or(typescript_rust_types::Type::Unknown);
-                ctx.ambient_global_symbols.insert(
-                    var.name.clone(),
-                    crate::symbols::SymbolInfo {
-                        ty,
-                        kind: if matches!(
-                            var.kind,
-                            typescript_rust_syntax::ParsedVariableKind::Const
-                        ) {
-                            crate::symbols::SymbolKind::Const
-                        } else {
-                            crate::symbols::SymbolKind::Let
+                if ctx.ambient_global_symbols.get(&var.name).is_none() {
+                    ctx.ambient_global_symbols.insert(
+                        var.name.clone(),
+                        crate::symbols::SymbolInfo {
+                            ty,
+                            kind: if matches!(
+                                var.kind,
+                                typescript_rust_syntax::ParsedVariableKind::Const
+                            ) {
+                                crate::symbols::SymbolKind::Const
+                            } else {
+                                crate::symbols::SymbolKind::Let
+                            },
                         },
-                    },
-                );
+                    );
+                }
             }
         }
 
         for (loc, fun_ty) in local_function_signatures {
-            ctx.ambient_global_symbols.insert(
-                match &parsed_file.statements[loc.statement_index] {
-                    ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
-                    ParsedStatement::ExportDeclaration(
-                        typescript_rust_syntax::ParsedExportDeclaration::Default {
-                            declaration:
-                                typescript_rust_syntax::ParsedDefaultExportDeclaration::Function(f),
-                            ..
-                        },
-                    ) => f.name.clone(),
+            let name = match &parsed_file.statements[loc.statement_index] {
+                ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Default {
+                        declaration:
+                            typescript_rust_syntax::ParsedDefaultExportDeclaration::Function(f),
+                        ..
+                    },
+                ) => f.name.clone(),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    },
+                ) => {
+                    if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
+                        f.name.clone()
+                    } else {
+                        "unknown".to_string()
+                    }
+                }
+                _ => "unknown".to_string(),
+            };
+
+            if ctx.ambient_global_symbols.get(&name).is_none() {
+                ctx.ambient_global_symbols.insert(
+                    name,
+                    crate::symbols::SymbolInfo {
+                        ty: typescript_rust_types::Type::Function(fun_ty),
+                        kind: crate::symbols::SymbolKind::Function,
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
+    let mut ambient_module_entries = Vec::<AmbientModuleEntry>::new();
+    let mut ambient_module_indexes = HashMap::<String, usize>::new();
+
+    for parsed_file in parsed_files {
+        ctx.set_file_name(parsed_file.file_name.clone());
+        for statement in &parsed_file.statements {
+            let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
+                continue;
+            };
+
+            let saved_type_declarations =
+                std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+            let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
+
+            collect_type_declarations(&module.statements, ctx);
+            let mut local_function_signatures = HashMap::new();
+            let mut current_symbols = std::mem::take(&mut ctx.symbols);
+            collect_function_signatures_from_statements(
+                &module.statements,
+                0,
+                &mut current_symbols,
+                &mut local_function_signatures,
+                ctx,
+            );
+            ctx.symbols = current_symbols;
+
+            for stmt in &module.statements {
+                match stmt {
+                    ParsedStatement::VariableDeclaration(var) => {
+                        if var.is_declare && ctx.symbols.get(&var.name).is_none() {
+                            let ty = var
+                                .declared_type
+                                .as_ref()
+                                .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                                .unwrap_or(typescript_rust_types::Type::Unknown);
+                            ctx.symbols.insert(
+                                var.name.clone(),
+                                crate::symbols::SymbolInfo {
+                                    kind: if matches!(
+                                        var.kind,
+                                        typescript_rust_syntax::ParsedVariableKind::Const
+                                    ) {
+                                        crate::symbols::SymbolKind::Const
+                                    } else {
+                                        crate::symbols::SymbolKind::Let
+                                    },
+                                    ty,
+                                },
+                            );
+                        }
+                    }
                     ParsedStatement::ExportDeclaration(
                         typescript_rust_syntax::ParsedExportDeclaration::Statement {
                             declaration,
                             ..
                         },
                     ) => {
-                        if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
-                            f.name.clone()
-                        } else {
-                            "unknown".to_string()
+                        if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                            if ctx.symbols.get(&var.name).is_none() {
+                                let ty = var
+                                    .declared_type
+                                    .as_ref()
+                                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                                    .unwrap_or(typescript_rust_types::Type::Unknown);
+                                ctx.symbols.insert(
+                                    var.name.clone(),
+                                    crate::symbols::SymbolInfo {
+                                        kind: if matches!(
+                                            var.kind,
+                                            typescript_rust_syntax::ParsedVariableKind::Const
+                                        ) {
+                                            crate::symbols::SymbolKind::Const
+                                        } else {
+                                            crate::symbols::SymbolKind::Let
+                                        },
+                                        ty,
+                                    },
+                                );
+                            }
                         }
                     }
-                    _ => "unknown".to_string(),
-                },
-                crate::symbols::SymbolInfo {
-                    ty: typescript_rust_types::Type::Function(fun_ty),
-                    kind: crate::symbols::SymbolKind::Function,
-                },
+                    _ => {}
+                }
+            }
+
+            let mut temp_file = parsed_file.clone();
+            temp_file.statements = module.statements.clone();
+            let current_type_declarations = std::mem::take(&mut ctx.type_declarations);
+            let current_symbols = std::mem::take(&mut ctx.symbols);
+            let raw_export_table = build_module_export_table(
+                &temp_file,
+                &current_type_declarations,
+                &current_symbols,
+                ctx,
             );
+            ctx.type_declarations = current_type_declarations;
+            ctx.symbols = current_symbols;
+
+            if let Some(existing_index) = ambient_module_indexes
+                .get(&module.module_specifier)
+                .copied()
+            {
+                merge_module_export_tables(
+                    &mut ambient_module_entries[existing_index].raw_export_table,
+                    &raw_export_table,
+                );
+                if let Some(existing_table) = ctx.ambient_modules.get_mut(&module.module_specifier)
+                {
+                    merge_module_export_tables(existing_table, &raw_export_table);
+                }
+            } else {
+                ctx.ambient_modules
+                    .insert(module.module_specifier.clone(), raw_export_table.clone());
+                ambient_module_indexes.insert(
+                    module.module_specifier.clone(),
+                    ambient_module_entries.len(),
+                );
+                ambient_module_entries.push(AmbientModuleEntry {
+                    module_specifier: module.module_specifier.clone(),
+                    file: temp_file,
+                    raw_export_table,
+                });
+            }
+
+            ctx.type_declarations = saved_type_declarations;
+            ctx.symbols = saved_symbols;
+        }
+    }
+
+    if ambient_module_entries.is_empty() {
+        return;
+    }
+
+    let ambient_files = ambient_module_entries
+        .iter()
+        .map(|entry| entry.file.clone())
+        .collect::<Vec<_>>();
+    let local_module_export_tables = ambient_module_entries
+        .iter()
+        .map(|entry| Some(entry.raw_export_table.clone()))
+        .collect::<Vec<_>>();
+
+    let mut resolved_module_export_tables = vec![None; ambient_module_entries.len()];
+    let mut resolving = vec![false; ambient_module_entries.len()];
+
+    for (file_index, entry) in ambient_module_entries.iter().enumerate() {
+        if let Some(resolved_export_table) = crate::modules::resolve_module_export_table(
+            file_index,
+            &ambient_files,
+            &local_module_export_tables,
+            &mut resolved_module_export_tables,
+            &mut resolving,
+            ctx,
+        ) {
+            ctx.ambient_modules
+                .insert(entry.module_specifier.clone(), resolved_export_table);
         }
     }
 }
 
-fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
-    for parsed_file in parsed_files {
-        ctx.set_file_name(parsed_file.file_name.clone());
-        for statement in &parsed_file.statements {
-            if let ParsedStatement::DeclareModuleDeclaration(module) = statement {
-                let saved_type_declarations =
-                    std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
-                let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
-
-                collect_type_declarations(&module.statements, ctx);
-                let mut local_function_signatures = HashMap::new();
-                let mut current_symbols = std::mem::take(&mut ctx.symbols);
-                collect_function_signatures_from_statements(
-                    &module.statements,
-                    0,
-                    &mut current_symbols,
-                    &mut local_function_signatures,
-                    ctx,
-                );
-                ctx.symbols = current_symbols;
-
-                for stmt in &module.statements {
-                    match stmt {
-                        ParsedStatement::VariableDeclaration(var) => {
-                            if var.is_declare {
-                                let ty = var
-                                    .declared_type
-                                    .as_ref()
-                                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
-                                    .unwrap_or(typescript_rust_types::Type::Unknown);
-                                ctx.symbols.insert(
-                                    var.name.clone(),
-                                    crate::symbols::SymbolInfo {
-                                        kind: if matches!(
-                                            var.kind,
-                                            typescript_rust_syntax::ParsedVariableKind::Const
-                                        ) {
-                                            crate::symbols::SymbolKind::Const
-                                        } else {
-                                            crate::symbols::SymbolKind::Let
-                                        },
-                                        ty: ty,
-                                    },
-                                );
-                            }
-                        }
-                        ParsedStatement::ExportDeclaration(
-                            typescript_rust_syntax::ParsedExportDeclaration::Statement {
-                                declaration,
-                                ..
-                            },
-                        ) => {
-                            if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref()
-                            {
-                                let ty = var
-                                    .declared_type
-                                    .as_ref()
-                                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
-                                    .unwrap_or(typescript_rust_types::Type::Unknown);
-                                ctx.symbols.insert(
-                                    var.name.clone(),
-                                    crate::symbols::SymbolInfo {
-                                        kind: if matches!(
-                                            var.kind,
-                                            typescript_rust_syntax::ParsedVariableKind::Const
-                                        ) {
-                                            crate::symbols::SymbolKind::Const
-                                        } else {
-                                            crate::symbols::SymbolKind::Let
-                                        },
-                                        ty: ty,
-                                    },
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                let mut temp_file = parsed_file.clone();
-                temp_file.statements = module.statements.clone();
-                let current_type_declarations = std::mem::take(&mut ctx.type_declarations);
-                let current_symbols = std::mem::take(&mut ctx.symbols);
-                let export_table = build_module_export_table(
-                    &temp_file,
-                    &current_type_declarations,
-                    &current_symbols,
-                    ctx,
-                );
-                ctx.type_declarations = current_type_declarations;
-                ctx.symbols = current_symbols;
-
-                ctx.ambient_modules
-                    .insert(module.module_specifier.clone(), export_table);
-
-                ctx.type_declarations = saved_type_declarations;
-                ctx.symbols = saved_symbols;
-            }
+fn merge_module_export_tables(target: &mut ModuleExportTable, source: &ModuleExportTable) {
+    for (name, declaration) in source.type_declarations.iter() {
+        if target.type_declarations.get(name).is_none() {
+            let _ = target
+                .type_declarations
+                .insert(name.clone(), declaration.clone());
         }
     }
+
+    for (name, symbol) in source.symbols.iter() {
+        if target.symbols.get(name).is_none() {
+            let _ = target.symbols.insert(name.clone(), symbol.clone());
+        }
+    }
+
+    if target.default_symbol.is_none() {
+        target.default_symbol = source.default_symbol.clone();
+    }
+
+    target.has_unresolved_star_export |= source.has_unresolved_star_export;
 }
 
 fn collect_global_variables(
@@ -781,20 +921,24 @@ fn collect_global_variables(
                         .as_ref()
                         .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
                         .unwrap_or(typescript_rust_types::Type::Unknown);
-                    global_symbols.insert(
-                        var.name.clone(),
-                        crate::symbols::SymbolInfo {
-                            kind: if matches!(
-                                var.kind,
-                                typescript_rust_syntax::ParsedVariableKind::Const
-                            ) {
-                                crate::symbols::SymbolKind::Const
-                            } else {
-                                crate::symbols::SymbolKind::Let
+                    if !parsed_file.file_name.ends_with(".d.ts")
+                        || global_symbols.get(&var.name).is_none()
+                    {
+                        global_symbols.insert(
+                            var.name.clone(),
+                            crate::symbols::SymbolInfo {
+                                kind: if matches!(
+                                    var.kind,
+                                    typescript_rust_syntax::ParsedVariableKind::Const
+                                ) {
+                                    crate::symbols::SymbolKind::Const
+                                } else {
+                                    crate::symbols::SymbolKind::Let
+                                },
+                                ty: ty,
                             },
-                            ty: ty,
-                        },
-                    );
+                        );
+                    }
                 }
             }
         }

@@ -39,7 +39,7 @@ Current limitations:
 - no computed properties
 - no alias/interface-preserving diagnostic display
 - no package, node_modules, or tsconfig-path resolution
-- no declaration files or CommonJS semantics
+- no full declaration-file semantics, CommonJS semantics, or declaration merging
 - unsupported module syntax such as `export * as Foo from "./foo"` stays parser-safe or pinned
 - program-mode module visibility is limited to loaded relative `.ts` files
 
@@ -48,4 +48,8 @@ Design note:
   checker resolves them to object types before assignability and display.
 
 ## Ambient Types
-`.d.ts` files contribute ambient global types which are accessible everywhere.
+Loaded `.d.ts` files contribute ambient global types which are accessible everywhere.
+- exact `declare module "pkg"` blocks contribute importable ambient modules in program mode
+- ambient types are loaded from project inputs, not from lib.d.ts or @types discovery
+- duplicate ambient globals are first-wins / pinned rather than merged
+- unsupported declaration syntax remains parser-safe and emits the pinned unsupported-declaration diagnostic

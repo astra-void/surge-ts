@@ -2,6 +2,8 @@
 
 CLI entry point for the workspace checker.
 
+Diagnostics are catalog-driven and rendered through the shared diagnostics crate.
+
 ## Modes
 
 - Single-file mode: `typescript-rust-cli <file.ts>`
@@ -15,6 +17,12 @@ CLI entry point for the workspace checker.
 By default, non-relative package imports emit TS2307.
 `--stubExternalModules` suppresses non-relative TS2307 and inserts unknown type/value stubs.
 This is a typescript-rust-only compatibility/triage mode and does not resolve node_modules, package.json, or declaration files.
+
+## Declaration Files (v0.64/v0.65)
+
+Loaded `.d.ts` files from project inputs participate in semantic checking.
+Exact ambient `declare module "pkg"` blocks resolve before package stubbing, but the CLI still does not discover `node_modules`, package.json `types`/`exports`/`main`, `@types`, or `lib.d.ts`.
+Default export, namespace import, named re-export, type-only re-export, star re-export, duplicate ambient module, and duplicate ambient global behavior is pinned rather than full TypeScript declaration merging.
 
 
 ## Single-file behavior
@@ -44,6 +52,15 @@ cargo run -p typescript-rust-cli -- --ignoreConfig examples/basic.ts
 - `--showSpans` is a text-mode affordance; JSON output already carries spans and,
   when available, 1-based line and column numbers.
 - `--maxDiagnostics` limits rendered diagnostics in normal diagnostic mode.
+
+The JSON diagnostic shape stays stable across the catalog migration:
+
+- `code`
+- `message`
+- `fileName`
+- `line`
+- `column`
+- `span`
 
 ## Workflow notes
 

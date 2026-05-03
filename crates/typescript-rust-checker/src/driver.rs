@@ -1,4 +1,4 @@
-use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
+use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedInterfaceDeclaration,
     ParsedStatement, ParsedTypeAliasDeclaration, parse_source,
@@ -27,11 +27,7 @@ pub fn check_source_with_options(
     let mut ctx = CheckerContext::new(file_name.clone(), options);
 
     for message in parsed.parser_errors {
-        let diagnostic = Diagnostic::new(
-            DiagnosticCode::Custom("typescript-rust::parser-error"),
-            message,
-            file_name.clone(),
-        );
+        let diagnostic = Diagnostic::typescript_rust_parser_error(message, file_name.clone());
         ctx.push(diagnostic);
     }
 
@@ -88,8 +84,12 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         ParsedStatement::ImportDeclaration(import) => {
             if crate::modules::is_external_specifier(&import.module_specifier) {
                 if !ctx.options.stub_external_modules {
-                    let mut diagnostic =
-                        Diagnostic::ts2307(&import.module_specifier, ctx.file_name.clone());
+                    let mut diagnostic = match &import.kind {
+                        typescript_rust_syntax::ParsedImportKind::SideEffect => {
+                            Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
+                        }
+                        _ => Diagnostic::ts2307(&import.module_specifier, ctx.file_name.clone()),
+                    };
                     if let Some(span) = import.module_specifier_span {
                         diagnostic = diagnostic.with_span(crate::context::convert_span(span));
                     }
@@ -162,11 +162,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                     _ => {}
                 }
             } else {
-                let mut diagnostic = Diagnostic::new(
-                    DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-                    "Unsupported module syntax.".to_string(),
-                    ctx.file_name.clone(),
-                );
+                let mut diagnostic =
+                    Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());
 
                 if let Some(span) = import.span.or(import.module_specifier_span) {
                     diagnostic = diagnostic.with_span(crate::context::convert_span(span));
@@ -194,11 +191,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                     ctx.push(diagnostic);
                 }
             } else {
-                let mut diagnostic = Diagnostic::new(
-                    DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-                    "Unsupported module syntax.".to_string(),
-                    ctx.file_name.clone(),
-                );
+                let mut diagnostic =
+                    Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());
 
                 if let Some(span) = span {
                     diagnostic = diagnostic.with_span(crate::context::convert_span(span));
@@ -219,11 +213,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                 expr::check_expression_statement(expression, ctx);
             }
             ParsedDefaultExportDeclaration::Unsupported { .. } => {
-                let mut diagnostic = Diagnostic::new(
-                    DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-                    "Unsupported module syntax.".to_string(),
-                    ctx.file_name.clone(),
-                );
+                let mut diagnostic =
+                    Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());
 
                 if let Some(span) = span {
                     diagnostic = diagnostic.with_span(crate::context::convert_span(span));
@@ -248,11 +239,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                     ctx.push(diagnostic);
                 }
             } else {
-                let mut diagnostic = Diagnostic::new(
-                    DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-                    "Unsupported module syntax.".to_string(),
-                    ctx.file_name.clone(),
-                );
+                let mut diagnostic =
+                    Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());
 
                 if let Some(span) = span {
                     diagnostic = diagnostic.with_span(crate::context::convert_span(span));
@@ -264,24 +252,18 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
         ParsedStatement::DeclareModuleDeclaration(_) => {}
         ParsedStatement::UnsupportedDeclaration { span } => {
-            let mut diag = typescript_rust_diagnostics::Diagnostic::new(
-                typescript_rust_diagnostics::DiagnosticCode::Custom(
-                    "typescript-rust::unsupported-declaration",
-                ),
-                "Unsupported declaration syntax.".to_string(),
-                ctx.file_name.clone(),
-            );
+            let mut diag =
+                typescript_rust_diagnostics::Diagnostic::typescript_rust_unsupported_declaration(
+                    ctx.file_name.clone(),
+                );
             if let Some(s) = span {
                 diag = diag.with_span(crate::context::convert_span(s));
             }
             ctx.push(diag);
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
-            let mut diagnostic = Diagnostic::new(
-                DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-                "Unsupported module syntax.".to_string(),
-                ctx.file_name.clone(),
-            );
+            let mut diagnostic =
+                Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());
 
             if let Some(span) = span {
                 diagnostic = diagnostic.with_span(crate::context::convert_span(span));

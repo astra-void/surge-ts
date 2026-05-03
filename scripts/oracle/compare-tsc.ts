@@ -108,6 +108,7 @@ const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
 
 const fixturePresets: Record<string, string> = {
   'declarations-basic': path.join(workspaceRoot, 'tests/compat-projects/declarations-basic/tsconfig.json'),
+  'declarations-hardening': path.join(workspaceRoot, 'tests/compat-projects/declarations-hardening/tsconfig.json'),
   'generics-basic': path.join(workspaceRoot, 'tests/compat-projects/generics-basic/tsconfig.json'),
   'package-imports': path.join(workspaceRoot, 'tests/compat-projects/package-imports/tsconfig.json'),
   'module-forms': path.join(workspaceRoot, 'tests/compat-projects/module-forms/tsconfig.json'),

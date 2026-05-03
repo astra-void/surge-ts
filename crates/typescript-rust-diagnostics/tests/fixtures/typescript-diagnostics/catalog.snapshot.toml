@@ -1,320 +1,490 @@
-# Pinned verification snapshot for the current TypeScript-compatible diagnostic catalog.
+# Pinned verification snapshot for the current diagnostic catalog.
 
 [[diagnostic]]
-code = 5112
-key = "tsconfig_json_is_present_but_will_not_be_loaded_if_files_are_specified_on_commandline_Use_ignoreConfig_to_skip_this_error"
-message_template = "tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error."
-argument_count = 0
-
-
-[[diagnostic]]
-code = 2304
-key = "Cannot_find_name_0"
-message_template = "Cannot find name '{0}'."
-argument_count = 1
+code = "TS5112"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error."
+arity = 0
 
 [[diagnostic]]
-code = 2322
-key = "Type_0_is_not_assignable_to_type_1"
-message_template = "Type '{0}' is not assignable to type '{1}'."
-argument_count = 2
+code = "TS2304"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'."
+arity = 1
 
 [[diagnostic]]
-code = 2339
-key = "Property_0_does_not_exist_on_type_1"
-message_template = "Property '{0}' does not exist on type '{1}'."
-argument_count = 2
+code = "TS2300"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Duplicate identifier '{0}'."
+arity = 1
 
 [[diagnostic]]
-code = 2345
-key = "Argument_of_type_0_is_not_assignable_to_parameter_of_type_1"
-message_template = "Argument of type '{0}' is not assignable to parameter of type '{1}'."
-argument_count = 2
+code = "TS2305"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' has no exported member '{1}'."
+arity = 2
 
 [[diagnostic]]
-code = 7006
-key = "Parameter_0_implicitly_has_an_any_type"
-message_template = "Parameter '{0}' implicitly has an 'any' type."
-argument_count = 1
+code = "TS2306"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "File '{0}' is not a module."
+arity = 1
 
 [[diagnostic]]
-code = 2349
-key = "This_expression_is_not_callable"
-message_template = "This expression is not callable."
-argument_count = 0
+code = "TS2307"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Cannot find module '{0}' or its corresponding type declarations."
+arity = 1
 
 [[diagnostic]]
-code = 2451
-key = "Cannot_redeclare_block_scoped_variable_0"
-message_template = "Cannot redeclare block-scoped variable '{0}'."
-argument_count = 1
+code = "TS2882"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find module or type declarations for side-effect import of '{0}'."
+arity = 1
 
 [[diagnostic]]
-code = 2554
-key = "Expected_0_arguments_but_got_1"
-message_template = "Expected {0} arguments, but got {1}."
-argument_count = 2
+code = "TS2314"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Generic type '{0}' requires {1} type argument(s)."
+arity = 2
 
 [[diagnostic]]
-code = 2588
-key = "Cannot_assign_to_0_because_it_is_a_constant"
-message_template = "Cannot assign to '{0}' because it is a constant."
-argument_count = 1
+code = "TS2315"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Type '{0}' is not generic."
+arity = 1
 
 [[diagnostic]]
-code = 2362
-key = "The_left_hand_side_of_an_arithmetic_operation_must_be_number_like"
-message_template = "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type."
-argument_count = 0
+code = "TS2322"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is not assignable to type '{1}'."
+arity = 2
 
 [[diagnostic]]
-code = 2363
-key = "The_right_hand_side_of_an_arithmetic_operation_must_be_number_like"
-message_template = "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type."
-argument_count = 0
+code = "TS2339"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' does not exist on type '{1}'."
+arity = 2
 
 [[diagnostic]]
-code = 2356
-key = "An_arithmetic_operand_must_be_number_like"
-message_template = "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type."
-argument_count = 0
+code = "TS2344"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Type '{0}' does not satisfy the constraint '{1}'."
+arity = 2
 
 [[diagnostic]]
-code = 2365
-key = "Operator_0_cannot_be_applied_to_types_1_and_2"
-message_template = "Operator '{0}' cannot be applied to types '{1}' and '{2}'."
-argument_count = 3
+code = "TS2345"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Argument of type '{0}' is not assignable to parameter of type '{1}'."
+arity = 2
 
 [[diagnostic]]
-code = 2367
-key = "This_comparison_appears_to_be_unintentional_because_the_types_0_and_1_have_no_overlap"
-message_template = "This comparison appears to be unintentional because the types '{0}' and '{1}' have no overlap."
-argument_count = 2
+code = "TS2349"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This expression is not callable."
+arity = 0
 
 [[diagnostic]]
-code = 2300
-key = "Duplicate_identifier_0"
-message_template = "Duplicate identifier '{0}'."
-argument_count = 1
+code = "TS2351"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "This expression is not constructable."
+arity = 0
 
 [[diagnostic]]
-code = 2306
-key = "File_0_is_not_a_module"
-message_template = "File '{0}' is not a module."
-argument_count = 1
+code = "TS2352"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Conversion of type '{0}' to type '{1}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+arity = 2
 
 [[diagnostic]]
-code = 2307
-key = "Cannot_find_module_0_or_its_corresponding_type_declarations"
-message_template = "Cannot find module '{0}' or its corresponding type declarations."
-argument_count = 1
+code = "TS2353"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Object literal may only specify known properties, and '{0}' does not exist in type '{1}'."
+arity = 2
 
 [[diagnostic]]
-code = 2315
-key = "Type_0_is_not_generic"
-message_template = "Type '{0}' is not generic."
-argument_count = 1
+code = "TS2355"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value."
+arity = 0
 
 [[diagnostic]]
-code = 2344
-key = "Type_0_does_not_satisfy_the_constraint_1"
-message_template = "Type '{0}' does not satisfy the constraint '{1}'."
-argument_count = 2
+code = "TS2356"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type."
+arity = 0
 
 [[diagnostic]]
-code = 2351
-key = "This_expression_is_not_constructable"
-message_template = "This expression is not constructable."
-argument_count = 0
+code = "TS2362"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type."
+arity = 0
 
 [[diagnostic]]
-code = 2352
-key = "Conversion_of_type_0_to_type_1_may_be_a_mistake"
-message_template = "Conversion of type '{0}' to type '{1}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
-argument_count = 2
+code = "TS2363"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type."
+arity = 0
 
 [[diagnostic]]
-code = 2353
-key = "Object_literal_may_only_specify_known_properties_0_does_not_exist_in_type_1"
-message_template = "Object literal may only specify known properties, and '{0}' does not exist in type '{1}'."
-argument_count = 2
+code = "TS2365"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Operator '{0}' cannot be applied to types '{1}' and '{2}'."
+arity = 3
 
 [[diagnostic]]
-code = 2354
-key = "This_syntax_requires_an_imported_helper_but_module_0_cannot_be_found"
-message_template = "This syntax requires an imported helper but module '{0}' cannot be found."
-argument_count = 1
+code = "TS2366"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Function lacks ending return statement and return type does not include 'undefined'."
+arity = 0
 
 [[diagnostic]]
-code = 2355
-key = "A_function_whose_declared_type_is_neither_undefined_void_nor_any_must_return_a_value"
-message_template = "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value."
-argument_count = 0
+code = "TS2367"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This comparison appears to be unintentional because the types '{0}' and '{1}' have no overlap."
+arity = 2
 
 [[diagnostic]]
-code = 2366
-key = "Function_lacks_ending_return_statement_and_return_type_does_not_include_undefined"
-message_template = "Function lacks ending return statement and return type does not include 'undefined'."
-argument_count = 0
+code = "TS2393"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Duplicate function implementation."
+arity = 0
 
 [[diagnostic]]
-code = 2371
-key = "A_parameter_initializer_is_only_allowed_in_a_function_or_constructor_implementation"
-message_template = "A parameter initializer is only allowed in a function or constructor implementation."
-argument_count = 0
+code = "TS2394"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "This overload signature is not compatible with its implementation signature."
+arity = 0
 
 [[diagnostic]]
-code = 2393
-key = "Duplicate_function_implementation"
-message_template = "Duplicate function implementation."
-argument_count = 0
+code = "TS2448"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Block-scoped variable '{0}' used before its declaration."
+arity = 1
 
 [[diagnostic]]
-code = 2394
-key = "This_overload_signature_is_not_compatible_with_its_implementation_signature"
-message_template = "This overload signature is not compatible with its implementation signature."
-argument_count = 0
+code = "TS2451"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot redeclare block-scoped variable '{0}'."
+arity = 1
 
 [[diagnostic]]
-code = 2448
-key = "Block_scoped_variable_0_used_before_its_declaration"
-message_template = "Block-scoped variable '{0}' used before its declaration."
-argument_count = 1
+code = "TS2454"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Variable '{0}' is used before being assigned."
+arity = 1
 
 [[diagnostic]]
-code = 2454
-key = "Variable_0_is_used_before_being_assigned"
-message_template = "Variable '{0}' is used before being assigned."
-argument_count = 1
+code = "TS2551"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?"
+arity = 3
 
 [[diagnostic]]
-code = 2551
-key = "Property_0_does_not_exist_on_type_1_did_you_mean_2"
-message_template = "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?"
-argument_count = 3
+code = "TS2554"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected {0} arguments, but got {1}."
+arity = 2
 
 [[diagnostic]]
-code = 2693
-key = "Type_0_only_refers_to_a_type_but_is_being_used_as_a_value_here"
-message_template = "'{0}' only refers to a type, but is being used as a value here."
-argument_count = 1
+code = "TS2588"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot assign to '{0}' because it is a constant."
+arity = 1
 
 [[diagnostic]]
-code = 2741
-key = "Property_0_is_missing_in_type_1_but_required_in_type_2"
-message_template = "Property '{0}' is missing in type '{1}' but required in type '{2}'."
-argument_count = 3
+code = "TS2693"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'{0}' only refers to a type, but is being used as a value here."
+arity = 1
 
 [[diagnostic]]
-code = 2749
-key = "Type_0_refers_to_a_value_but_is_being_used_as_a_type_here_did_you_mean_typeof_0"
-message_template = "'{0}' refers to a value, but is being used as a type here. Did you mean 'typeof {0}'?"
-argument_count = 1
+code = "TS2741"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' is missing in type '{1}' but required in type '{2}'."
+arity = 3
 
 [[diagnostic]]
-code = 2872
-key = "This_kind_of_expression_is_always_truthy"
-message_template = "This kind of expression is always truthy."
-argument_count = 0
+code = "TS2749"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'{0}' refers to a value, but is being used as a type here. Did you mean 'typeof {0}'?"
+arity = 1
 
 [[diagnostic]]
-code = 2873
-key = "This_kind_of_expression_is_always_falsy"
-message_template = "This kind of expression is always falsy."
-argument_count = 0
+code = "TS2872"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This kind of expression is always truthy."
+arity = 0
 
 [[diagnostic]]
-code = 7005
-key = "Variable_0_implicitly_has_an_1_type"
-message_template = "Variable '{0}' implicitly has an '{1}' type."
-argument_count = 2
+code = "TS2873"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This kind of expression is always falsy."
+arity = 0
 
 [[diagnostic]]
-code = 7019
-key = "Rest_parameter_0_implicitly_has_an_any_array_type"
-message_template = "Rest parameter '{0}' implicitly has an 'any[]' type."
-argument_count = 1
+code = "TS7005"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Variable '{0}' implicitly has an '{1}' type."
+arity = 2
 
 [[diagnostic]]
-code = 7030
-key = "Not_all_code_paths_return_a_value"
-message_template = "Not all code paths return a value."
-argument_count = 0
+code = "TS7006"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Parameter '{0}' implicitly has an 'any' type."
+arity = 1
 
 [[diagnostic]]
-code = 7031
-key = "Binding_element_0_implicitly_has_an_1_type"
-message_template = "Binding element '{0}' implicitly has an '{1}' type."
-argument_count = 2
+code = "TS7019"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Rest parameter '{0}' implicitly has an 'any[]' type."
+arity = 1
 
 [[diagnostic]]
-code = 7034
-key = "Variable_0_implicitly_has_type_1_in_some_locations_where_its_type_cannot_be_determined"
-message_template = "Variable '{0}' implicitly has type '{1}' in some locations where its type cannot be determined."
-argument_count = 2
+code = "TS7030"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Not all code paths return a value."
+arity = 0
 
 [[diagnostic]]
-code = 7051
-key = "Parameter_has_a_name_but_no_type_did_you_mean_0_colon_1"
-message_template = "Parameter has a name but no type. Did you mean '{0}: {1}'?"
-argument_count = 2
+code = "TS7031"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Binding element '{0}' implicitly has an '{1}' type."
+arity = 2
 
 [[diagnostic]]
-code = 7052
-key = "Element_implicitly_has_an_any_type_because_type_0_has_no_index_signature_did_you_mean_to_call_1"
-message_template = "Element implicitly has an 'any' type because type '{0}' has no index signature. Did you mean to call '{1}'?"
-argument_count = 2
+code = "TS7034"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Variable '{0}' implicitly has type '{1}' in some locations where its type cannot be determined."
+arity = 2
 
 [[diagnostic]]
-code = 7053
-key = "Element_implicitly_has_an_any_type_because_expression_of_type_0_cant_be_used_to_index_type_1"
-message_template = "Element implicitly has an 'any' type because expression of type '{0}' can't be used to index type '{1}'."
-argument_count = 2
+code = "TS7051"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Parameter has a name but no type. Did you mean '{0}: {1}'?"
+arity = 2
 
 [[diagnostic]]
-code = 7054
-key = "No_index_signature_with_a_parameter_of_type_0_was_found_on_type_1"
-message_template = "No index signature with a parameter of type '{0}' was found on type '{1}'."
-argument_count = 2
+code = "TS7052"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Element implicitly has an 'any' type because type '{0}' has no index signature. Did you mean to call '{1}'?"
+arity = 2
 
 [[diagnostic]]
-code = 7055
-key = "Implicitly_has_an_1_yield_type"
-message_template = "'{0}', which lacks return-type annotation, implicitly has an '{1}' yield type."
-argument_count = 2
+code = "TS7053"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Element implicitly has an 'any' type because expression of type '{0}' can't be used to index type '{1}'."
+arity = 2
 
 [[diagnostic]]
-code = 7056
-key = "Inferred_type_exceeds_maximum_length"
-message_template = "The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed."
-argument_count = 0
+code = "TS7054"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "No index signature with a parameter of type '{0}' was found on type '{1}'."
+arity = 2
 
 [[diagnostic]]
-code = 7057
-key = "Yield_expression_implicitly_results_in_any_type"
-message_template = "'yield' expression implicitly results in an 'any' type because its containing generator lacks a return-type annotation."
-argument_count = 0
+code = "TS7055"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'{0}', which lacks return-type annotation, implicitly has an '{1}' yield type."
+arity = 2
 
 [[diagnostic]]
-code = 7058
-key = "Package_exposes_module_add_declare_module"
-message_template = "If the '{0}' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module '{1}';`"
-argument_count = 2
+code = "TS7056"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed."
+arity = 0
 
 [[diagnostic]]
-code = 7059
-key = "Reserved_syntax_use_as_expression_in_mts_or_cts"
-message_template = "This syntax is reserved in files with the .mts or .cts extension. Use an `as` expression instead."
-argument_count = 0
+code = "TS7057"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'yield' expression implicitly results in an 'any' type because its containing generator lacks a return-type annotation."
+arity = 0
 
 [[diagnostic]]
-code = 7060
-key = "Reserved_syntax_add_trailing_comma_or_explicit_constraint"
-message_template = "This syntax is reserved in files with the .mts or .cts extension. Add a trailing comma or explicit constraint."
-argument_count = 0
+code = "TS7058"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "If the '{0}' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module '{1}';`"
+arity = 2
 
 [[diagnostic]]
-code = 7061
-key = "Mapped_type_may_not_declare_properties_or_methods"
-message_template = "A mapped type may not declare properties or methods."
-argument_count = 0
+code = "TS7059"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "This syntax is reserved in files with the .mts or .cts extension. Use an `as` expression instead."
+arity = 0
+
+[[diagnostic]]
+code = "TS7060"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "This syntax is reserved in files with the .mts or .cts extension. Add a trailing comma or explicit constraint."
+arity = 0
+
+[[diagnostic]]
+code = "TS7061"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A mapped type may not declare properties or methods."
+arity = 0
+
+[[diagnostic]]
+code = "typescript-rust::parser-error"
+category = "Error"
+source = "typescript-rust"
+support = "emitted"
+message = "{0}"
+arity = 1
+
+[[diagnostic]]
+code = "typescript-rust::duplicate-type-parameter"
+category = "Error"
+source = "typescript-rust"
+support = "emitted"
+message = "Duplicate type parameter '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "typescript-rust::duplicate-default-export"
+category = "Error"
+source = "typescript-rust"
+support = "emitted"
+message = "Duplicate default export."
+arity = 0
+
+[[diagnostic]]
+code = "typescript-rust::unsupported-module-syntax"
+category = "Error"
+source = "typescript-rust"
+support = "emitted"
+message = "Unsupported module syntax."
+arity = 0
+
+[[diagnostic]]
+code = "typescript-rust::unsupported-declaration"
+category = "Error"
+source = "typescript-rust"
+support = "emitted"
+message = "Unsupported declaration syntax."
+arity = 0
+
+[[diagnostic]]
+code = "typescript-rust::type-alias-cycle"
+category = "Error"
+source = "typescript-rust"
+support = "emitted"
+message = "Type alias '{0}' circularly references itself."
+arity = 1
+
+[[diagnostic]]
+code = "typescript-rust::type-declaration-cycle"
+category = "Error"
+source = "typescript-rust"
+support = "emitted"
+message = "Type declaration '{0}' circularly references itself."
+arity = 1
+

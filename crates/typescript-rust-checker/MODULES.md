@@ -1,13 +1,15 @@
 # Modules
 
 v0.61 expands the existing relative module-resolution-lite boundary with a
-small, pinned module syntax surface for loaded `.ts` files. It keeps package
-resolution, `node_modules`, `paths`/`baseUrl`, declaration files, CommonJS,
-and full TypeScript parity out of scope.
+small, pinned module syntax surface for loaded `.ts` files. v0.65 hardens the
+ambient-module side of that surface, and v0.67 matches TypeScript's TS2882
+priority for unresolved side-effect imports, without adding package resolution,
+`node_modules`, `paths`/`baseUrl`, full declaration-file semantics, CommonJS,
+or full TypeScript parity.
 
 ## What Is Supported
 
-All supported forms are limited to already loaded relative `.ts` files.
+All relative module-syntax forms are limited to already loaded relative `.ts` files.
 
 - Default imports: `import DefaultThing from "./user";`
 - Namespace imports: `import * as user from "./user";`
@@ -27,7 +29,9 @@ Namespace imports bind a single value symbol whose object type is built from the
 - Module files do not contribute to the global script namespace.
 - Module files do not see script globals under the isolated-module policy.
 - Relative resolution only covers already loaded `./` and `../` specifiers.
-- Missing relative modules emit TS2307.
+- Missing ordinary relative modules emit TS2307.
+- Missing side-effect imports emit TS2882, matching TypeScript's priority for
+  `import "pkg";` / `import "./missing";`.
 - Missing exported members emit TS2305.
 - Unsupported module syntax stays parser-safe and is pinned with `typescript-rust::unsupported-module-syntax`.
 - `export * from` follows a pinned conflict policy: local explicit exports win, and the first star export wins when multiple star exports provide the same name.
@@ -39,11 +43,13 @@ v0.63 does not resolve packages. It does, however, stub non-relative imports
 and re-exports to reduce compatibility-report cascades.
 
 Default mode:
-- reports TS2307 for non-relative module specifiers
+- reports TS2307 for ordinary non-relative module specifiers
+- reports TS2882 for non-relative side-effect imports
 - inserts unknown type/value stubs where possible
 
 `--stubExternalModules`:
-- suppresses non-relative TS2307
+- suppresses non-relative missing-module diagnostics, including TS2307 and the
+  side-effect-import TS2882 form
 - keeps unknown stubs
 - leaves relative missing modules unchanged
 
@@ -53,7 +59,13 @@ These forms remain intentionally out of scope for v0.61:
 
 - `node_modules` lookup
 - `paths` / `baseUrl` resolution
-- Declaration files and `lib.d.ts`
+- Full declaration-file semantics and `lib.d.ts` loading remain unsupported.
+- The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.
+  - Ambient modules resolve before package stubbing.
+  - Default import, namespace import, named re-export, type-only re-export, and star re-export behavior inside exact ambient modules is pinned.
+  - Duplicate ambient module declarations are first-wins / pinned, not full merging.
+  - Exact specifier only.
+  - No wildcard ambient module support.
 - `import = require(...)`
 - `export =`
 - `export * as Foo from "./foo"`
@@ -66,7 +78,7 @@ These forms remain intentionally out of scope for v0.61:
 - Exported generic aliases and interfaces still use the relative module-resolution-lite pass, with explicit type arguments substituted when the imported declaration is instantiated and trailing defaults applied when callers omit type arguments.
 - Constraints remain parser-only metadata in this phase.
 - Private helper types stay visible through the current module-resolution-lite pass so imported declarations can still resolve them.
-- The next phase should still be chosen from compatibility-report output rather than by expanding into package or tsconfig-path semantics by default.
+- The next phase should still be chosen from compatibility-report output rather than by expanding into package or tsconfig-path semantics by default. Likely follow-ups are diagnostic expansion or a package declaration entrypoint foundation.
 
 ## Ambient Modules
-Imports try to resolve from ambient external modules defined by `declare module "pkg"` before falling back to relative paths or package stubbing.
+Imports try to resolve from ambient external modules defined by loaded `.d.ts` files with `declare module "pkg"` before falling back to package stubbing. Unsupported declaration syntax remains parser-safe and emits the pinned unsupported-declaration diagnostic.

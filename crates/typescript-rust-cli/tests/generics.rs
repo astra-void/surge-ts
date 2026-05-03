@@ -32,7 +32,7 @@ fn compat_project_generics_basic_valid_subset_passes() {
     let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.trim().is_empty());
+    assert!(stdout.contains("unsupported-declaration"));
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn compat_project_generics_basic_report_stable() {
     assert!(stderr.is_empty());
     assert!(stdout.contains("Compatibility report"));
     assert!(stdout.contains("Files loaded: 3"));
-    assert!(stdout.contains("Diagnostics: 0"));
+    assert!(stdout.contains("Diagnostics: 1"));
 }
 
 #[test]
@@ -79,8 +79,11 @@ fn compat_report_generics_json_stable() {
 
     let parsed: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(parsed["filesLoaded"], Value::from(3));
-    assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
-    assert_eq!(parsed["byCode"], Value::Array(Vec::new()));
+    assert_eq!(parsed["diagnosticsTotal"], Value::from(1));
+    assert_eq!(
+        parsed["byCode"],
+        serde_json::json!([{"code":"typescript-rust::unsupported-declaration","count":1}])
+    );
 }
 
 #[test]
@@ -98,8 +101,14 @@ fn compat_report_generics_counts_by_code_stable() {
     assert!(stderr.is_empty());
 
     let parsed: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(parsed["byCode"], Value::Array(Vec::new()));
-    assert_eq!(parsed["byFile"], Value::Array(Vec::new()));
+    assert_eq!(
+        parsed["byCode"],
+        serde_json::json!([{"code":"typescript-rust::unsupported-declaration","count":1}])
+    );
+    assert_eq!(
+        parsed["byFile"],
+        serde_json::json!([{"fileName":"src/unsupported.ts","count":1}])
+    );
 }
 
 #[test]
@@ -110,5 +119,5 @@ fn compat_report_generics_unsupported_file_still_parser_safe_or_pinned() {
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("Files loaded: 3"));
-    assert!(stdout.contains("Diagnostics: 0"));
+    assert!(stdout.contains("Diagnostics: 1"));
 }

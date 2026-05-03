@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::render::render_with_span;
-use crate::{DiagnosticCode, TypeScriptDiagnosticKind};
+use crate::{DiagnosticCode, DiagnosticDescriptor};
 
 #[derive(Debug, Clone)]
 pub enum DiagnosticArg {
@@ -15,6 +15,24 @@ impl fmt::Display for DiagnosticArg {
             DiagnosticArg::Str(value) => f.write_str(value),
             DiagnosticArg::Usize(value) => write!(f, "{value}"),
         }
+    }
+}
+
+impl From<String> for DiagnosticArg {
+    fn from(value: String) -> Self {
+        Self::Str(value)
+    }
+}
+
+impl From<&str> for DiagnosticArg {
+    fn from(value: &str) -> Self {
+        Self::Str(value.to_string())
+    }
+}
+
+impl From<usize> for DiagnosticArg {
+    fn from(value: usize) -> Self {
+        Self::Usize(value)
     }
 }
 
@@ -46,296 +64,24 @@ impl Diagnostic {
         }
     }
 
-    pub fn with_span(mut self, span: TextSpan) -> Self {
-        self.span = Some(span);
-        self
-    }
-
-    pub fn ts2307(module_specifier: &str, file_name: impl Into<String>) -> Self {
-        Self::new(
-            DiagnosticCode::TypeScript(2307),
-            format!(
-                "Cannot find module '{}' or its corresponding type declarations.",
-                module_specifier
-            ),
-            file_name,
-        )
-    }
-
-    pub fn ts2322(source_type: &str, target_type: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::TypeNotAssignable,
-            vec![
-                DiagnosticArg::Str(source_type.to_string()),
-                DiagnosticArg::Str(target_type.to_string()),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts2353(property_name: &str, target_type: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ObjectLiteralMayOnlySpecifyKnownProperties,
-            vec![
-                DiagnosticArg::Str(property_name.to_string()),
-                DiagnosticArg::Str(target_type.to_string()),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts2339(property_name: &str, object_type: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::PropertyDoesNotExist,
-            vec![
-                DiagnosticArg::Str(property_name.to_string()),
-                DiagnosticArg::Str(object_type.to_string()),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts2741(
-        property_name: &str,
-        source_type: &str,
-        target_type: &str,
-        file_name: impl Into<String>,
-    ) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::PropertyIsMissingInTypeButRequiredInType,
-            vec![
-                DiagnosticArg::Str(property_name.to_string()),
-                DiagnosticArg::Str(source_type.to_string()),
-                DiagnosticArg::Str(target_type.to_string()),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts2345(source_type: &str, target_type: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ArgumentNotAssignableToParameter,
-            vec![
-                DiagnosticArg::Str(source_type.to_string()),
-                DiagnosticArg::Str(target_type.to_string()),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts7006(parameter_name: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ParameterImplicitlyHasAny,
-            vec![DiagnosticArg::Str(parameter_name.to_string())],
-            file_name,
-        )
-    }
-
-    pub fn ts2349(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ThisExpressionIsNotCallable,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn ts2554(expected: usize, actual: usize, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ExpectedArguments,
-            vec![DiagnosticArg::Usize(expected), DiagnosticArg::Usize(actual)],
-            file_name,
-        )
-    }
-
-    pub fn ts2314(type_name: &str, arity: usize, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::GenericTypeRequiresTypeArguments,
-            vec![
-                DiagnosticArg::Str(type_name.to_string()),
-                DiagnosticArg::Usize(arity),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts2315(type_name: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::TypeIsNotGeneric,
-            vec![DiagnosticArg::Str(type_name.to_string())],
-            file_name,
-        )
-    }
-
-    pub fn ts5112(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::TsconfigNotLoaded,
-            vec![],
-            file_name,
-        )
-    }
-
-    pub fn ts2304(name: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::CannotFindName,
-            vec![DiagnosticArg::Str(name.to_string())],
-            file_name,
-        )
-    }
-
-    pub fn ts2300(name: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::DuplicateIdentifier,
-            vec![DiagnosticArg::Str(name.to_string())],
-            file_name,
-        )
-    }
-
-    pub fn ts2588(name: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::CannotAssignToConstant,
-            vec![DiagnosticArg::Str(name.to_string())],
-            file_name,
-        )
-    }
-
-    pub fn ts2451(name: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::CannotRedeclareBlockScopedVariable,
-            vec![DiagnosticArg::Str(name.to_string())],
-            file_name,
-        )
-    }
-
-    pub fn ts2448(name: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::BlockScopedVariableUsedBeforeItsDeclaration,
-            vec![DiagnosticArg::Str(name.to_string())],
-            file_name,
-        )
-    }
-
-    pub fn ts2454(name: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::VariableUsedBeforeBeingAssigned,
-            vec![DiagnosticArg::Str(name.to_string())],
-            file_name,
-        )
-    }
-
-    pub fn ts2393(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::DuplicateFunctionImplementation,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn ts2355(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::FunctionMustReturnAValue,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn ts2366(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::FunctionLacksEndingReturnStatement,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn ts7005(name: &str, implicit_type: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::VariableImplicitlyHasAnyType,
-            vec![
-                DiagnosticArg::Str(name.to_string()),
-                DiagnosticArg::Str(implicit_type.to_string()),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts2362(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::LeftHandSideOfArithmeticOperationMustBeNumberLike,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn ts2363(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::RightHandSideOfArithmeticOperationMustBeNumberLike,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn ts2356(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ArithmeticOperandMustBeNumberLike,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn ts2365(
-        operator: &str,
-        left_type: &str,
-        right_type: &str,
-        file_name: impl Into<String>,
-    ) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::OperatorCannotBeAppliedToTypes,
-            vec![
-                DiagnosticArg::Str(operator.to_string()),
-                DiagnosticArg::Str(left_type.to_string()),
-                DiagnosticArg::Str(right_type.to_string()),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts2367(left_type: &str, right_type: &str, file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ComparisonAppearsUnintentionalNoOverlap,
-            vec![
-                DiagnosticArg::Str(left_type.to_string()),
-                DiagnosticArg::Str(right_type.to_string()),
-            ],
-            file_name,
-        )
-    }
-
-    pub fn ts2872(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ThisKindOfExpressionIsAlwaysTruthy,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn ts2873(file_name: impl Into<String>) -> Self {
-        Self::typescript(
-            TypeScriptDiagnosticKind::ThisKindOfExpressionIsAlwaysFalsy,
-            Vec::<DiagnosticArg>::new(),
-            file_name,
-        )
-    }
-
-    pub fn typescript(
-        kind: TypeScriptDiagnosticKind,
+    pub fn from_descriptor(
+        descriptor: &'static DiagnosticDescriptor,
         args: impl Into<Vec<DiagnosticArg>>,
         file_name: impl Into<String>,
     ) -> Self {
         let args = args.into();
+        debug_assert_eq!(args.len(), descriptor.argument_count);
+
         Self::new(
-            DiagnosticCode::TypeScript(kind.code()),
-            format_message(kind.message_template(), &args),
+            descriptor.diagnostic_code(),
+            format_message(descriptor.message_template, &args),
             file_name,
         )
+    }
+
+    pub fn with_span(mut self, span: TextSpan) -> Self {
+        self.span = Some(span);
+        self
     }
 
     pub fn render(&self, source_text: &str) -> String {

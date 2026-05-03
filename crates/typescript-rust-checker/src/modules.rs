@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
+use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedImportDeclaration,
     ParsedImportKind, ParsedStatement, ParsedType, TextSpan,
@@ -255,7 +255,7 @@ fn try_resolve_module_export_table(
     None
 }
 
-fn resolve_module_export_table(
+pub(crate) fn resolve_module_export_table(
     file_index: usize,
     parsed_files: &[ParsedProgramFile],
     local_module_export_tables: &[Option<ModuleExportTable>],
@@ -391,9 +391,15 @@ fn resolve_module_export_table(
                     }
 
                     if let Some(value_export) = value_export {
-                        let _ = resolved_export_table
+                        if resolved_export_table
                             .symbols
-                            .insert(specifier.exported_name.clone(), value_export);
+                            .get(&specifier.exported_name)
+                            .is_none()
+                        {
+                            let _ = resolved_export_table
+                                .symbols
+                                .insert(specifier.exported_name.clone(), value_export);
+                        }
                         found = true;
                     }
 
@@ -449,10 +455,14 @@ fn resolve_module_export_table(
             continue;
         };
 
-        let Some(resolved_module) = resolve_relative_module(
-            &parsed_files[file_index].file_name,
+        let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table(
             module_specifier,
+            ctx,
             parsed_files,
+            local_module_export_tables,
+            resolved_module_export_tables,
+            resolving,
+            &parsed_files[file_index].file_name,
         ) else {
             if !(ctx.options.stub_external_modules && is_external_specifier(module_specifier)) {
                 emit_unresolved_export_module_diagnostic(
@@ -462,18 +472,6 @@ fn resolve_module_export_table(
                 );
             }
             resolved_export_table.has_unresolved_star_export = true;
-            continue;
-        };
-
-        let Some(target_export_table) = resolve_module_export_table(
-            resolved_module.resolved_file_index,
-            parsed_files,
-            local_module_export_tables,
-            resolved_module_export_tables,
-            resolving,
-            ctx,
-        ) else {
-            ctx.set_file_name(parsed_files[file_index].file_name.clone());
             continue;
         };
 
@@ -530,6 +528,7 @@ fn collect_exportable_value_symbols_from_statement(
 ) {
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
+            let existing_symbol = exportable_values.get(&variable.name).cloned();
             let _ = check_variable_declaration_with_symbols(
                 variable.clone(),
                 exportable_values,
@@ -539,6 +538,10 @@ fn collect_exportable_value_symbols_from_statement(
                     check_initializer: true,
                 },
             );
+
+            if let Some(existing_symbol) = existing_symbol {
+                exportable_values.insert(variable.name.clone(), existing_symbol);
+            }
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
             declaration,
@@ -611,7 +614,9 @@ fn collect_exports_from_statement(
                 }
 
                 if let Some(symbol) = exportable_values.get(&specifier.local_name) {
-                    symbols.insert(specifier.exported_name.clone(), symbol.clone());
+                    if symbols.get(&specifier.exported_name).is_none() {
+                        symbols.insert(specifier.exported_name.clone(), symbol.clone());
+                    }
                     found = true;
                 }
 
@@ -683,12 +688,16 @@ fn collect_exports_from_statement(
         }
         ParsedStatement::FunctionDeclaration(function) => {
             if let Some(symbol) = local_symbols.get(&function.name) {
-                symbols.insert(function.name.clone(), symbol.clone());
+                if symbols.get(&function.name).is_none() {
+                    symbols.insert(function.name.clone(), symbol.clone());
+                }
             }
         }
         ParsedStatement::VariableDeclaration(variable) => {
             if let Some(symbol) = exportable_values.get(&variable.name) {
-                symbols.insert(variable.name.clone(), symbol.clone());
+                if symbols.get(&variable.name).is_none() {
+                    symbols.insert(variable.name.clone(), symbol.clone());
+                }
             }
         }
         _ => {}
@@ -707,7 +716,9 @@ fn resolve_import_declaration(
 ) {
     match &import.kind {
         ParsedImportKind::Unsupported => {
-            emit_unsupported_module_syntax_diagnostic(ctx, import);
+            if !ctx.file_name.ends_with(".d.ts") {
+                emit_unsupported_module_syntax_diagnostic(ctx, import);
+            }
             return;
         }
         ParsedImportKind::Default {
@@ -1086,11 +1097,8 @@ fn namespace_export_object_type(export_table: &ModuleExportTable) -> Type {
 }
 
 fn push_duplicate_default_export_diagnostic(ctx: &mut CheckerContext, name_span: Option<TextSpan>) {
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticCode::Custom("typescript-rust::duplicate-default-export"),
-        "Duplicate default export.".to_string(),
-        ctx.file_name.clone(),
-    );
+    let mut diagnostic =
+        Diagnostic::typescript_rust_duplicate_default_export(ctx.file_name.clone());
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -1104,14 +1112,7 @@ fn emit_unresolved_export_module_diagnostic(
     module_specifier: &str,
     module_specifier_span: Option<TextSpan>,
 ) {
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticCode::TypeScript(2307),
-        format!(
-            "Cannot find module '{}' or its corresponding type declarations.",
-            module_specifier
-        ),
-        ctx.file_name.clone(),
-    );
+    let mut diagnostic = Diagnostic::ts2307(module_specifier, ctx.file_name.clone());
 
     if let Some(span) = module_specifier_span {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -1121,14 +1122,12 @@ fn emit_unresolved_export_module_diagnostic(
 }
 
 fn emit_unresolved_module_diagnostic(ctx: &mut CheckerContext, import: &ParsedImportDeclaration) {
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticCode::TypeScript(2307),
-        format!(
-            "Cannot find module '{}' or its corresponding type declarations.",
-            import.module_specifier
-        ),
-        ctx.file_name.clone(),
-    );
+    let mut diagnostic = match &import.kind {
+        ParsedImportKind::SideEffect => {
+            Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
+        }
+        _ => Diagnostic::ts2307(&import.module_specifier, ctx.file_name.clone()),
+    };
 
     if let Some(span) = import.module_specifier_span.or(import.span) {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -1163,11 +1162,8 @@ fn emit_unsupported_module_syntax_diagnostic(
     ctx: &mut CheckerContext,
     import: &ParsedImportDeclaration,
 ) {
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
-        "Unsupported module syntax.".to_string(),
-        ctx.file_name.clone(),
-    );
+    let mut diagnostic =
+        Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());
 
     if let Some(span) = import.span.or(import.module_specifier_span) {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -1182,11 +1178,7 @@ fn emit_missing_export_diagnostic(
     export_name: &str,
     name_span: Option<TextSpan>,
 ) {
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticCode::TypeScript(2305),
-        format!("Module '{module_specifier}' has no exported member '{export_name}'."),
-        ctx.file_name.clone(),
-    );
+    let mut diagnostic = Diagnostic::ts2305(module_specifier, export_name, ctx.file_name.clone());
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));

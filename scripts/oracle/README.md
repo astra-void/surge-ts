@@ -55,7 +55,21 @@ Compare a project while suppressing external package missing-module errors:
 ```bash
 pnpm run oracle:compare -- --project package-imports --stubExternalModules
 ```
-*Note: `--stubExternalModules` is a typescript-rust-only compatibility flag. The oracle does not pass it to TypeScript.*
+*Note: `--stubExternalModules` is a typescript-rust-only compatibility flag. The oracle does not pass it to TypeScript. In this mode, typescript-rust suppresses non-relative missing-module diagnostics, including TS2307 and the side-effect-import TS2882 form, while TypeScript still reports its normal diagnostics.*
+
+The `package-imports` fixture pins TypeScript 6.0.3 behavior for unresolved
+package imports: ordinary imports and re-exports remain TS2307, while a bare
+side-effect import such as `import "reflect-metadata";` is TS2882. This is a
+diagnostic-priority parity check only; it is not package resolution.
+
+Compare the declaration-ingestion fixture through the preset system:
+
+```bash
+pnpm run oracle:compare -- --project declarations-basic
+pnpm run oracle:compare -- --project declarations-hardening
+```
+
+The declaration presets are pinned compatibility fixtures, not a claim that the oracle handles package discovery or full declaration merging.
 
 
 Compare a disposable local project:
@@ -100,8 +114,9 @@ pnpm run oracle:test
 - It does not require exact message parity.
 - It does not require exact span parity.
 - It does not add package resolution, `node_modules` lookup, `paths` /
-  `baseUrl`, `lib.d.ts`, declaration files, project references, or any broader
-  TypeScript parity work.
+  `baseUrl`, full declaration-file semantics, `lib.d.ts`, `@types`,
+  package.json-based declaration lookup, or project references.
+- It does not add declaration merging parity or TypeScript's full ambient-module semantics.
 - File mode currently only accepts `.ts` files. Project mode is still the
   preferred oracle for multi-file compatibility checks, and file mode may drift
   from project mode because single-file TypeScript runs use default compiler

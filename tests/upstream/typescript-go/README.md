@@ -26,7 +26,7 @@ This is useful for early diagnostic-code compatibility, but it is not full upstr
 
 The checker now parses import/export syntax and treats files with import/export syntax as module files. Module files remain isolated from the global-script prepass in this phase.
 
-v0.57.1 hardens the limited relative module-resolution-lite pass for loaded program files. v0.61 expands that pass to cover default imports, namespace imports, default exports, named re-exports, type-only re-exports, and star re-exports across already loaded `.ts` files, still with separate type and value namespaces. It still does not implement package resolution, `node_modules`, `paths`, `baseUrl`, star-as re-exports, or other CommonJS/declaration-file semantics. v0.63 adds package import stubbing to reduce cascades from non-relative imports.
+v0.57.1 hardens the limited relative module-resolution-lite pass for loaded program files. v0.61 expands that pass to cover default imports, namespace imports, default exports, named re-exports, type-only re-exports, and star re-exports across already loaded `.ts` files, still with separate type and value namespaces. It still does not implement package resolution, `node_modules`, `paths`, `baseUrl`, star-as re-exports, or other CommonJS/declaration-file semantics. v0.63 adds package import stubbing to reduce cascades from non-relative imports. v0.67 keeps ordinary missing package imports on TS2307 but emits catalog-backed TS2882 for unresolved side-effect imports, matching TypeScript diagnostic priority without adding package lookup.
 
 v0.58 adds compatibility-report instrumentation for real-project triage. External project source should live under `.local-projects/` and should not be committed.
 
@@ -38,4 +38,10 @@ The upstream fixture subset here is still intentionally small, and
 compatibility-report output should continue to drive the next phase rather than
 any expectation of full TypeScript parity.
 
-Note: v0.64 introduced ambient declaration files `.d.ts` but does not aim for full typescript-go parity yet.
+Note: v0.64 introduced a loaded `.d.ts` ambient subset for globals and exact ambient modules, v0.65 hardens that subset with pinned default-import, namespace-import, re-export, duplicate, and unsupported-syntax behavior, and v0.66 introduced the diagnostic catalog/codegen foundation. These are implemented baselines, not future upstream parity promises. The checker still does not add package discovery, lib.d.ts loading, or @types discovery.
+
+Diagnostics are catalog-driven now, including TS2882, so some compatibility
+drift can come from catalog updates even when checker logic stays the same.
+Keep those changes intentional and review the generated catalog diff with the
+checker diff. Likely next work is diagnostic expansion or package declaration
+entrypoint foundation, not full typescript-go parity.
