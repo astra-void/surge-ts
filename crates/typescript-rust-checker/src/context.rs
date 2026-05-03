@@ -18,12 +18,17 @@ impl Default for CheckerOptions {
     }
 }
 
+use crate::modules::ModuleExportTable;
+
 pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
     pub(crate) options: CheckerOptions,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
+    pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
+    pub(crate) ambient_global_symbols: SymbolTable,
+    pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
 }
 
 impl CheckerContext {
@@ -34,6 +39,9 @@ impl CheckerContext {
             diagnostics: Vec::new(),
             symbols: SymbolTable::new(),
             type_declarations: TypeDeclarationTable::new(),
+            ambient_modules: std::collections::HashMap::new(),
+            ambient_global_symbols: SymbolTable::new(),
+            ambient_global_type_declarations: TypeDeclarationTable::new(),
         }
     }
 

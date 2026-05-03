@@ -37,3 +37,5 @@ still keeping constraints parser-only and generic inference out of scope.
 The upstream fixture subset here is still intentionally small, and
 compatibility-report output should continue to drive the next phase rather than
 any expectation of full TypeScript parity.
+
+Note: v0.64 introduced ambient declaration files `.d.ts` but does not aim for full typescript-go parity yet.

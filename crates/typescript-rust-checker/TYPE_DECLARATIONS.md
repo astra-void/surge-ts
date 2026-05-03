@@ -46,3 +46,6 @@ Current limitations:
 Design note:
 - interface names are not preserved in downstream diagnostics today because the
   checker resolves them to object types before assignability and display.
+
+## Ambient Types
+`.d.ts` files contribute ambient global types which are accessible everywhere.

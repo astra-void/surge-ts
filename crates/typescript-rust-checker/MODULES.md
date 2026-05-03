@@ -67,3 +67,6 @@ These forms remain intentionally out of scope for v0.61:
 - Constraints remain parser-only metadata in this phase.
 - Private helper types stay visible through the current module-resolution-lite pass so imported declarations can still resolve them.
 - The next phase should still be chosen from compatibility-report output rather than by expanding into package or tsconfig-path semantics by default.
+
+## Ambient Modules
+Imports try to resolve from ambient external modules defined by `declare module "pkg"` before falling back to relative paths or package stubbing.

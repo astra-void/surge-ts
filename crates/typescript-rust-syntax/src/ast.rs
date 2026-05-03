@@ -17,6 +17,16 @@ pub enum ParsedStatement {
     InterfaceDeclaration(ParsedInterfaceDeclaration),
     ImportDeclaration(ParsedImportDeclaration),
     ExportDeclaration(ParsedExportDeclaration),
+    DeclareModuleDeclaration(ParsedDeclareModuleDeclaration),
+    UnsupportedDeclaration { span: Option<TextSpan> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedDeclareModuleDeclaration {
+    pub module_specifier: String,
+    pub module_specifier_span: Option<TextSpan>,
+    pub statements: Vec<ParsedStatement>,
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +88,7 @@ pub struct ParsedNamedType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedTypeAliasDeclaration {
+    pub is_declare: bool,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub type_parameters: Vec<ParsedTypeParameter>,
@@ -87,6 +98,7 @@ pub struct ParsedTypeAliasDeclaration {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedInterfaceDeclaration {
+    pub is_declare: bool,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub type_parameters: Vec<ParsedTypeParameter>,
@@ -316,6 +328,7 @@ pub struct TextSpan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedVariableDeclaration {
+    pub is_declare: bool,
     pub kind: ParsedVariableKind,
     pub name: String,
     pub name_span: Option<TextSpan>,
@@ -334,6 +347,7 @@ pub struct ParsedAssignment {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedFunctionDeclaration {
+    pub is_declare: bool,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub type_parameters: Vec<ParsedTypeParameter>,

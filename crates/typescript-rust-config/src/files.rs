@@ -196,14 +196,6 @@ fn should_prune(path: &Path, root_dir: &Path, exclude_set: Option<&GlobSet>) -> 
 }
 
 fn is_supported_source_file(path: &Path, allow_js: bool) -> bool {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
-    if file_name.ends_with(".d.ts") {
-        return false;
-    }
-
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
         return false;
     };

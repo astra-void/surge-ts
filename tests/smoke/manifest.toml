@@ -6071,3 +6071,11 @@ diagnostics = [2307]
 [[test]]
 file = "external_namespace_import_property_access_no_cascade.ts"
 expected_codes = ["TS2307"]
+
+[[test]]
+file = "declaration_unsupported_declare_class_pinned.ts"
+expected_codes = ["typescript-rust::unsupported-declaration"]
+
+[[test]]
+file = "declaration_declare_module_parser_safe.ts"
+expected_codes = []

@@ -262,6 +262,20 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             }
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
+        ParsedStatement::DeclareModuleDeclaration(_) => {}
+        ParsedStatement::UnsupportedDeclaration { span } => {
+            let mut diag = typescript_rust_diagnostics::Diagnostic::new(
+                typescript_rust_diagnostics::DiagnosticCode::Custom(
+                    "typescript-rust::unsupported-declaration",
+                ),
+                "Unsupported declaration syntax.".to_string(),
+                ctx.file_name.clone(),
+            );
+            if let Some(s) = span {
+                diag = diag.with_span(crate::context::convert_span(s));
+            }
+            ctx.push(diag);
+        }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
             let mut diagnostic = Diagnostic::new(
                 DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),

@@ -551,3 +551,71 @@ fn paths_are_accepted_without_base_url() {
         }]
     );
 }
+
+#[test]
+fn config_includes_d_ts_from_include_glob() {
+    let root = temp_dir("config_includes_d_ts_from_include_glob");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+        "include": ["src/**/*", "types/**/*.d.ts"]
+    }"#,
+    );
+    write_file(&root, "src/index.ts", "");
+    write_file(&root, "types/globals.d.ts", "");
+
+    let loaded = load(root.join("tsconfig.json"));
+    let mut names: Vec<_> = loaded
+        .files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["globals.d.ts", "index.ts"]);
+}
+
+#[test]
+fn config_includes_d_ts_from_files_list() {
+    let root = temp_dir("config_includes_d_ts_from_files_list");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+        "files": ["index.ts", "globals.d.ts"]
+    }"#,
+    );
+    write_file(&root, "index.ts", "");
+    write_file(&root, "globals.d.ts", "");
+
+    let loaded = load(root.join("tsconfig.json"));
+    let mut names: Vec<_> = loaded
+        .files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["globals.d.ts", "index.ts"]);
+}
+
+#[test]
+fn config_excludes_node_modules_d_ts() {
+    let root = temp_dir("config_excludes_node_modules_d_ts");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+        "include": ["**/*"]
+    }"#,
+    );
+    write_file(&root, "index.ts", "");
+    write_file(&root, "node_modules/pkg/index.d.ts", "");
+
+    let loaded = load(root.join("tsconfig.json"));
+    let names: Vec<_> = loaded
+        .files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["index.ts"]);
+}

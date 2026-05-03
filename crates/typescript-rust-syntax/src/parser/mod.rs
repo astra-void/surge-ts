@@ -1,11 +1,12 @@
 use oxc_ast::ast::{
     AssignmentOperator, AssignmentTarget, Declaration, Expression, ExpressionStatement,
-    ModuleDeclaration, Statement, VariableDeclaration, VariableDeclarationKind,
+    ModuleDeclaration, Statement, TSModuleDeclaration, TSModuleDeclarationBody,
+    TSModuleDeclarationName, VariableDeclaration, VariableDeclarationKind,
 };
 
 use crate::{
-    ParsedAssignment, ParsedExportDeclaration, ParsedStatement, ParsedVariableDeclaration,
-    ParsedVariableKind,
+    ParsedAssignment, ParsedDeclareModuleDeclaration, ParsedExportDeclaration, ParsedStatement,
+    ParsedVariableDeclaration, ParsedVariableKind,
 };
 
 mod entry;
@@ -87,11 +88,16 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
             .map(|type_alias| vec![ParsedStatement::TypeAliasDeclaration(type_alias)]),
         Declaration::TSInterfaceDeclaration(interface) => parse_interface_declaration(interface)
             .map(|interface| vec![ParsedStatement::InterfaceDeclaration(interface)]),
+        Declaration::TSModuleDeclaration(module) => Some(parse_ts_module_declaration(module)),
         Declaration::TSImportEqualsDeclaration(import_equals) => {
             parse_import_equals_declaration(import_equals)
                 .map(|import| vec![ParsedStatement::ImportDeclaration(import)])
         }
-        _ => None,
+        _ => Some(vec![ParsedStatement::UnsupportedDeclaration {
+            span: Some(text_span_from_oxc_span(oxc_span::GetSpan::span(
+                declaration,
+            ))),
+        }]),
     }
 }
 
@@ -126,6 +132,7 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
 
             Some(ParsedStatement::VariableDeclaration(
                 ParsedVariableDeclaration {
+                    is_declare: declaration.declare,
                     kind,
                     name,
                     name_span,
@@ -191,4 +198,31 @@ fn parse_assignment_expression(
         value,
         value_span: Some(text_span_from_oxc_span(value_span)),
     })
+}
+
+fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedStatement> {
+    use oxc_span::GetSpan;
+    let module_specifier = match &module.id {
+        TSModuleDeclarationName::StringLiteral(literal) => literal.value.to_string(),
+        _ => return vec![],
+    };
+
+    let statements = match &module.body {
+        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => block
+            .body
+            .iter()
+            .filter_map(parse_statement)
+            .flatten()
+            .collect(),
+        _ => vec![],
+    };
+
+    vec![ParsedStatement::DeclareModuleDeclaration(
+        ParsedDeclareModuleDeclaration {
+            module_specifier,
+            module_specifier_span: Some(text_span_from_oxc_span(module.id.span())),
+            statements,
+            span: Some(text_span_from_oxc_span(module.span)),
+        },
+    )]
 }

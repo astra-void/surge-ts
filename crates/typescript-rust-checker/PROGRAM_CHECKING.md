@@ -129,3 +129,6 @@ The compatibility harness still splits `// @filename:` comments into virtual fil
 
 The next phase should still be chosen from compatibility-report output rather
 than reshaping the single-file APIs.
+
+## Ambient Globals
+Ambient globals from `.d.ts` files are gathered into `ambient_global_symbols` and mixed into modules and scripts.

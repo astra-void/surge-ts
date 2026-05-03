@@ -79,3 +79,6 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
   contract. The pinned TypeScript version can shift the oracle output, so
   compare changes intentionally rather than treating the comparator as a
   semantic contract.
+
+- **Unsupported Declaration Syntax**: `typescript-rust::unsupported-declaration` points to the syntax token.
+- **Ambient Module Fallback**: Missing exports point to the import specifier.

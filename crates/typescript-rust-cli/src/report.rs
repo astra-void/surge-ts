@@ -36,6 +36,8 @@ pub struct ProjectCompatibilityReport {
     pub parser_errors: Vec<CompatReportParserErrorEntry>,
     pub external_module_stubs_total: usize,
     pub external_module_stubs: Vec<CompatReportCountEntry>,
+    pub declaration_files_loaded: usize,
+    pub ambient_external_modules: Vec<String>,
 }
 
 fn is_relative_specifier(specifier: &str) -> bool {
@@ -55,8 +57,13 @@ pub fn build_project_compatibility_report(
     let mut parser_errors = HashMap::<(String, String), usize>::new();
     let mut external_module_stubs = HashMap::<String, usize>::new();
     let mut external_module_stubs_total = 0;
+    let mut declaration_files_loaded = 0;
+    let mut ambient_external_modules_set = std::collections::HashSet::new();
 
     for (_, file_name, source_text) in sources {
+        if file_name.ends_with(".d.ts") {
+            declaration_files_loaded += 1;
+        }
         let parsed = typescript_rust_syntax::parse_source(source_text, file_name);
         for statement in parsed.statements {
             match statement {
@@ -67,6 +74,11 @@ pub fn build_project_compatibility_report(
                             .or_default() += 1;
                         external_module_stubs_total += 1;
                     }
+                }
+                typescript_rust_syntax::ParsedStatement::DeclareModuleDeclaration(
+                    declare_module,
+                ) => {
+                    ambient_external_modules_set.insert(declare_module.module_specifier.clone());
                 }
                 typescript_rust_syntax::ParsedStatement::ExportDeclaration(export) => {
                     let module_specifier = match &export {
@@ -117,6 +129,12 @@ pub fn build_project_compatibility_report(
         parser_errors: sort_parser_errors(parser_errors),
         external_module_stubs_total,
         external_module_stubs: sort_counts(external_module_stubs),
+        declaration_files_loaded,
+        ambient_external_modules: {
+            let mut list: Vec<_> = ambient_external_modules_set.into_iter().collect();
+            list.sort();
+            list
+        },
     }
 }
 
@@ -188,6 +206,20 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     } else {
         for entry in &report.external_module_stubs {
             lines.push(format!("{}  {}", entry.key, entry.count));
+        }
+    }
+
+    if report.declaration_files_loaded > 0 {
+        lines.push(String::new());
+        lines.push(format!(
+            "Declaration files loaded: {}",
+            report.declaration_files_loaded
+        ));
+        if !report.ambient_external_modules.is_empty() {
+            lines.push(format!(
+                "Ambient external modules: {}",
+                report.ambient_external_modules.len()
+            ));
         }
     }
 
@@ -279,6 +311,23 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
         ),
     );
     root.insert("externalModuleStubs".to_string(), Value::Object(stubs_json));
+
+    if report.declaration_files_loaded > 0 {
+        root.insert(
+            "declarationFilesLoaded".to_string(),
+            Value::from(report.declaration_files_loaded as u64),
+        );
+        root.insert(
+            "ambientExternalModules".to_string(),
+            Value::Array(
+                report
+                    .ambient_external_modules
+                    .iter()
+                    .map(|s| Value::String(s.clone()))
+                    .collect(),
+            ),
+        );
+    }
 
     Value::Object(root)
 }

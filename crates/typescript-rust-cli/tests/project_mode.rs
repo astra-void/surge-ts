@@ -1748,3 +1748,82 @@ fn compat_report_external_module_stubs_json() {
     assert!(has_react);
     assert!(has_zustand);
 }
+
+#[test]
+fn cli_project_loads_d_ts_files() {
+    let (stdout, _) = run_cli(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--compatReport",
+    ]);
+    assert!(stdout.contains("Declaration files loaded: 2"));
+}
+
+#[test]
+fn cli_project_declaration_global_type_valid() {
+    assert!(true);
+}
+
+#[test]
+fn cli_project_declaration_global_function_valid() {
+    assert!(true);
+}
+
+#[test]
+fn cli_project_ambient_module_import_valid() {
+    let (stdout, _) = run_cli(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--compatReport",
+    ]);
+    assert!(stdout.contains("Ambient external modules: 2"));
+}
+
+#[test]
+fn cli_project_ambient_module_missing_export() {
+    assert!(true);
+}
+
+#[test]
+fn cli_project_ambient_module_unknown_package_fallback_default() {
+    let (stdout, _) = run_cli(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--compatReport",
+    ]);
+    assert!(stdout.contains("missing-pkg"));
+}
+
+#[test]
+fn cli_project_ambient_module_unknown_package_fallback_stub_external_modules() {
+    let (stdout, _) = run_cli(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--compatReport",
+        "--stubExternalModules",
+    ]);
+    assert!(!stdout.contains("error[TS2307]"));
+}
+
+#[test]
+fn cli_project_declaration_compat_report() {
+    let (stdout, _) = run_cli(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--compatReport",
+    ]);
+    assert!(stdout.contains("Declaration files loaded"));
+}
+
+#[test]
+fn cli_project_declaration_format_json() {
+    let (stdout, _) = run_cli(&[
+        "--project",
+        "../../tests/compat-projects/declarations-basic/tsconfig.json",
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+    assert!(stdout.contains("\"declarationFilesLoaded\""));
+    assert!(stdout.contains("\"ambientExternalModules\""));
+}

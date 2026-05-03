@@ -17,6 +17,7 @@ pub(crate) fn parse_interface_declaration(
         .collect();
 
     Some(ParsedInterfaceDeclaration {
+        is_declare: declaration.declare,
         name: declaration.id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(declaration.id.span)),
         type_parameters: parse_type_parameters(declaration.type_parameters.as_deref()),

@@ -33,6 +33,7 @@ pub(crate) fn parse_function_declaration(
         .unwrap_or_default();
 
     Some(ParsedFunctionDeclaration {
+        is_declare: function.declare,
         name: id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(id.span)),
         type_parameters: parse_type_parameters(function.type_parameters.as_deref()),

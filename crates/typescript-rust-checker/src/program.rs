@@ -69,6 +69,8 @@ pub fn check_program_with_options(
     let mut function_signatures = HashMap::new();
 
     emit_parser_diagnostics(&parsed_files, &mut ctx);
+    collect_ambient_globals(&parsed_files, &mut ctx);
+    collect_ambient_modules(&parsed_files, &mut ctx);
     collect_global_type_declarations(&parsed_files, &mut ctx);
     let global_type_declarations = ctx.type_declarations.clone();
     collect_global_function_signatures(
@@ -77,6 +79,7 @@ pub fn check_program_with_options(
         &mut function_signatures,
         &mut ctx,
     );
+    collect_global_variables(&parsed_files, &mut global_symbols, &mut ctx);
     let module_analyses = collect_module_analyses(&parsed_files, &mut ctx);
     let local_module_export_tables = module_analyses
         .iter()
@@ -148,7 +151,7 @@ fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
 
 fn collect_global_type_declarations(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
     for parsed_file in parsed_files {
-        if parsed_file.is_module {
+        if parsed_file.is_module && !parsed_file.file_name.ends_with(".d.ts") {
             continue;
         }
 
@@ -164,7 +167,7 @@ fn collect_global_function_signatures(
     ctx: &mut CheckerContext,
 ) {
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-        if parsed_file.is_module {
+        if parsed_file.is_module && !parsed_file.file_name.ends_with(".d.ts") {
             continue;
         }
 
@@ -240,6 +243,10 @@ fn check_program_files(
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         ctx.set_file_name(parsed_file.file_name.clone());
 
+        if parsed_file.file_name.ends_with(".d.ts") {
+            continue;
+        }
+
         if parsed_file.is_module {
             let Some(module_analysis) = module_analyses[file_index].as_ref() else {
                 continue;
@@ -249,12 +256,18 @@ fn check_program_files(
                 .clone()
                 .unwrap_or_default();
 
-            let mut merged_type_declarations = module_analysis.local_type_declarations.clone();
+            let mut merged_type_declarations = ctx.ambient_global_type_declarations.clone();
+            for (name, declaration) in module_analysis.local_type_declarations.iter() {
+                let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+            }
             for (name, declaration) in imported_bindings.type_declarations.iter() {
                 let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
             }
 
-            let mut merged_symbols = module_analysis.local_symbols.clone();
+            let mut merged_symbols = ctx.ambient_global_symbols.clone();
+            for (name, symbol) in module_analysis.local_symbols.iter() {
+                let _ = merged_symbols.insert(name.clone(), symbol.clone());
+            }
             for (name, symbol) in imported_bindings.symbols.iter() {
                 if merged_symbols.get(name).is_none() {
                     merged_symbols.insert(name.clone(), symbol.clone());
@@ -270,8 +283,17 @@ fn check_program_files(
                 ctx,
             );
         } else {
-            ctx.type_declarations = global_type_declarations.clone();
-            ctx.set_symbols(global_symbols.clone());
+            let mut script_td = global_type_declarations.clone();
+            for (name, declaration) in ctx.ambient_global_type_declarations.iter() {
+                let _ = script_td.insert(name.clone(), declaration.clone());
+            }
+            ctx.type_declarations = script_td;
+
+            let mut script_sym = global_symbols.clone();
+            for (name, symbol) in ctx.ambient_global_symbols.iter() {
+                let _ = script_sym.insert(name.clone(), symbol.clone());
+            }
+            ctx.set_symbols(script_sym);
 
             check_program_file_statements(
                 &parsed_file.statements,
@@ -479,6 +501,8 @@ fn check_program_statement(
         },
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
+        ParsedStatement::DeclareModuleDeclaration(_) => {}
+        ParsedStatement::UnsupportedDeclaration { .. } => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
             let mut diagnostic = Diagnostic::new(
                 DiagnosticCode::Custom("typescript-rust::unsupported-module-syntax"),
@@ -513,4 +537,266 @@ fn check_program_function_declaration(
     };
 
     check_function::check_function_declaration_body(function, &function_type, ctx);
+}
+
+fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
+    for parsed_file in parsed_files {
+        if !parsed_file.file_name.ends_with(".d.ts") {
+            continue;
+        }
+
+        ctx.set_file_name(parsed_file.file_name.clone());
+
+        let saved_type_declarations =
+            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+        collect_type_declarations(&parsed_file.statements, ctx);
+        let mut ambient_td = ctx.type_declarations.clone();
+        ctx.type_declarations = saved_type_declarations;
+
+        for (name, decl) in ambient_td.iter() {
+            let _ = ctx
+                .ambient_global_type_declarations
+                .insert(name.clone(), decl.clone());
+        }
+
+        let mut local_function_signatures = HashMap::new();
+        let mut current_symbols = std::mem::take(&mut ctx.symbols);
+        collect_function_signatures_from_statements(
+            &parsed_file.statements,
+            0,
+            &mut current_symbols,
+            &mut local_function_signatures,
+            ctx,
+        );
+        ctx.symbols = current_symbols;
+
+        for stmt in &parsed_file.statements {
+            let var = match stmt {
+                ParsedStatement::VariableDeclaration(var) => Some(var),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    },
+                ) => {
+                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                        Some(var)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(var) = var {
+                let ty = var
+                    .declared_type
+                    .as_ref()
+                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                    .unwrap_or(typescript_rust_types::Type::Unknown);
+                ctx.ambient_global_symbols.insert(
+                    var.name.clone(),
+                    crate::symbols::SymbolInfo {
+                        ty,
+                        kind: if matches!(
+                            var.kind,
+                            typescript_rust_syntax::ParsedVariableKind::Const
+                        ) {
+                            crate::symbols::SymbolKind::Const
+                        } else {
+                            crate::symbols::SymbolKind::Let
+                        },
+                    },
+                );
+            }
+        }
+
+        for (loc, fun_ty) in local_function_signatures {
+            ctx.ambient_global_symbols.insert(
+                match &parsed_file.statements[loc.statement_index] {
+                    ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
+                    ParsedStatement::ExportDeclaration(
+                        typescript_rust_syntax::ParsedExportDeclaration::Default {
+                            declaration:
+                                typescript_rust_syntax::ParsedDefaultExportDeclaration::Function(f),
+                            ..
+                        },
+                    ) => f.name.clone(),
+                    ParsedStatement::ExportDeclaration(
+                        typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                            declaration,
+                            ..
+                        },
+                    ) => {
+                        if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
+                            f.name.clone()
+                        } else {
+                            "unknown".to_string()
+                        }
+                    }
+                    _ => "unknown".to_string(),
+                },
+                crate::symbols::SymbolInfo {
+                    ty: typescript_rust_types::Type::Function(fun_ty),
+                    kind: crate::symbols::SymbolKind::Function,
+                },
+            );
+        }
+    }
+}
+
+fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
+    for parsed_file in parsed_files {
+        ctx.set_file_name(parsed_file.file_name.clone());
+        for statement in &parsed_file.statements {
+            if let ParsedStatement::DeclareModuleDeclaration(module) = statement {
+                let saved_type_declarations =
+                    std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+                let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
+
+                collect_type_declarations(&module.statements, ctx);
+                let mut local_function_signatures = HashMap::new();
+                let mut current_symbols = std::mem::take(&mut ctx.symbols);
+                collect_function_signatures_from_statements(
+                    &module.statements,
+                    0,
+                    &mut current_symbols,
+                    &mut local_function_signatures,
+                    ctx,
+                );
+                ctx.symbols = current_symbols;
+
+                for stmt in &module.statements {
+                    match stmt {
+                        ParsedStatement::VariableDeclaration(var) => {
+                            if var.is_declare {
+                                let ty = var
+                                    .declared_type
+                                    .as_ref()
+                                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                                    .unwrap_or(typescript_rust_types::Type::Unknown);
+                                ctx.symbols.insert(
+                                    var.name.clone(),
+                                    crate::symbols::SymbolInfo {
+                                        kind: if matches!(
+                                            var.kind,
+                                            typescript_rust_syntax::ParsedVariableKind::Const
+                                        ) {
+                                            crate::symbols::SymbolKind::Const
+                                        } else {
+                                            crate::symbols::SymbolKind::Let
+                                        },
+                                        ty: ty,
+                                    },
+                                );
+                            }
+                        }
+                        ParsedStatement::ExportDeclaration(
+                            typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                                declaration,
+                                ..
+                            },
+                        ) => {
+                            if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref()
+                            {
+                                let ty = var
+                                    .declared_type
+                                    .as_ref()
+                                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                                    .unwrap_or(typescript_rust_types::Type::Unknown);
+                                ctx.symbols.insert(
+                                    var.name.clone(),
+                                    crate::symbols::SymbolInfo {
+                                        kind: if matches!(
+                                            var.kind,
+                                            typescript_rust_syntax::ParsedVariableKind::Const
+                                        ) {
+                                            crate::symbols::SymbolKind::Const
+                                        } else {
+                                            crate::symbols::SymbolKind::Let
+                                        },
+                                        ty: ty,
+                                    },
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                let mut temp_file = parsed_file.clone();
+                temp_file.statements = module.statements.clone();
+                let current_type_declarations = std::mem::take(&mut ctx.type_declarations);
+                let current_symbols = std::mem::take(&mut ctx.symbols);
+                let export_table = build_module_export_table(
+                    &temp_file,
+                    &current_type_declarations,
+                    &current_symbols,
+                    ctx,
+                );
+                ctx.type_declarations = current_type_declarations;
+                ctx.symbols = current_symbols;
+
+                ctx.ambient_modules
+                    .insert(module.module_specifier.clone(), export_table);
+
+                ctx.type_declarations = saved_type_declarations;
+                ctx.symbols = saved_symbols;
+            }
+        }
+    }
+}
+
+fn collect_global_variables(
+    parsed_files: &[ParsedProgramFile],
+    global_symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for parsed_file in parsed_files {
+        if parsed_file.is_module && !parsed_file.file_name.ends_with(".d.ts") {
+            continue;
+        }
+
+        ctx.set_file_name(parsed_file.file_name.clone());
+        for statement in &parsed_file.statements {
+            let var = match statement {
+                ParsedStatement::VariableDeclaration(var) => Some(var),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    },
+                ) => {
+                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                        Some(var)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(var) = var {
+                if var.is_declare || parsed_file.file_name.ends_with(".d.ts") {
+                    let ty = var
+                        .declared_type
+                        .as_ref()
+                        .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                        .unwrap_or(typescript_rust_types::Type::Unknown);
+                    global_symbols.insert(
+                        var.name.clone(),
+                        crate::symbols::SymbolInfo {
+                            kind: if matches!(
+                                var.kind,
+                                typescript_rust_syntax::ParsedVariableKind::Const
+                            ) {
+                                crate::symbols::SymbolKind::Const
+                            } else {
+                                crate::symbols::SymbolKind::Let
+                            },
+                            ty: ty,
+                        },
+                    );
+                }
+            }
+        }
+    }
 }
