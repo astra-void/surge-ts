@@ -49,6 +49,9 @@ struct Cli {
 
     #[arg(long)]
     no_implicit_any: bool,
+
+    #[arg(long = "noLib")]
+    no_lib: bool,
 }
 
 fn main() -> ExitCode {
@@ -116,6 +119,7 @@ fn main() -> ExitCode {
     run_single_file_mode(
         file_path,
         cli.no_implicit_any,
+        cli.no_lib,
         cli.stub_external_modules,
         cli.show_spans,
         cli.format.unwrap_or(ReportFormat::Text),
@@ -127,6 +131,7 @@ fn main() -> ExitCode {
 fn run_single_file_mode(
     file_path: PathBuf,
     no_implicit_any: bool,
+    no_lib: bool,
     stub_external_modules: bool,
     show_spans: bool,
     format: ReportFormat,
@@ -167,6 +172,7 @@ fn run_single_file_mode(
         &file_path.to_string_lossy(),
         CheckerOptions {
             no_implicit_any,
+            no_lib,
             stub_external_modules,
             resolved_modules: std::collections::HashMap::new(),
         },
@@ -258,6 +264,7 @@ fn run_project_mode(
 
     let checker_options = CheckerOptions {
         no_implicit_any: loaded.compiler_options.no_implicit_any,
+        no_lib: loaded.compiler_options.no_lib,
         stub_external_modules,
         resolved_modules,
     };
@@ -531,6 +538,7 @@ fn build_compiler_options_json(
         "skipLibCheck".to_string(),
         Value::Bool(compiler_options.skip_lib_check),
     );
+    options.insert("noLib".to_string(), Value::Bool(compiler_options.no_lib));
 
     if let Some(jsx) = compiler_options.jsx.as_ref() {
         options.insert(

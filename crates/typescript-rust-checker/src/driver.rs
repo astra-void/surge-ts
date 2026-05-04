@@ -26,6 +26,8 @@ pub fn check_source_with_options(
     let file_name = parsed.file_name;
     let mut ctx = CheckerContext::new(file_name.clone(), options);
 
+    crate::builtins::inject_builtins(&mut ctx);
+
     for message in parsed.parser_errors {
         let diagnostic = Diagnostic::typescript_rust_parser_error(message, file_name.clone());
         ctx.push(diagnostic);

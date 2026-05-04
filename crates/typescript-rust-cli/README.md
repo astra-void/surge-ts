@@ -20,11 +20,11 @@ By default, unresolved non-relative package imports emit TS2307.
 `--stubExternalModules` suppresses non-relative TS2307 and inserts unknown type/value stubs.
 This is a typescript-rust-only compatibility/triage mode.
 
-## Declaration Files (v0.69/v0.69.1/v0.70)
+## Declaration Files & Built-ins (v0.69/v0.69.1/v0.70/v0.72)
 
 Loaded `.d.ts` files from project inputs participate in semantic checking.
 Bare package imports (`pkg`, `@scope/pkg`) and exact subpaths resolve their `.d.ts` entrypoints via `types`, `typings`, `exports["types"]`, or `index.d.ts` fallback.
-Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. The CLI still does not discover full package resolution, wildcard `exports`, `@types`, or `lib.d.ts`. `baseUrl` resolution remains unsupported/deprecated.
+Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. The CLI still does not discover full package resolution, wildcard `exports`, `@types`, or `lib.d.ts`. `baseUrl` resolution remains unsupported/deprecated. v0.72 adds a minimal synthetic built-in globals pack to reduce TS2304 noise, which can be disabled via `noLib: true` in `compilerOptions`. DOM and Node globals remain unsupported.
 Default export, namespace import, named re-export, type-only re-export, star re-export, duplicate ambient module, and duplicate ambient global behavior is pinned rather than full TypeScript declaration merging.
 
 

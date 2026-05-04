@@ -2,7 +2,7 @@
 
 This workspace is organized as small crates with stable public façades and internal modules that can evolve without forcing broad API churn.
 
-v0.68.1 hardens diagnostic coverage metadata, ensuring that `support = "emitted"` is backed by test and oracle evidence via an emitted-diagnostics manifest. The `diagnostics-pack` fixture is the compact oracle-backed project for supported emitted diagnostics. v0.69 supports narrow bare package declaration entrypoints. v0.69.1 hardens/refactors this support.
+v0.68.1 hardens diagnostic coverage metadata, ensuring that `support = "emitted"` is backed by test and oracle evidence via an emitted-diagnostics manifest. The `diagnostics-pack` fixture is the compact oracle-backed project for supported emitted diagnostics. v0.69 supports narrow bare package declaration entrypoints. v0.69.1 hardens/refactors this support. v0.72 adds a minimal synthetic built-in globals pack, but physical `lib.d.ts` parsing, `@types` discovery, and DOM/Node globals remain unsupported.
 
 v0.48 introduced the crate-level module split across types, diagnostics, config, syntax, and checker. v0.48.1 finishes the checker/config/syntax hardening pass by moving the remaining internals into focused submodules while keeping the public crate-root APIs stable.
 
@@ -56,4 +56,4 @@ v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable be
 - Default exports, namespace imports, named re-exports, type-only re-exports, and star re-exports are pinned for the supported ambient-module subset.
 - Duplicate ambient module and duplicate ambient global behavior is intentionally first-wins / pinned rather than full declaration merging.
 - Unsupported declaration syntax stays parser-safe and emits a stable pinned diagnostic.
-- No `node_modules`, `package.json`, `@types`, or `lib.d.ts` discovery is added here.
+- No `node_modules`, `package.json`, `@types`, or `lib.d.ts` discovery is added here. `noLib: true` disables the minimal synthetic built-ins. `baseUrl` remains unsupported/deprecated.

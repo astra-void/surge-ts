@@ -72,6 +72,9 @@ pub fn check_program_with_options(
         .map(|file| file.file_name.clone())
         .unwrap_or_default();
     let mut ctx = CheckerContext::new(first_file_name, options);
+
+    crate::builtins::inject_builtins(&mut ctx);
+
     let mut global_symbols = SymbolTable::new();
     let mut function_signatures = HashMap::new();
 
@@ -217,7 +220,7 @@ fn collect_preliminary_module_type_bindings(
 
 fn collect_module_analyses_with_bindings(
     parsed_files: &[ParsedProgramFile],
-    local_type_declarations_by_module: &[Option<TypeDeclarationTable>],
+    _local_type_declarations_by_module: &[Option<TypeDeclarationTable>],
     preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
     ctx: &mut CheckerContext,
 ) -> Vec<Option<ModuleAnalysis>> {

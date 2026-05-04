@@ -1100,6 +1100,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_lib: false,
         },
     );
 

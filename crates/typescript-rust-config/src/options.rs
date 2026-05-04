@@ -238,6 +238,11 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::KnownNoop,
     },
     TsConfigOptionDefinition {
+        name: "noLib",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
         name: "lib",
         value_kind: TsConfigOptionValueKind::StringArray,
         support: TsConfigOptionSupport::KnownNoop,

@@ -115,6 +115,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
         &loaded.files[0].to_string_lossy(),
         CheckerOptions {
             resolved_modules: std::collections::HashMap::new(),
+            no_lib: false,
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
         },

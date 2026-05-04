@@ -81,6 +81,7 @@ fn smoke_cases_emit_expected_codes() {
                         resolved_modules: Default::default(),
                         stub_external_modules: false,
                         no_implicit_any: true,
+                        no_lib: false,
                     },
                 )
             } else {
@@ -108,6 +109,7 @@ fn smoke_cases_emit_expected_codes() {
                         resolved_modules: Default::default(),
                         stub_external_modules: false,
                         no_implicit_any: true,
+                        no_lib: false,
                     },
                 )
             } else {

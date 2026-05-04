@@ -53,6 +53,6 @@ Design note:
 ## Ambient Types
 Loaded `.d.ts` files contribute ambient global types which are accessible everywhere.
 - exact `declare module "pkg"` blocks contribute importable ambient modules in program mode
-- ambient types are loaded from project inputs, not from lib.d.ts or @types discovery
+- ambient types are loaded from project inputs, not from lib.d.ts or @types discovery. v0.72 adds a minimal synthetic built-in globals pack containing basic utility types and primitives to avoid TS2304 cascades, but physical `lib.d.ts` parsing remains unsupported. `noLib: true` disables these synthetic built-ins.
 - duplicate ambient globals are first-wins / pinned rather than merged
 - unsupported declaration syntax remains parser-safe and emits the pinned unsupported-declaration diagnostic

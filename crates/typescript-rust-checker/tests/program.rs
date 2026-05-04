@@ -412,6 +412,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_lib: false,
         },
     );
     let single_file_diagnostics = check_source_with_options(
@@ -421,6 +422,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_lib: false,
         },
     );
 
@@ -464,6 +466,7 @@ fn program_order_parser_before_type_prepass() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_lib: false,
         },
     );
 
@@ -1049,6 +1052,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_lib: false,
         },
     );
 

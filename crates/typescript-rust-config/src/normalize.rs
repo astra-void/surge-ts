@@ -65,6 +65,10 @@ pub(crate) fn normalize_compiler_options(
                 normalized.skip_lib_check = parse_bool_option(key, value, config_dir, diagnostics)
                     .unwrap_or(normalized.skip_lib_check);
             }
+            "noLib" => {
+                normalized.no_lib = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.no_lib);
+            }
             "paths" => {
                 normalized.paths = parse_paths_option(value, diagnostics, config_dir);
             }

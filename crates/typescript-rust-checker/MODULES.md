@@ -61,7 +61,7 @@ These forms remain intentionally out of scope for v0.70.1:
 - exact package declaration subpaths are supported; wildcard/runtime subpaths are not
 - explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
 - `baseUrl` resolution remains unsupported/deprecated
-- `lib.d.ts` loading and `@types` discovery remain unsupported.
+- `lib.d.ts` loading and `@types` discovery remain unsupported. v0.72 injects a minimal synthetic built-in globals pack (e.g. `console`, `Promise`, `Math`), but this is not full `lib.d.ts` and DOM/Node globals remain unsupported. `noLib: true` disables these synthetic built-ins.
 - The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.
   - Ambient modules and resolved package entrypoints resolve before package stubbing.
   - Default import, namespace import, named re-export, type-only re-export, and star re-export behavior inside exact ambient modules is pinned.

@@ -1,3 +1,4 @@
+mod builtins;
 mod checks;
 mod context;
 mod driver;

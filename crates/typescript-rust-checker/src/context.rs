@@ -8,6 +8,7 @@ pub struct CheckerOptions {
     pub no_implicit_any: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
+    pub no_lib: bool,
 }
 
 impl Default for CheckerOptions {
@@ -16,6 +17,7 @@ impl Default for CheckerOptions {
             no_implicit_any: false,
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
+            no_lib: false,
         }
     }
 }

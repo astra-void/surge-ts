@@ -9,9 +9,9 @@ v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emit
 
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
-v0.69.1 hardens/refactors this support.
+v0.69.1 hardens/refactors this support. v0.72 adds a minimal synthetic built-in globals pack (not full `lib.d.ts`, which remains unsupported).
 Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exports["types"] condition.
-Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, lib loading, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
+Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, physical `lib.d.ts` loading, DOM/Node globals, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
 
 The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
 `cargo test` does not require `pnpm install`.
