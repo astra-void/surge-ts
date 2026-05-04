@@ -1,1 +1,0 @@
-type Name = string; let value: Name<string> = "ok";

@@ -9,6 +9,13 @@ v0.68 uses oracle comparisons to validate emitted diagnostic coverage. The new `
 The Node toolchain is dev-only. Rust crates do not depend on Node tooling, and
 `cargo test` does not require `pnpm install`.
 
+## Known Mismatches
+
+- **Duplicate Declarations (`TS2393`, `TS2451`)**: TypeScript reports diagnostics on *both* the original declaration and the duplicate. `typescript-rust` reports it on only one.
+- **Control Flow (`TS2454`)**: TypeScript sometimes emits multiple use-before-assignment diagnostics for the same variable in complex assignments.
+- **Generic Arity (`TS2314`, `TS2315`)**: TypeScript reports the error on the *usage* site (e.g. the variable declaration). `typescript-rust` reports it using the span of the *type declaration*.
+- **Implicit Any (`TS7005`)**: `typescript-rust` reports this for uninitialized variables globally if `strict` is enabled, while TypeScript has more complex usage-based inference.
+
 ## Lockfile policy
 
 - The repository commits `pnpm-lock.yaml`.

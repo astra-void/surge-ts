@@ -5,7 +5,7 @@ not a claim that large TypeScript packages pass. `v0.60` adds a TypeScript
 oracle comparison harness on top of that baseline so we can measure the current
 checker against a pinned compiler without changing the checker to chase parity.
 
-v0.68 uses the oracle to expand emitted diagnostic coverage, not just catalog entries. Reported counts should distinguish emitted diagnostics from catalog-only placeholders so real-project comparisons stay tied to actual checker behavior.
+v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
 The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
 `cargo test` does not require `pnpm install`.

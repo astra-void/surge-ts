@@ -5,7 +5,7 @@ use std::{
 
 use serde_json::{Map, Value};
 use typescript_rust_config::LoadedTsConfig;
-use typescript_rust_diagnostics::{Diagnostic, render_diagnostics};
+use typescript_rust_diagnostics::{Diagnostic, catalog_coverage_stats, DiagnosticCoverageStats, render_diagnostics};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ReportFormat {
@@ -38,6 +38,7 @@ pub struct ProjectCompatibilityReport {
     pub external_module_stubs: Vec<CompatReportCountEntry>,
     pub declaration_files_loaded: usize,
     pub ambient_external_modules: Vec<String>,
+    pub diagnostic_coverage: DiagnosticCoverageStats,
 }
 
 fn is_relative_specifier(specifier: &str) -> bool {
@@ -135,6 +136,7 @@ pub fn build_project_compatibility_report(
             list.sort();
             list
         },
+        diagnostic_coverage: catalog_coverage_stats(),
     }
 }
 
@@ -163,6 +165,13 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     lines.push(format!("Root dir: {}", report.root_dir));
     lines.push(format!("Files loaded: {}", report.files_loaded));
     lines.push(format!("Diagnostics: {}", report.diagnostics_total));
+    lines.push(String::new());
+    lines.push("Diagnostic coverage:".to_string());
+    lines.push(format!("  catalog total: {}", report.diagnostic_coverage.catalog_total));
+    lines.push(format!("  emitted total: {}", report.diagnostic_coverage.emitted_total));
+    lines.push(format!("  catalog-only total: {}", report.diagnostic_coverage.catalog_only_total));
+    lines.push(format!("  emitted TypeScript diagnostics: {}", report.diagnostic_coverage.emitted_typescript_total));
+    lines.push(format!("  catalog-only TypeScript diagnostics: {}", report.diagnostic_coverage.catalog_only_typescript_total));
     lines.push(String::new());
     lines.push("By code:".to_string());
     if report.by_code.is_empty() {
@@ -240,6 +249,15 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
         "diagnosticsTotal".to_string(),
         Value::from(report.diagnostics_total as u64),
     );
+    
+    let mut coverage_map = Map::new();
+    coverage_map.insert("catalogTotal".to_string(), Value::from(report.diagnostic_coverage.catalog_total as u64));
+    coverage_map.insert("emittedTotal".to_string(), Value::from(report.diagnostic_coverage.emitted_total as u64));
+    coverage_map.insert("catalogOnlyTotal".to_string(), Value::from(report.diagnostic_coverage.catalog_only_total as u64));
+    coverage_map.insert("emittedTypeScriptTotal".to_string(), Value::from(report.diagnostic_coverage.emitted_typescript_total as u64));
+    coverage_map.insert("catalogOnlyTypeScriptTotal".to_string(), Value::from(report.diagnostic_coverage.catalog_only_typescript_total as u64));
+    root.insert("diagnosticCoverage".to_string(), Value::Object(coverage_map));
+
     root.insert(
         "byCode".to_string(),
         Value::Array(

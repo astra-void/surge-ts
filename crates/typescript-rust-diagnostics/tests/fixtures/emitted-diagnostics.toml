@@ -1,0 +1,466 @@
+[TS5112]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+]
+oracle = [
+  "CLI tests",
+]
+
+[TS2304]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+  "crates/typescript-rust-checker/tests/generics_spans.rs",
+  "crates/typescript-rust-checker/tests/generics.rs",
+  "crates/typescript-rust-checker/tests/example_spans.rs",
+  "crates/typescript-rust-checker/tests/compatibility.rs",
+]
+
+[TS2300]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2305]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2306]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2307]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/program.rs",
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2882]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2314]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/generics.rs",
+  "crates/typescript-rust-checker/tests/generics_spans.rs",
+]
+
+[TS2315]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/generics.rs",
+  "crates/typescript-rust-checker/tests/generics_spans.rs",
+]
+
+[TS2322]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "crates/typescript-rust-cli/tests/json_diagnostics.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+  "crates/typescript-rust-checker/tests/generics_spans.rs",
+  "crates/typescript-rust-checker/tests/generics.rs",
+  "crates/typescript-rust-checker/tests/example_spans.rs",
+  "crates/typescript-rust-checker/tests/compatibility.rs",
+]
+
+[TS2339]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/example_spans.rs",
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2344]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2345]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+  "crates/typescript-rust-checker/tests/example_spans.rs",
+]
+
+[TS2349]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2351]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2352]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2353]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/compatibility.rs",
+]
+
+[TS2355]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+[TS2356]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2362]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/example_spans.rs",
+]
+
+[TS2363]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2365]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/example_spans.rs",
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2366]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+[TS2367]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/example_spans.rs",
+]
+
+[TS2393]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2394]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2448]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+[TS2451]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2454]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+[TS2551]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2554]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2588]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/program.rs",
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2693]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/generics.rs",
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2741]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/compatibility.rs",
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2749]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2872]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2873]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS7005]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS7006]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/generics.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS7019]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7030]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7031]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7034]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7051]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7052]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7053]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7054]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7055]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7056]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7057]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7058]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7059]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7060]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7061]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+["typescript-rust::parser-error"]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+["typescript-rust::duplicate-type-parameter"]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/generics_spans.rs",
+  "crates/typescript-rust-checker/tests/generics.rs",
+]
+
+["typescript-rust::duplicate-default-export"]
+status = "emitted"
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+["typescript-rust::unsupported-module-syntax"]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+["typescript-rust::unsupported-declaration"]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/generics.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
+["typescript-rust::type-alias-cycle"]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+["typescript-rust::type-declaration-cycle"]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
