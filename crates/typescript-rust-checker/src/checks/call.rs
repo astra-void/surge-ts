@@ -4,6 +4,7 @@ use typescript_rust_syntax::{
 };
 use typescript_rust_types::{FunctionType, Type, is_assignable_to};
 
+use super::emit_type_only_as_value_diagnostic;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use crate::context::CheckerContext;
 use crate::infer::InferredExpression;
@@ -33,6 +34,10 @@ pub(crate) fn check_call_like(
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     let Some(symbol) = symbols.get(callee_name).cloned() else {
+        if emit_type_only_as_value_diagnostic(callee_name, callee_span, ctx) {
+            return None;
+        }
+
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2304(callee_name, ctx.file_name.clone()),
             callee_span,
@@ -75,6 +80,10 @@ pub(crate) fn check_property_call_like(
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     let Some(symbol) = symbols.get(object_name).cloned() else {
+        if emit_type_only_as_value_diagnostic(object_name, object_span, ctx) {
+            return None;
+        }
+
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2304(object_name, ctx.file_name.clone()),
             object_span,

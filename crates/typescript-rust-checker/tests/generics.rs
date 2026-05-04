@@ -892,7 +892,7 @@ fn generic_module_type_only_import_value_usage_unresolved() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2693"]);
 }
 
 #[test]

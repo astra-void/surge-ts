@@ -62,7 +62,7 @@ pub const TS2307: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Cannot find module '{0}' or its corresponding type declarations.",
     argument_count: 1,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2882: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -82,7 +82,7 @@ pub const TS2314: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Generic type '{0}' requires {1} type argument(s).",
     argument_count: 2,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2315: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -92,7 +92,7 @@ pub const TS2315: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Type '{0}' is not generic.",
     argument_count: 1,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2322: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -332,7 +332,7 @@ pub const TS2693: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "'{0}' only refers to a type, but is being used as a value here.",
     argument_count: 1,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2741: DiagnosticDescriptor = DiagnosticDescriptor {

@@ -205,6 +205,33 @@ fn generated_ts2307_formats_message() {
 }
 
 #[test]
+fn generated_ts2314_formats_message() {
+    let diagnostic = Diagnostic::ts2314("Box", 2, "example.ts");
+    assert_eq!(diagnostic.code.to_string(), "TS2314");
+    assert_eq!(
+        diagnostic.message,
+        "Generic type 'Box' requires 2 type argument(s)."
+    );
+}
+
+#[test]
+fn generated_ts2315_formats_message() {
+    let diagnostic = Diagnostic::ts2315("Name", "example.ts");
+    assert_eq!(diagnostic.code.to_string(), "TS2315");
+    assert_eq!(diagnostic.message, "Type 'Name' is not generic.");
+}
+
+#[test]
+fn generated_ts2693_formats_message() {
+    let diagnostic = Diagnostic::ts2693("Name", "example.ts");
+    assert_eq!(diagnostic.code.to_string(), "TS2693");
+    assert_eq!(
+        diagnostic.message,
+        "'Name' only refers to a type, but is being used as a value here."
+    );
+}
+
+#[test]
 fn generated_ts2882_formats_message() {
     let diagnostic = Diagnostic::ts2882("reflect-metadata", "example.ts");
     assert_eq!(diagnostic.code.to_string(), "TS2882");

@@ -816,7 +816,7 @@ fn span_ts2873_falsy_literal() {
 }
 
 #[test]
-fn span_ts2304_imported_type_usage() {
+fn span_ts2693_imported_type_usage() {
     let diagnostics = check_program(vec![
         SourceFileInput {
             file_name: "user.ts".to_string(),
@@ -1102,7 +1102,7 @@ fn span_module_type_only_import_value_usage_points_to_value_usage() {
     assert_eq!(
         diagnostic_tuples(&diagnostics),
         vec![(
-            "TS2304".to_string(),
+            "TS2693".to_string(),
             "index.ts".to_string(),
             Some(span_nth(
                 "import type { Name } from \"./user\"; let value = Name;",

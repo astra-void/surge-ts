@@ -38,6 +38,7 @@ function run() {
   oracle_args_rejects_js_file_as_project();
   oracle_args_rejects_tsconfig_as_file();
   oracle_args_accepts_project_preset();
+  oracle_args_accepts_diagnostics_pack_project_preset();
   oracle_args_accepts_declarations_basic_project_preset();
   oracle_args_accepts_declarations_hardening_project_preset();
   oracle_args_accepts_project_tsconfig_path();
@@ -55,7 +56,7 @@ function run() {
   oracle_builds_rust_project_command_with_project();
   oracle_builds_rust_project_command_with_declarations_basic_preset();
   oracle_builds_rust_project_command_with_declarations_hardening_preset();
-  oracle_builds_rust_file_command_positional();
+  oracle_builds_rust_file_command_without_project();
   oracle_output_includes_mode_project();
   oracle_output_includes_mode_file();
   oracle_json_output_includes_mode();
@@ -345,6 +346,17 @@ function oracle_args_accepts_project_preset() {
   );
 }
 
+function oracle_args_accepts_diagnostics_pack_project_preset() {
+  const parsed = parseArgs(['--project', 'diagnostics-pack']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/diagnostics-pack/tsconfig.json'),
+  );
+}
+
 function oracle_args_accepts_declarations_basic_project_preset() {
   const parsed = parseArgs(['--project', 'declarations-basic']);
   const mode = resolveOracleMode(parsed);
@@ -445,40 +457,31 @@ function oracle_builds_tsc_file_command_without_project() {
 }
 
 function oracle_builds_rust_project_command_with_project() {
-  assert.equal(
-    buildTypeScriptRustCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json'),
-    `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/generics-basic/tsconfig.json --format json`,
-  );
+  const actual = buildTypeScriptRustCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json').replace(/\\/g, '/');
+  const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/generics-basic/tsconfig.json --format json`.replace(/\\/g, '/');
+  assert.equal(actual, expected);
 }
 
 function oracle_builds_rust_project_command_with_declarations_basic_preset() {
-  assert.equal(
-    buildTypeScriptRustCommand('project', 'tests/compat-projects/declarations-basic/tsconfig.json'),
-    `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/declarations-basic/tsconfig.json --format json`,
-  );
+  const actual = buildTypeScriptRustCommand('project', 'tests/compat-projects/declarations-basic/tsconfig.json').replace(/\\/g, '/');
+  const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/declarations-basic/tsconfig.json --format json`.replace(/\\/g, '/');
+  assert.equal(actual, expected);
 }
 
 function oracle_builds_rust_project_command_with_declarations_hardening_preset() {
-  assert.equal(
-    buildTypeScriptRustCommand('project', 'tests/compat-projects/declarations-hardening/tsconfig.json'),
-    `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/declarations-hardening/tsconfig.json --format json`,
-  );
+  const actual = buildTypeScriptRustCommand('project', 'tests/compat-projects/declarations-hardening/tsconfig.json').replace(/\\/g, '/');
+  const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/declarations-hardening/tsconfig.json --format json`.replace(/\\/g, '/');
+  assert.equal(actual, expected);
 }
 
-function oracle_builds_rust_file_command_positional() {
-  assert.equal(
-    buildTypeScriptRustCommand('file', 'examples/basic.ts'),
-    `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --format json examples/basic.ts`,
-  );
+function oracle_builds_rust_file_command_without_project() {
+  const actual = buildTypeScriptRustCommand('file', 'examples/basic.ts').replace(/\\/g, '/');
+  const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --format json examples/basic.ts`.replace(/\\/g, '/');
+  assert.equal(actual, expected);
 }
 
 function oracle_output_includes_mode_project() {
-  const comparison = compareDiagnostics(
-    'project',
-    'tests/compat-projects/generics-basic/tsconfig.json',
-    [],
-    [],
-  );
+  const comparison = compareDiagnostics('project', 'tests/compat-projects/generics-basic/tsconfig.json', [], []);
 
   const rendered = renderComparisonText(comparison);
   assert.ok(rendered.includes('Mode: project'));

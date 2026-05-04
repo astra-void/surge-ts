@@ -45,3 +45,5 @@ drift can come from catalog updates even when checker logic stays the same.
 Keep those changes intentional and review the generated catalog diff with the
 checker diff. Likely next work is diagnostic expansion or package declaration
 entrypoint foundation, not full typescript-go parity.
+
+v0.68 keeps that focus on emitted diagnostics: new upstream-style cases should only be added when they map to a real checker or parser emission path with span and no-cascade policy, not just because a code exists in the catalog.

@@ -45,7 +45,7 @@
     "message": "Cannot find module '{0}' or its corresponding type declarations.",
     "source": "typescript",
     "arity": 1,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2882",
@@ -61,7 +61,7 @@
     "message": "Generic type '{0}' requires {1} type argument(s).",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2315",
@@ -69,7 +69,7 @@
     "message": "Type '{0}' is not generic.",
     "source": "typescript",
     "arity": 1,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2322",
@@ -261,7 +261,7 @@
     "message": "'{0}' only refers to a type, but is being used as a value here.",
     "source": "typescript",
     "arity": 1,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2741",

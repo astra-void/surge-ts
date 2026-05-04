@@ -3,6 +3,7 @@ use typescript_rust_syntax::{ParsedExpression, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::{NumberLiteralType, Type, is_assignable_to, union_type};
 
 use super::call::{check_call_like, check_property_call_like};
+use super::emit_type_only_as_value_diagnostic;
 use super::ops;
 use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, infer_expression};
@@ -179,6 +180,10 @@ pub(crate) fn report_inferred_expression(
             }
         }
         InferredExpression::UnresolvedIdentifier { name, span } => {
+            if emit_type_only_as_value_diagnostic(&name, span, ctx) {
+                return;
+            }
+
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2304(&name, ctx.file_name.clone()),
                 choose_span(span, fallback_span),
@@ -209,6 +214,10 @@ fn evaluate_index_access(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let Some(symbol) = symbols.get(object_name).cloned() else {
+        if emit_type_only_as_value_diagnostic(object_name, object_span, ctx) {
+            return InferredExpression::Unknown;
+        }
+
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2304(object_name, ctx.file_name.clone()),
             choose_span(object_span, fallback_span),

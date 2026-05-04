@@ -337,6 +337,20 @@ fn program_file_local_variable_does_not_leak() {
 }
 
 #[test]
+fn program_type_only_value_usage_reports_ts2693_no_cascade() {
+    let diagnostics = program(&[
+        ("a.ts", "type Name = string;"),
+        (
+            "b.ts",
+            "let value: string; value = Name; let other: string = value;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2693"]);
+    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
 fn program_diagnostics_are_in_input_file_order() {
     let diagnostics = program(&[
         ("a.ts", "type Name = Missing; let a: Name = 1;"),
@@ -1163,7 +1177,7 @@ fn program_module_import_regular_type_export_value_usage_unresolved() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2693"]);
     assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
 }
 
@@ -1246,7 +1260,7 @@ fn program_module_import_regular_alias_type_export_value_usage_unresolved() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2693"]);
     assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
 }
 
@@ -1288,7 +1302,7 @@ fn program_module_import_type_type_export_value_usage_unresolved() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2693"]);
     assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
 }
 
@@ -1511,7 +1525,7 @@ fn program_module_export_type_list_exports_type_only() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2693"]);
     assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
 }
 
@@ -2160,7 +2174,7 @@ fn module_re_export_type_named_does_not_export_value() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2693"]);
 }
 
 #[test]

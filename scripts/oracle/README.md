@@ -4,6 +4,8 @@ This workspace keeps a pinned root `typescript` dev dependency and a small
 comparison harness for measuring `typescript-rust` against the TypeScript
 compiler.
 
+v0.68 uses oracle comparisons to validate emitted diagnostic coverage. The new `diagnostics-pack` fixture is a synthetic example that should stay tiny and reviewable while still exercising real checker emission paths.
+
 The Node toolchain is dev-only. Rust crates do not depend on Node tooling, and
 `cargo test` does not require `pnpm install`.
 

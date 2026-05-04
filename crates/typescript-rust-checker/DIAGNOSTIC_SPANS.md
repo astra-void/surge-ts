@@ -2,6 +2,8 @@
 
 This checker aims for predictable, useful diagnostic spans rather than byte-for-byte TypeScript LSP parity.
 
+For the v0.68 emitted-diagnostic expansion phase, every newly emitted source-facing diagnostic should have at least one span test and should be checked against an oracle-backed fixture when feasible. If a diagnostic can cascade, pin that policy explicitly in the nearby tests.
+
 The reference point for this phase is the TypeScript LSP underline behavior on the supported single-file and program checks. Span selection should prefer the smallest relevant token or expression, then fall back to a stable wrapper span when the smaller span is unavailable.
 
 ## Policy

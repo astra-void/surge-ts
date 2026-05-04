@@ -86,10 +86,8 @@ fn cli_diagnostics_json_project() {
     assert_eq!(parsed["diagnostics"].as_array().unwrap().len(), 1);
     let diagnostic = &parsed["diagnostics"][0];
     assert_eq!(diagnostic["code"], Value::String("TS2322".to_string()));
-    assert_eq!(
-        diagnostic["fileName"],
-        Value::String("src/index.ts".to_string())
-    );
+    let file_name = diagnostic["fileName"].as_str().unwrap().replace('\\', "/");
+    assert_eq!(file_name, "src/index.ts");
     assert!(diagnostic["span"]["start"].is_number());
     assert!(diagnostic["span"]["end"].is_number());
     assert!(diagnostic["line"].as_u64().unwrap() >= 1);
@@ -115,10 +113,8 @@ fn cli_diagnostics_json_includes_code_file_message() {
     let parsed: Value = serde_json::from_str(&stdout).unwrap();
     let diagnostic = &parsed["diagnostics"][0];
     assert_eq!(diagnostic["code"], Value::String("TS2322".to_string()));
-    assert_eq!(
-        diagnostic["fileName"],
-        Value::String("src/index.ts".to_string())
-    );
+    let file_name = diagnostic["fileName"].as_str().unwrap().replace('\\', "/");
+    assert_eq!(file_name, "src/index.ts");
     assert!(!diagnostic["message"].as_str().unwrap().is_empty());
 }
 

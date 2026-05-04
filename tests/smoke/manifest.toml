@@ -404,7 +404,7 @@ source_text = "import type { User } from \"./a\"; let user: User = { name: \"Ada
 
 [[case]]
 name = "module-resolution_type_only_import_value_usage"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case.files]]
 file_name = "src/a.ts"
@@ -2613,7 +2613,7 @@ expected_diagnostics = ["TS2300"]
 [[case]]
 name = "type-alias-not-value-ts2304"
 path = "tests/smoke/type_alias_not_value_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "type-alias-value-not-type-ts2304"
@@ -3948,7 +3948,7 @@ expected_diagnostics = ["typescript-rust::type-alias-cycle"]
 [[case]]
 name = "type-alias-not-value-still-ts2304"
 path = "tests/smoke/type_alias_not_value_still_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "type-alias-value-not-type-still-ts2304"
@@ -4203,7 +4203,7 @@ expected_diagnostics = ["TS2300"]
 [[case]]
 name = "interface-not-value-still-ts2304"
 path = "tests/smoke/interface_not_value_still_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "interface-value-not-type-still-ts2304"
@@ -4473,12 +4473,12 @@ expected_diagnostics = ["TS2741"]
 [[case]]
 name = "interface-not-value-expression-ts2304"
 path = "tests/smoke/interface_not_value_expression_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "interface-not-value-call-ts2304"
 path = "tests/smoke/interface_not_value_call_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "interface-value-not-type-variable-ts2304"
@@ -5741,7 +5741,7 @@ files = [
   { file_name = "index.ts", source_text = "export type { User } from \"./user\";" },
   { file_name = "app.ts", source_text = "import { User } from \"./index\";\nlet value = User;" },
 ]
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "module-re-export-star-type-valid"
@@ -5826,7 +5826,7 @@ files = [
   { file_name = "user.ts", source_text = "export interface User { name: string; }" },
   { file_name = "index.ts", source_text = "import { User } from \"./user\";\nlet value = User;" },
 ]
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "module-resolution-regular-value-export-value-usage-valid"
@@ -5858,7 +5858,7 @@ files = [
   { file_name = "user.ts", source_text = "export type Name = string;" },
   { file_name = "index.ts", source_text = "import type { Name } from \"./user\";\nlet value = Name;" },
 ]
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "module-resolution-missing-module-no-cascade"
@@ -6027,7 +6027,7 @@ files = [
   { file_name = "box.ts", source_text = "export type Box<T> = { value: T };" },
   { file_name = "index.ts", source_text = "import type { Box } from \"./box\"; let value = Box;" },
 ]
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2693"]
 
 [[case]]
 name = "generic-module-private-helper-importable-pinned"

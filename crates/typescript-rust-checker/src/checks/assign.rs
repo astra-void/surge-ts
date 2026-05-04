@@ -2,6 +2,7 @@ use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::ParsedAssignment;
 use typescript_rust_types::is_assignable_to;
 
+use super::emit_type_only_as_value_diagnostic;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use crate::context::{CheckerContext, convert_span};
 use crate::symbols::{SymbolKind, SymbolTable};
@@ -21,6 +22,10 @@ pub(crate) fn check_assignment_with_symbols(
     };
 
     let Some(target) = symbols.get(&assignment.target_name).cloned() else {
+        if emit_type_only_as_value_diagnostic(&assignment.target_name, Some(target_span), ctx) {
+            return;
+        }
+
         let diagnostic = Diagnostic::ts2304(&assignment.target_name, ctx.file_name.clone())
             .with_span(convert_span(target_span));
         ctx.push(diagnostic);

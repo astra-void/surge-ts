@@ -44,7 +44,7 @@ arity = 1
 code = "TS2307"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Cannot find module '{0}' or its corresponding type declarations."
 arity = 1
 
@@ -60,7 +60,7 @@ arity = 1
 code = "TS2314"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Generic type '{0}' requires {1} type argument(s)."
 arity = 2
 
@@ -68,7 +68,7 @@ arity = 2
 code = "TS2315"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Type '{0}' is not generic."
 arity = 1
 
@@ -260,7 +260,7 @@ arity = 1
 code = "TS2693"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'{0}' only refers to a type, but is being used as a value here."
 arity = 1
 

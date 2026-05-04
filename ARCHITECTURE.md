@@ -2,6 +2,8 @@
 
 This workspace is organized as small crates with stable public façades and internal modules that can evolve without forcing broad API churn.
 
+v0.68 expands emitted diagnostic coverage in a reviewable, oracle-backed way. The target is real checker/parser emission paths with catalog entries, generated accessors, span policy, and no-cascade behavior, not catalog-only growth. The next compatibility unit after this phase should be package declaration entrypoint handling.
+
 v0.48 introduced the crate-level module split across types, diagnostics, config, syntax, and checker. v0.48.1 finishes the checker/config/syntax hardening pass by moving the remaining internals into focused submodules while keeping the public crate-root APIs stable.
 
 | Crate | Responsibility |

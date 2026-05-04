@@ -105,10 +105,10 @@ fn compat_report_generics_counts_by_code_stable() {
         parsed["byCode"],
         serde_json::json!([{"code":"typescript-rust::unsupported-declaration","count":1}])
     );
-    assert_eq!(
-        parsed["byFile"],
-        serde_json::json!([{"fileName":"src/unsupported.ts","count":1}])
-    );
+    let by_file = parsed["byFile"].as_array().unwrap();
+    let file_name = by_file[0]["fileName"].as_str().unwrap().replace('\\', "/");
+    assert_eq!(file_name, "src/unsupported.ts");
+    assert_eq!(by_file[0]["count"], Value::from(1));
 }
 
 #[test]

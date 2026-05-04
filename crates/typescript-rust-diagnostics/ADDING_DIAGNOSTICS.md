@@ -2,6 +2,8 @@
 
 This is a short pointer to the canonical guide in [`DIAGNOSTICS.md`](DIAGNOSTICS.md).
 
+For v0.68, prefer diagnostics that already have a real emission path, a focused fixture, a span policy, and a no-cascade policy where relevant. Catalog-only codes are fine as scaffolding, but they do not count toward emitted coverage.
+
 The important rules are:
 
 - `TSxxxx` codes stay TypeScript-compatible.

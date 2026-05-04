@@ -2,6 +2,8 @@
 
 Diagnostics in this crate are catalog-driven.
 
+v0.68 focuses on emitted diagnostics that are reachable from parser or checker code paths. Catalog-only entries may still exist as stepping stones, but they are tracked separately and should not be counted as coverage.
+
 ## Source of truth
 
 The canonical catalog is [`diagnostic-messages.json`](diagnostic-messages.json).

@@ -2,6 +2,8 @@
 
 CLI entry point for the workspace checker.
 
+v0.68 keeps the CLI shape stable while the checker expands emitted diagnostic coverage. CLI output should continue to reflect catalog-driven codes, spans, and line/column data without introducing package-resolution or lib.d.ts discovery.
+
 Diagnostics are catalog-driven and rendered through the shared diagnostics crate.
 
 ## Modes

@@ -34,8 +34,16 @@ fn run_cli(args: &[&str]) -> (String, String) {
         .unwrap();
 
     assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let normalize_paths = !args
+        .windows(2)
+        .any(|window| window[0] == "--format" && window[1] == "json");
     (
-        String::from_utf8(output.stdout).unwrap(),
+        if normalize_paths {
+            stdout.replace('\\', "/")
+        } else {
+            stdout
+        },
         String::from_utf8(output.stderr).unwrap(),
     )
 }
@@ -842,7 +850,7 @@ fn project_mode_regular_type_export_value_usage_unresolved() {
     let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.contains("TS2304"));
+    assert!(stdout.contains("TS2693"));
     assert!(stdout.contains("src/index.ts"));
 }
 
@@ -1706,10 +1714,10 @@ fn cli_stub_external_modules_single_file_ignore_config_suppresses_package_ts2307
     let file = root.join("index.ts");
     fs::write(&file, r#"import { useState } from "react";"#).unwrap();
 
-    let (stdout, stderr) = run_cli(&["--ignoreConfig", file.to_string_lossy().as_ref()]);
+    let (stdout, _stderr) = run_cli(&["--ignoreConfig", file.to_string_lossy().as_ref()]);
     assert!(stdout.contains("TS2307"));
 
-    let (stdout, stderr) = run_cli(&[
+    let (stdout, _stderr) = run_cli(&[
         "--ignoreConfig",
         file.to_string_lossy().as_ref(),
         "--stubExternalModules",
@@ -1745,7 +1753,7 @@ fn cli_stub_external_modules_compat_report() {
         r#"import { useState } from "react"; import { create } from "zustand";"#,
     );
 
-    let (stdout, stderr) = run_cli(&[
+    let (stdout, _stderr) = run_cli(&[
         "--project",
         root.join("tsconfig.json").to_string_lossy().as_ref(),
         "--compatReport",
@@ -1755,7 +1763,7 @@ fn cli_stub_external_modules_compat_report() {
     assert!(stdout.contains("zustand  1"));
     assert!(stdout.contains("TS2307"));
 
-    let (stdout, stderr) = run_cli(&[
+    let (stdout, _stderr) = run_cli(&[
         "--project",
         root.join("tsconfig.json").to_string_lossy().as_ref(),
         "--compatReport",
@@ -1775,7 +1783,7 @@ fn cli_default_external_import_reports_ts2307_no_cascade() {
         r#"import * as Zustand from "zustand"; let x = Zustand.create;"#,
     );
 
-    let (stdout, stderr) = run_cli(&[
+    let (stdout, _stderr) = run_cli(&[
         "--project",
         root.join("tsconfig.json").to_string_lossy().as_ref(),
     ]);
@@ -1793,7 +1801,7 @@ fn cli_external_namespace_property_access_no_cascade() {
     )
     .unwrap();
 
-    let (stdout, stderr) = run_cli(&["--ignoreConfig", file.to_string_lossy().as_ref()]);
+    let (stdout, _stderr) = run_cli(&["--ignoreConfig", file.to_string_lossy().as_ref()]);
     assert!(stdout.contains("TS2307"));
     assert!(!stdout.contains("TS2339"));
 }

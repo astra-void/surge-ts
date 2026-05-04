@@ -104,11 +104,14 @@ const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
 const workspaceRoot = path.resolve(scriptDir, '../..');
 const packageManagerCache = process.env.npm_config_cache ?? path.join(os.tmpdir(), 'npm-cache');
+const packageManagerExecutable = process.env.npm_execpath ? process.execPath : 'pnpm';
+const packageManagerArgsPrefix = process.env.npm_execpath ? [process.env.npm_execpath] : [];
 const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
 
 const fixturePresets: Record<string, string> = {
   'declarations-basic': path.join(workspaceRoot, 'tests/compat-projects/declarations-basic/tsconfig.json'),
   'declarations-hardening': path.join(workspaceRoot, 'tests/compat-projects/declarations-hardening/tsconfig.json'),
+  'diagnostics-pack': path.join(workspaceRoot, 'tests/compat-projects/diagnostics-pack/tsconfig.json'),
   'generics-basic': path.join(workspaceRoot, 'tests/compat-projects/generics-basic/tsconfig.json'),
   'package-imports': path.join(workspaceRoot, 'tests/compat-projects/package-imports/tsconfig.json'),
   'module-forms': path.join(workspaceRoot, 'tests/compat-projects/module-forms/tsconfig.json'),
@@ -353,7 +356,7 @@ export function runTsc(mode: OracleMode): RunResult {
   if (mode.ignoreConfig) {
       args.splice(args.length - 1, 0, '--ignoreConfig');
   }
-  const result = spawnSync('pnpm', args, {
+  const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, ...args], {
     cwd: workspaceRoot,
     encoding: 'utf8',
     env: {
