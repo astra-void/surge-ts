@@ -1,4 +1,5 @@
 mod package_declarations;
+mod path_mapping;
 mod report;
 
 use std::{fs, path::PathBuf, process::ExitCode};
@@ -237,11 +238,21 @@ fn run_project_mode(
         sources.push((file_path.clone(), file_name, source_text));
     }
 
-    let package_declaration_modules = package_declarations::resolve_package_declaration_entrypoints(
+    let mut package_declaration_modules = path_mapping::resolve_path_mappings(
+        &inputs,
+        &loaded.compiler_options.paths,
+        &loaded.root_dir,
+    );
+
+    let resolved_packages = package_declarations::resolve_package_declaration_entrypoints(
         &mut inputs,
         &mut sources,
         &loaded.root_dir,
     );
+
+    for (k, v) in resolved_packages {
+        package_declaration_modules.insert(k, v);
+    }
 
     let checker_options = CheckerOptions {
         no_implicit_any: loaded.compiler_options.no_implicit_any,

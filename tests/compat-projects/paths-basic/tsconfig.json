@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "paths": {
+      "@models": ["./src/models/index.ts"],
+      "@config": ["./src/config.ts"],
+      "@app/*": ["./src/app/*"],
+      "@lib/*": ["./src/lib/*"],
+      "@types/*": ["./types/*"]
+    }
+  },
+  "include": ["src/**/*", "types/**/*"]
+}

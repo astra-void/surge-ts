@@ -11,7 +11,7 @@ v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
 v0.69.1 hardens/refactors this support.
 Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exports["types"] condition.
-Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, lib loading, paths/baseUrl, JS runtime entrypoints.
+Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, lib loading, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
 
 The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
 `cargo test` does not require `pnpm install`.
@@ -61,7 +61,7 @@ The current baseline still intentionally avoids:
 
 - full package resolution remains unsupported
 - only declaration-oriented `node_modules` lookup is supported
-- `paths` / `baseUrl`
+- `baseUrl` resolution remains unsupported/deprecated
 - lib.d.ts modeling or auto-loading
 - full declaration-file semantics
 - `@types` discovery

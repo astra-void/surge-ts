@@ -4,7 +4,7 @@ v0.61 expands the existing relative module-resolution-lite boundary with a
 small, pinned module syntax surface for loaded `.ts` files. v0.65 hardens the
 ambient-module side of that surface, and v0.67 matches TypeScript's TS2882
 priority for unresolved side-effect imports, without adding package resolution,
-`node_modules`, `paths`/`baseUrl`, full declaration-file semantics, CommonJS,
+`node_modules`, explicit TS7-style `paths`, full declaration-file semantics, CommonJS,
 or full TypeScript parity.
 
 ## What Is Supported
@@ -59,7 +59,8 @@ These forms remain intentionally out of scope for v0.70.1:
 - full package resolution remains unsupported
 - only exact `exports.types` declaration targets are supported; full exports maps are not
 - exact package declaration subpaths are supported; wildcard/runtime subpaths are not
-- `paths` / `baseUrl` resolution
+- `paths` resolution without `baseUrl`
+- `baseUrl` resolution remains unsupported/deprecated
 - `lib.d.ts` loading and `@types` discovery remain unsupported.
 - The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.
   - Ambient modules and resolved package entrypoints resolve before package stubbing.
@@ -79,7 +80,7 @@ These forms remain intentionally out of scope for v0.70.1:
 - Exported generic aliases and interfaces still use the relative module-resolution-lite pass, with explicit type arguments substituted when the imported declaration is instantiated and trailing defaults applied when callers omit type arguments.
 - Constraints remain parser-only metadata in this phase.
 - Private helper types stay visible through the current module-resolution-lite pass so imported declarations can still resolve them.
-- The next phase should still be chosen from compatibility-report output rather than by expanding into package or tsconfig-path semantics by default. Likely follow-ups are diagnostic expansion or a package declaration entrypoint foundation.
+- The next phase should continue from compatibility-report output. Likely follow-ups are `@types` / `lib.d.ts` foundational support.
 
 ## Ambient Modules
 Imports try to resolve from ambient external modules defined by loaded `.d.ts` files with `declare module "pkg"` before falling back to package stubbing. Unsupported declaration syntax remains parser-safe and emits the pinned unsupported-declaration diagnostic.

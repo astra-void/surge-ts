@@ -38,7 +38,11 @@ Current limitations:
 - no readonly properties
 - no computed properties
 - no alias/interface-preserving diagnostic display
-- no package, node_modules, or tsconfig-path resolution
+- declaration-only package node_modules lookup is supported for package `.d.ts` entrypoints and exact declaration subpaths
+- tsconfig `paths` aliases are supported only through explicit TS7-style path targets
+- `baseUrl` resolution remains unsupported/deprecated
+- full package resolution remains unsupported
+- full tsconfig path ecosystem features such as rootDirs/projectReferences remain unsupported
 - no full declaration-file semantics, CommonJS semantics, or declaration merging
 - unsupported module syntax such as `export * as Foo from "./foo"` stays parser-safe or pinned
 - program-mode module visibility is limited to loaded relative `.ts` files
