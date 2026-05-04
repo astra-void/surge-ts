@@ -7,7 +7,7 @@ use crate::symbols::{SymbolTable, TypeDeclarationTable};
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
     pub stub_external_modules: bool,
-    pub package_declaration_modules: std::collections::HashMap<String, String>,
+    pub resolved_modules: std::collections::HashMap<String, String>,
 }
 
 impl Default for CheckerOptions {
@@ -15,7 +15,7 @@ impl Default for CheckerOptions {
         Self {
             no_implicit_any: false,
             stub_external_modules: false,
-            package_declaration_modules: std::collections::HashMap::new(),
+            resolved_modules: std::collections::HashMap::new(),
         }
     }
 }
@@ -57,6 +57,14 @@ impl CheckerContext {
 
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
         self.diagnostics.push(diagnostic);
+    }
+
+    pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub(crate) fn truncate_diagnostics(&mut self, len: usize) {
+        self.diagnostics.truncate(len);
     }
 
     pub(crate) fn finish(self) -> Vec<Diagnostic> {

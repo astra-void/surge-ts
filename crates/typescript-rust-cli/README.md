@@ -24,7 +24,7 @@ This is a typescript-rust-only compatibility/triage mode.
 
 Loaded `.d.ts` files from project inputs participate in semantic checking.
 Bare package imports (`pkg`, `@scope/pkg`) and exact subpaths resolve their `.d.ts` entrypoints via `types`, `typings`, `exports["types"]`, or `index.d.ts` fallback.
-Exact ambient `declare module "pkg"` blocks and resolved package entrypoints resolve before package stubbing. The CLI still does not discover full package resolution, wildcard `exports`, `@types`, or `lib.d.ts`. Only exact package declaration subpaths and exact `exports.types` conditions are supported.
+Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. The CLI still does not discover full package resolution, wildcard `exports`, `@types`, or `lib.d.ts`. `baseUrl` resolution remains unsupported/deprecated.
 Default export, namespace import, named re-export, type-only re-export, star re-export, duplicate ambient module, and duplicate ambient global behavior is pinned rather than full TypeScript declaration merging.
 
 

@@ -87,7 +87,18 @@ pub fn check_program_with_options(
         &mut ctx,
     );
     collect_global_variables(&parsed_files, &mut global_symbols, &mut ctx);
-    let module_analyses = collect_module_analyses(&parsed_files, &mut ctx);
+
+    // PRELIMINARY PASS: collect types and resolve imports/exports to make them available for function signature collection
+    let (local_type_declarations_by_module, preliminary_module_import_bindings) =
+        collect_preliminary_module_type_bindings(&parsed_files, &mut ctx);
+
+    let module_analyses = collect_module_analyses_with_bindings(
+        &parsed_files,
+        &local_type_declarations_by_module,
+        &preliminary_module_import_bindings,
+        &mut ctx,
+    );
+
     let local_module_export_tables = module_analyses
         .iter()
         .map(|analysis| {
@@ -124,6 +135,147 @@ pub fn check_program_with_options(
     );
 
     ctx.finish()
+}
+
+fn collect_preliminary_module_type_bindings(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) -> (
+    Vec<Option<TypeDeclarationTable>>,
+    Vec<Option<ModuleImportBindings>>,
+) {
+    let mut local_type_declarations_by_module = Vec::with_capacity(parsed_files.len());
+    let mut preliminary_local_export_tables = Vec::with_capacity(parsed_files.len());
+
+    let initial_diagnostics_len = ctx.diagnostics().len();
+
+    for parsed_file in parsed_files {
+        if !parsed_file.is_module {
+            local_type_declarations_by_module.push(None);
+            preliminary_local_export_tables.push(None);
+            continue;
+        }
+
+        ctx.set_file_name(parsed_file.file_name.clone());
+
+        let saved_type_declarations =
+            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
+
+        collect_type_declarations(&parsed_file.statements, ctx);
+        let local_type_declarations = ctx.type_declarations.clone();
+
+        let preliminary_export_table = build_module_export_table(
+            parsed_file,
+            &local_type_declarations,
+            &SymbolTable::new(), // empty symbols
+            ctx,
+        );
+
+        ctx.type_declarations = saved_type_declarations;
+        ctx.symbols = saved_symbols;
+
+        local_type_declarations_by_module.push(Some(local_type_declarations));
+        preliminary_local_export_tables.push(Some(preliminary_export_table));
+    }
+
+    let preliminary_module_export_tables =
+        resolve_module_export_tables(parsed_files, &preliminary_local_export_tables, ctx);
+
+    let module_resolution_scopes = local_type_declarations_by_module
+        .iter()
+        .map(|td| td.as_ref().map(|td| Rc::new(td.clone())))
+        .collect::<Vec<_>>();
+
+    let mut preliminary_module_import_bindings = Vec::with_capacity(parsed_files.len());
+    for (_file_index, parsed_file) in parsed_files.iter().enumerate() {
+        if !parsed_file.is_module {
+            preliminary_module_import_bindings.push(None);
+            continue;
+        }
+
+        ctx.set_file_name(parsed_file.file_name.clone());
+        let imported_bindings = resolve_module_imports(
+            parsed_file,
+            parsed_files,
+            &preliminary_module_export_tables,
+            &module_resolution_scopes,
+            &SymbolTable::new(), // empty local symbols
+            ctx,
+        );
+        preliminary_module_import_bindings.push(Some(imported_bindings));
+    }
+
+    // Discard any diagnostics emitted during the preliminary pass
+    ctx.truncate_diagnostics(initial_diagnostics_len);
+
+    (
+        local_type_declarations_by_module,
+        preliminary_module_import_bindings,
+    )
+}
+
+fn collect_module_analyses_with_bindings(
+    parsed_files: &[ParsedProgramFile],
+    local_type_declarations_by_module: &[Option<TypeDeclarationTable>],
+    preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
+    ctx: &mut CheckerContext,
+) -> Vec<Option<ModuleAnalysis>> {
+    let mut analyses = Vec::with_capacity(parsed_files.len());
+
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        if !parsed_file.is_module {
+            analyses.push(None);
+            continue;
+        }
+
+        ctx.set_file_name(parsed_file.file_name.clone());
+
+        let saved_type_declarations =
+            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
+
+        // Re-run collect_type_declarations to emit the correct TS2300 diagnostics
+        collect_type_declarations(&parsed_file.statements, ctx);
+        let local_type_declarations = ctx.type_declarations.clone();
+
+        // Set up the full type environment for function signature collection
+        let mut full_type_declarations = ctx.ambient_global_type_declarations.clone();
+        for (k, v) in local_type_declarations.iter() {
+            let _ = full_type_declarations.insert(k.clone(), v.clone());
+        }
+        if let Some(imported) = &preliminary_module_import_bindings[file_index] {
+            for (k, v) in imported.type_declarations.iter() {
+                let _ = full_type_declarations.insert(k.clone(), v.clone());
+            }
+        }
+        ctx.type_declarations = full_type_declarations;
+
+        let mut local_symbols = SymbolTable::new();
+        let mut local_function_signatures = HashMap::new();
+        collect_function_signatures_from_statements(
+            &parsed_file.statements,
+            file_index,
+            &mut local_symbols,
+            &mut local_function_signatures,
+            ctx,
+        );
+
+        let export_table =
+            build_module_export_table(parsed_file, &local_type_declarations, &local_symbols, ctx);
+
+        ctx.type_declarations = saved_type_declarations;
+        ctx.symbols = saved_symbols;
+
+        analyses.push(Some(ModuleAnalysis {
+            local_type_declarations,
+            local_symbols,
+            local_function_signatures,
+            local_export_table: export_table,
+        }));
+    }
+
+    analyses
 }
 
 fn parse_program_files(files: Vec<SourceFileInput>) -> Vec<ParsedProgramFile> {
@@ -187,54 +339,6 @@ fn collect_global_function_signatures(
             ctx,
         );
     }
-}
-
-fn collect_module_analyses(
-    parsed_files: &[ParsedProgramFile],
-    ctx: &mut CheckerContext,
-) -> Vec<Option<ModuleAnalysis>> {
-    let mut analyses = Vec::with_capacity(parsed_files.len());
-
-    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-        if !parsed_file.is_module {
-            analyses.push(None);
-            continue;
-        }
-
-        ctx.set_file_name(parsed_file.file_name.clone());
-
-        let saved_type_declarations =
-            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
-        let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
-
-        collect_type_declarations(&parsed_file.statements, ctx);
-        let local_type_declarations = ctx.type_declarations.clone();
-
-        let mut local_symbols = SymbolTable::new();
-        let mut local_function_signatures = HashMap::new();
-        collect_function_signatures_from_statements(
-            &parsed_file.statements,
-            file_index,
-            &mut local_symbols,
-            &mut local_function_signatures,
-            ctx,
-        );
-
-        let export_table =
-            build_module_export_table(parsed_file, &local_type_declarations, &local_symbols, ctx);
-
-        ctx.type_declarations = saved_type_declarations;
-        ctx.symbols = saved_symbols;
-
-        analyses.push(Some(ModuleAnalysis {
-            local_type_declarations,
-            local_symbols,
-            local_function_signatures,
-            local_export_table: export_table,
-        }));
-    }
-
-    analyses
 }
 
 fn check_program_files(

@@ -18,7 +18,10 @@ pub fn resolve_path_mappings(
     // Build lookup of loaded files (normalized path -> original path)
     let mut loaded_files = HashMap::new();
     for input in inputs {
-        loaded_files.insert(normalize_path_string(&input.file_name), input.file_name.clone());
+        loaded_files.insert(
+            normalize_path_string(&input.file_name),
+            input.file_name.clone(),
+        );
     }
 
     let mut specifiers_to_resolve = HashSet::new();
@@ -180,7 +183,7 @@ fn try_resolve_path_mapping(
 
                 // Normalize path to use forward slashes
                 let normalized = normalize_path_string(&joined.to_string_lossy());
-                
+
                 // Try candidate extensions
                 let candidates = vec![
                     normalized.clone(),

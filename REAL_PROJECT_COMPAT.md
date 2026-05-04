@@ -60,7 +60,7 @@ does not misread the file as a config input.
 The current baseline still intentionally avoids:
 
 - full package resolution remains unsupported
-- only declaration-oriented `node_modules` lookup is supported
+- explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
 - `baseUrl` resolution remains unsupported/deprecated
 - lib.d.ts modeling or auto-loading
 - full declaration-file semantics

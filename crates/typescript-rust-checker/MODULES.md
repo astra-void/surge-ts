@@ -4,7 +4,7 @@ v0.61 expands the existing relative module-resolution-lite boundary with a
 small, pinned module syntax surface for loaded `.ts` files. v0.65 hardens the
 ambient-module side of that surface, and v0.67 matches TypeScript's TS2882
 priority for unresolved side-effect imports, without adding package resolution,
-`node_modules`, explicit TS7-style `paths`, full declaration-file semantics, CommonJS,
+`node_modules`, full declaration-file semantics, CommonJS,
 or full TypeScript parity.
 
 ## What Is Supported
@@ -59,7 +59,7 @@ These forms remain intentionally out of scope for v0.70.1:
 - full package resolution remains unsupported
 - only exact `exports.types` declaration targets are supported; full exports maps are not
 - exact package declaration subpaths are supported; wildcard/runtime subpaths are not
-- `paths` resolution without `baseUrl`
+- explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
 - `baseUrl` resolution remains unsupported/deprecated
 - `lib.d.ts` loading and `@types` discovery remain unsupported.
 - The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.

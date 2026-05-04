@@ -209,11 +209,7 @@ fn try_resolve_module(
         ));
     }
 
-    if let Some(resolved_file_name) = ctx
-        .options
-        .package_declaration_modules
-        .get(module_specifier)
-    {
+    if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
         if let Some((resolved_index, _)) = program_files
             .iter()
             .enumerate()
@@ -258,11 +254,7 @@ fn try_resolve_module_export_table(
         return Some((export_table.clone(), None));
     }
 
-    if let Some(resolved_file_name) = ctx
-        .options
-        .package_declaration_modules
-        .get(module_specifier)
-    {
+    if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
         if let Some((resolved_index, _)) = parsed_files
             .iter()
             .enumerate()
@@ -853,7 +845,7 @@ fn resolve_import_declaration(
             }
             if ctx
                 .options
-                .package_declaration_modules
+                .resolved_modules
                 .contains_key(&import.module_specifier)
             {
                 return;

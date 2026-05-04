@@ -168,7 +168,7 @@ fn run_single_file_mode(
         CheckerOptions {
             no_implicit_any,
             stub_external_modules,
-            package_declaration_modules: std::collections::HashMap::new(),
+            resolved_modules: std::collections::HashMap::new(),
         },
     );
     match format {
@@ -238,26 +238,28 @@ fn run_project_mode(
         sources.push((file_path.clone(), file_name, source_text));
     }
 
-    let mut package_declaration_modules = path_mapping::resolve_path_mappings(
-        &inputs,
-        &loaded.compiler_options.paths,
-        &loaded.root_dir,
-    );
-
-    let resolved_packages = package_declarations::resolve_package_declaration_entrypoints(
+    let mut resolved_modules = package_declarations::resolve_package_declaration_entrypoints(
         &mut inputs,
         &mut sources,
         &loaded.root_dir,
     );
 
-    for (k, v) in resolved_packages {
-        package_declaration_modules.insert(k, v);
+    let path_modules = path_mapping::resolve_path_mappings(
+        &inputs,
+        &loaded.compiler_options.paths,
+        &loaded.root_dir,
+    );
+
+    // Path mappings should win only when they match an explicit alias pattern.
+    // Prefer paths alias precedence for explicit user config.
+    for (k, v) in path_modules {
+        resolved_modules.insert(k, v);
     }
 
     let checker_options = CheckerOptions {
         no_implicit_any: loaded.compiler_options.no_implicit_any,
         stub_external_modules,
-        package_declaration_modules,
+        resolved_modules,
     };
 
     let diagnostics = check_program_with_options(inputs, checker_options);
