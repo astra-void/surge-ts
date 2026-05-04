@@ -39,6 +39,7 @@ function run() {
   oracle_args_rejects_tsconfig_as_file();
   oracle_args_accepts_project_preset();
   oracle_args_accepts_diagnostics_pack_project_preset();
+  oracle_args_accepts_package_declarations_project_preset();
   oracle_args_accepts_declarations_basic_project_preset();
   oracle_args_accepts_declarations_hardening_project_preset();
   oracle_args_accepts_project_tsconfig_path();
@@ -354,6 +355,17 @@ function oracle_args_accepts_diagnostics_pack_project_preset() {
   assert.equal(
     mode.resolvedTsconfig,
     path.resolve('tests/compat-projects/diagnostics-pack/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_package_declarations_project_preset() {
+  const parsed = parseArgs(['--project', 'package-declarations']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/package-declarations/tsconfig.json'),
   );
 }
 

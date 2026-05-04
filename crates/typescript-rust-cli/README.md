@@ -16,14 +16,15 @@ Diagnostics are catalog-driven and rendered through the shared diagnostics crate
 
 ## External Modules (v0.63)
 
-By default, non-relative package imports emit TS2307.
+By default, unresolved non-relative package imports emit TS2307.
 `--stubExternalModules` suppresses non-relative TS2307 and inserts unknown type/value stubs.
-This is a typescript-rust-only compatibility/triage mode and does not resolve node_modules, package.json, or declaration files.
+This is a typescript-rust-only compatibility/triage mode.
 
-## Declaration Files (v0.64/v0.65)
+## Declaration Files (v0.69)
 
 Loaded `.d.ts` files from project inputs participate in semantic checking.
-Exact ambient `declare module "pkg"` blocks resolve before package stubbing, but the CLI still does not discover `node_modules`, package.json `types`/`exports`/`main`, `@types`, or `lib.d.ts`.
+Bare package imports (`pkg`, `@scope/pkg`) resolve their `.d.ts` entrypoints via `types`, `typings`, or `index.d.ts` fallback.
+Exact ambient `declare module "pkg"` blocks and resolved package entrypoints resolve before package stubbing. The CLI still does not discover full package resolution, package `exports`/`main` maps, `@types`, or `lib.d.ts`.
 Default export, namespace import, named re-export, type-only re-export, star re-export, duplicate ambient module, and duplicate ambient global behavior is pinned rather than full TypeScript declaration merging.
 
 

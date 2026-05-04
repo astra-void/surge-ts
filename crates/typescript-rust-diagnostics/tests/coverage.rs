@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs, path::PathBuf};
 
 use serde::Deserialize;
-use typescript_rust_diagnostics_codegen::{load_catalog, DiagnosticSupport};
+use typescript_rust_diagnostics_codegen::{DiagnosticSupport, load_catalog};
 
 #[derive(Debug, Deserialize)]
 struct ManifestEntry {
@@ -39,12 +39,16 @@ fn emitted_diagnostics_have_manifest_entry() {
             let m = manifest.get(&entry.code).unwrap_or_else(|| {
                 panic!("Emitted diagnostic {} is missing from manifest", entry.code)
             });
-            assert_eq!(m.status, "emitted", "Manifest status for {} must be 'emitted'", entry.code);
-            
+            assert_eq!(
+                m.status, "emitted",
+                "Manifest status for {} must be 'emitted'",
+                entry.code
+            );
+
             let fixtures = m.fixtures.as_deref().unwrap_or(&[]);
             let span_tests = m.span_tests.as_deref().unwrap_or(&[]);
             let oracle = m.oracle.as_deref().unwrap_or(&[]);
-            
+
             assert!(
                 !fixtures.is_empty() || !span_tests.is_empty() || !oracle.is_empty(),
                 "Emitted diagnostic {} must have at least one fixture, span_test, or oracle evidence",
@@ -62,10 +66,17 @@ fn catalog_only_have_reason_if_callsites_exist() {
     for entry in catalog {
         if matches!(entry.support, DiagnosticSupport::CatalogOnly) {
             let m = manifest.get(&entry.code).unwrap_or_else(|| {
-                panic!("Catalog-only diagnostic {} is missing from manifest", entry.code)
+                panic!(
+                    "Catalog-only diagnostic {} is missing from manifest",
+                    entry.code
+                )
             });
-            assert_eq!(m.status, "catalog-only", "Manifest status for {} must be 'catalog-only'", entry.code);
-            
+            assert_eq!(
+                m.status, "catalog-only",
+                "Manifest status for {} must be 'catalog-only'",
+                entry.code
+            );
+
             if m.callsite_groups.as_deref().is_some_and(|g| !g.is_empty()) {
                 let reason = m.reason.as_deref().unwrap_or("");
                 assert!(
@@ -81,12 +92,16 @@ fn catalog_only_have_reason_if_callsites_exist() {
 #[test]
 fn specific_diagnostics_classified_correctly() {
     let catalog = load_catalog(catalog_path()).expect("catalog loads");
-    
+
     for code in ["TS2307", "TS2314", "TS2315"] {
-        let entry = catalog.iter().find(|e| e.code == code).expect("Diagnostic should exist");
+        let entry = catalog
+            .iter()
+            .find(|e| e.code == code)
+            .expect("Diagnostic should exist");
         assert!(
             matches!(entry.support, DiagnosticSupport::Emitted),
-            "{} should be classified as emitted", code
+            "{} should be classified as emitted",
+            code
         );
     }
 }

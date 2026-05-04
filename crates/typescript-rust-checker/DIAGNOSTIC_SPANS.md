@@ -72,13 +72,13 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
   underline the repeated name span, not the declaration keyword.
 - Call-expression type arguments are parsed for syntax stability, but v0.59
   ignores them in checker flow, so no dedicated diagnostic span is emitted yet.
-- Non-relative package-style imports intentionally do not resolve. Ordinary
-  missing imports emit TS2307. Missing side-effect imports emit catalog-backed
+- Unresolved non-relative package-style imports emit TS2307. Missing side-effect imports emit catalog-backed
   TS2882 and use the same module-specifier span. `--stubExternalModules`
   suppresses both non-relative missing-module forms while preserving stubs.
+  Resolved packages that are missing an export emit TS2305 on the imported specifier.
   Unsupported syntax still uses the pinned unsupported-module diagnostic.
-- Ambient `declare module "pkg"` blocks resolve before package stubbing; missing
-  exports from a declared ambient module still underline the imported specifier
+- Ambient `declare module "pkg"` blocks and resolved package `.d.ts` entrypoints resolve before package stubbing; missing
+  exports from a declared ambient module or package entrypoint still underline the imported specifier
   and use TS2305.
 - Duplicate ambient module/global behavior is pinned rather than merged, so spans stay attached to the first-wins declaration or duplicate site used by the checker.
 - Side-effect imports never bind names, so downstream unresolved-identifier diagnostics are still usage-site diagnostics.

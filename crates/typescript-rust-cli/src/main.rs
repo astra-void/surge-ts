@@ -14,6 +14,9 @@ use typescript_rust_checker::{
 };
 use typescript_rust_config::{TsConfigLoadOptions, load_tsconfig};
 use typescript_rust_diagnostics::render_diagnostics;
+use typescript_rust_syntax::{
+    parse_source, ParsedExportDeclaration, ParsedStatement,
+};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, disable_help_subcommand = true)]
@@ -122,6 +125,157 @@ fn main() -> ExitCode {
     )
 }
 
+fn is_external_specifier(specifier: &str) -> bool {
+    !specifier.starts_with("./")
+        && !specifier.starts_with("../")
+        && !specifier.starts_with(".\\")
+        && !specifier.starts_with("..\\")
+}
+
+fn extract_package_name(specifier: &str) -> Option<String> {
+    if specifier.starts_with('@') {
+        let parts: Vec<&str> = specifier.split('/').collect();
+        if parts.len() >= 2 {
+            Some(format!("{}/{}", parts[0], parts[1]))
+        } else {
+            None
+        }
+    } else {
+        specifier.split('/').next().map(|s| s.to_string())
+    }
+}
+
+fn resolve_package_declarations(
+    inputs: &mut Vec<SourceFileInput>,
+    sources: &mut Vec<(PathBuf, String, String)>,
+    root_dir: &std::path::Path,
+) -> std::collections::HashMap<String, String> {
+    let mut packages_to_resolve = std::collections::HashSet::new();
+
+    // Scan all initial inputs for non-relative specifiers
+    for input in inputs.iter() {
+        let parsed = parse_source(&input.source_text, &input.file_name);
+        for statement in parsed.statements {
+            match statement {
+                ParsedStatement::ImportDeclaration(import) => {
+                    if is_external_specifier(&import.module_specifier) {
+                        if let Some(pkg) = extract_package_name(&import.module_specifier) {
+                            // Only resolve bare package specifiers right now, ignore subpaths if any
+                            if pkg == import.module_specifier {
+                                packages_to_resolve.insert(pkg);
+                            }
+                        }
+                    }
+                }
+                ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+                    module_specifier: Some(module_specifier),
+                    ..
+                })
+                | ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
+                    module_specifier,
+                    ..
+                }) => {
+                    if is_external_specifier(&module_specifier) {
+                        if let Some(pkg) = extract_package_name(&module_specifier) {
+                            if pkg == module_specifier {
+                                packages_to_resolve.insert(pkg);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut package_declaration_modules = std::collections::HashMap::new();
+
+    for pkg in packages_to_resolve {
+        let mut current_dir = root_dir.to_path_buf();
+        let mut resolved_path = None;
+
+        // Simple node_modules lookup
+        loop {
+            let pkg_dir = current_dir.join("node_modules").join(&pkg);
+            let pkg_json_path = pkg_dir.join("package.json");
+
+            if pkg_json_path.exists() && pkg_json_path.is_file() {
+                if let Ok(json_str) = std::fs::read_to_string(&pkg_json_path) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        let mut types_path = None;
+
+                        if let Some(types) = json.get("types").and_then(|t| t.as_str()) {
+                            types_path = Some(pkg_dir.join(types));
+                        } else if let Some(typings) = json.get("typings").and_then(|t| t.as_str()) {
+                            types_path = Some(pkg_dir.join(typings));
+                        }
+
+                        if let Some(path) = types_path {
+                            let path = if path.exists() && path.is_file() {
+                                Some(path)
+                            } else if path.extension().is_none()
+                                && path.with_extension("d.ts").exists()
+                            {
+                                Some(path.with_extension("d.ts"))
+                            } else {
+                                None
+                            };
+
+                            if path.is_some() {
+                                resolved_path = path;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Fallback to index.d.ts
+                let index_dts = pkg_dir.join("index.d.ts");
+                if index_dts.exists() && index_dts.is_file() {
+                    resolved_path = Some(index_dts);
+                    break;
+                }
+            }
+
+            if let Some(parent) = current_dir.parent() {
+                current_dir = parent.to_path_buf();
+            } else {
+                break;
+            }
+        }
+
+        if let Some(path) = resolved_path {
+            if let Ok(path) = path.canonicalize() {
+                let file_name = path.to_string_lossy().into_owned();
+
+                // Avoid loading the same file multiple times
+                if !package_declaration_modules
+                    .values()
+                    .any(|v| v == &file_name)
+                    && !inputs.iter().any(|input| input.file_name == file_name)
+                {
+                    if let Ok(source_text) = std::fs::read_to_string(&path) {
+                        inputs.push(SourceFileInput {
+                            file_name: file_name.clone(),
+                            source_text: source_text.clone(),
+                        });
+                        sources.push((path.clone(), file_name.clone(), source_text));
+                        package_declaration_modules.insert(pkg, file_name);
+                    }
+                } else if package_declaration_modules
+                    .values()
+                    .any(|v| v == &file_name)
+                    || inputs.iter().any(|input| input.file_name == file_name)
+                {
+                    package_declaration_modules.insert(pkg, file_name);
+                }
+            }
+        }
+    }
+
+    package_declaration_modules
+}
+
 fn run_single_file_mode(
     file_path: PathBuf,
     no_implicit_any: bool,
@@ -166,6 +320,7 @@ fn run_single_file_mode(
         CheckerOptions {
             no_implicit_any,
             stub_external_modules,
+            package_declaration_modules: std::collections::HashMap::new(),
         },
     );
     match format {
@@ -215,11 +370,6 @@ fn run_project_mode(
         return ExitCode::SUCCESS;
     }
 
-    let checker_options = CheckerOptions {
-        no_implicit_any: loaded.compiler_options.no_implicit_any,
-        stub_external_modules,
-    };
-
     let mut inputs = Vec::with_capacity(loaded.files.len());
     let mut sources = Vec::with_capacity(loaded.files.len());
 
@@ -239,6 +389,15 @@ fn run_project_mode(
         });
         sources.push((file_path.clone(), file_name, source_text));
     }
+
+    let package_declaration_modules =
+        resolve_package_declarations(&mut inputs, &mut sources, &loaded.root_dir);
+
+    let checker_options = CheckerOptions {
+        no_implicit_any: loaded.compiler_options.no_implicit_any,
+        stub_external_modules,
+        package_declaration_modules,
+    };
 
     let diagnostics = check_program_with_options(inputs, checker_options);
     if compat_report {

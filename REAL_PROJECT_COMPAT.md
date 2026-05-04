@@ -7,6 +7,9 @@ checker against a pinned compiler without changing the checker to chase parity.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
+v0.69 adds narrow package declaration entrypoint support for bare package imports in project mode.
+It resolves package `.d.ts` files via `types`, `typings`, or `index.d.ts` fallback without full package resolution.
+
 The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
 `cargo test` does not require `pnpm install`.
 
@@ -59,7 +62,8 @@ The current baseline still intentionally avoids:
 - lib.d.ts modeling or auto-loading
 - full declaration-file semantics
 - `@types` discovery
-- package.json `types` / `exports` / `main`
+- package `exports` / `main` / JS runtime entrypoints
+- package subpath imports (e.g. `pkg/subpath`)
 - project references
 - incremental or watch behavior
 - generic inference and generic classes
@@ -74,13 +78,15 @@ The current declaration and diagnostic baseline includes:
 
 - exact ambient `declare module "pkg"` blocks are supported
 - ambient modules resolve before package stubbing
-- default import, namespace import, and re-export behavior for ambient modules is pinned
+- bare package imports (e.g. `pkg` or `@scope/pkg`) resolve to declaration entrypoints (`types`, `typings`, or `index.d.ts` fallback) in project mode
+- resolved package `.d.ts` files act as external modules and do not leak private helpers globally
+- default import, namespace import, and re-export behavior for ambient modules and package entrypoints is pinned
 - duplicate ambient module and duplicate ambient global behavior is pinned, not merged
 - unsupported declaration syntax remains parser-safe and emits stable diagnostics
 - TS2882 is catalog-backed and is emitted for unresolved side-effect imports such as `import "reflect-metadata";`
 - ordinary missing package imports still produce TS2307 by default
-- `--stubExternalModules` suppresses non-relative missing-module diagnostics, including the side-effect TS2882 form, while leaving relative missing modules unchanged
-- package.json, `node_modules`, `@types`, and lib.d.ts discovery are still out of scope
+- `--stubExternalModules` suppresses non-relative missing-module diagnostics, including the side-effect TS2882 form, while leaving relative missing modules and resolved package declaration errors unchanged
+- full package resolution, `exports` maps, package subpath imports, `@types`, and lib.d.ts discovery are still out of scope
 
 The oracle harness also stays away from those areas. It only measures the
 current surface against TypeScript diagnostics; it does not add new resolver or
@@ -92,5 +98,4 @@ The next phase should still be chosen from oracle and compat-report output, not
 from a fixed feature wish list. Module syntax expansion, package import
 stubbing, declaration-file ingestion, ambient declaration hardening, and the
 diagnostic catalog/codegen foundation are implemented. Likely follow-ups are
-diagnostic expansion or a package declaration entrypoint foundation; neither
-should imply full package resolution by default.
+diagnostic expansion or package subpath declaration resolution / exports types condition.

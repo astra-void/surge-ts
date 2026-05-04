@@ -605,7 +605,6 @@ fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
             std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
         collect_type_declarations(&parsed_file.statements, ctx);
         let ambient_td = ctx.type_declarations.clone();
-        ctx.type_declarations = saved_type_declarations;
 
         for (name, decl) in ambient_td.iter() {
             let _ = ctx
@@ -700,6 +699,8 @@ fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                 );
             }
         }
+
+        ctx.type_declarations = saved_type_declarations;
     }
 }
 

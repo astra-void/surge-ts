@@ -117,6 +117,7 @@ const fixturePresets: Record<string, string> = {
   'module-forms': path.join(workspaceRoot, 'tests/compat-projects/module-forms/tsconfig.json'),
   'relative-deep': path.join(workspaceRoot, 'tests/compat-projects/relative-deep/tsconfig.json'),
   'private-types': path.join(workspaceRoot, 'tests/compat-projects/private-types/tsconfig.json'),
+  'package-declarations': path.join(workspaceRoot, 'tests/compat-projects/package-declarations/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

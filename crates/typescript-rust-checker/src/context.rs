@@ -3,10 +3,11 @@ use typescript_rust_syntax::TextSpan as SyntaxTextSpan;
 
 use crate::symbols::{SymbolTable, TypeDeclarationTable};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
     pub stub_external_modules: bool,
+    pub package_declaration_modules: std::collections::HashMap<String, String>,
 }
 
 impl Default for CheckerOptions {
@@ -14,6 +15,7 @@ impl Default for CheckerOptions {
         Self {
             no_implicit_any: false,
             stub_external_modules: false,
+            package_declaration_modules: std::collections::HashMap::new(),
         }
     }
 }

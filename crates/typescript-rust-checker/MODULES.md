@@ -39,10 +39,9 @@ Namespace imports bind a single value symbol whose object type is built from the
 
 ## Non-relative imports and package stubs
 
-v0.63 does not resolve packages. It does, however, stub non-relative imports
-and re-exports to reduce compatibility-report cascades.
+v0.69 resolves bare package imports (e.g. `pkg` or `@scope/pkg`) to their `.d.ts` declaration entrypoints (`types`, `typings`, or `index.d.ts` fallback). Resolved package files act as external modules.
 
-Default mode:
+Default mode for unresolved packages:
 - reports TS2307 for ordinary non-relative module specifiers
 - reports TS2882 for non-relative side-effect imports
 - inserts unknown type/value stubs where possible
@@ -51,17 +50,17 @@ Default mode:
 - suppresses non-relative missing-module diagnostics, including TS2307 and the
   side-effect-import TS2882 form
 - keeps unknown stubs
-- leaves relative missing modules unchanged
+- leaves relative missing modules and resolved package declaration errors unchanged
 
 ## Still Unsupported
 
-These forms remain intentionally out of scope for v0.61:
+These forms remain intentionally out of scope for v0.69:
 
-- `node_modules` lookup
+- full package resolution, `exports` maps, package subpath imports
 - `paths` / `baseUrl` resolution
-- Full declaration-file semantics and `lib.d.ts` loading remain unsupported.
+- `lib.d.ts` loading and `@types` discovery remain unsupported.
 - The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.
-  - Ambient modules resolve before package stubbing.
+  - Ambient modules and resolved package entrypoints resolve before package stubbing.
   - Default import, namespace import, named re-export, type-only re-export, and star re-export behavior inside exact ambient modules is pinned.
   - Duplicate ambient module declarations are first-wins / pinned, not full merging.
   - Exact specifier only.

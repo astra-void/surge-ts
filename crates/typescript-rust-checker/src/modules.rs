@@ -209,6 +209,25 @@ fn try_resolve_module(
         ));
     }
 
+    if let Some(resolved_file_name) = ctx
+        .options
+        .package_declaration_modules
+        .get(module_specifier)
+    {
+        if let Some((resolved_index, _)) = program_files
+            .iter()
+            .enumerate()
+            .find(|(_, file)| file.file_name == *resolved_file_name)
+        {
+            if let Some(Some(export_table)) = module_export_tables.get(resolved_index) {
+                let scope = module_resolution_scopes
+                    .get(resolved_index)
+                    .and_then(|scope| scope.clone());
+                return Some((export_table.clone(), scope, Some(resolved_index)));
+            }
+        }
+    }
+
     if let Some(resolved) = resolve_relative_module(&ctx.file_name, module_specifier, program_files)
     {
         if let Some(Some(export_table)) = module_export_tables.get(resolved.resolved_file_index) {
@@ -237,6 +256,29 @@ fn try_resolve_module_export_table(
 ) -> Option<(ModuleExportTable, Option<usize>)> {
     if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
         return Some((export_table.clone(), None));
+    }
+
+    if let Some(resolved_file_name) = ctx
+        .options
+        .package_declaration_modules
+        .get(module_specifier)
+    {
+        if let Some((resolved_index, _)) = parsed_files
+            .iter()
+            .enumerate()
+            .find(|(_, file)| file.file_name == *resolved_file_name)
+        {
+            if let Some(export_table) = resolve_module_export_table(
+                resolved_index,
+                parsed_files,
+                local_module_export_tables,
+                resolved_module_export_tables,
+                resolving,
+                ctx,
+            ) {
+                return Some((export_table, Some(resolved_index)));
+            }
+        }
     }
 
     if let Some(resolved) = resolve_relative_module(file_name, module_specifier, parsed_files) {
@@ -505,7 +547,7 @@ fn collect_exportable_value_symbols(
     local_symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> SymbolTable {
-    let mut shadow_ctx = CheckerContext::new(ctx.file_name.clone(), ctx.options);
+    let mut shadow_ctx = CheckerContext::new(ctx.file_name.clone(), ctx.options.clone());
     shadow_ctx.type_declarations = local_type_declarations.clone();
 
     let mut exportable_values = local_symbols.clone();
@@ -807,6 +849,13 @@ fn resolve_import_declaration(
         }
         ParsedImportKind::SideEffect => {
             if ctx.ambient_modules.contains_key(&import.module_specifier) {
+                return;
+            }
+            if ctx
+                .options
+                .package_declaration_modules
+                .contains_key(&import.module_specifier)
+            {
                 return;
             }
             if resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)

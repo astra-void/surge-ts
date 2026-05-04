@@ -43,7 +43,7 @@ Note: v0.64 introduced a loaded `.d.ts` ambient subset for globals and exact amb
 Diagnostics are catalog-driven now, including TS2882, so some compatibility
 drift can come from catalog updates even when checker logic stays the same.
 Keep those changes intentional and review the generated catalog diff with the
-checker diff. Likely next work is diagnostic expansion or package declaration
-entrypoint foundation, not full typescript-go parity.
+checker diff. Likely next work is diagnostic expansion or package subpath
+declaration resolution, not full typescript-go parity.
 
-v0.68 keeps that focus on emitted diagnostics: new upstream-style cases should only be added when they map to a real checker or parser emission path with span and no-cascade policy, not just because a code exists in the catalog.
+v0.69 keeps that focus on emitted diagnostics and provides a foundation for package declaration entrypoints. New upstream-style cases should only be added when they map to a real checker or parser emission path with span and no-cascade policy, not just because a code exists in the catalog.

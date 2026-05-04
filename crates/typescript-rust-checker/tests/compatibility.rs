@@ -78,6 +78,7 @@ fn smoke_cases_emit_expected_codes() {
                 check_program_with_options(
                     inputs,
                     CheckerOptions {
+                        package_declaration_modules: Default::default(),
                         stub_external_modules: false,
                         no_implicit_any: true,
                     },
@@ -104,6 +105,7 @@ fn smoke_cases_emit_expected_codes() {
                     &source,
                     path.to_string_lossy().as_ref(),
                     CheckerOptions {
+                        package_declaration_modules: Default::default(),
                         stub_external_modules: false,
                         no_implicit_any: true,
                     },

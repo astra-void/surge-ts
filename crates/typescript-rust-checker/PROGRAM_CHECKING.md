@@ -38,10 +38,11 @@ Program mode treats the input files as one shared global script:
 - Relative named imports, type-only named imports, default imports, namespace imports, side-effect imports, local named export lists, named re-exports, type-only re-exports, and star re-exports are resolved across loaded `.ts` files.
 - Module files are isolated from the global-script prepass in this phase.
 - Loaded `.d.ts` files can contribute the v0.64 ambient subset: simple global type/interface/value/function declarations and exact `declare module "pkg"` blocks.
-- Ambient modules resolve before package import stubbing fallback.
-- Default exports, namespace imports, named re-exports, type-only re-exports, and star re-exports inside exact ambient modules are pinned in this phase.
+- Package imports resolve to `.d.ts` entrypoints via `types`, `typings`, or `index.d.ts` and behave like external modules.
+- Ambient modules and resolved packages resolve before package import stubbing fallback.
+- Default exports, namespace imports, named re-exports, type-only re-exports, and star re-exports inside exact ambient modules and resolved package modules are pinned in this phase.
 - Duplicate ambient modules and duplicate ambient globals are first-wins / pinned rather than merged.
-- Full declaration-file semantics, declaration merging, lib.d.ts loading, `@types`, package.json discovery, and package discovery remain unsupported.
+- Full declaration-file semantics, declaration merging, lib.d.ts loading, `@types`, full package.json discovery, and JS entrypoint discovery remain unsupported.
 
 ## What is shared
 
