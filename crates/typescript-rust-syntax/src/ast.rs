@@ -284,6 +284,33 @@ pub enum ParsedExpression {
         ty: ParsedType,
         type_span: Option<TextSpan>,
     },
+    OptionalPropertyAccess {
+        object: Box<ParsedExpression>,
+        object_span: Option<TextSpan>,
+        property_name: String,
+        property_span: Option<TextSpan>,
+    },
+    OptionalPropertyCall {
+        object: Box<ParsedExpression>,
+        object_span: Option<TextSpan>,
+        property_name: String,
+        property_span: Option<TextSpan>,
+        call_span: Option<TextSpan>,
+        type_arguments: Vec<ParsedType>,
+        arguments: Vec<ParsedCallArgument>,
+    },
+    OptionalCall {
+        callee: Box<ParsedExpression>,
+        callee_span: Option<TextSpan>,
+        type_arguments: Vec<ParsedType>,
+        arguments: Vec<ParsedCallArgument>,
+    },
+    NullishCoalescing {
+        left: Box<ParsedExpression>,
+        left_span: Option<TextSpan>,
+        right: Box<ParsedExpression>,
+        right_span: Option<TextSpan>,
+    },
     Unknown,
 }
 

@@ -5,6 +5,22 @@ pub struct UnionType {
     pub types: Vec<Type>,
 }
 
+pub fn remove_undefined(ty: &Type) -> Type {
+    match ty {
+        Type::Union(union) => {
+            let filtered: Vec<Type> = union
+                .types
+                .iter()
+                .filter(|t| **t != Type::Undefined)
+                .cloned()
+                .collect();
+            union_type(filtered)
+        }
+        Type::Undefined => Type::Unknown, // Or whatever makes sense, maybe just return it
+        _ => ty.clone(),
+    }
+}
+
 pub fn union_type(types: Vec<Type>) -> Type {
     let mut flattened = Vec::new();
 

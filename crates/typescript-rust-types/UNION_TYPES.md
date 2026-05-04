@@ -5,6 +5,7 @@ Current scope:
 - explicit union annotations
 - conditional expression union inference
 - optional property access widening
+- nullish coalescing `??` evaluation removing `undefined`
 
 Normalization:
 - flatten nested unions

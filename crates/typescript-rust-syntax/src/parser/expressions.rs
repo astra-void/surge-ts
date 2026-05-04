@@ -1,8 +1,8 @@
 use oxc_ast::ast::{
-    Argument, ArrayExpression, BinaryExpression, BinaryOperator, ComputedMemberExpression,
-    ConditionalExpression, Expression, LogicalExpression, LogicalOperator, ObjectExpression,
-    ObjectPropertyKind, PropertyKey, PropertyKind, StaticMemberExpression, UnaryExpression,
-    UnaryOperator,
+    Argument, ArrayExpression, BinaryExpression, BinaryOperator, ChainElement, ChainExpression,
+    ComputedMemberExpression, ConditionalExpression, Expression, LogicalExpression,
+    LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKey, PropertyKind,
+    StaticMemberExpression, UnaryExpression, UnaryOperator,
 };
 use oxc_span::{GetSpan, Span};
 
@@ -73,13 +73,19 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         }
         Expression::TSAsExpression(as_expression) => {
             let (expression, expression_span) = parse_expression(&as_expression.expression);
-            let ty = crate::parser::types::parse_type(&as_expression.type_annotation).unwrap_or(crate::ParsedType::Unknown);
+            let ty = crate::parser::types::parse_type(&as_expression.type_annotation)
+                .unwrap_or(crate::ParsedType::Unknown);
             ParsedExpression::TypeAssertion {
                 expression: Box::new(expression),
                 expression_span: Some(text_span_from_oxc_span(expression_span)),
                 ty,
-                type_span: Some(text_span_from_oxc_span(as_expression.type_annotation.span())),
+                type_span: Some(text_span_from_oxc_span(
+                    as_expression.type_annotation.span(),
+                )),
             }
+        }
+        Expression::ChainExpression(chain_expression) => {
+            parse_chain_expression(chain_expression).unwrap_or(ParsedExpression::Unknown)
         }
         _ => ParsedExpression::Unknown,
     };
@@ -327,13 +333,16 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
         ),
         Argument::TSAsExpression(as_expression) => {
             let (expression, expression_span) = parse_expression(&as_expression.expression);
-            let ty = crate::parser::types::parse_type(&as_expression.type_annotation).unwrap_or(crate::ParsedType::Unknown);
+            let ty = crate::parser::types::parse_type(&as_expression.type_annotation)
+                .unwrap_or(crate::ParsedType::Unknown);
             (
                 ParsedExpression::TypeAssertion {
                     expression: Box::new(expression),
                     expression_span: Some(text_span_from_oxc_span(expression_span)),
                     ty,
-                    type_span: Some(text_span_from_oxc_span(as_expression.type_annotation.span())),
+                    type_span: Some(text_span_from_oxc_span(
+                        as_expression.type_annotation.span(),
+                    )),
                 },
                 argument.span(),
             )
@@ -381,14 +390,23 @@ fn parse_binary_expression(binary_expression: &BinaryExpression<'_>) -> Option<P
 fn parse_logical_expression(
     logical_expression: &LogicalExpression<'_>,
 ) -> Option<ParsedExpression> {
+    let (left, left_span) = parse_expression(&logical_expression.left);
+    let (right, right_span) = parse_expression(&logical_expression.right);
+
+    if logical_expression.operator == LogicalOperator::Coalesce {
+        return Some(ParsedExpression::NullishCoalescing {
+            left: Box::new(left),
+            left_span: Some(text_span_from_oxc_span(left_span)),
+            right: Box::new(right),
+            right_span: Some(text_span_from_oxc_span(right_span)),
+        });
+    }
+
     let operator = match logical_expression.operator {
         LogicalOperator::And => ParsedLogicalOperator::And,
         LogicalOperator::Or => ParsedLogicalOperator::Or,
-        LogicalOperator::Coalesce => return None,
+        LogicalOperator::Coalesce => unreachable!(),
     };
-
-    let (left, left_span) = parse_expression(&logical_expression.left);
-    let (right, right_span) = parse_expression(&logical_expression.right);
 
     Some(ParsedExpression::Logical {
         left: Box::new(left),
@@ -518,6 +536,55 @@ pub(crate) fn parse_static_member_expression(
         property_name: member_expression.property.name.to_string(),
         property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
     })
+}
+
+fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<ParsedExpression> {
+    match &chain_expression.expression {
+        ChainElement::CallExpression(call_expression) => {
+            let arguments = call_expression
+                .arguments
+                .iter()
+                .map(parse_call_argument)
+                .collect::<Vec<_>>();
+            let type_arguments = parse_call_type_arguments(call_expression).unwrap_or_default();
+
+            match &call_expression.callee {
+                Expression::StaticMemberExpression(member_expression) => {
+                    let (object, object_span) = parse_expression(&member_expression.object);
+                    Some(ParsedExpression::OptionalPropertyCall {
+                        object: Box::new(object),
+                        object_span: Some(text_span_from_oxc_span(object_span)),
+                        property_name: member_expression.property.name.to_string(),
+                        property_span: Some(text_span_from_oxc_span(
+                            member_expression.property.span,
+                        )),
+                        call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                        type_arguments,
+                        arguments,
+                    })
+                }
+                _ => {
+                    let (callee, callee_span) = parse_expression(&call_expression.callee);
+                    Some(ParsedExpression::OptionalCall {
+                        callee: Box::new(callee),
+                        callee_span: Some(text_span_from_oxc_span(callee_span)),
+                        type_arguments,
+                        arguments,
+                    })
+                }
+            }
+        }
+        ChainElement::StaticMemberExpression(member_expression) => {
+            let (object, object_span) = parse_expression(&member_expression.object);
+            Some(ParsedExpression::OptionalPropertyAccess {
+                object: Box::new(object),
+                object_span: Some(text_span_from_oxc_span(object_span)),
+                property_name: member_expression.property.name.to_string(),
+                property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn parse_computed_member_expression(

@@ -7,6 +7,7 @@ Supported in this phase:
 - Return-type propagation into declarations, assignments, returns, and supported conditionals.
 - Contextual checking of object literal property values when the property value is a property call.
 - Inferred object literal property values when the property value is a property call.
+- Optional property calls and direct optional calls returning ReturnType | undefined.
 - `any` receivers return `any` and skip argument checking.
 - `unknown` receivers remain intentionally shallow and currently do not emit a property-call diagnostic.
 
@@ -14,7 +15,6 @@ Not supported in this phase:
 
 - Chained property calls.
 - Nested property access calls.
-- Optional chaining.
 - Bracket notation.
 - Method declarations or shorthand methods.
 - Receiver or `this` binding semantics.

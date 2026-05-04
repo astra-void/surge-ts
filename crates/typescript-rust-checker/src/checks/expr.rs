@@ -2,7 +2,10 @@ use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{ParsedExpression, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::{NumberLiteralType, Type, is_assignable_to, union_type};
 
-use super::call::{check_call_like, check_property_call_like};
+use super::call::{
+    check_call_like, check_optional_call_like, check_optional_property_call,
+    check_property_call_like,
+};
 use super::emit_type_only_as_value_diagnostic;
 use super::ops;
 use crate::context::CheckerContext;
@@ -76,6 +79,73 @@ pub(crate) fn evaluate_expression(
             Some(return_type) => InferredExpression::Known(return_type),
             None => InferredExpression::Unknown,
         },
+        ParsedExpression::OptionalPropertyCall {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            call_span,
+            type_arguments,
+            arguments,
+        } => match check_optional_property_call(
+            object,
+            *object_span,
+            property_name,
+            *property_span,
+            *call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ) {
+            Some(return_type) => InferredExpression::Known(return_type),
+            None => InferredExpression::Unknown,
+        },
+        ParsedExpression::OptionalCall {
+            callee,
+            callee_span,
+            type_arguments,
+            arguments,
+        } => match check_optional_call_like(
+            callee,
+            *callee_span,
+            None,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ) {
+            Some(return_type) => InferredExpression::Known(return_type),
+            None => InferredExpression::Unknown,
+        },
+        ParsedExpression::NullishCoalescing {
+            left,
+            left_span,
+            right,
+            right_span,
+        } => {
+            let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+            let right_result =
+                evaluate_expression(right, right_span.or(fallback_span), symbols, ctx);
+
+            match (left_result, right_result) {
+                (InferredExpression::Known(left_type), InferredExpression::Known(right_type)) => {
+                    if left_type == Type::Any || left_type == Type::Unknown {
+                        InferredExpression::Known(left_type)
+                    } else if left_type == Type::Undefined {
+                        InferredExpression::Known(right_type)
+                    } else {
+                        let filtered_left = typescript_rust_types::remove_undefined(&left_type);
+                        InferredExpression::Known(union_type(vec![filtered_left, right_type]))
+                    }
+                }
+                (InferredExpression::Known(Type::Unknown) | InferredExpression::Unknown, _)
+                | (_, InferredExpression::Known(Type::Unknown) | InferredExpression::Unknown) => {
+                    InferredExpression::Unknown
+                }
+                _ => InferredExpression::Unknown,
+            }
+        }
         ParsedExpression::Logical {
             left,
             left_span,
@@ -146,6 +216,17 @@ pub(crate) fn evaluate_expression(
 
             ops::evaluate_conditional_expression(condition_result, true_result, false_result)
         }
+        ParsedExpression::OptionalPropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+        } => {
+            let _ = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
+            let inferred_expression = infer_expression(expression, symbols);
+            report_inferred_expression(inferred_expression.clone(), fallback_span, ctx);
+            inferred_expression
+        }
         ParsedExpression::IndexAccess {
             object_name,
             object_span,
@@ -178,7 +259,7 @@ pub(crate) fn evaluate_expression(
             let resolved_type = crate::infer::map_parsed_type(ty.clone(), ctx);
 
             // If the type is unresolved (e.g. unknown named type), map_parsed_type
-            // already emits TS2304 and returns Type::Unknown. 
+            // already emits TS2304 and returns Type::Unknown.
             // We just return it as the assertion result.
             InferredExpression::Known(resolved_type)
         }

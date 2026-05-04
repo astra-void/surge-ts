@@ -378,6 +378,23 @@ pub(crate) fn check_expression_flow(
             statement_index,
             ctx,
         ),
+        ParsedExpression::OptionalPropertyAccess { object, .. } => {
+            check_expression_flow(object, fallback_span, flow_state, statement_index, ctx)
+        }
+        ParsedExpression::OptionalPropertyCall { object, .. } => {
+            check_expression_flow(object, fallback_span, flow_state, statement_index, ctx)
+        }
+        ParsedExpression::OptionalCall { callee, .. } => {
+            check_expression_flow(callee, fallback_span, flow_state, statement_index, ctx)
+        }
+        ParsedExpression::NullishCoalescing { left, right, .. } => {
+            if check_expression_flow(left, fallback_span, flow_state, statement_index, ctx)
+                .is_blocked()
+            {
+                return FlowCheck::Blocked;
+            }
+            check_expression_flow(right, fallback_span, flow_state, statement_index, ctx)
+        }
         ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)
         | ParsedExpression::BooleanLiteral(_)

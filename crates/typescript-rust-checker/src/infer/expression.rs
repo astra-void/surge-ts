@@ -76,11 +76,37 @@ pub(crate) fn infer_expression(
             index,
             index_span,
         } => infer_index_access(object_name, object_span, index, index_span, symbols),
-        ParsedExpression::TypeAssertion {
-            expression,
-            ty,
-            ..
-        } => {
+        ParsedExpression::OptionalPropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+        } => infer_optional_property_access(
+            object,
+            object_span,
+            property_name,
+            property_span,
+            symbols,
+        ),
+        ParsedExpression::NullishCoalescing { left, right, .. } => {
+            let left_type = infer_expression(left, symbols);
+            let right_type = infer_expression(right, symbols);
+
+            match (left_type, right_type) {
+                (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty)) => {
+                    if left_ty == Type::Any || left_ty == Type::Unknown {
+                        InferredExpression::Known(left_ty)
+                    } else if left_ty == Type::Undefined {
+                        InferredExpression::Known(right_ty)
+                    } else {
+                        let filtered_left = typescript_rust_types::remove_undefined(&left_ty);
+                        InferredExpression::Known(union_type(vec![filtered_left, right_ty]))
+                    }
+                }
+                _ => InferredExpression::Unknown,
+            }
+        }
+        ParsedExpression::TypeAssertion { expression, ty, .. } => {
             // Primitive types can be inferred purely from AST
             match ty {
                 typescript_rust_syntax::ParsedType::String => {
@@ -126,6 +152,9 @@ pub(crate) fn infer_expression(
             property_span,
             symbols,
         ),
+        ParsedExpression::OptionalPropertyCall { .. } | ParsedExpression::OptionalCall { .. } => {
+            InferredExpression::Unknown
+        }
         ParsedExpression::Unknown => InferredExpression::Unknown,
     }
 }
@@ -500,6 +529,54 @@ fn infer_property_call(
             let _ = property_span;
             InferredExpression::Unknown
         }
+    }
+}
+
+fn infer_optional_property_access(
+    object: &ParsedExpression,
+    object_span: &Option<TextSpan>,
+    property_name: &str,
+    property_span: &Option<TextSpan>,
+    symbols: &SymbolTable,
+) -> InferredExpression {
+    let object_type = match infer_expression(object, symbols) {
+        InferredExpression::Known(ty) => ty,
+        InferredExpression::UnresolvedIdentifier { name, span } => {
+            return InferredExpression::UnresolvedIdentifier { name, span };
+        }
+        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+            return InferredExpression::Unknown;
+        }
+    };
+
+    let base_type = typescript_rust_types::remove_undefined(&object_type);
+
+    match base_type {
+        Type::Object(ref object_type) => object_type
+            .get_property_access_type(property_name)
+            .map(|ty| InferredExpression::Known(union_type(vec![ty, Type::Undefined])))
+            .unwrap_or_else(|| InferredExpression::MissingProperty {
+                property_name: property_name.to_string(),
+                object_type: base_type.clone(),
+                span: *property_span,
+            }),
+        Type::Unknown | Type::Any => InferredExpression::Known(base_type),
+        Type::Function(_)
+        | Type::Array(_)
+        | Type::Tuple(_)
+        | Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::Void
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Undefined
+        | Type::Union(_) => InferredExpression::MissingProperty {
+            property_name: property_name.to_string(),
+            object_type: base_type.clone(),
+            span: *property_span,
+        },
     }
 }
 
