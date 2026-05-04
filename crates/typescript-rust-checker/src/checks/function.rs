@@ -77,6 +77,7 @@ fn map_function_signature(
     FunctionType {
         parameters: parameter_types,
         return_type: Box::new(function_return_type),
+        is_variadic: false,
     }
 }
 
@@ -176,6 +177,7 @@ pub(crate) fn collect_function_declaration_signature(
     let FunctionType {
         parameters,
         return_type,
+        is_variadic: _,
     } = map_function_signature(
         &function.parameters,
         function.return_type.as_ref(),
@@ -185,6 +187,7 @@ pub(crate) fn collect_function_declaration_signature(
     let function_type = FunctionType {
         parameters,
         return_type,
+        is_variadic: false,
     };
 
     let duplicate =

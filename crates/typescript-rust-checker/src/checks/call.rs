@@ -166,7 +166,7 @@ pub(crate) fn check_function_type_call(
     let actual = arguments.len();
     let mut has_unresolved_argument = false;
 
-    if expected != actual {
+    if expected != actual && !function_type.is_variadic {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2554(expected, actual, ctx.file_name.clone()),
             call_span.or(callee_span),
@@ -174,7 +174,15 @@ pub(crate) fn check_function_type_call(
         return None;
     }
 
-    for (argument, parameter_type) in arguments.iter().zip(function_type.parameters.iter()) {
+    for (i, argument) in arguments.iter().enumerate() {
+        let parameter_type = if i < expected {
+            &function_type.parameters[i]
+        } else if function_type.is_variadic && expected > 0 {
+            &function_type.parameters[expected - 1]
+        } else {
+            &Type::Any
+        };
+
         let inferred_argument = evaluate_expression_with_expected_type(
             &argument.expression,
             argument.span,

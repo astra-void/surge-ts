@@ -202,6 +202,7 @@ fn resolve_function_type(
         ty: Type::Function(FunctionType {
             parameters,
             return_type: Box::new(return_type.ty),
+            is_variadic: false,
         }),
         had_error: false,
     }
@@ -356,6 +357,15 @@ fn resolve_type_alias(
             had_error: true,
         };
     };
+
+    if alias.file_name == "<built-in>" && (alias.name == "Array" || alias.name == "ReadonlyArray") {
+        resolving.pop();
+        let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
+        return ResolvedType {
+            ty: Type::Array(Box::new(element_type)),
+            had_error: false,
+        };
+    }
 
     let resolved = with_type_declarations(&alias.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &alias.file_name, |ctx| {

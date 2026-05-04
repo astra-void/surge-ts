@@ -9,7 +9,7 @@ v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emit
 
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
-v0.69.1 hardens/refactors this support. v0.72 adds a minimal synthetic built-in globals pack (not full `lib.d.ts`, which remains unsupported).
+v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. Utility types mostly suppress TS2304 and do not implement mapped/conditional type semantics yet. `noLib: true` disables synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
 Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exports["types"] condition.
 Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, physical `lib.d.ts` loading, DOM/Node globals, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
 

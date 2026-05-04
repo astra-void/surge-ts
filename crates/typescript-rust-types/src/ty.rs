@@ -180,8 +180,7 @@ mod tests {
         assert_eq!(
             Type::Array(Box::new(Type::Function(FunctionType {
                 parameters: vec![],
-                return_type: Box::new(Type::String),
-            })))
+                return_type: Box::new(Type::String), is_variadic: false })))
             .name(),
             "(() => string)[]"
         );
@@ -252,7 +251,7 @@ mod tests {
             Type::Tuple(vec![
                 Type::Function(FunctionType {
                     parameters: vec![],
-                    return_type: Box::new(Type::Void),
+                    return_type: Box::new(Type::Void), is_variadic: false 
                 }),
                 Type::String,
             ])

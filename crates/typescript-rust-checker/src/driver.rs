@@ -28,6 +28,18 @@ pub fn check_source_with_options(
 
     crate::builtins::inject_builtins(&mut ctx);
 
+    let mut merged_td = ctx.ambient_global_type_declarations.clone();
+    for (k, v) in ctx.type_declarations.iter() {
+        let _ = merged_td.insert(k.clone(), v.clone());
+    }
+    ctx.type_declarations = merged_td;
+
+    let mut merged_sym = ctx.ambient_global_symbols.clone();
+    for (k, v) in ctx.symbols.iter() {
+        let _ = merged_sym.insert(k.clone(), v.clone());
+    }
+    ctx.set_symbols(merged_sym);
+
     for message in parsed.parser_errors {
         let diagnostic = Diagnostic::typescript_rust_parser_error(message, file_name.clone());
         ctx.push(diagnostic);

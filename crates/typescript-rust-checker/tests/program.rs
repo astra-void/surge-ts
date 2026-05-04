@@ -404,6 +404,40 @@ fn program_api_single_file_matches_check_source_mismatch() {
 }
 
 #[test]
+fn single_file_builtins_visible() {
+    let source = r#"
+        console.log("ok");
+        const a: Array<string> = ["a"];
+        const n: number = Math.max(1, 2);
+    "#;
+    
+    let options = CheckerOptions {
+        no_lib: false,
+        ..Default::default()
+    };
+    
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(diagnostics.len(), 0, "Expected 0 diagnostics, got: {:#?}", diagnostics);
+}
+
+#[test]
+fn single_file_no_lib_hides_builtins() {
+    let source = r#"
+        console.log("ok");
+        const a: Array<string> = ["a"];
+        const n: number = Math.max(1, 2);
+    "#;
+    
+    let options = CheckerOptions {
+        no_lib: true,
+        ..Default::default()
+    };
+    
+    let diagnostics = check_source_with_options(source, "test.ts", options);
+    assert_eq!(codes(&diagnostics), vec!["TS2304", "TS2304", "TS2304"]);
+}
+
+#[test]
 fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
     let source = "function f(value): string { return \"ok\"; }";
     let program_diagnostics = program_with_options(

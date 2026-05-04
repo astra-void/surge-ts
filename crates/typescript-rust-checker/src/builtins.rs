@@ -89,6 +89,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::Void),
+            is_variadic: true,
         })),
     );
     console_props.insert(
@@ -96,6 +97,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::Void),
+            is_variadic: true,
         })),
     );
     console_props.insert(
@@ -103,6 +105,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::Void),
+            is_variadic: true,
         })),
     );
 
@@ -113,6 +116,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::Number, Type::Number],
             return_type: Box::new(Type::Number),
+            is_variadic: true,
         })),
     );
     math_props.insert(
@@ -120,6 +124,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::Number, Type::Number],
             return_type: Box::new(Type::Number),
+            is_variadic: true,
         })),
     );
     math_props.insert(
@@ -127,6 +132,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::Number],
             return_type: Box::new(Type::Number),
+            is_variadic: true,
         })),
     );
     math_props.insert(
@@ -134,6 +140,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::Number],
             return_type: Box::new(Type::Number),
+            is_variadic: true,
         })),
     );
 
@@ -144,6 +151,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Any),
+            is_variadic: false,
         })),
     );
     json_props.insert(
@@ -151,6 +159,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         ObjectProperty::required(Type::Function(FunctionType {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::String),
+            is_variadic: false,
         })),
     );
 
@@ -183,10 +192,12 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                     Type::Function(FunctionType {
                         parameters: vec![],
                         return_type: Box::new(Type::Void),
+                        is_variadic: false,
                     }),
                     Type::Number,
                 ],
                 return_type: Box::new(Type::Number),
+                is_variadic: true,
             }),
         ),
         (
@@ -194,6 +205,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             Type::Function(FunctionType {
                 parameters: vec![Type::Number],
                 return_type: Box::new(Type::Void),
+                is_variadic: false,
             }),
         ),
         (
@@ -201,6 +213,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             Type::Function(FunctionType {
                 parameters: vec![Type::String],
                 return_type: Box::new(Type::Number),
+                is_variadic: true,
             }),
         ),
         (
@@ -208,6 +221,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             Type::Function(FunctionType {
                 parameters: vec![Type::String],
                 return_type: Box::new(Type::Number),
+                is_variadic: false,
             }),
         ),
         ("Number", Type::Any),
