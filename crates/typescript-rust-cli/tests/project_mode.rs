@@ -2145,3 +2145,173 @@ fn cli_declarations_hardening_no_diagnostics() {
 
     assert!(json_diagnostic_codes(&parsed).is_empty());
 }
+
+#[test]
+fn cli_package_declarations_resolves_subpath_d_ts_file() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    // "subpath-pkg/feature" is on line 5, it should be resolved
+    assert!(!lines.contains(&Some(5)));
+}
+
+#[test]
+fn cli_package_declarations_resolves_subpath_index_d_ts_fallback() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    // "subpath-pkg/nested/path" is on line 6, it should be resolved
+    assert!(!lines.contains(&Some(6)));
+}
+
+#[test]
+fn cli_package_declarations_resolves_scoped_subpath() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    // "@scope/subtool/helpers" is on line 36, it should be resolved
+    assert!(!lines.contains(&Some(36)));
+}
+
+#[test]
+fn cli_package_declarations_ignores_wildcard_exports() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    // "exports-types-pkg/wild/wild" is on line 28, should NOT be resolved
+    assert!(lines.contains(&Some(28)));
+}
+
+#[test]
+fn cli_package_declarations_resolves_exports_types_subpath() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    // "exports-types-pkg/feature" is on line 14, should be resolved
+    // "exports-types-pkg/nested/path" is on line 15, should be resolved
+    assert!(!lines.contains(&Some(14)));
+    assert!(!lines.contains(&Some(15)));
+}
+
+#[test]
+fn cli_package_declarations_ignores_runtime_only_exports() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    // "exports-types-pkg/runtime-only" is on line 17, should NOT be resolved
+    assert!(lines.contains(&Some(17)));
+}
+
+#[test]
+fn cli_package_declarations_side_effect_resolved_subpath_no_ts2882() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let has_error = json_diagnostics(&parsed).iter().any(|d| {
+        d["code"].as_str() == Some("TS2882")
+            && d["fileName"].as_str().unwrap().contains("side-effect.ts")
+            && d["line"].as_u64() == Some(2)
+    });
+
+    assert!(!has_error);
+}
+
+#[test]
+fn cli_package_declarations_unresolved_subpath_reports_ts2307() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2307");
+    // "pkg/subpath" in subpaths.ts is on line 1, should be unresolved
+    assert!(lines.contains(&Some(1)));
+}
+
+#[test]
+fn cli_package_declarations_unresolved_side_effect_subpath_reports_ts2882() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2882");
+    // "exports-types-pkg/runtime-only" in side-effect.ts is on line 3, should be unresolved
+    assert!(lines.contains(&Some(3)));
+}
+
+#[test]
+fn cli_package_declarations_stub_external_modules_suppresses_unresolved_subpath_only() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--stubExternalModules",
+        "--format",
+        "json",
+    ]);
+
+    let lines_2307 = json_diagnostic_lines(&parsed, "TS2307");
+    let lines_2882 = json_diagnostic_lines(&parsed, "TS2882");
+    let codes = json_diagnostic_codes(&parsed);
+
+    // Suppressed:
+    assert!(!lines_2307.contains(&Some(1))); // pkg/subpath
+    assert!(!lines_2307.contains(&Some(17))); // runtime-only
+    assert!(!lines_2882.contains(&Some(3))); // runtime-only side-effect
+
+    // Still semantic errors from resolved ones:
+    // mismatch on line 10 TS2322 should still be there
+    assert!(codes.contains(&"TS2322".to_string()));
+}
+
+#[test]
+fn cli_package_declarations_missing_export_from_resolved_subpath_reports_ts2305() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-declarations/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let lines = json_diagnostic_lines(&parsed, "TS2305");
+    // We'll add an import in missing-export.ts line 2 that expects TS2305
+    assert!(lines.contains(&Some(2)));
+}

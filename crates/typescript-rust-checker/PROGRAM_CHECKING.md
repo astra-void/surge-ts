@@ -5,7 +5,7 @@
 - `check_program(files: Vec<SourceFileInput>)`
 - `check_program_with_options(files: Vec<SourceFileInput>, options: CheckerOptions)`
 
-The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, v0.65 hardens the ambient declaration path for loaded `.d.ts` files, and v0.69/v0.69.1 add and harden bare package declaration entrypoint support.
+The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, v0.65 hardens the ambient declaration path for loaded `.d.ts` files, and v0.69/v0.69.1/v0.70 add and harden bare package declaration entrypoint and subpath support.
 
 ## Public API
 
@@ -38,11 +38,14 @@ Program mode treats the input files as one shared global script:
 - Relative named imports, type-only named imports, default imports, namespace imports, side-effect imports, local named export lists, named re-exports, type-only re-exports, and star re-exports are resolved across loaded `.ts` files.
 - Module files are isolated from the global-script prepass in this phase.
 - Loaded `.d.ts` files can contribute the v0.64 ambient subset: simple global type/interface/value/function declarations and exact `declare module "pkg"` blocks.
-- Package imports resolve to `.d.ts` entrypoints via `types`, `typings`, or `index.d.ts` and behave like external modules.
+- Package imports resolve to `.d.ts` entrypoints via `types`, `typings`, `exports["types"]`, or `index.d.ts` and behave like external modules.
 - Ambient modules and resolved packages resolve before package import stubbing fallback.
 - Default exports, namespace imports, named re-exports, type-only re-exports, and star re-exports inside exact ambient modules and resolved package modules are pinned in this phase.
 - Duplicate ambient modules and duplicate ambient globals are first-wins / pinned rather than merged.
-- Full declaration-file semantics, declaration merging, lib.d.ts loading, `@types`, full package.json discovery, and JS entrypoint discovery remain unsupported.
+- Full package resolution remains unsupported.
+- Only declaration-oriented `node_modules` lookup is supported.
+- Exact package declaration subpaths are supported; wildcard/runtime subpaths are not.
+- Only exact `exports.types` declaration targets are supported; full exports maps are not.
 
 ## What is shared
 

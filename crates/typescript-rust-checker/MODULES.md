@@ -39,7 +39,7 @@ Namespace imports bind a single value symbol whose object type is built from the
 
 ## Non-relative imports and package stubs
 
-v0.69 supports narrow bare package declaration entrypoints, and v0.69.1 hardens this support. It resolves bare package imports (e.g. `pkg` or `@scope/pkg`) to their `.d.ts` declaration entrypoints (`types`, `typings`, or `index.d.ts` fallback). Resolved package files act as external modules.
+v0.70 adds support for package declaration subpath entrypoints. It resolves exact subpath imports (e.g. `pkg/subpath` or `@scope/pkg/subpath`) and exact `exports["types"]`. Resolved package files act as external modules.
 
 Default mode for unresolved packages:
 - reports TS2307 for ordinary non-relative module specifiers
@@ -54,9 +54,11 @@ Default mode for unresolved packages:
 
 ## Still Unsupported
 
-These forms remain intentionally out of scope for v0.69:
+These forms remain intentionally out of scope for v0.70.1:
 
-- full package resolution, `exports` maps, package subpath imports
+- full package resolution remains unsupported
+- only exact `exports.types` declaration targets are supported; full exports maps are not
+- exact package declaration subpaths are supported; wildcard/runtime subpaths are not
 - `paths` / `baseUrl` resolution
 - `lib.d.ts` loading and `@types` discovery remain unsupported.
 - The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.

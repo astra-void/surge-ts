@@ -7,10 +7,11 @@ checker against a pinned compiler without changing the checker to chase parity.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
+v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
 v0.69.1 hardens/refactors this support.
-Supported: types, typings, index.d.ts, bare scoped/unscoped packages.
-Unsupported: exports, main, typesVersions, subpaths, @types, lib loading, paths/baseUrl, JS runtime entrypoints.
+Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exports["types"] condition.
+Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, lib loading, paths/baseUrl, JS runtime entrypoints.
 
 The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
 `cargo test` does not require `pnpm install`.
@@ -58,14 +59,14 @@ does not misread the file as a config input.
 
 The current baseline still intentionally avoids:
 
-- package resolution
-- `node_modules` lookup
+- full package resolution remains unsupported
+- only declaration-oriented `node_modules` lookup is supported
 - `paths` / `baseUrl`
 - lib.d.ts modeling or auto-loading
 - full declaration-file semantics
 - `@types` discovery
-- package `exports` / `main` / JS runtime entrypoints
-- package subpath imports (e.g. `pkg/subpath`)
+- only exact `exports.types` declaration targets are supported; full exports maps are not
+- exact package declaration subpaths are supported; wildcard/runtime subpaths are not
 - project references
 - incremental or watch behavior
 - generic inference and generic classes
@@ -80,7 +81,7 @@ The current declaration and diagnostic baseline includes:
 
 - exact ambient `declare module "pkg"` blocks are supported
 - ambient modules resolve before package stubbing
-- bare package imports (e.g. `pkg` or `@scope/pkg`) resolve to declaration entrypoints (`types`, `typings`, or `index.d.ts` fallback) in project mode
+- bare package imports (e.g. `pkg` or `@scope/pkg`) and exact subpaths resolve to declaration entrypoints (`types`, `typings`, `exports["types"]`, or `index.d.ts` fallback) in project mode
 - resolved package `.d.ts` files act as external modules and do not leak private helpers globally
 - default import, namespace import, and re-export behavior for ambient modules and package entrypoints is pinned
 - duplicate ambient module and duplicate ambient global behavior is pinned, not merged
@@ -88,7 +89,7 @@ The current declaration and diagnostic baseline includes:
 - TS2882 is catalog-backed and is emitted for unresolved side-effect imports such as `import "reflect-metadata";`
 - ordinary missing package imports still produce TS2307 by default
 - `--stubExternalModules` suppresses non-relative missing-module diagnostics, including the side-effect TS2882 form, while leaving relative missing modules and resolved package declaration errors unchanged
-- full package resolution, `exports` maps, package subpath imports, `@types`, and lib.d.ts discovery are still out of scope
+- full package resolution, wildcard `exports`, JS runtime subpaths, `@types`, and lib.d.ts discovery are still out of scope
 
 The oracle harness also stays away from those areas. It only measures the
 current surface against TypeScript diagnostics; it does not add new resolver or

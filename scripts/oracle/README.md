@@ -122,9 +122,9 @@ pnpm run oracle:test
 
 - It does not require exact message parity.
 - It does not require exact span parity.
-- It does not add package resolution, `node_modules` lookup, `paths` /
+- It does not add full package resolution, `paths` /
   `baseUrl`, full declaration-file semantics, `lib.d.ts`, `@types`,
-  package.json-based declaration lookup, or project references.
+  or project references. (It only supports declaration-oriented `node_modules` lookup.)
 - It does not add declaration merging parity or TypeScript's full ambient-module semantics.
 - File mode currently only accepts `.ts` files. Project mode is still the
   preferred oracle for multi-file compatibility checks, and file mode may drift

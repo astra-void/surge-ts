@@ -128,9 +128,11 @@ pub fn resolve_package_declaration_entrypoints(
                         if let Some(subpath) = &req.subpath {
                             // Subpath resolution
                             let subpath_key = format!("./{}", subpath);
-                            
+
                             if let Some(exports) = json.get("exports") {
-                                if let Some(types_path_str) = resolve_exports_types(exports, &subpath_key) {
+                                if let Some(types_path_str) =
+                                    resolve_exports_types(exports, &subpath_key)
+                                {
                                     let path = pkg_dir.join(types_path_str);
                                     if path.exists() && path.is_file() {
                                         resolved_path = Some(path);
@@ -141,17 +143,19 @@ pub fn resolve_package_declaration_entrypoints(
                         } else {
                             // Bare package resolution
                             let mut types_path = None;
-                            
+
                             if let Some(exports) = json.get("exports") {
                                 if let Some(types_path_str) = resolve_exports_types(exports, ".") {
                                     types_path = Some(pkg_dir.join(types_path_str));
                                 }
                             }
-                            
+
                             if types_path.is_none() {
                                 if let Some(types) = json.get("types").and_then(|t| t.as_str()) {
                                     types_path = Some(pkg_dir.join(types));
-                                } else if let Some(typings) = json.get("typings").and_then(|t| t.as_str()) {
+                                } else if let Some(typings) =
+                                    json.get("typings").and_then(|t| t.as_str())
+                                {
                                     types_path = Some(pkg_dir.join(typings));
                                 }
                             }
@@ -289,5 +293,80 @@ fn extract_packages_from_source(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_package_specifier() {
+        assert_eq!(
+            parse_package_specifier("pkg"),
+            Some(("pkg".to_string(), None))
+        );
+        assert_eq!(
+            parse_package_specifier("pkg/subpath"),
+            Some(("pkg".to_string(), Some("subpath".to_string())))
+        );
+        assert_eq!(
+            parse_package_specifier("pkg/nested/path"),
+            Some(("pkg".to_string(), Some("nested/path".to_string())))
+        );
+        assert_eq!(
+            parse_package_specifier("@scope/pkg"),
+            Some(("@scope/pkg".to_string(), None))
+        );
+        assert_eq!(
+            parse_package_specifier("@scope/pkg/helpers"),
+            Some(("@scope/pkg".to_string(), Some("helpers".to_string())))
+        );
+        assert_eq!(
+            parse_package_specifier("@scope/pkg/a/b"),
+            Some(("@scope/pkg".to_string(), Some("a/b".to_string())))
+        );
+        assert_eq!(parse_package_specifier("@broken"), None);
+    }
+
+    #[test]
+    fn test_resolve_exports_types() {
+        let exports = serde_json::json!({
+            ".": { "types": "./dist/index.d.ts" },
+            "./feature": { "types": "./dist/feature.d.ts" },
+            "./nested/path": { "types": "./dist/nested/path.d.ts" },
+            "./string-dts": "./dist/string-dts.d.ts",
+            "./runtime-only": "./dist/runtime.js",
+            "./feature-nested": { "import": { "types": "./dist/feature.d.ts" } },
+            "./wild/*": { "types": "./dist/*.d.ts" }
+        });
+
+        assert_eq!(
+            resolve_exports_types(&exports, "."),
+            Some("./dist/index.d.ts".to_string())
+        );
+        assert_eq!(
+            resolve_exports_types(&exports, "./feature"),
+            Some("./dist/feature.d.ts".to_string())
+        );
+        assert_eq!(
+            resolve_exports_types(&exports, "./nested/path"),
+            Some("./dist/nested/path.d.ts".to_string())
+        );
+        assert_eq!(
+            resolve_exports_types(&exports, "./string-dts"),
+            Some("./dist/string-dts.d.ts".to_string())
+        );
+        assert_eq!(resolve_exports_types(&exports, "./runtime-only"), None);
+        assert_eq!(
+            resolve_exports_types(&exports, "./feature-nested"),
+            Some("./dist/feature.d.ts".to_string())
+        );
+        assert_eq!(
+            resolve_exports_types(&exports, "./wild/*"),
+            Some("./dist/*.d.ts".to_string())
+        );
+        assert_eq!(resolve_exports_types(&exports, "./wild/feature"), None);
+        assert_eq!(resolve_exports_types(&exports, "./missing"), None);
     }
 }
