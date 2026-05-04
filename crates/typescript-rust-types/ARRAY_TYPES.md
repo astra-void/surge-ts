@@ -16,10 +16,8 @@ Supported surface:
 
 Limitations:
 
-- no `Array<T>`
-- no `ReadonlyArray<T>`
-- no readonly arrays
-- no array methods
+- `Array<T>` and `ReadonlyArray<T>` are supported through synthetic built-ins and lower to the existing native array representation
+- readonly write restrictions and array methods are still unsupported
 - no property index access
 - no nested index access
 - no index calls

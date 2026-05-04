@@ -71,6 +71,16 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ComputedMemberExpression(member_expression) => {
             parse_computed_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown)
         }
+        Expression::TSAsExpression(as_expression) => {
+            let (expression, expression_span) = parse_expression(&as_expression.expression);
+            let ty = crate::parser::types::parse_type(&as_expression.type_annotation).unwrap_or(crate::ParsedType::Unknown);
+            ParsedExpression::TypeAssertion {
+                expression: Box::new(expression),
+                expression_span: Some(text_span_from_oxc_span(expression_span)),
+                ty,
+                type_span: Some(text_span_from_oxc_span(as_expression.type_annotation.span())),
+            }
+        }
         _ => ParsedExpression::Unknown,
     };
 
@@ -315,6 +325,19 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                 .unwrap_or(ParsedExpression::Unknown),
             argument.span(),
         ),
+        Argument::TSAsExpression(as_expression) => {
+            let (expression, expression_span) = parse_expression(&as_expression.expression);
+            let ty = crate::parser::types::parse_type(&as_expression.type_annotation).unwrap_or(crate::ParsedType::Unknown);
+            (
+                ParsedExpression::TypeAssertion {
+                    expression: Box::new(expression),
+                    expression_span: Some(text_span_from_oxc_span(expression_span)),
+                    ty,
+                    type_span: Some(text_span_from_oxc_span(as_expression.type_annotation.span())),
+                },
+                argument.span(),
+            )
+        }
         _ => (ParsedExpression::Unknown, argument.span()),
     };
 

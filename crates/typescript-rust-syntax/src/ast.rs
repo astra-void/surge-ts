@@ -278,6 +278,12 @@ pub enum ParsedExpression {
         type_arguments: Vec<ParsedType>,
         arguments: Vec<ParsedCallArgument>,
     },
+    TypeAssertion {
+        expression: Box<ParsedExpression>,
+        expression_span: Option<TextSpan>,
+        ty: ParsedType,
+        type_span: Option<TextSpan>,
+    },
     Unknown,
 }
 

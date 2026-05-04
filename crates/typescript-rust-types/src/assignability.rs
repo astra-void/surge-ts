@@ -629,7 +629,7 @@ mod tests {
             &Type::Tuple(vec![
                 Type::StringLiteral("ok".to_string()),
                 Type::NumberLiteral(NumberLiteralType {
-                    value: "1".to_string(), is_variadic: false 
+                    value: "1".to_string(),
                 })
             ])
         ));

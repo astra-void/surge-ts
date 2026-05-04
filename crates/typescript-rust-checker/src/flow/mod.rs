@@ -367,6 +367,17 @@ pub(crate) fn check_expression_flow(
                 ctx,
             )
         }
+        ParsedExpression::TypeAssertion {
+            expression,
+            expression_span,
+            ..
+        } => check_expression_flow(
+            expression,
+            expression_span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
         ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)
         | ParsedExpression::BooleanLiteral(_)

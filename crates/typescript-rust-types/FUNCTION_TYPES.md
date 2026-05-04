@@ -12,7 +12,7 @@ Supported syntax:
 
 Assignability policy:
 
-- arity must match exactly
+- user-authored function types remain exact-arity, while synthetic built-ins can use the internal `is_variadic` flag to avoid common rest-argument false positives
 - parameters use a conservative compatibility check
 - return types must be assignable
 

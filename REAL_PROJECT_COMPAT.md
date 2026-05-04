@@ -101,3 +101,6 @@ The next phase should still be chosen from oracle and compat-report output, not
 from a fixed feature wish list. Module syntax expansion, package import
 stubbing, declaration-file ingestion, ambient declaration hardening, and the
 diagnostic catalog/codegen foundation are implemented. Likely next real phase is either package subpath declaration resolution / exports types condition, or a compatibility-report-driven diagnostic/type-system unit.
+
+## Note on Type Assertions (v0.73)
+Type assertions (`as` expressions) were chosen for v0.73 because they are extremely common in real TypeScript projects, particularly around parsed data, library boundaries, and compatibility shims. By implementing a narrow parsing and inference surface for primitive assertions, aliases, and built-in arrays, we significantly reduce false-positive TS2322 cascades without needing full TypeScript assertion semantics. Dominant blockers remaining after this phase continue to revolve around ambient `@types` package discovery, missing DOM/Node globals, and `lib.d.ts` semantics which often surface as TS2304 errors.

@@ -160,6 +160,28 @@ pub(crate) fn evaluate_expression(
             symbols,
             ctx,
         ),
+        ParsedExpression::TypeAssertion {
+            expression: asserted_expression,
+            expression_span,
+            ty,
+            type_span,
+        } => {
+            // Evaluate the inner expression so it participates in checking
+            let _ = evaluate_expression(
+                asserted_expression,
+                expression_span.or(fallback_span),
+                symbols,
+                ctx,
+            );
+
+            // Resolve the target type
+            let resolved_type = crate::infer::map_parsed_type(ty.clone(), ctx);
+
+            // If the type is unresolved (e.g. unknown named type), map_parsed_type
+            // already emits TS2304 and returns Type::Unknown. 
+            // We just return it as the assertion result.
+            InferredExpression::Known(resolved_type)
+        }
         _ => {
             let inferred_expression = infer_expression(expression, symbols);
             report_inferred_expression(inferred_expression.clone(), fallback_span, ctx);

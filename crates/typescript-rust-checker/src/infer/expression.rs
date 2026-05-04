@@ -76,6 +76,33 @@ pub(crate) fn infer_expression(
             index,
             index_span,
         } => infer_index_access(object_name, object_span, index, index_span, symbols),
+        ParsedExpression::TypeAssertion {
+            expression,
+            ty,
+            ..
+        } => {
+            // Primitive types can be inferred purely from AST
+            match ty {
+                typescript_rust_syntax::ParsedType::String => {
+                    InferredExpression::Known(Type::String)
+                }
+                typescript_rust_syntax::ParsedType::Number => {
+                    InferredExpression::Known(Type::Number)
+                }
+                typescript_rust_syntax::ParsedType::Boolean => {
+                    InferredExpression::Known(Type::Boolean)
+                }
+                typescript_rust_syntax::ParsedType::Any => InferredExpression::Known(Type::Any),
+                typescript_rust_syntax::ParsedType::Unknown => {
+                    InferredExpression::Known(Type::Unknown)
+                }
+                typescript_rust_syntax::ParsedType::Undefined => {
+                    InferredExpression::Known(Type::Undefined)
+                }
+                typescript_rust_syntax::ParsedType::Void => InferredExpression::Known(Type::Void),
+                _ => InferredExpression::Unknown,
+            }
+        }
         ParsedExpression::Call { callee_name, .. } => match symbols.get(callee_name) {
             Some(symbol) => match &symbol.ty {
                 Type::Function(function_type) => {
