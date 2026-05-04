@@ -7,8 +7,10 @@ checker against a pinned compiler without changing the checker to chase parity.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
-v0.69 adds narrow package declaration entrypoint support for bare package imports in project mode.
-It resolves package `.d.ts` files via `types`, `typings`, or `index.d.ts` fallback without full package resolution.
+v0.69 supports narrow bare package declaration entrypoints.
+v0.69.1 hardens/refactors this support.
+Supported: types, typings, index.d.ts, bare scoped/unscoped packages.
+Unsupported: exports, main, typesVersions, subpaths, @types, lib loading, paths/baseUrl, JS runtime entrypoints.
 
 The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
 `cargo test` does not require `pnpm install`.
@@ -97,5 +99,4 @@ and it is a quick standalone oracle rather than the main compatibility path.
 The next phase should still be chosen from oracle and compat-report output, not
 from a fixed feature wish list. Module syntax expansion, package import
 stubbing, declaration-file ingestion, ambient declaration hardening, and the
-diagnostic catalog/codegen foundation are implemented. Likely follow-ups are
-diagnostic expansion or package subpath declaration resolution / exports types condition.
+diagnostic catalog/codegen foundation are implemented. Likely next real phase is either package subpath declaration resolution / exports types condition, or a compatibility-report-driven diagnostic/type-system unit.

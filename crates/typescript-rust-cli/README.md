@@ -20,7 +20,7 @@ By default, unresolved non-relative package imports emit TS2307.
 `--stubExternalModules` suppresses non-relative TS2307 and inserts unknown type/value stubs.
 This is a typescript-rust-only compatibility/triage mode.
 
-## Declaration Files (v0.69)
+## Declaration Files (v0.69/v0.69.1)
 
 Loaded `.d.ts` files from project inputs participate in semantic checking.
 Bare package imports (`pkg`, `@scope/pkg`) resolve their `.d.ts` entrypoints via `types`, `typings`, or `index.d.ts` fallback.

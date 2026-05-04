@@ -2,7 +2,7 @@
 
 This workspace is organized as small crates with stable public façades and internal modules that can evolve without forcing broad API churn.
 
-v0.68.1 hardens diagnostic coverage metadata, ensuring that `support = "emitted"` is backed by test and oracle evidence via an emitted-diagnostics manifest. The `diagnostics-pack` fixture is the compact oracle-backed project for supported emitted diagnostics. The next compatibility unit after this phase should be package declaration entrypoint handling.
+v0.68.1 hardens diagnostic coverage metadata, ensuring that `support = "emitted"` is backed by test and oracle evidence via an emitted-diagnostics manifest. The `diagnostics-pack` fixture is the compact oracle-backed project for supported emitted diagnostics. v0.69 supports narrow bare package declaration entrypoints. v0.69.1 hardens/refactors this support.
 
 v0.48 introduced the crate-level module split across types, diagnostics, config, syntax, and checker. v0.48.1 finishes the checker/config/syntax hardening pass by moving the remaining internals into focused submodules while keeping the public crate-root APIs stable.
 

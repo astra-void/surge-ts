@@ -5,7 +5,7 @@
 - `check_program(files: Vec<SourceFileInput>)`
 - `check_program_with_options(files: Vec<SourceFileInput>, options: CheckerOptions)`
 
-The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, and v0.65 hardens the ambient declaration path for loaded `.d.ts` files.
+The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, v0.65 hardens the ambient declaration path for loaded `.d.ts` files, and v0.69/v0.69.1 add and harden bare package declaration entrypoint support.
 
 ## Public API
 

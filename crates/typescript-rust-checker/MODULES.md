@@ -39,7 +39,7 @@ Namespace imports bind a single value symbol whose object type is built from the
 
 ## Non-relative imports and package stubs
 
-v0.69 resolves bare package imports (e.g. `pkg` or `@scope/pkg`) to their `.d.ts` declaration entrypoints (`types`, `typings`, or `index.d.ts` fallback). Resolved package files act as external modules.
+v0.69 supports narrow bare package declaration entrypoints, and v0.69.1 hardens this support. It resolves bare package imports (e.g. `pkg` or `@scope/pkg`) to their `.d.ts` declaration entrypoints (`types`, `typings`, or `index.d.ts` fallback). Resolved package files act as external modules.
 
 Default mode for unresolved packages:
 - reports TS2307 for ordinary non-relative module specifiers

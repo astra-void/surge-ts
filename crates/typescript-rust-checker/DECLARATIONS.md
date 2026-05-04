@@ -1,6 +1,6 @@
 # Declaration Ingestion Foundation
 
-v0.65 hardens the v0.64 declaration ingestion foundation so ambient behavior is predictable before any package discovery work lands.
+v0.65 hardens the v0.64 declaration ingestion foundation. v0.69 supports narrow bare package declaration entrypoints, and v0.69.1 hardens this support.
 
 ## Capabilities
 - Loads `.d.ts` files from tsconfig `files` and `include`.

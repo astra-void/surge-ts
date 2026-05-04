@@ -78,7 +78,7 @@ pnpm run oracle:compare -- --project declarations-basic
 pnpm run oracle:compare -- --project declarations-hardening
 ```
 
-The declaration presets are pinned compatibility fixtures, not a claim that the oracle handles package discovery or full declaration merging.
+The declaration presets are pinned compatibility fixtures, not a claim that the oracle handles full package discovery or full declaration merging. Supported: bare packages via types, typings, index.d.ts fallback.
 
 
 Compare a disposable local project:
