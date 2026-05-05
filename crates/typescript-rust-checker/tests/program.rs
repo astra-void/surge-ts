@@ -3254,7 +3254,9 @@ fn native_profile_suppresses_indexed_access_cascade() {
         source_text: "
         interface User { name: string; }
         type UnresolvedKeyIndex = User[MissingKeyName];
-        ".to_string(),
+        let _trigger: UnresolvedKeyIndex;
+        "
+        .to_string(),
     }];
 
     let mut options = CheckerOptions::default();

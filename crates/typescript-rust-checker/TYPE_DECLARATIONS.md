@@ -62,9 +62,10 @@ Type operators provide a parser-safe foundation for common compatibility pattern
 - Optional properties still contribute their names
 - `keyof typeof constObject` maps are supported
 - Unresolved or unsupported targets (primitives, template literal types, index signatures, etc.) fallback to `unknown` without exact TypeScript semantics
+- Narrow indexed access types (`T["K"]`, `T[keyof T]`, tuple numeric literal index) are supported. Unresolved index keys correctly emit cascading `TS2538` diagnostics under the `tsc` profile.
 
 Current limitations:
-- full indexed access types (e.g., `T[K]`)
+- generic indexed access types (e.g., `T[K]`)
 - mapped types (e.g., `{ [K in keyof T]: T[K] }`)
 - conditional types
 - generic constraint enforcement on `keyof`

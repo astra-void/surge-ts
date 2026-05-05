@@ -7,6 +7,7 @@ Current scope:
 - optional property and optional element access widening
 - nullish coalescing `??` evaluation removing `undefined`
 - `keyof T` and `keyof typeof` type queries returning unions of string literal types
+- `T[keyof T]` indexed access resolving to a union of property values
 
 Normalization:
 - flatten nested unions

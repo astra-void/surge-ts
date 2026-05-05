@@ -200,12 +200,21 @@ fn resolve_parsed_type(
         ParsedType::IndexedAccess(indexed_access) => {
             let resolved_object =
                 resolve_parsed_type(*indexed_access.object_type, ctx, resolving, substitution);
-            let resolved_index =
-                resolve_parsed_type(*indexed_access.index_type.clone(), ctx, resolving, substitution);
+            let resolved_index = resolve_parsed_type(
+                *indexed_access.index_type.clone(),
+                ctx,
+                resolving,
+                substitution,
+            );
 
             if resolved_object.had_error || resolved_index.had_error {
-                if resolved_index.had_error && ctx.options.diagnostic_profile == crate::context::DiagnosticProfile::Tsc {
-                    let mut diagnostic = Diagnostic::ts2538(&get_parsed_type_name(&indexed_access.index_type), ctx.file_name.clone());
+                if resolved_index.had_error
+                    && ctx.options.diagnostic_profile == crate::context::DiagnosticProfile::Tsc
+                {
+                    let mut diagnostic = Diagnostic::ts2538(
+                        &get_parsed_type_name(&indexed_access.index_type),
+                        ctx.file_name.clone(),
+                    );
                     if let Some(span) = indexed_access.span {
                         diagnostic = diagnostic.with_span(convert_span(span));
                     }
