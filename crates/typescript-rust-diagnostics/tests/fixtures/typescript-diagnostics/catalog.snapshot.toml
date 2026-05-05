@@ -241,6 +241,22 @@ message = "Variable '{0}' is used before being assigned."
 arity = 1
 
 [[diagnostic]]
+code = "TS2493"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Tuple type '{0}' of length '{1}' has no element at index '{2}'."
+arity = 3
+
+[[diagnostic]]
+code = "TS2538"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' cannot be used as an index type."
+arity = 1
+
+[[diagnostic]]
 code = "TS2551"
 category = "Error"
 source = "typescript"

@@ -240,6 +240,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS2493",
+    "category": "Error",
+    "message": "Tuple type '{0}' of length '{1}' has no element at index '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2538",
+    "category": "Error",
+    "message": "Type '{0}' cannot be used as an index type.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2551",
     "category": "Error",
     "message": "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?",

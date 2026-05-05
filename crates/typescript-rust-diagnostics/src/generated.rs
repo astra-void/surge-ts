@@ -305,6 +305,26 @@ pub const TS2454: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2493: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2493",
+    number: Some(2493),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Tuple type '{0}' of length '{1}' has no element at index '{2}'.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2538: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2538",
+    number: Some(2538),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' cannot be used as an index type.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2551: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2551",
     number: Some(2551),
@@ -656,6 +676,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2448,
     TS2451,
     TS2454,
+    TS2493,
+    TS2538,
     TS2551,
     TS2554,
     TS2588,
@@ -955,6 +977,33 @@ impl Diagnostic {
     pub fn ts2454(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2454,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2493(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2493,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2538(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2538,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

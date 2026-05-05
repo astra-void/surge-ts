@@ -22,6 +22,6 @@ Assignability:
 
 Limitations:
 - no narrowing
-- no literal types (outside of basic parser-safe assignments and unions)
+- literal union members exist and are used by `keyof`, but full TypeScript literal-union normalization/simplification and narrowing remain unsupported
 - no `null`, `void`, or `never`
 - no exact optional property semantics

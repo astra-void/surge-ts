@@ -1,14 +1,14 @@
 use oxc_ast::ast::{
-    PropertyKey, TSLiteral, TSLiteralType, TSPropertySignature, TSSignature, TSTupleElement,
-    TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeOperator,
-    TSTypeOperatorOperator, TSTypeParameter, TSTypeParameterDeclaration,
+    PropertyKey, TSIndexedAccessType, TSLiteral, TSLiteralType, TSPropertySignature, TSSignature,
+    TSTupleElement, TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName,
+    TSTypeOperator, TSTypeOperatorOperator, TSTypeParameter, TSTypeParameterDeclaration,
     TSTypeParameterInstantiation, TSTypeQuery, TSTypeQueryExprName, TSTypeReference, TSUnionType,
 };
 use oxc_span::GetSpan;
 
 use crate::{
-    ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedType,
-    ParsedTypeAliasDeclaration, ParsedTypeOfType, ParsedTypeParameter,
+    ParsedIndexedAccessType, ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty,
+    ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType, ParsedTypeParameter,
 };
 
 use super::function_types::parse_function_type;
@@ -45,6 +45,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSTypeReference(type_reference) => parse_type_reference(type_reference),
         TSType::TSTypeQuery(type_query) => parse_type_query(type_query),
         TSType::TSTypeOperatorType(type_operator) => parse_type_operator(type_operator),
+        TSType::TSIndexedAccessType(indexed_access) => parse_indexed_access_type(indexed_access),
         _ => None,
     }
 }
@@ -68,6 +69,17 @@ fn parse_type_operator(type_operator: &TSTypeOperator<'_>) -> Option<ParsedType>
         }
         _ => None,
     }
+}
+
+fn parse_indexed_access_type(indexed_access: &TSIndexedAccessType<'_>) -> Option<ParsedType> {
+    let object_type = parse_type(&indexed_access.object_type)?;
+    let index_type = parse_type(&indexed_access.index_type)?;
+
+    Some(ParsedType::IndexedAccess(ParsedIndexedAccessType {
+        object_type: Box::new(object_type),
+        index_type: Box::new(index_type),
+        span: Some(text_span_from_oxc_span(indexed_access.span)),
+    }))
 }
 
 fn parse_type_reference(type_reference: &TSTypeReference<'_>) -> Option<ParsedType> {

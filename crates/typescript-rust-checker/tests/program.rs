@@ -3246,3 +3246,23 @@ fn declaration_file_unsupported_wildcard_module_still_reports() {
         vec!["typescript-rust::unsupported-declaration"]
     );
 }
+
+#[test]
+fn native_profile_suppresses_indexed_access_cascade() {
+    let files = vec![SourceFileInput {
+        file_name: "index.ts".to_string(),
+        source_text: "
+        interface User { name: string; }
+        type UnresolvedKeyIndex = User[MissingKeyName];
+        ".to_string(),
+    }];
+
+    let mut options = CheckerOptions::default();
+    // Default is Tsc profile
+    let tsc_diagnostics = check_program_with_options(files.clone(), options.clone());
+    assert_eq!(codes(&tsc_diagnostics), vec!["TS2304", "TS2538"]);
+
+    options.diagnostic_profile = typescript_rust_checker::DiagnosticProfile::Native;
+    let native_diagnostics = check_program_with_options(files, options);
+    assert_eq!(codes(&native_diagnostics), vec!["TS2304"]);
+}

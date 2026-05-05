@@ -56,6 +56,14 @@ pub enum ParsedType {
     Named(ParsedNamedType),
     TypeOf(ParsedTypeOfType),
     KeyOf(Box<ParsedType>),
+    IndexedAccess(ParsedIndexedAccessType),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedIndexedAccessType {
+    pub object_type: Box<ParsedType>,
+    pub index_type: Box<ParsedType>,
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

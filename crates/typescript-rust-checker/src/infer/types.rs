@@ -56,6 +56,21 @@ pub(crate) fn map_parsed_type_with_substitution(
     resolve_parsed_type(parsed_type, ctx, &mut resolving, substitution).ty
 }
 
+fn get_parsed_type_name(parsed: &ParsedType) -> String {
+    match parsed {
+        ParsedType::Named(named) => named.name.clone(),
+        ParsedType::TypeOf(type_of) => type_of.name.clone(),
+        ParsedType::String => "string".to_string(),
+        ParsedType::Number => "number".to_string(),
+        ParsedType::Boolean => "boolean".to_string(),
+        ParsedType::Any => "any".to_string(),
+        ParsedType::Unknown => "unknown".to_string(),
+        ParsedType::Void => "void".to_string(),
+        ParsedType::Undefined => "undefined".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
 fn resolve_parsed_type(
     parsed_type: ParsedType,
     ctx: &mut CheckerContext,
@@ -180,6 +195,166 @@ fn resolve_parsed_type(
                     union_type(keys)
                 },
                 had_error: false,
+            }
+        }
+        ParsedType::IndexedAccess(indexed_access) => {
+            let resolved_object =
+                resolve_parsed_type(*indexed_access.object_type, ctx, resolving, substitution);
+            let resolved_index =
+                resolve_parsed_type(*indexed_access.index_type.clone(), ctx, resolving, substitution);
+
+            if resolved_object.had_error || resolved_index.had_error {
+                if resolved_index.had_error && ctx.options.diagnostic_profile == crate::context::DiagnosticProfile::Tsc {
+                    let mut diagnostic = Diagnostic::ts2538(&get_parsed_type_name(&indexed_access.index_type), ctx.file_name.clone());
+                    if let Some(span) = indexed_access.span {
+                        diagnostic = diagnostic.with_span(convert_span(span));
+                    }
+                    ctx.push(diagnostic);
+                }
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                };
+            }
+
+            match (&resolved_object.ty, &resolved_index.ty) {
+                (Type::Object(object_type), Type::StringLiteral(key)) => {
+                    if let Some(property_ty) = object_type.get_property_access_type(&key) {
+                        ResolvedType {
+                            ty: property_ty,
+                            had_error: false,
+                        }
+                    } else {
+                        let mut diagnostic = Diagnostic::ts2339(
+                            key,
+                            &resolved_object.ty.name(),
+                            ctx.file_name.clone(),
+                        );
+                        if let Some(span) = indexed_access.span {
+                            diagnostic = diagnostic.with_span(convert_span(span));
+                        }
+                        ctx.push(diagnostic);
+                        ResolvedType {
+                            ty: Type::Unknown,
+                            had_error: true,
+                        }
+                    }
+                }
+                (Type::Object(object_type), Type::Union(union_ty)) => {
+                    let mut types = Vec::new();
+                    let mut had_error = false;
+                    for key_ty in &union_ty.types {
+                        if let Type::StringLiteral(key) = key_ty {
+                            if let Some(property_ty) = object_type.get_property_access_type(key) {
+                                types.push(property_ty);
+                            } else {
+                                let mut diagnostic = Diagnostic::ts2339(
+                                    key,
+                                    &resolved_object.ty.name(),
+                                    ctx.file_name.clone(),
+                                );
+                                if let Some(span) = indexed_access.span {
+                                    diagnostic = diagnostic.with_span(convert_span(span));
+                                }
+                                ctx.push(diagnostic);
+                                had_error = true;
+                            }
+                        } else {
+                            let mut diagnostic =
+                                Diagnostic::ts2538(&key_ty.name(), ctx.file_name.clone());
+                            if let Some(span) = indexed_access.span {
+                                diagnostic = diagnostic.with_span(convert_span(span));
+                            }
+                            ctx.push(diagnostic);
+                            had_error = true;
+                        }
+                    }
+
+                    if had_error {
+                        ResolvedType {
+                            ty: Type::Unknown,
+                            had_error: true,
+                        }
+                    } else {
+                        ResolvedType {
+                            ty: union_type(types),
+                            had_error: false,
+                        }
+                    }
+                }
+                (Type::Tuple(elements), Type::NumberLiteral(num)) => {
+                    if let Ok(index) = num.value.parse::<usize>() {
+                        if let Some(element_ty) = elements.get(index) {
+                            ResolvedType {
+                                ty: element_ty.clone(),
+                                had_error: false,
+                            }
+                        } else {
+                            let mut diagnostic = Diagnostic::ts2493(
+                                &resolved_object.ty.name(),
+                                elements.len(),
+                                index,
+                                ctx.file_name.clone(),
+                            );
+                            if let Some(span) = indexed_access.span {
+                                diagnostic = diagnostic.with_span(convert_span(span));
+                            }
+                            ctx.push(diagnostic);
+                            ResolvedType {
+                                ty: Type::Unknown,
+                                had_error: true,
+                            }
+                        }
+                    } else {
+                        ResolvedType {
+                            ty: Type::Unknown,
+                            had_error: true,
+                        }
+                    }
+                }
+                (Type::Array(element_type), Type::Number) => ResolvedType {
+                    ty: *element_type.clone(),
+                    had_error: false,
+                },
+                (Type::Tuple(elements), Type::Number) => ResolvedType {
+                    ty: union_type(elements.clone()),
+                    had_error: false,
+                },
+                (Type::Any, _) | (_, Type::Any) => ResolvedType {
+                    ty: Type::Any,
+                    had_error: false,
+                },
+                (_, Type::StringLiteral(key)) => {
+                    let mut diagnostic =
+                        Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
+                    if let Some(span) = indexed_access.span {
+                        diagnostic = diagnostic.with_span(convert_span(span));
+                    }
+                    ctx.push(diagnostic);
+                    ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: true,
+                    }
+                }
+                (_, invalid_index) => {
+                    // For Type::Unknown index (like UnresolvedKey), avoid cascading TS2538 if possible
+                    if let Type::Unknown = invalid_index {
+                        return ResolvedType {
+                            ty: Type::Unknown,
+                            had_error: true,
+                        };
+                    }
+                    let mut diagnostic =
+                        Diagnostic::ts2538(&invalid_index.name(), ctx.file_name.clone());
+                    if let Some(span) = indexed_access.span {
+                        diagnostic = diagnostic.with_span(convert_span(span));
+                    }
+                    ctx.push(diagnostic);
+                    ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: true,
+                    }
+                }
             }
         }
     }

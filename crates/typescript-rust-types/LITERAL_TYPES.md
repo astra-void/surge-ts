@@ -19,7 +19,7 @@ This crate currently supports string, number, and boolean literal types.
 
 ## Limitations
 
-- No `as const`.
+- v0.77 supports a narrow parser-safe `as const` foundation for primitive/object/array literals. Deep readonly semantics, readonly write restrictions, discriminated unions, template literal types, and full literal simplification remain unsupported.
 - No template literal types.
 - No narrowing.
 - No discriminated unions.

@@ -54,11 +54,11 @@ Design note:
 Type operators provide a parser-safe foundation for common compatibility patterns.
 
 `typeof value`:
-- Resolves to the inferred type of a top-level or in-scope value symbol
+- Resolves to the inferred type of a top-level or in-scope value symbol in a narrow type-position subset
 - If the value symbol is unresolved, emits `TS2304` or defaults to `unknown`
 
 `keyof T`:
-- Extracts the property names of an object or interface type into a string literal union
+- Extracts the property names of an object or interface type into a string literal union in a narrow type-position subset
 - Optional properties still contribute their names
 - `keyof typeof constObject` maps are supported
 - Unresolved or unsupported targets (primitives, template literal types, index signatures, etc.) fallback to `unknown` without exact TypeScript semantics

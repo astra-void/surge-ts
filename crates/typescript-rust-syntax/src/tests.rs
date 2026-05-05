@@ -3306,3 +3306,49 @@ fn module_detection_oxc_source_type_module_true() {
     let parsed = parse_source("export {};", "example.ts");
     assert!(parsed.is_module);
 }
+
+#[test]
+fn parse_indexed_access_type() {
+    let source = "type T = Obj[\"key\"]; type U = Arr[0]; type V = Obj[keyof Obj];";
+    let parsed = parse_source(source, "test.ts");
+
+    let stmt1 = &parsed.statements[0];
+    let stmt2 = &parsed.statements[1];
+    let stmt3 = &parsed.statements[2];
+
+    assert!(matches!(
+        stmt1,
+        ParsedStatement::TypeAliasDeclaration(alias) if matches!(
+            &alias.ty,
+            ParsedType::IndexedAccess(indexed_access) if matches!(
+                (indexed_access.object_type.as_ref(), indexed_access.index_type.as_ref()),
+                (ParsedType::Named(obj), ParsedType::StringLiteral(key)) if obj.name == "Obj" && key == "key"
+            )
+        )
+    ));
+
+    assert!(matches!(
+        stmt2,
+        ParsedStatement::TypeAliasDeclaration(alias) if matches!(
+            &alias.ty,
+            ParsedType::IndexedAccess(indexed_access) if matches!(
+                (indexed_access.object_type.as_ref(), indexed_access.index_type.as_ref()),
+                (ParsedType::Named(arr), ParsedType::NumberLiteral(num)) if arr.name == "Arr" && num == "0"
+            )
+        )
+    ));
+
+    assert!(matches!(
+        stmt3,
+        ParsedStatement::TypeAliasDeclaration(alias) if matches!(
+            &alias.ty,
+            ParsedType::IndexedAccess(indexed_access) if matches!(
+                (indexed_access.object_type.as_ref(), indexed_access.index_type.as_ref()),
+                (ParsedType::Named(obj1), ParsedType::KeyOf(keyof_inner)) if obj1.name == "Obj" && matches!(
+                    keyof_inner.as_ref(),
+                    ParsedType::Named(obj2) if obj2.name == "Obj"
+                )
+            )
+        )
+    ));
+}

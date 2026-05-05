@@ -261,6 +261,18 @@ fixtures = [
   "tests/smoke/manifest.toml",
 ]
 
+[TS2493]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/indexed-access-basic/src/index.ts",
+]
+
+[TS2538]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/indexed-access-basic/src/index.ts",
+]
+
 [TS2551]
 status = "catalog-only"
 reason = "Cataloged for future coverage"
