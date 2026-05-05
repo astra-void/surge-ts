@@ -152,9 +152,59 @@ pub(crate) fn infer_expression(
             property_span,
             symbols,
         ),
-        ParsedExpression::OptionalPropertyCall { .. } | ParsedExpression::OptionalCall { .. } => {
-            InferredExpression::Unknown
+        ParsedExpression::OptionalPropertyCall {
+            object,
+            property_name,
+            ..
+        } => {
+            let object_type = match infer_expression(object, symbols) {
+                InferredExpression::Known(ty) => ty,
+                _ => return InferredExpression::Unknown,
+            };
+
+            let base_type = typescript_rust_types::remove_undefined(&object_type);
+
+            match base_type {
+                Type::Object(ref object_type) => {
+                    let property_type = object_type.get_property_access_type(property_name);
+                    if let Some(property_type) = property_type {
+                        let prop_base = typescript_rust_types::remove_undefined(&property_type);
+                        if let Type::Function(function_type) = prop_base {
+                            return InferredExpression::Known(union_type(vec![
+                                *function_type.return_type.clone(),
+                                Type::Undefined,
+                            ]));
+                        }
+                    }
+                    InferredExpression::Unknown
+                }
+                Type::Any => InferredExpression::Known(Type::Any),
+                _ => InferredExpression::Unknown,
+            }
         }
+        ParsedExpression::OptionalCall { callee, .. } => {
+            let callee_type = match infer_expression(callee, symbols) {
+                InferredExpression::Known(ty) => ty,
+                _ => return InferredExpression::Unknown,
+            };
+
+            let base_type = typescript_rust_types::remove_undefined(&callee_type);
+
+            match base_type {
+                Type::Function(function_type) => InferredExpression::Known(union_type(vec![
+                    *function_type.return_type.clone(),
+                    Type::Undefined,
+                ])),
+                Type::Any => InferredExpression::Known(Type::Any),
+                _ => InferredExpression::Unknown,
+            }
+        }
+        ParsedExpression::OptionalIndexAccess {
+            object,
+            object_span,
+            index,
+            index_span,
+        } => infer_optional_index_access(object, object_span, index, index_span, symbols),
         ParsedExpression::Unknown => InferredExpression::Unknown,
     }
 }
@@ -323,7 +373,7 @@ fn infer_tuple_index_access(
     InferredExpression::Unknown
 }
 
-fn tuple_index_value(index_type: &Type) -> Option<usize> {
+pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {
     let Type::NumberLiteral(NumberLiteralType { value }) = index_type else {
         return None;
     };
@@ -529,6 +579,60 @@ fn infer_property_call(
             let _ = property_span;
             InferredExpression::Unknown
         }
+    }
+}
+
+fn infer_optional_index_access(
+    object: &ParsedExpression,
+    _object_span: &Option<TextSpan>,
+    index: &ParsedExpression,
+    index_span: &Option<TextSpan>,
+    symbols: &SymbolTable,
+) -> InferredExpression {
+    let object_type = match infer_expression(object, symbols) {
+        InferredExpression::Known(ty) => ty,
+        InferredExpression::UnresolvedIdentifier { name, span } => {
+            return InferredExpression::UnresolvedIdentifier { name, span };
+        }
+        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+            return InferredExpression::Unknown;
+        }
+    };
+
+    let base_type = typescript_rust_types::remove_undefined(&object_type);
+
+    match &base_type {
+        Type::Any => InferredExpression::Known(Type::Any),
+        Type::Unknown => InferredExpression::Unknown,
+        Type::Tuple(elements) => {
+            let result = infer_tuple_index_access(elements, index, index_span, symbols);
+            match result {
+                InferredExpression::Known(ty) => {
+                    InferredExpression::Known(union_type(vec![ty, Type::Undefined]))
+                }
+                _ => result,
+            }
+        }
+        Type::Array(element_type) => {
+            let element_type = element_type.as_ref();
+            if matches!(element_type, Type::Unknown) {
+                return InferredExpression::Unknown;
+            }
+
+            let index_type = match infer_expression(index, symbols) {
+                InferredExpression::Known(ty) => ty,
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. }
+                | InferredExpression::Unknown => return InferredExpression::Unknown,
+            };
+
+            if let Type::NumberLiteral(_) | Type::Number = index_type {
+                InferredExpression::Known(union_type(vec![element_type.clone(), Type::Undefined]))
+            } else {
+                InferredExpression::Unknown
+            }
+        }
+        _ => InferredExpression::Unknown,
     }
 }
 

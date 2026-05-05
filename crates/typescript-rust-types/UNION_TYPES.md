@@ -4,7 +4,7 @@ Current scope:
 - `undefined`
 - explicit union annotations
 - conditional expression union inference
-- optional property access widening
+- optional property and optional element access widening
 - nullish coalescing `??` evaluation removing `undefined`
 
 Normalization:

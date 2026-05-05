@@ -299,6 +299,12 @@ pub enum ParsedExpression {
         type_arguments: Vec<ParsedType>,
         arguments: Vec<ParsedCallArgument>,
     },
+    OptionalIndexAccess {
+        object: Box<ParsedExpression>,
+        object_span: Option<TextSpan>,
+        index: Box<ParsedExpression>,
+        index_span: Option<TextSpan>,
+    },
     OptionalCall {
         callee: Box<ParsedExpression>,
         callee_span: Option<TextSpan>,

@@ -1,7 +1,7 @@
-mod expression;
+pub(crate) mod expression;
 mod types;
 
-pub(crate) use expression::infer_expression;
+pub(crate) use expression::{infer_expression, tuple_index_value};
 pub(crate) use types::{
     TypeParameterSubstitution, map_parsed_type, map_parsed_type_with_substitution,
     report_duplicate_type_parameters,

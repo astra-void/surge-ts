@@ -193,7 +193,9 @@ pub(crate) fn check_optional_property_call(
                 return None;
             };
 
-            match property_type {
+            let property_type_base = typescript_rust_types::remove_undefined(&property_type);
+
+            match property_type_base {
                 Type::Function(function_type) => check_function_type_call(
                     &function_type,
                     property_span,
@@ -206,7 +208,11 @@ pub(crate) fn check_optional_property_call(
                 .map(|ret| union_type(vec![ret, Type::Undefined])),
                 Type::Any => Some(Type::Any),
                 Type::Unknown => None,
-                Type::Union(_) | _ => {
+                _ => {
+                    println!(
+                        "TS2349 because property_type_base is: {:?}",
+                        property_type_base
+                    );
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2349(ctx.file_name.clone()),
                         crate::spans::choose_span(

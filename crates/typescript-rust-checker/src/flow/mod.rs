@@ -381,6 +381,14 @@ pub(crate) fn check_expression_flow(
         ParsedExpression::OptionalPropertyAccess { object, .. } => {
             check_expression_flow(object, fallback_span, flow_state, statement_index, ctx)
         }
+        ParsedExpression::OptionalIndexAccess { object, index, .. } => {
+            let object_flow =
+                check_expression_flow(object, fallback_span, flow_state, statement_index, ctx);
+            if object_flow.is_blocked() {
+                return object_flow;
+            }
+            check_expression_flow(index, fallback_span, flow_state, statement_index, ctx)
+        }
         ParsedExpression::OptionalPropertyCall { object, .. } => {
             check_expression_flow(object, fallback_span, flow_state, statement_index, ctx)
         }

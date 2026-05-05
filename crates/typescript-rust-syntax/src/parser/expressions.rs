@@ -117,6 +117,32 @@ fn parse_call_expression_expression(
         .collect::<Vec<_>>();
     let type_arguments = parse_call_type_arguments(call_expression)?;
 
+    if call_expression.optional {
+        match &call_expression.callee {
+            Expression::StaticMemberExpression(member_expression) => {
+                let (object, object_span) = parse_expression(&member_expression.object);
+                return Some(ParsedExpression::OptionalPropertyCall {
+                    object: Box::new(object),
+                    object_span: Some(text_span_from_oxc_span(object_span)),
+                    property_name: member_expression.property.name.to_string(),
+                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                    type_arguments,
+                    arguments,
+                });
+            }
+            _ => {
+                let (callee, callee_span) = parse_expression(&call_expression.callee);
+                return Some(ParsedExpression::OptionalCall {
+                    callee: Box::new(callee),
+                    callee_span: Some(text_span_from_oxc_span(callee_span)),
+                    type_arguments,
+                    arguments,
+                });
+            }
+        }
+    }
+
     match &call_expression.callee {
         Expression::Identifier(callee) => Some(ParsedExpression::Call {
             callee_name: callee.name.to_string(),
@@ -125,19 +151,32 @@ fn parse_call_expression_expression(
             arguments,
         }),
         Expression::StaticMemberExpression(member_expression) => {
-            let Expression::Identifier(object_identifier) = &member_expression.object else {
-                return None;
-            };
+            let (object, object_span) = parse_expression(&member_expression.object);
 
-            Some(ParsedExpression::PropertyCall {
-                object_name: object_identifier.name.to_string(),
-                object_span: Some(text_span_from_oxc_span(object_identifier.span)),
-                property_name: member_expression.property.name.to_string(),
-                property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
-                call_span: Some(text_span_from_oxc_span(call_expression.span)),
-                type_arguments,
-                arguments,
-            })
+            if member_expression.optional {
+                Some(ParsedExpression::OptionalPropertyCall {
+                    object: Box::new(object),
+                    object_span: Some(text_span_from_oxc_span(object_span)),
+                    property_name: member_expression.property.name.to_string(),
+                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                    type_arguments,
+                    arguments,
+                })
+            } else {
+                let Expression::Identifier(object_identifier) = &member_expression.object else {
+                    return None;
+                };
+                Some(ParsedExpression::PropertyCall {
+                    object_name: object_identifier.name.to_string(),
+                    object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+                    property_name: member_expression.property.name.to_string(),
+                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                    type_arguments,
+                    arguments,
+                })
+            }
         }
         _ => None,
     }
@@ -215,6 +254,32 @@ fn parse_call_expression_expression_with_type_arguments(
         .map(parse_call_argument)
         .collect::<Vec<_>>();
 
+    if call_expression.optional {
+        match &call_expression.callee {
+            Expression::StaticMemberExpression(member_expression) => {
+                let (object, object_span) = parse_expression(&member_expression.object);
+                return Some(ParsedExpression::OptionalPropertyCall {
+                    object: Box::new(object),
+                    object_span: Some(text_span_from_oxc_span(object_span)),
+                    property_name: member_expression.property.name.to_string(),
+                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                    type_arguments,
+                    arguments,
+                });
+            }
+            _ => {
+                let (callee, callee_span) = parse_expression(&call_expression.callee);
+                return Some(ParsedExpression::OptionalCall {
+                    callee: Box::new(callee),
+                    callee_span: Some(text_span_from_oxc_span(callee_span)),
+                    type_arguments,
+                    arguments,
+                });
+            }
+        }
+    }
+
     match &call_expression.callee {
         Expression::Identifier(callee) => Some(ParsedExpression::Call {
             callee_name: callee.name.to_string(),
@@ -223,19 +288,32 @@ fn parse_call_expression_expression_with_type_arguments(
             arguments,
         }),
         Expression::StaticMemberExpression(member_expression) => {
-            let Expression::Identifier(object_identifier) = &member_expression.object else {
-                return None;
-            };
+            let (object, object_span) = parse_expression(&member_expression.object);
 
-            Some(ParsedExpression::PropertyCall {
-                object_name: object_identifier.name.to_string(),
-                object_span: Some(text_span_from_oxc_span(object_identifier.span)),
-                property_name: member_expression.property.name.to_string(),
-                property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
-                call_span: Some(text_span_from_oxc_span(call_expression.span)),
-                type_arguments,
-                arguments,
-            })
+            if member_expression.optional {
+                Some(ParsedExpression::OptionalPropertyCall {
+                    object: Box::new(object),
+                    object_span: Some(text_span_from_oxc_span(object_span)),
+                    property_name: member_expression.property.name.to_string(),
+                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                    type_arguments,
+                    arguments,
+                })
+            } else {
+                let Expression::Identifier(object_identifier) = &member_expression.object else {
+                    return None;
+                };
+                Some(ParsedExpression::PropertyCall {
+                    object_name: object_identifier.name.to_string(),
+                    object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+                    property_name: member_expression.property.name.to_string(),
+                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
+                    type_arguments,
+                    arguments,
+                })
+            }
         }
         _ => None,
     }
@@ -526,6 +604,16 @@ pub(crate) fn parse_array_expression(
 pub(crate) fn parse_static_member_expression(
     member_expression: &StaticMemberExpression<'_>,
 ) -> Option<ParsedExpression> {
+    if member_expression.optional {
+        let (object, object_span) = parse_expression(&member_expression.object);
+        return Some(ParsedExpression::OptionalPropertyAccess {
+            object: Box::new(object),
+            object_span: Some(text_span_from_oxc_span(object_span)),
+            property_name: member_expression.property.name.to_string(),
+            property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+        });
+    }
+
     let Expression::Identifier(object_identifier) = &member_expression.object else {
         return None;
     };
@@ -541,47 +629,13 @@ pub(crate) fn parse_static_member_expression(
 fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<ParsedExpression> {
     match &chain_expression.expression {
         ChainElement::CallExpression(call_expression) => {
-            let arguments = call_expression
-                .arguments
-                .iter()
-                .map(parse_call_argument)
-                .collect::<Vec<_>>();
-            let type_arguments = parse_call_type_arguments(call_expression).unwrap_or_default();
-
-            match &call_expression.callee {
-                Expression::StaticMemberExpression(member_expression) => {
-                    let (object, object_span) = parse_expression(&member_expression.object);
-                    Some(ParsedExpression::OptionalPropertyCall {
-                        object: Box::new(object),
-                        object_span: Some(text_span_from_oxc_span(object_span)),
-                        property_name: member_expression.property.name.to_string(),
-                        property_span: Some(text_span_from_oxc_span(
-                            member_expression.property.span,
-                        )),
-                        call_span: Some(text_span_from_oxc_span(call_expression.span)),
-                        type_arguments,
-                        arguments,
-                    })
-                }
-                _ => {
-                    let (callee, callee_span) = parse_expression(&call_expression.callee);
-                    Some(ParsedExpression::OptionalCall {
-                        callee: Box::new(callee),
-                        callee_span: Some(text_span_from_oxc_span(callee_span)),
-                        type_arguments,
-                        arguments,
-                    })
-                }
-            }
+            parse_call_expression_expression(call_expression)
         }
         ChainElement::StaticMemberExpression(member_expression) => {
-            let (object, object_span) = parse_expression(&member_expression.object);
-            Some(ParsedExpression::OptionalPropertyAccess {
-                object: Box::new(object),
-                object_span: Some(text_span_from_oxc_span(object_span)),
-                property_name: member_expression.property.name.to_string(),
-                property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
-            })
+            parse_static_member_expression(member_expression)
+        }
+        ChainElement::ComputedMemberExpression(member_expression) => {
+            parse_computed_member_expression(member_expression)
         }
         _ => None,
     }
@@ -590,6 +644,17 @@ fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<Pars
 fn parse_computed_member_expression(
     member_expression: &ComputedMemberExpression<'_>,
 ) -> Option<ParsedExpression> {
+    if member_expression.optional {
+        let (object, object_span) = parse_expression(&member_expression.object);
+        let (index, index_span) = parse_expression(&member_expression.expression);
+        return Some(ParsedExpression::OptionalIndexAccess {
+            object: Box::new(object),
+            object_span: Some(text_span_from_oxc_span(object_span)),
+            index: Box::new(index),
+            index_span: Some(text_span_from_oxc_span(index_span)),
+        });
+    }
+
     let Expression::Identifier(object_identifier) = &member_expression.object else {
         return None;
     };
