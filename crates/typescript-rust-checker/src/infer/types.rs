@@ -3,8 +3,8 @@ use std::rc::Rc;
 
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
-    ParsedFunctionType, ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedNamedType,
-    ParsedObjectType, ParsedType, ParsedTypeParameter, TextSpan,
+    ParsedFunctionType, ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedMappedType,
+    ParsedNamedType, ParsedObjectType, ParsedType, ParsedTypeParameter, TextSpan,
 };
 use typescript_rust_types::{
     FunctionType, NumberLiteralType, ObjectProperty, ObjectType, Type, union_type,
@@ -197,6 +197,7 @@ fn resolve_parsed_type(
                 had_error: false,
             }
         }
+        ParsedType::Mapped(mapped) => resolve_mapped_type(mapped, ctx, resolving, substitution),
         ParsedType::IndexedAccess(indexed_access) => {
             let resolved_object =
                 resolve_parsed_type(*indexed_access.object_type, ctx, resolving, substitution);
@@ -790,6 +791,79 @@ fn extend_substitution_with_type_parameters(
     }
 
     substitution
+}
+
+fn resolve_mapped_type(
+    mapped: ParsedMappedType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<String>,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let resolved_constraint = resolve_parsed_type(*mapped.constraint, ctx, resolving, substitution);
+
+    if resolved_constraint.had_error {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
+    let keys = match resolved_constraint.ty {
+        Type::StringLiteral(s) => vec![s],
+        Type::Union(union) => {
+            let mut keys = Vec::new();
+            for variant in union.types {
+                match variant {
+                    Type::StringLiteral(s) => keys.push(s),
+                    _ => {
+                        return ResolvedType {
+                            ty: Type::Unknown,
+                            had_error: false,
+                        };
+                    }
+                }
+            }
+            keys
+        }
+        _ => {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: false,
+            };
+        }
+    };
+
+    let mut properties = std::collections::BTreeMap::new();
+    let mut had_error = false;
+
+    for key in keys {
+        let mut new_substitution = substitution.clone();
+        new_substitution.insert(mapped.key_name.clone(), Type::StringLiteral(key.clone()));
+
+        let resolved_value = resolve_parsed_type(
+            *mapped.value_type.clone(),
+            ctx,
+            resolving,
+            &new_substitution,
+        );
+
+        if resolved_value.had_error {
+            had_error = true;
+        }
+
+        properties.insert(
+            key,
+            ObjectProperty {
+                ty: resolved_value.ty,
+                optional: mapped.optional,
+            },
+        );
+    }
+
+    ResolvedType {
+        ty: Type::Object(ObjectType { properties }),
+        had_error,
+    }
 }
 
 fn resolve_parsed_type_with_substitution(

@@ -398,7 +398,9 @@ pub(crate) fn evaluate_expression(
                         typescript_rust_syntax::ParsedExpression::ObjectLiteral { .. }
                         | typescript_rust_syntax::ParsedExpression::ArrayLiteral { .. }
                         | typescript_rust_syntax::ParsedExpression::ConstAssertion { .. }
-                        | typescript_rust_syntax::ParsedExpression::Conditional { .. } => !contextual_failed,
+                        | typescript_rust_syntax::ParsedExpression::Conditional { .. } => {
+                            !contextual_failed
+                        }
                         _ => true,
                     };
 

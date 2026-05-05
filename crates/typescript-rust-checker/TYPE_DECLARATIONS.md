@@ -63,16 +63,18 @@ Type operators provide a parser-safe foundation for common compatibility pattern
 - `keyof typeof constObject` maps are supported
 - Unresolved or unsupported targets (primitives, template literal types, index signatures, etc.) fallback to `unknown` without exact TypeScript semantics
 - Narrow indexed access types (`T["K"]`, `T[keyof T]`, tuple numeric literal index) are supported. Unresolved index keys correctly emit cascading `TS2538` diagnostics under the `tsc` profile.
+- Mapped types (`{ [K in keyof T]: T[K] }` and `{ [K in keyof T]?: T[K] }`) are supported. Homomorphic mapped types and optional mapped properties map over string-literal keys. Generic mapped aliases are supported after concrete substitution. Key remapping, conditional types, template literal types, index signatures, readonly mapped semantics, modifier arithmetic, generic inference, `@types`, physical `lib.d.ts`, DOM/Node globals, and modifiers beyond bare `?` are unsupported. Utility types are not automatically "full TypeScript utility types" just because mapped types exist. `Partial`, `Record`, `Pick`, `Omit` remain synthetic aliases/noise reducers.
 
 Current limitations:
-- generic indexed access types (e.g., `T[K]`)
-- mapped types (e.g., `{ [K in keyof T]: T[K] }`)
+- generic indexed access types (e.g., `T[K]`) outside mapped type body
+- mapped type modifiers `readonly`, `-readonly`, `-?`, `+?`
+- key remapping `as SomeRemap<K>`
 - conditional types
 - generic constraint enforcement on `keyof`
 - `typeof import("pkg")`
 - namespace and class constructor `typeof` semantics
 Loaded `.d.ts` files contribute ambient global types which are accessible everywhere.
 - exact `declare module "pkg"` blocks contribute importable ambient modules in program mode
-- ambient types are loaded from project inputs, not from lib.d.ts or @types discovery. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics, while utility types mostly suppress TS2304 without mapped/conditional semantics. `noLib: true` disables these synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
+- ambient types are loaded from project inputs, not from lib.d.ts or @types discovery. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics, while utility types mostly suppress TS2304 without automatically implementing full utility type semantics despite mapped types support. `noLib: true` disables these synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
 - duplicate ambient globals are first-wins / pinned rather than merged
 - unsupported declaration syntax remains parser-safe and emits the pinned unsupported-declaration diagnostic

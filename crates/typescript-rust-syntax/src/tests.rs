@@ -3352,3 +3352,71 @@ fn parse_indexed_access_type() {
         )
     ));
 }
+
+#[test]
+fn parse_mapped_type_required() {
+    let source = "type Clone<T> = { [K in keyof T]: T[K] };";
+    let parsed = parse_source(source, "test.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Mapped(mapped) = &alias.ty else {
+        panic!("expected a mapped type");
+    };
+
+    assert_eq!(mapped.key_name, "K");
+    assert!(!mapped.optional);
+    assert!(matches!(*mapped.constraint, ParsedType::KeyOf(_)));
+    assert!(matches!(*mapped.value_type, ParsedType::IndexedAccess(_)));
+}
+
+#[test]
+fn parse_mapped_type_optional() {
+    let source = "type OptionalClone<T> = { [K in keyof T]?: T[K] };";
+    let parsed = parse_source(source, "test.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Mapped(mapped) = &alias.ty else {
+        panic!("expected a mapped type");
+    };
+
+    assert_eq!(mapped.key_name, "K");
+    assert!(mapped.optional);
+    assert!(matches!(*mapped.constraint, ParsedType::KeyOf(_)));
+    assert!(matches!(*mapped.value_type, ParsedType::IndexedAccess(_)));
+}
+
+#[test]
+fn parse_mapped_type_unsupported_remapping() {
+    let source = "type Remapped<T> = { [K in keyof T as string]: T[K] };";
+    let parsed = parse_source(source, "test.ts");
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    assert!(matches!(alias.ty, ParsedType::Unknown));
+}
+
+#[test]
+fn parse_mapped_type_unsupported_modifiers() {
+    let source = "type ReadonlyClone<T> = { readonly [K in keyof T]: T[K] }; type MinusOpt<T> = { [K in keyof T]-?: T[K] };";
+    let parsed = parse_source(source, "test.ts");
+
+    let ParsedStatement::TypeAliasDeclaration(alias1) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+    assert!(matches!(alias1.ty, ParsedType::Unknown));
+
+    let ParsedStatement::TypeAliasDeclaration(alias2) = &parsed.statements[1] else {
+        panic!("expected a type alias declaration");
+    };
+    assert!(matches!(alias2.ty, ParsedType::Unknown));
+}

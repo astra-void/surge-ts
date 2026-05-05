@@ -8,6 +8,7 @@ Current scope:
 - nullish coalescing `??` evaluation removing `undefined`
 - `keyof T` and `keyof typeof` type queries returning unions of string literal types
 - `T[keyof T]` indexed access resolving to a union of property values
+- Homomorphic mapped types iterating over string literal unions to map properties
 
 Normalization:
 - flatten nested unions

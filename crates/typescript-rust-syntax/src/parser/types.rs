@@ -1,14 +1,16 @@
 use oxc_ast::ast::{
-    PropertyKey, TSIndexedAccessType, TSLiteral, TSLiteralType, TSPropertySignature, TSSignature,
-    TSTupleElement, TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName,
-    TSTypeOperator, TSTypeOperatorOperator, TSTypeParameter, TSTypeParameterDeclaration,
+    PropertyKey, TSIndexedAccessType, TSLiteral, TSLiteralType, TSMappedType,
+    TSMappedTypeModifierOperator, TSPropertySignature, TSSignature, TSTupleElement, TSTupleType,
+    TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeOperator,
+    TSTypeOperatorOperator, TSTypeParameter, TSTypeParameterDeclaration,
     TSTypeParameterInstantiation, TSTypeQuery, TSTypeQueryExprName, TSTypeReference, TSUnionType,
 };
 use oxc_span::GetSpan;
 
 use crate::{
-    ParsedIndexedAccessType, ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty,
-    ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType, ParsedTypeParameter,
+    ParsedIndexedAccessType, ParsedMappedType, ParsedNamedType, ParsedObjectType,
+    ParsedObjectTypeProperty, ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType,
+    ParsedTypeParameter,
 };
 
 use super::function_types::parse_function_type;
@@ -46,6 +48,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSTypeQuery(type_query) => parse_type_query(type_query),
         TSType::TSTypeOperatorType(type_operator) => parse_type_operator(type_operator),
         TSType::TSIndexedAccessType(indexed_access) => parse_indexed_access_type(indexed_access),
+        TSType::TSMappedType(mapped_type) => parse_mapped_type(mapped_type),
         _ => None,
     }
 }
@@ -79,6 +82,33 @@ fn parse_indexed_access_type(indexed_access: &TSIndexedAccessType<'_>) -> Option
         object_type: Box::new(object_type),
         index_type: Box::new(index_type),
         span: Some(text_span_from_oxc_span(indexed_access.span)),
+    }))
+}
+
+fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
+    if mapped_type.readonly.is_some() || mapped_type.name_type.is_some() {
+        return Some(ParsedType::Unknown);
+    }
+
+    let optional = match mapped_type.optional {
+        Some(TSMappedTypeModifierOperator::True) => true,
+        Some(_) => return Some(ParsedType::Unknown), // unsupported +? or -?
+        None => false,
+    };
+
+    let constraint = parse_type(&mapped_type.constraint)?;
+    let value_type = match &mapped_type.type_annotation {
+        Some(t) => parse_type(t)?,
+        None => ParsedType::Any, // Though typically TS requires a type, fall back to Any or Unknown
+    };
+
+    Some(ParsedType::Mapped(ParsedMappedType {
+        key_name: mapped_type.key.name.to_string(),
+        key_span: Some(text_span_from_oxc_span(mapped_type.key.span)),
+        constraint: Box::new(constraint),
+        value_type: Box::new(value_type),
+        optional,
+        span: Some(text_span_from_oxc_span(mapped_type.span)),
     }))
 }
 
