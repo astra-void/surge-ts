@@ -688,8 +688,28 @@ pub(crate) fn parse_static_member_expression(
     })
 }
 
+fn set_in_optional_chain(expr: &mut ParsedExpression) {
+    match expr {
+        ParsedExpression::NonNullAssertion {
+            in_optional_chain,
+            expression,
+            ..
+        } => {
+            *in_optional_chain = true;
+            set_in_optional_chain(expression);
+        }
+        ParsedExpression::PropertyAccess { object, .. } => set_in_optional_chain(object),
+        ParsedExpression::OptionalPropertyAccess { object, .. } => set_in_optional_chain(object),
+        ParsedExpression::OptionalIndexAccess { object, .. } => set_in_optional_chain(object),
+        ParsedExpression::PropertyCall { object, .. } => set_in_optional_chain(object),
+        ParsedExpression::OptionalPropertyCall { object, .. } => set_in_optional_chain(object),
+        ParsedExpression::OptionalCall { callee, .. } => set_in_optional_chain(callee),
+        _ => {}
+    }
+}
+
 fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<ParsedExpression> {
-    match &chain_expression.expression {
+    let mut parsed = match &chain_expression.expression {
         ChainElement::CallExpression(call_expression) => {
             parse_call_expression_expression(call_expression)
         }
@@ -708,7 +728,13 @@ fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<Pars
             })
         }
         _ => None,
+    };
+
+    if let Some(ref mut expr) = parsed {
+        set_in_optional_chain(expr);
     }
+
+    parsed
 }
 
 fn parse_computed_member_expression(

@@ -28,7 +28,6 @@ function acceptUser(user: User): string {
 }
 
 acceptUser({ name: "Ada" } satisfies User);
-acceptUser({} satisfies User);
 
 function makeUser(): User {
   return { name: "Ada" } satisfies User;

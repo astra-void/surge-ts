@@ -384,10 +384,11 @@ pub(crate) fn evaluate_expression(
             let original_inferred = crate::infer::infer_expression(satisfied_expression, symbols);
 
             // Check if contextual check already failed (meaning it returned Unknown when actual wasn't Unknown).
-            let mut failed = matches!(
+            let contextual_failed = matches!(
                 contextual_inferred,
                 crate::infer::InferredExpression::Unknown
             );
+            let mut top_level_failed = false;
 
             if let crate::infer::InferredExpression::Known(actual_type) = &original_inferred {
                 if *actual_type != typescript_rust_types::Type::Unknown
@@ -397,7 +398,7 @@ pub(crate) fn evaluate_expression(
                         typescript_rust_syntax::ParsedExpression::ObjectLiteral { .. }
                         | typescript_rust_syntax::ParsedExpression::ArrayLiteral { .. }
                         | typescript_rust_syntax::ParsedExpression::ConstAssertion { .. }
-                        | typescript_rust_syntax::ParsedExpression::Conditional { .. } => !failed,
+                        | typescript_rust_syntax::ParsedExpression::Conditional { .. } => !contextual_failed,
                         _ => true,
                     };
 
@@ -407,7 +408,7 @@ pub(crate) fn evaluate_expression(
                             &resolved_target_type,
                         )
                     {
-                        failed = true;
+                        top_level_failed = true;
                         let actual_type_name = actual_type.name();
                         let target_type_name = resolved_target_type.name();
                         let diagnostic = typescript_rust_diagnostics::Diagnostic::ts1360(
@@ -445,7 +446,9 @@ pub(crate) fn evaluate_expression(
                 other => other,
             };
 
-            if failed {
+            if contextual_failed {
+                crate::infer::InferredExpression::Unknown
+            } else if top_level_failed {
                 match ctx.options.diagnostic_profile {
                     crate::context::DiagnosticProfile::Tsc => final_inferred,
                     crate::context::DiagnosticProfile::Native => {
@@ -493,7 +496,7 @@ pub(crate) fn evaluate_expression(
         ParsedExpression::NonNullAssertion {
             expression: asserted_expression,
             span: expression_span,
-            ..
+            in_optional_chain,
         } => {
             let inferred = evaluate_expression(
                 asserted_expression,
@@ -505,9 +508,14 @@ pub(crate) fn evaluate_expression(
             match inferred {
                 InferredExpression::Known(ty) => {
                     let filtered = typescript_rust_types::remove_undefined(&ty);
-                    // For now, only remove undefined to match current ?? semantics.
-                    // Full NonNullable<T> would remove null as well, but null is out of scope.
-                    InferredExpression::Known(filtered)
+                    if *in_optional_chain {
+                        InferredExpression::Known(typescript_rust_types::union_type(vec![
+                            filtered,
+                            typescript_rust_types::Type::Undefined,
+                        ]))
+                    } else {
+                        InferredExpression::Known(filtered)
+                    }
                 }
                 other => other,
             }

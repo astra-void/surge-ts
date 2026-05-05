@@ -274,7 +274,10 @@ fn infer_unary_expression(
     }
 }
 
-fn infer_object_literal(properties: &[ParsedObjectProperty], symbols: &SymbolTable) -> Type {
+pub(crate) fn infer_object_literal(
+    properties: &[ParsedObjectProperty],
+    symbols: &SymbolTable,
+) -> Type {
     let properties = properties
         .iter()
         .map(|property| {
@@ -333,6 +336,43 @@ fn infer_index_access(
     match &symbol.ty {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown => InferredExpression::Unknown,
+        Type::Union(union_type) => {
+            let mut result_types = vec![];
+            for ty in &union_type.types {
+                if *ty == Type::Undefined {
+                    result_types.push(ty.clone());
+                    continue;
+                }
+                match ty {
+                    Type::Tuple(elements) => {
+                        let res = infer_tuple_index_access(elements, index, index_span, symbols);
+                        if let InferredExpression::Known(ty) = res {
+                            result_types.push(ty);
+                        } else {
+                            return InferredExpression::Unknown;
+                        }
+                    }
+                    Type::Array(element_type) => {
+                        let element_type = element_type.as_ref();
+                        if matches!(element_type, Type::Unknown) {
+                            return InferredExpression::Unknown;
+                        }
+
+                        let index_type = match infer_expression(index, symbols) {
+                            InferredExpression::Known(ty) => ty,
+                            _ => return InferredExpression::Unknown,
+                        };
+
+                        if !typescript_rust_types::is_assignable_to(&index_type, &Type::Number) {
+                            return InferredExpression::Unknown;
+                        }
+                        result_types.push(element_type.clone());
+                    }
+                    _ => return InferredExpression::Unknown,
+                }
+            }
+            InferredExpression::Known(typescript_rust_types::union_type(result_types))
+        }
         Type::Tuple(elements) => infer_tuple_index_access(elements, index, index_span, symbols),
         Type::Array(element_type) => {
             let element_type = element_type.as_ref();
@@ -363,8 +403,7 @@ fn infer_index_access(
         | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
-        | Type::Undefined
-        | Type::Union(_) => InferredExpression::Unknown,
+        | Type::Undefined => InferredExpression::Unknown,
     }
 }
 
@@ -548,6 +587,37 @@ fn infer_property_access(
                 span: *property_span,
             }),
         Type::Unknown | Type::Any => InferredExpression::Known(object_type.clone()),
+        Type::Union(union_type) => {
+            let mut result_types = vec![];
+            for ty in &union_type.types {
+                if *ty == Type::Undefined {
+                    result_types.push(ty.clone());
+                    continue;
+                }
+                match ty {
+                    Type::Object(object_type) => {
+                        match object_type.get_property_access_type(property_name) {
+                            Some(ty) => result_types.push(ty),
+                            None => {
+                                return InferredExpression::MissingProperty {
+                                    property_name: property_name.to_string(),
+                                    object_type: Type::Object(object_type.clone()),
+                                    span: *property_span,
+                                };
+                            }
+                        }
+                    }
+                    _ => {
+                        return InferredExpression::MissingProperty {
+                            property_name: property_name.to_string(),
+                            object_type: ty.clone(),
+                            span: *property_span,
+                        };
+                    }
+                }
+            }
+            InferredExpression::Known(typescript_rust_types::union_type(result_types))
+        }
         _ => InferredExpression::MissingProperty {
             property_name: property_name.to_string(),
             object_type: object_type.clone(),
@@ -576,6 +646,29 @@ fn infer_property_call(
     match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown => InferredExpression::Unknown,
+        Type::Union(union_type) => {
+            let mut result_types = vec![];
+            for ty in &union_type.types {
+                if *ty == Type::Undefined {
+                    result_types.push(ty.clone());
+                    continue;
+                }
+                match ty {
+                    Type::Object(object_type) => {
+                        match object_type.get_property_access_type(property_name) {
+                            Some(Type::Function(function_type)) => {
+                                result_types.push((*function_type.return_type).clone());
+                            }
+                            Some(Type::Any) => result_types.push(Type::Any),
+                            Some(_) | None => return InferredExpression::Unknown,
+                        }
+                    }
+                    Type::Any => result_types.push(Type::Any),
+                    _ => return InferredExpression::Unknown,
+                }
+            }
+            InferredExpression::Known(typescript_rust_types::union_type(result_types))
+        }
         Type::Object(object_type) => match object_type.get_property_access_type(property_name) {
             Some(Type::Function(function_type)) => {
                 InferredExpression::Known((*function_type.return_type).clone())
@@ -593,8 +686,7 @@ fn infer_property_call(
         | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
-        | Type::Undefined
-        | Type::Union(_) => InferredExpression::Unknown,
+        | Type::Undefined => InferredExpression::Unknown,
     }
 }
 
