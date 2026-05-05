@@ -50,7 +50,26 @@ Design note:
 - interface names are not preserved in downstream diagnostics today because the
   checker resolves them to object types before assignability and display.
 
-## Ambient Types
+## Type Operators
+Type operators provide a parser-safe foundation for common compatibility patterns.
+
+`typeof value`:
+- Resolves to the inferred type of a top-level or in-scope value symbol
+- If the value symbol is unresolved, emits `TS2304` or defaults to `unknown`
+
+`keyof T`:
+- Extracts the property names of an object or interface type into a string literal union
+- Optional properties still contribute their names
+- `keyof typeof constObject` maps are supported
+- Unresolved or unsupported targets (primitives, template literal types, index signatures, etc.) fallback to `unknown` without exact TypeScript semantics
+
+Current limitations:
+- full indexed access types (e.g., `T[K]`)
+- mapped types (e.g., `{ [K in keyof T]: T[K] }`)
+- conditional types
+- generic constraint enforcement on `keyof`
+- `typeof import("pkg")`
+- namespace and class constructor `typeof` semantics
 Loaded `.d.ts` files contribute ambient global types which are accessible everywhere.
 - exact `declare module "pkg"` blocks contribute importable ambient modules in program mode
 - ambient types are loaded from project inputs, not from lib.d.ts or @types discovery. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics, while utility types mostly suppress TS2304 without mapped/conditional semantics. `noLib: true` disables these synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.

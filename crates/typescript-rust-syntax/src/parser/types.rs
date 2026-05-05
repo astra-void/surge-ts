@@ -1,13 +1,14 @@
 use oxc_ast::ast::{
     PropertyKey, TSLiteral, TSLiteralType, TSPropertySignature, TSSignature, TSTupleElement,
-    TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeParameter,
-    TSTypeParameterDeclaration, TSTypeParameterInstantiation, TSTypeReference, TSUnionType,
+    TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeOperator,
+    TSTypeOperatorOperator, TSTypeParameter, TSTypeParameterDeclaration,
+    TSTypeParameterInstantiation, TSTypeQuery, TSTypeQueryExprName, TSTypeReference, TSUnionType,
 };
 use oxc_span::GetSpan;
 
 use crate::{
     ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedType,
-    ParsedTypeAliasDeclaration, ParsedTypeParameter,
+    ParsedTypeAliasDeclaration, ParsedTypeOfType, ParsedTypeParameter,
 };
 
 use super::function_types::parse_function_type;
@@ -42,6 +43,29 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         }
         TSType::TSUnionType(union_type) => Some(parse_union_type(union_type)),
         TSType::TSTypeReference(type_reference) => parse_type_reference(type_reference),
+        TSType::TSTypeQuery(type_query) => parse_type_query(type_query),
+        TSType::TSTypeOperatorType(type_operator) => parse_type_operator(type_operator),
+        _ => None,
+    }
+}
+
+fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
+    let name = match &type_query.expr_name {
+        TSTypeQueryExprName::IdentifierReference(identifier) => identifier,
+        _ => return None, // Fallback for unsupported typeof targets
+    };
+
+    Some(ParsedType::TypeOf(ParsedTypeOfType {
+        name: name.name.to_string(),
+        name_span: Some(text_span_from_oxc_span(name.span)),
+    }))
+}
+
+fn parse_type_operator(type_operator: &TSTypeOperator<'_>) -> Option<ParsedType> {
+    match type_operator.operator {
+        TSTypeOperatorOperator::Keyof => {
+            parse_type(&type_operator.type_annotation).map(|ty| ParsedType::KeyOf(Box::new(ty)))
+        }
         _ => None,
     }
 }

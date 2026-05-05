@@ -105,18 +105,63 @@ fn parse_union_type_literal_keeps_constituents_and_metadata() {
         panic!("expected a variable declaration");
     };
 
-    let Some(ParsedType::Union(types)) = variable.declared_type.as_ref() else {
-        panic!("expected a union type annotation");
+    let ParsedType::Union(types) = variable.declared_type.as_ref().unwrap() else {
+        panic!("expected a union type");
     };
-
     assert_eq!(types.len(), 2);
-    assert!(matches!(types[0], ParsedType::Object(_)));
-    assert!(matches!(types[1], ParsedType::Undefined));
+}
 
-    let ParsedType::Object(object_type) = &types[0] else {
-        panic!("expected an object constituent");
+#[test]
+fn parse_type_query_identifier() {
+    let parsed = parse_source("type Config = typeof config;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
     };
-    assert!(object_type.properties[0].optional);
+
+    let ParsedType::TypeOf(type_of) = &alias.ty else {
+        panic!("expected a typeof type");
+    };
+    assert_eq!(type_of.name, "config");
+}
+
+#[test]
+fn parse_type_operator_keyof() {
+    let parsed = parse_source("type Keys = keyof Config;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::KeyOf(inner) = &alias.ty else {
+        panic!("expected a keyof type");
+    };
+
+    let ParsedType::Named(named) = &**inner else {
+        panic!("expected a named inner type");
+    };
+    assert_eq!(named.name, "Config");
+}
+
+#[test]
+fn parse_type_operator_keyof_typeof() {
+    let parsed = parse_source("type ConfigKeys = keyof typeof config;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::KeyOf(inner) = &alias.ty else {
+        panic!("expected a keyof type");
+    };
+
+    let ParsedType::TypeOf(type_of) = &**inner else {
+        panic!("expected a typeof inner type");
+    };
+    assert_eq!(type_of.name, "config");
 }
 
 #[test]

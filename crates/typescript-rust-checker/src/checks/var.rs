@@ -38,9 +38,17 @@ pub(crate) fn check_variable_declaration_with_symbols(
     ctx: &mut CheckerContext,
     options: VariableCheckOptions,
 ) -> Option<SymbolInfo> {
+    // Put symbols back into ctx for map_parsed_type to use
+    let temp_symbols = std::mem::take(symbols);
+    ctx.set_symbols(temp_symbols);
+
     let declared_type = variable
         .declared_type
         .map(|declared_type| map_parsed_type(declared_type, ctx));
+
+    // Take them back out
+    *symbols = std::mem::take(&mut ctx.symbols);
+
     let symbol_kind = map_symbol_kind(variable.kind);
 
     if options.report_duplicate_let_const

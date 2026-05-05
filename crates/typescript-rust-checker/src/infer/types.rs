@@ -128,6 +128,60 @@ fn resolve_parsed_type(
         ParsedType::Named(named_type) => {
             resolve_named_type(named_type, ctx, resolving, substitution)
         }
+        ParsedType::TypeOf(type_of) => {
+            let Some(symbol) = ctx.symbols.get(&type_of.name) else {
+                let mut diagnostic = Diagnostic::ts2304(&type_of.name, ctx.file_name.clone());
+                if let Some(span) = type_of.name_span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
+
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                };
+            };
+
+            ResolvedType {
+                ty: symbol.ty.clone(),
+                had_error: false,
+            }
+        }
+        ParsedType::KeyOf(inner) => {
+            let resolved_inner = resolve_parsed_type(*inner, ctx, resolving, substitution);
+            if resolved_inner.had_error {
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                };
+            }
+
+            let mut keys = Vec::new();
+            match &resolved_inner.ty {
+                Type::Object(object_type) => {
+                    for key in object_type.properties.keys() {
+                        keys.push(Type::StringLiteral(key.clone()));
+                    }
+                }
+                _ => {
+                    return ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: false,
+                    };
+                }
+            }
+
+            ResolvedType {
+                ty: if keys.is_empty() {
+                    Type::Unknown
+                } else if keys.len() == 1 {
+                    keys.into_iter().next().unwrap()
+                } else {
+                    union_type(keys)
+                },
+                had_error: false,
+            }
+        }
     }
 }
 

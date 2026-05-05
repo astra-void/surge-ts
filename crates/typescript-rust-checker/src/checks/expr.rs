@@ -359,8 +359,11 @@ pub(crate) fn evaluate_expression(
             target_type,
             target_span: _,
         } => {
+            let temp_symbols = symbols.clone();
+            let saved_symbols = std::mem::replace(&mut ctx.symbols, temp_symbols);
             // Resolve the target type
             let resolved_target_type = crate::infer::map_parsed_type(target_type.clone(), ctx);
+            ctx.symbols = saved_symbols;
 
             // Evaluate the left expression contextually against the target type
             // This pushes contextual diagnostics (like excess properties, missing properties).
@@ -467,8 +470,11 @@ pub(crate) fn evaluate_expression(
                 ctx,
             );
 
+            let temp_symbols = symbols.clone();
+            let saved_symbols = std::mem::replace(&mut ctx.symbols, temp_symbols);
             // Resolve the target type
             let resolved_type = crate::infer::map_parsed_type(ty.clone(), ctx);
+            ctx.symbols = saved_symbols;
 
             // If the type is unresolved (e.g. unknown named type), map_parsed_type
             // already emits TS2304 and returns Type::Unknown.

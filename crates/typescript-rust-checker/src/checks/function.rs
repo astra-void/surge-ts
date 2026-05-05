@@ -174,6 +174,9 @@ pub(crate) fn collect_function_declaration_signature(
     symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
 ) -> FunctionType {
+    let temp_symbols = std::mem::take(symbols);
+    ctx.set_symbols(temp_symbols);
+
     let FunctionType {
         parameters,
         return_type,
@@ -184,6 +187,9 @@ pub(crate) fn collect_function_declaration_signature(
         &function.type_parameters,
         ctx,
     );
+
+    *symbols = std::mem::take(&mut ctx.symbols);
+
     let function_type = FunctionType {
         parameters,
         return_type,

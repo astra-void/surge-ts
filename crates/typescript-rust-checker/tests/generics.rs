@@ -1096,7 +1096,8 @@ fn generic_function_body_return_mismatch_policy_pinned() {
 fn generic_function_no_implicit_any_still_checks_unannotated_param() {
     let diagnostics = source_with_options(
         "function identity<T>(value): T { return value; }",
-        CheckerOptions { diagnostic_profile: Default::default(),
+        CheckerOptions {
+            diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,

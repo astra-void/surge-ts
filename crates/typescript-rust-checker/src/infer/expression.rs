@@ -679,9 +679,9 @@ fn infer_optional_property_access(
                     property_name: property_name.to_string(),
                     object_type: base_type.clone(),
                     span: *property_span,
-                }
+                },
             }
-        },
+        }
         Type::Unknown | Type::Any => InferredExpression::Known(base_type.clone()),
         Type::Function(_)
         | Type::Array(_)
@@ -698,7 +698,9 @@ fn infer_optional_property_access(
     };
 
     match result_type {
-        InferredExpression::Known(ty) => InferredExpression::Known(union_type(vec![ty, Type::Undefined])),
+        InferredExpression::Known(ty) => {
+            InferredExpression::Known(union_type(vec![ty, Type::Undefined]))
+        }
         other => other,
     }
 }

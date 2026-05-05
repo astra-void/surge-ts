@@ -29,8 +29,7 @@ Program mode treats the input files as one shared global script:
 
 - Top-level `type` aliases are shared across files.
 - Top-level `interface` declarations are shared across files.
-- Top-level generic aliases and interfaces are shared across files, with explicit type arguments substituted during lowering.
-- Defaults on generic aliases and interfaces are applied when explicit type arguments are omitted.
+- Top-level `typeof value` type queries resolve across files.
 - Constraints are parsed and retained but are not enforced in this phase.
 - Top-level function declarations are shared across files.
 - Function bodies can reference shared declarations from earlier or later files.

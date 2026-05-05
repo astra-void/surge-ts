@@ -54,6 +54,14 @@ pub enum ParsedType {
     Union(Vec<ParsedType>),
     Function(ParsedFunctionType),
     Named(ParsedNamedType),
+    TypeOf(ParsedTypeOfType),
+    KeyOf(Box<ParsedType>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedTypeOfType {
+    pub name: String,
+    pub name_span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

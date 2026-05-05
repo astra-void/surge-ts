@@ -107,7 +107,9 @@ fn main() -> ExitCode {
             cli.format.unwrap_or(ReportFormat::Text),
             cli.max_diagnostics,
             cli.stub_external_modules,
-            cli.diagnostic_profile.unwrap_or(CliDiagnosticProfile::Tsc).into(),
+            cli.diagnostic_profile
+                .unwrap_or(CliDiagnosticProfile::Tsc)
+                .into(),
         );
     }
 
@@ -144,7 +146,9 @@ fn main() -> ExitCode {
         cli.format.unwrap_or(ReportFormat::Text),
         cli.max_diagnostics,
         cli.ignore_config,
-        cli.diagnostic_profile.unwrap_or(CliDiagnosticProfile::Tsc).into(),
+        cli.diagnostic_profile
+            .unwrap_or(CliDiagnosticProfile::Tsc)
+            .into(),
     )
 }
 
