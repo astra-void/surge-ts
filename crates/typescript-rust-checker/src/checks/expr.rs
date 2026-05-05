@@ -13,9 +13,96 @@ use crate::infer::{InferredExpression, infer_expression};
 use crate::spans::{choose_span, diagnostic_with_syntax_span};
 use crate::symbols::SymbolTable;
 
+fn widen_type(ty: &Type) -> Type {
+    match ty {
+        Type::StringLiteral(_) => Type::String,
+        Type::NumberLiteral(_) => Type::Number,
+        Type::BooleanLiteral(_) => Type::Boolean,
+        Type::Object(obj) => {
+            let mut new_props = std::collections::BTreeMap::new();
+            for (k, v) in &obj.properties {
+                new_props.insert(
+                    k.clone(),
+                    typescript_rust_types::ObjectProperty {
+                        ty: widen_type(&v.ty),
+                        optional: v.optional,
+                    },
+                );
+            }
+            Type::Object(typescript_rust_types::ObjectType {
+                properties: new_props,
+            })
+        }
+        Type::Array(inner) => Type::Array(Box::new(widen_type(inner))),
+        Type::Union(types) => {
+            let widened: Vec<_> = types.types.iter().map(widen_type).collect();
+            typescript_rust_types::union_type(widened)
+        }
+        _ => ty.clone(),
+    }
+}
+
 pub(crate) fn check_expression_statement(expression: ParsedExpression, ctx: &mut CheckerContext) {
     let symbols = ctx.symbols.clone();
     let _ = evaluate_expression(&expression, None, &symbols, ctx);
+}
+
+pub(crate) fn evaluate_const_expression(
+    expression: &ParsedExpression,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    match expression {
+        ParsedExpression::ArrayLiteral { elements, .. } => {
+            let mut element_types = Vec::new();
+            for element in elements {
+                let inferred = evaluate_const_expression(
+                    &element.expression,
+                    element.span.or(fallback_span),
+                    symbols,
+                    ctx,
+                );
+                element_types.push(match inferred {
+                    InferredExpression::Known(ty) => ty,
+                    _ => Type::Unknown,
+                });
+            }
+            let result = InferredExpression::Known(Type::Tuple(element_types));
+            report_inferred_expression(result.clone(), fallback_span, ctx);
+            result
+        }
+        ParsedExpression::ObjectLiteral { properties, .. } => {
+            let mut props = std::collections::BTreeMap::new();
+            for property in properties {
+                let inferred = evaluate_const_expression(
+                    &property.value,
+                    property.value_span.or(fallback_span),
+                    symbols,
+                    ctx,
+                );
+                let ty = match inferred {
+                    InferredExpression::Known(ty) => ty,
+                    _ => Type::Unknown,
+                };
+                props.insert(
+                    property.name.clone(),
+                    typescript_rust_types::ObjectProperty {
+                        ty,
+                        optional: false,
+                    },
+                );
+            }
+            let result =
+                InferredExpression::Known(Type::Object(typescript_rust_types::ObjectType {
+                    properties: props,
+                }));
+            report_inferred_expression(result.clone(), fallback_span, ctx);
+            result
+        }
+        // Primitives just evaluate normally without widening
+        _ => evaluate_expression(expression, fallback_span, symbols, ctx),
+    }
 }
 
 pub(crate) fn evaluate_expression(
@@ -58,7 +145,7 @@ pub(crate) fn evaluate_expression(
             None => InferredExpression::Unknown,
         },
         ParsedExpression::PropertyCall {
-            object_name,
+            object,
             object_span,
             property_name,
             property_span,
@@ -66,7 +153,7 @@ pub(crate) fn evaluate_expression(
             arguments,
             ..
         } => match check_property_call_like(
-            object_name,
+            object,
             *object_span,
             property_name,
             *property_span,
@@ -219,8 +306,8 @@ pub(crate) fn evaluate_expression(
         ParsedExpression::OptionalPropertyAccess {
             object,
             object_span,
-            property_name,
-            property_span,
+            property_name: _,
+            property_span: _,
         } => {
             let _ = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
             let inferred_expression = infer_expression(expression, symbols);
@@ -306,6 +393,7 @@ pub(crate) fn evaluate_expression(
                     let needs_top_level_check = match satisfied_expression.as_ref() {
                         typescript_rust_syntax::ParsedExpression::ObjectLiteral { .. }
                         | typescript_rust_syntax::ParsedExpression::ArrayLiteral { .. }
+                        | typescript_rust_syntax::ParsedExpression::ConstAssertion { .. }
                         | typescript_rust_syntax::ParsedExpression::Conditional { .. } => !failed,
                         _ => true,
                     };
@@ -333,17 +421,43 @@ pub(crate) fn evaluate_expression(
                 }
             }
 
+            let final_inferred = match original_inferred {
+                crate::infer::InferredExpression::Known(ty) => {
+                    match ctx.options.diagnostic_profile {
+                        crate::context::DiagnosticProfile::Tsc => {
+                            if matches!(
+                                **satisfied_expression,
+                                ParsedExpression::ConstAssertion { .. }
+                            ) {
+                                crate::infer::InferredExpression::Known(ty)
+                            } else {
+                                crate::infer::InferredExpression::Known(widen_type(&ty))
+                            }
+                        }
+                        crate::context::DiagnosticProfile::Native => {
+                            crate::infer::InferredExpression::Known(ty)
+                        }
+                    }
+                }
+                other => other,
+            };
+
             if failed {
-                crate::infer::InferredExpression::Unknown
+                match ctx.options.diagnostic_profile {
+                    crate::context::DiagnosticProfile::Tsc => final_inferred,
+                    crate::context::DiagnosticProfile::Native => {
+                        crate::infer::InferredExpression::Unknown
+                    }
+                }
             } else {
-                original_inferred
+                final_inferred
             }
         }
         ParsedExpression::TypeAssertion {
             expression: asserted_expression,
             expression_span,
             ty,
-            type_span,
+            type_span: _,
         } => {
             // Evaluate the inner expression so it participates in checking
             let _ = evaluate_expression(
@@ -360,6 +474,37 @@ pub(crate) fn evaluate_expression(
             // already emits TS2304 and returns Type::Unknown.
             // We just return it as the assertion result.
             InferredExpression::Known(resolved_type)
+        }
+        ParsedExpression::ConstAssertion {
+            expression: asserted_expression,
+            span: expression_span,
+        } => evaluate_const_expression(
+            asserted_expression,
+            expression_span.or(fallback_span),
+            symbols,
+            ctx,
+        ),
+        ParsedExpression::NonNullAssertion {
+            expression: asserted_expression,
+            span: expression_span,
+            ..
+        } => {
+            let inferred = evaluate_expression(
+                asserted_expression,
+                expression_span.or(fallback_span),
+                symbols,
+                ctx,
+            );
+
+            match inferred {
+                InferredExpression::Known(ty) => {
+                    let filtered = typescript_rust_types::remove_undefined(&ty);
+                    // For now, only remove undefined to match current ?? semantics.
+                    // Full NonNullable<T> would remove null as well, but null is out of scope.
+                    InferredExpression::Known(filtered)
+                }
+                other => other,
+            }
         }
         _ => {
             let inferred_expression = infer_expression(expression, symbols);

@@ -52,6 +52,7 @@ cargo run -p typescript-rust-cli -- --ignoreConfig examples/basic.ts
 
 - `--format json` prints diagnostic JSON in normal project or single-file mode.
 - `--compatReport --format json` prints compatibility-report JSON.
+- `--diagnosticProfile <tsc|native>` sets the diagnostic profile. The `tsc` profile strictly aligns with TypeScript's oracle baseline, while `native` aggressively suppresses noisy cascades at boundaries like `satisfies`. (Default: `tsc`)
 - `--showSpans` is a text-mode affordance; JSON output already carries spans and,
   when available, 1-based line and column numbers.
 - `--maxDiagnostics` limits rendered diagnostics in normal diagnostic mode.

@@ -141,3 +141,14 @@ than reshaping the single-file APIs.
 
 ## Ambient Globals
 Ambient globals from loaded `.d.ts` files are gathered into `ambient_global_symbols` and `ambient_global_type_declarations`, then mixed into modules and scripts.
+
+## Diagnostic Profiles
+
+The checker supports two diagnostic profiles, controlled via `CheckerOptions.diagnostic_profile` or the `--diagnosticProfile` CLI flag:
+
+1. **`Tsc` (Default)**: Aims to match the TypeScript compiler (`tsc`) exactly. This includes applying targeted type widening (like on `satisfies`) and allowing known diagnostic cascades (like outer assignability failures) to appear if TypeScript emits them.
+2. **`Native`**: Uses `typescript-rust`-specific behaviors. For example, it aggressively returns `Unknown` from failed contextual checks (like `satisfies` failures) to suppress noisy downstream cascade errors. This produces a cleaner developer experience but diverges from the TypeScript compiler baseline.
+
+The `compat-projects` oracle testing runs exclusively in `tsc` profile.
+
+

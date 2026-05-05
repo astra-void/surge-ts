@@ -1,6 +1,6 @@
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
-    ParsedCall, ParsedCallArgument, ParsedType, TextSpan as SyntaxTextSpan,
+    ParsedCall, ParsedCallArgument, ParsedExpression, ParsedType, TextSpan as SyntaxTextSpan,
 };
 use typescript_rust_types::{FunctionType, Type, is_assignable_to, union_type};
 
@@ -8,7 +8,7 @@ use super::emit_type_only_as_value_diagnostic;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use crate::checks::expr::evaluate_expression;
 use crate::context::CheckerContext;
-use crate::infer::{InferredExpression, infer_expression};
+use crate::infer::InferredExpression;
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 
@@ -70,7 +70,7 @@ pub(crate) fn check_call_like(
 }
 
 pub(crate) fn check_property_call_like(
-    object_name: &str,
+    object: &ParsedExpression,
     object_span: Option<SyntaxTextSpan>,
     property_name: &str,
     property_span: Option<SyntaxTextSpan>,
@@ -80,21 +80,15 @@ pub(crate) fn check_property_call_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    let Some(symbol) = symbols.get(object_name).cloned() else {
-        if emit_type_only_as_value_diagnostic(object_name, object_span, ctx) {
-            return None;
-        }
+    let object_ty =
+        match crate::checks::expr::evaluate_expression(object, object_span, symbols, ctx) {
+            crate::infer::InferredExpression::Known(ty) => ty,
+            _ => return None,
+        };
 
-        ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2304(object_name, ctx.file_name.clone()),
-            object_span,
-        ));
-        return None;
-    };
+    let object_type_name = object_ty.name();
 
-    let object_type_name = symbol.ty.name();
-
-    match symbol.ty {
+    match object_ty {
         Type::Any => Some(Type::Any),
         Type::Unknown => None,
         Type::Object(object_type) => {

@@ -1272,13 +1272,20 @@ fn parse_property_call_no_args() {
     assert!(parsed.parser_errors.is_empty());
 
     let ParsedStatement::Expression(ParsedExpression::PropertyCall {
-        object_name,
+        object,
         property_name,
         arguments,
         ..
     }) = &parsed.statements[0]
     else {
         panic!("expected a property call expression");
+    };
+
+    let ParsedExpression::Identifier {
+        name: object_name, ..
+    } = &**object
+    else {
+        panic!("expected an identifier");
     };
 
     assert_eq!(object_name, "store");

@@ -59,17 +59,11 @@ pub(crate) fn infer_expression(
             ..
         } => infer_conditional_expression(condition, when_true, when_false, symbols),
         ParsedExpression::PropertyAccess {
-            object_name,
+            object,
             object_span,
             property_name,
             property_span,
-        } => infer_property_access(
-            object_name,
-            object_span,
-            property_name,
-            property_span,
-            symbols,
-        ),
+        } => infer_property_access(object, object_span, property_name, property_span, symbols),
         ParsedExpression::IndexAccess {
             object_name,
             object_span,
@@ -109,7 +103,40 @@ pub(crate) fn infer_expression(
         ParsedExpression::SatisfiesExpression { expression, .. } => {
             infer_expression(expression, symbols)
         }
-        ParsedExpression::TypeAssertion { expression, ty, .. } => {
+        ParsedExpression::NonNullAssertion {
+            expression,
+            in_optional_chain,
+            ..
+        } => {
+            let inferred = infer_expression(expression, symbols);
+            match inferred {
+                InferredExpression::Known(ty) => {
+                    let filtered = typescript_rust_types::remove_undefined(&ty);
+                    if *in_optional_chain {
+                        InferredExpression::Known(typescript_rust_types::union_type(vec![
+                            filtered,
+                            Type::Undefined,
+                        ]))
+                    } else {
+                        InferredExpression::Known(filtered)
+                    }
+                }
+                InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+                    if *in_optional_chain {
+                        InferredExpression::Known(Type::Undefined)
+                    } else {
+                        inferred
+                    }
+                }
+                other => other,
+            }
+        }
+        ParsedExpression::ConstAssertion { expression, .. } => {
+            infer_expression(expression, symbols)
+        }
+        ParsedExpression::TypeAssertion {
+            expression: _, ty, ..
+        } => {
             // Primitive types can be inferred purely from AST
             match ty {
                 typescript_rust_syntax::ParsedType::String => {
@@ -143,18 +170,12 @@ pub(crate) fn infer_expression(
             None => InferredExpression::Unknown,
         },
         ParsedExpression::PropertyCall {
-            object_name,
+            object,
             object_span,
             property_name,
             property_span,
             ..
-        } => infer_property_call(
-            object_name,
-            object_span,
-            property_name,
-            property_span,
-            symbols,
-        ),
+        } => infer_property_call(object, object_span, property_name, property_span, symbols),
         ParsedExpression::OptionalPropertyCall {
             object,
             property_name,
@@ -500,64 +521,59 @@ fn infer_binary_expression(
 }
 
 fn infer_property_access(
-    object_name: &str,
-    object_span: &Option<TextSpan>,
+    object: &ParsedExpression,
+    _object_span: &Option<TextSpan>,
     property_name: &str,
     property_span: &Option<TextSpan>,
     symbols: &SymbolTable,
 ) -> InferredExpression {
-    let Some(symbol) = symbols.get(object_name) else {
-        return InferredExpression::UnresolvedIdentifier {
-            name: object_name.to_string(),
-            span: *object_span,
-        };
+    let object_type = match infer_expression(object, symbols) {
+        InferredExpression::Known(ty) => ty,
+        InferredExpression::UnresolvedIdentifier { name, span } => {
+            return InferredExpression::UnresolvedIdentifier { name, span };
+        }
+        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+            return InferredExpression::Unknown;
+        }
     };
 
-    match &symbol.ty {
+    match &object_type {
         Type::Object(object_type) => object_type
             // Reads widen optional properties to include undefined.
             .get_property_access_type(property_name)
             .map(InferredExpression::Known)
             .unwrap_or_else(|| InferredExpression::MissingProperty {
                 property_name: property_name.to_string(),
-                object_type: symbol.ty.clone(),
+                object_type: Type::Object(object_type.clone()),
                 span: *property_span,
             }),
-        Type::Unknown | Type::Any => InferredExpression::Unknown,
-        Type::Function(_)
-        | Type::Array(_)
-        | Type::Tuple(_)
-        | Type::String
-        | Type::Number
-        | Type::Boolean
-        | Type::Void
-        | Type::StringLiteral(_)
-        | Type::NumberLiteral(_)
-        | Type::BooleanLiteral(_)
-        | Type::Undefined
-        | Type::Union(_) => InferredExpression::MissingProperty {
+        Type::Unknown | Type::Any => InferredExpression::Known(object_type.clone()),
+        _ => InferredExpression::MissingProperty {
             property_name: property_name.to_string(),
-            object_type: symbol.ty.clone(),
+            object_type: object_type.clone(),
             span: *property_span,
         },
     }
 }
 
 fn infer_property_call(
-    object_name: &str,
-    object_span: &Option<TextSpan>,
+    object: &ParsedExpression,
+    _object_span: &Option<TextSpan>,
     property_name: &str,
-    property_span: &Option<TextSpan>,
+    _property_span: &Option<TextSpan>,
     symbols: &SymbolTable,
 ) -> InferredExpression {
-    let Some(symbol) = symbols.get(object_name) else {
-        return InferredExpression::UnresolvedIdentifier {
-            name: object_name.to_string(),
-            span: *object_span,
-        };
+    let object_type = match infer_expression(object, symbols) {
+        InferredExpression::Known(ty) => ty,
+        InferredExpression::UnresolvedIdentifier { name, span } => {
+            return InferredExpression::UnresolvedIdentifier { name, span };
+        }
+        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+            return InferredExpression::Unknown;
+        }
     };
 
-    match &symbol.ty {
+    match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown => InferredExpression::Unknown,
         Type::Object(object_type) => match object_type.get_property_access_type(property_name) {
@@ -578,10 +594,7 @@ fn infer_property_call(
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Undefined
-        | Type::Union(_) => {
-            let _ = property_span;
-            InferredExpression::Unknown
-        }
+        | Type::Union(_) => InferredExpression::Unknown,
     }
 }
 
@@ -641,7 +654,7 @@ fn infer_optional_index_access(
 
 fn infer_optional_property_access(
     object: &ParsedExpression,
-    object_span: &Option<TextSpan>,
+    _object_span: &Option<TextSpan>,
     property_name: &str,
     property_span: &Option<TextSpan>,
     symbols: &SymbolTable,
@@ -658,32 +671,35 @@ fn infer_optional_property_access(
 
     let base_type = typescript_rust_types::remove_undefined(&object_type);
 
-    match base_type {
-        Type::Object(ref object_type) => object_type
-            .get_property_access_type(property_name)
-            .map(|ty| InferredExpression::Known(union_type(vec![ty, Type::Undefined])))
-            .unwrap_or_else(|| InferredExpression::MissingProperty {
-                property_name: property_name.to_string(),
-                object_type: base_type.clone(),
-                span: *property_span,
-            }),
-        Type::Unknown | Type::Any => InferredExpression::Known(base_type),
+    let result_type = match base_type {
+        Type::Object(ref object_type) => {
+            match object_type.get_property_access_type(property_name) {
+                Some(ty) => InferredExpression::Known(ty),
+                None => InferredExpression::MissingProperty {
+                    property_name: property_name.to_string(),
+                    object_type: base_type.clone(),
+                    span: *property_span,
+                }
+            }
+        },
+        Type::Unknown | Type::Any => InferredExpression::Known(base_type.clone()),
         Type::Function(_)
         | Type::Array(_)
         | Type::Tuple(_)
         | Type::String
         | Type::Number
         | Type::Boolean
-        | Type::Void
         | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
-        | Type::Undefined
-        | Type::Union(_) => InferredExpression::MissingProperty {
-            property_name: property_name.to_string(),
-            object_type: base_type.clone(),
-            span: *property_span,
-        },
+        | Type::Void
+        | Type::Undefined => InferredExpression::Known(Type::Unknown),
+        Type::Union(_) => InferredExpression::Known(Type::Unknown),
+    };
+
+    match result_type {
+        InferredExpression::Known(ty) => InferredExpression::Known(union_type(vec![ty, Type::Undefined])),
+        other => other,
     }
 }
 

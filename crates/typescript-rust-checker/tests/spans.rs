@@ -55,7 +55,7 @@ fn span_ts2304_identifier_expression() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -71,7 +71,7 @@ fn span_ts2304_unknown_type_annotation_points_to_type_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -87,7 +87,7 @@ fn span_ts2304_unknown_type_alias_target() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -103,7 +103,7 @@ fn span_ts2304_unknown_interface_property_type() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -119,7 +119,7 @@ fn span_ts2304_unknown_function_parameter_type() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -135,7 +135,7 @@ fn span_ts2304_unknown_function_return_type() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -151,7 +151,7 @@ fn span_ts2304_unknown_tuple_element_type() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -167,7 +167,7 @@ fn span_ts2304_unknown_array_element_type() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -183,7 +183,7 @@ fn span_ts7006_points_to_parameter_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
@@ -199,7 +199,7 @@ fn span_ts7005_points_to_variable_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
@@ -215,7 +215,7 @@ fn span_ts2451_points_to_duplicate_variable_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -231,7 +231,7 @@ fn span_ts2393_points_to_duplicate_function_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -247,7 +247,7 @@ fn span_ts2300_points_to_duplicate_type_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -263,7 +263,7 @@ fn span_ts2588_points_to_assignment_target() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -279,7 +279,7 @@ fn span_ts2322_variable_initializer() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -295,7 +295,7 @@ fn span_ts2322_assignment_rhs() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -311,7 +311,7 @@ fn span_ts2322_return_expression() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -327,7 +327,7 @@ fn span_ts2322_object_property_value() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -343,7 +343,7 @@ fn span_ts2322_array_element() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -359,7 +359,7 @@ fn span_ts2322_tuple_element() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -375,7 +375,7 @@ fn span_tuple_length_too_few_points_to_array_literal() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -391,7 +391,7 @@ fn span_tuple_length_too_many_points_to_extra_element() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -407,7 +407,7 @@ fn span_ts2322_conditional_true_branch() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -423,7 +423,7 @@ fn span_ts2322_conditional_false_branch() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -439,7 +439,7 @@ fn span_ts2322_property_call_return_initializer() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -460,7 +460,7 @@ fn span_ts2322_index_access_initializer() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -476,7 +476,7 @@ fn span_ts2345_identifier_call_argument() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -492,7 +492,7 @@ fn span_ts2304_call_argument() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -508,7 +508,7 @@ fn span_ts2304_call_callee() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -524,7 +524,7 @@ fn span_ts2304_property_call_receiver() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -540,7 +540,7 @@ fn span_ts2304_index_receiver() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -556,7 +556,7 @@ fn span_ts2304_index_expression() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -572,7 +572,7 @@ fn span_ts2345_contextual_object_argument_property_value() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -588,7 +588,7 @@ fn span_ts2345_contextual_array_argument_element() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -604,7 +604,7 @@ fn span_ts2345_contextual_tuple_argument_element() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -620,7 +620,7 @@ fn span_ts2554_identifier_call_arity_points_to_callee() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -636,7 +636,7 @@ fn span_ts2554_property_call_arity_points_to_property_or_call() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -657,7 +657,7 @@ fn span_ts2349_identifier_non_callable_points_to_callee() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -673,7 +673,7 @@ fn span_ts2349_property_non_callable_points_to_property() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -689,7 +689,7 @@ fn span_ts2339_property_access_missing_points_to_property_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -705,7 +705,7 @@ fn span_ts2339_property_call_missing_points_to_property_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -721,7 +721,7 @@ fn span_ts2339_primitive_receiver_property_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -737,7 +737,7 @@ fn span_ts2339_tuple_out_of_range_index() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -753,7 +753,7 @@ fn span_ts2339_index_non_array_receiver() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -769,7 +769,7 @@ fn span_ts2353_excess_property_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -785,7 +785,7 @@ fn span_ts2741_missing_required_object_literal() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -801,7 +801,7 @@ fn span_object_literal_unresolved_property_value() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -817,7 +817,7 @@ fn span_ts2362_left_operand() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -833,7 +833,7 @@ fn span_ts2363_right_operand() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -849,7 +849,7 @@ fn span_ts2365_operator() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -865,7 +865,7 @@ fn span_ts2367_equality_operator() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -881,7 +881,7 @@ fn span_ts2356_unary_operand() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -897,7 +897,7 @@ fn span_ts2872_truthy_literal() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -913,7 +913,7 @@ fn span_ts2873_falsy_literal() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -1576,7 +1576,7 @@ fn span_module_exported_unknown_type_points_to_type_name() {
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,

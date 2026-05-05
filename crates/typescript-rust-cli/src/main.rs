@@ -196,6 +196,7 @@ fn run_single_file_mode(
             no_lib,
             stub_external_modules,
             resolved_modules: std::collections::HashMap::new(),
+            diagnostic_profile,
         },
     );
     match format {
@@ -232,6 +233,7 @@ fn run_project_mode(
     format: ReportFormat,
     max_diagnostics: Option<usize>,
     stub_external_modules: bool,
+    diagnostic_profile: typescript_rust_checker::DiagnosticProfile,
 ) -> ExitCode {
     let loaded = load_tsconfig(TsConfigLoadOptions { project });
 
@@ -288,6 +290,7 @@ fn run_project_mode(
         no_lib: loaded.compiler_options.no_lib,
         stub_external_modules,
         resolved_modules,
+        diagnostic_profile,
     };
 
     let diagnostics = check_program_with_options(inputs, checker_options);

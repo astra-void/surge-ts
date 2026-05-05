@@ -252,7 +252,7 @@ pub enum ParsedExpression {
         when_false_span: Option<TextSpan>,
     },
     PropertyAccess {
-        object_name: String,
+        object: Box<ParsedExpression>,
         object_span: Option<TextSpan>,
         property_name: String,
         property_span: Option<TextSpan>,
@@ -270,7 +270,7 @@ pub enum ParsedExpression {
         arguments: Vec<ParsedCallArgument>,
     },
     PropertyCall {
-        object_name: String,
+        object: Box<ParsedExpression>,
         object_span: Option<TextSpan>,
         property_name: String,
         property_span: Option<TextSpan>,
@@ -322,6 +322,17 @@ pub enum ParsedExpression {
         left_span: Option<TextSpan>,
         right: Box<ParsedExpression>,
         right_span: Option<TextSpan>,
+    },
+    NonNullAssertion {
+        expression: Box<ParsedExpression>,
+        span: Option<TextSpan>,
+        /// Indicates if this assertion removes the `| undefined` component from an optional chain.
+        /// If false, the optional chain wrapper's undefined short-circuit may still be kept.
+        in_optional_chain: bool,
+    },
+    ConstAssertion {
+        expression: Box<ParsedExpression>,
+        span: Option<TextSpan>,
     },
     Unknown,
 }

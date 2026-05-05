@@ -7,7 +7,7 @@ checker against a pinned compiler without changing the checker to chase parity.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
-v0.76/v0.76.1 narrowly supports `expr satisfies T` by contextually checking `expr` against `T` and preserving the inferred type of `expr`. It correctly emits `TS1360` for assignability and shape mismatches at the satisfies boundary, returning an unknown/marker type on failure to prevent noisy downstream `TS2322`/`TS2345` cascades. Full contextual typing parity, `as const`, and non-null assertions are not yet supported.
+v0.77.1 implements non-null assertions and a parser-safe `as const` foundation under the default `tsc` diagnostic profile. Literal types and tuple constraints are preserved on primitive literals and object/array properties for `as const` expressions. `satisfies` with `as const` behaves correctly. Optional chaining AST evaluation now correctly propagates the `undefined` short-circuit across subsequent non-null assertions (e.g. `a?.b!.c` evaluates to `C | undefined`).
 v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics and control-flow narrowing remain unsupported. `ignoreDeprecations` is not used in committed fixtures because TS 7-oriented compatibility should not hide deprecated option behavior.
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.

@@ -158,19 +158,13 @@ pub(crate) fn check_expression_flow(
             FlowCheck::Clear
         }
         ParsedExpression::PropertyCall {
-            object_name,
-            object_span,
+            object,
+            object_span: _,
             arguments,
             ..
         } => {
-            if report_read_flow(
-                object_name,
-                object_span.or(fallback_span),
-                flow_state,
-                statement_index,
-                ctx,
-            )
-            .is_blocked()
+            if check_expression_flow(object, fallback_span, flow_state, statement_index, ctx)
+                .is_blocked()
             {
                 return FlowCheck::Blocked;
             }
@@ -192,16 +186,10 @@ pub(crate) fn check_expression_flow(
             FlowCheck::Clear
         }
         ParsedExpression::PropertyAccess {
-            object_name,
-            object_span,
+            object,
+            object_span: _,
             ..
-        } => report_read_flow(
-            object_name,
-            object_span.or(fallback_span),
-            flow_state,
-            statement_index,
-            ctx,
-        ),
+        } => check_expression_flow(object, fallback_span, flow_state, statement_index, ctx),
         ParsedExpression::Unary {
             operand,
             operand_span,
@@ -379,6 +367,24 @@ pub(crate) fn check_expression_flow(
             ctx,
         ),
         ParsedExpression::SatisfiesExpression {
+            expression, span, ..
+        } => check_expression_flow(
+            expression,
+            span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
+        ParsedExpression::NonNullAssertion {
+            expression, span, ..
+        } => check_expression_flow(
+            expression,
+            span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
+        ParsedExpression::ConstAssertion {
             expression, span, ..
         } => check_expression_flow(
             expression,

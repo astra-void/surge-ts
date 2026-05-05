@@ -27,6 +27,20 @@ pub(crate) fn evaluate_expression_with_expected_type(
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
 
+    if let ParsedExpression::ConstAssertion {
+        expression: inner, ..
+    } = expression
+    {
+        return evaluate_expression_with_expected_type(
+            inner,
+            fallback_span,
+            Some(expected_type),
+            _expected_diagnostic,
+            symbols,
+            ctx,
+        );
+    }
+
     if matches!(expression, ParsedExpression::Conditional { .. }) {
         return evaluate_conditional_expression_with_expected_type(
             expression,

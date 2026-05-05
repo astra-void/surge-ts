@@ -411,7 +411,7 @@ fn single_file_builtins_visible() {
         const n: number = Math.max(1, 2);
     "#;
 
-    let options = CheckerOptions {
+    let options = CheckerOptions { diagnostic_profile: Default::default(),
         no_lib: false,
         ..Default::default()
     };
@@ -433,7 +433,7 @@ fn single_file_no_lib_hides_builtins() {
         const n: number = Math.max(1, 2);
     "#;
 
-    let options = CheckerOptions {
+    let options = CheckerOptions { diagnostic_profile: Default::default(),
         no_lib: true,
         ..Default::default()
     };
@@ -447,7 +447,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
     let source = "function f(value): string { return \"ok\"; }";
     let program_diagnostics = program_with_options(
         &[("example.ts", source)],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
@@ -457,7 +457,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
     let single_file_diagnostics = check_source_with_options(
         source,
         "example.ts",
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
@@ -501,7 +501,7 @@ fn program_order_parser_before_type_prepass() {
             ("b.ts", "type Name = string; type Name = number;"),
             ("c.ts", "function f(value): string { return 123; }"),
         ],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
@@ -1087,7 +1087,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             "a.ts",
             "export function f(value): string { return \"ok\"; }",
         )],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
@@ -2560,7 +2560,7 @@ fn ambient_module_resolves_before_package_stub_with_stub_external_modules() {
                 "declare module \"pkg\" { export const foo: number; }",
             ),
         ],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: true,
             ..Default::default()
@@ -2593,7 +2593,7 @@ fn ambient_module_missing_export_ts2305_not_ts2307_with_stub_external_modules() 
                 "declare module \"pkg\" { export const foo: number; }",
             ),
         ],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: true,
             ..Default::default()
@@ -2639,7 +2639,7 @@ fn ambient_module_unknown_specifier_stub_external_modules_suppresses_ts2307() {
                 "declare module \"pkg\" { export const foo: number; }",
             ),
         ],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: true,
             ..Default::default()
@@ -2705,7 +2705,7 @@ fn ambient_module_default_import_missing_module_fallback_ts2307() {
 fn ambient_module_default_import_missing_module_stub_external_suppresses_ts2307() {
     let diagnostics = program_with_options(
         &[("src/index.ts", "import value from \"missing-pkg\";")],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: true,
             ..Default::default()
@@ -2806,7 +2806,7 @@ fn ambient_module_namespace_import_unknown_module_fallback_ts2307() {
 fn ambient_module_namespace_import_unknown_module_stub_external_suppresses_ts2307() {
     let diagnostics = program_with_options(
         &[("src/index.ts", "import * as pkg from \"missing-pkg\";")],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: true,
             ..Default::default()
@@ -2989,7 +2989,7 @@ fn ambient_module_re_export_unknown_source_stub_external_modules_behavior() {
                 "#,
             ),
         ],
-        CheckerOptions {
+        CheckerOptions { diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
             stub_external_modules: true,
             ..Default::default()

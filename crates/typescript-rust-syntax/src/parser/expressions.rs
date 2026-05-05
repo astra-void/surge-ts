@@ -75,6 +75,19 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
             let (expression, expression_span) = parse_expression(&as_expression.expression);
             let ty = crate::parser::types::parse_type(&as_expression.type_annotation)
                 .unwrap_or(crate::ParsedType::Unknown);
+
+            if let crate::ParsedType::Named(named_type) = &ty {
+                if named_type.name == "const" && named_type.type_arguments.is_empty() {
+                    return (
+                        ParsedExpression::ConstAssertion {
+                            expression: Box::new(expression),
+                            span: Some(text_span_from_oxc_span(as_expression.span)),
+                        },
+                        as_expression.span,
+                    );
+                }
+            }
+
             ParsedExpression::TypeAssertion {
                 expression: Box::new(expression),
                 expression_span: Some(text_span_from_oxc_span(expression_span)),
@@ -95,6 +108,14 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
                 target_span: Some(text_span_from_oxc_span(
                     satisfies_expression.type_annotation.span(),
                 )),
+            }
+        }
+        Expression::TSNonNullExpression(non_null_expression) => {
+            let (expression, _expression_span) = parse_expression(&non_null_expression.expression);
+            ParsedExpression::NonNullAssertion {
+                expression: Box::new(expression),
+                span: Some(text_span_from_oxc_span(non_null_expression.span)),
+                in_optional_chain: false,
             }
         }
         Expression::ChainExpression(chain_expression) => {
@@ -177,12 +198,9 @@ fn parse_call_expression_expression(
                     arguments,
                 })
             } else {
-                let Expression::Identifier(object_identifier) = &member_expression.object else {
-                    return None;
-                };
                 Some(ParsedExpression::PropertyCall {
-                    object_name: object_identifier.name.to_string(),
-                    object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+                    object: Box::new(object),
+                    object_span: Some(text_span_from_oxc_span(object_span)),
                     property_name: member_expression.property.name.to_string(),
                     property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
                     call_span: Some(text_span_from_oxc_span(call_expression.span)),
@@ -314,12 +332,9 @@ fn parse_call_expression_expression_with_type_arguments(
                     arguments,
                 })
             } else {
-                let Expression::Identifier(object_identifier) = &member_expression.object else {
-                    return None;
-                };
                 Some(ParsedExpression::PropertyCall {
-                    object_name: object_identifier.name.to_string(),
-                    object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+                    object: Box::new(object),
+                    object_span: Some(text_span_from_oxc_span(object_span)),
                     property_name: member_expression.property.name.to_string(),
                     property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
                     call_span: Some(text_span_from_oxc_span(call_expression.span)),
@@ -336,13 +351,10 @@ fn parse_property_call_expression_with_type_arguments(
     member_expression: &StaticMemberExpression<'_>,
     type_arguments: Vec<crate::ParsedType>,
 ) -> Option<ParsedExpression> {
-    let Expression::Identifier(object_identifier) = &member_expression.object else {
-        return None;
-    };
-
+    let (object, object_span) = parse_expression(&member_expression.object);
     Some(ParsedExpression::PropertyCall {
-        object_name: object_identifier.name.to_string(),
-        object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+        object: Box::new(object),
+        object_span: Some(text_span_from_oxc_span(object_span)),
         property_name: member_expression.property.name.to_string(),
         property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
         call_span: None,
@@ -426,6 +438,19 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             let (expression, expression_span) = parse_expression(&as_expression.expression);
             let ty = crate::parser::types::parse_type(&as_expression.type_annotation)
                 .unwrap_or(crate::ParsedType::Unknown);
+
+            if let crate::ParsedType::Named(named_type) = &ty {
+                if named_type.name == "const" && named_type.type_arguments.is_empty() {
+                    return ParsedCallArgument {
+                        expression: ParsedExpression::ConstAssertion {
+                            expression: Box::new(expression),
+                            span: Some(text_span_from_oxc_span(as_expression.span)),
+                        },
+                        span: Some(text_span_from_oxc_span(as_expression.span)),
+                    };
+                }
+            }
+
             (
                 ParsedExpression::TypeAssertion {
                     expression: Box::new(expression),
@@ -452,6 +477,17 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                     )),
                 },
                 satisfies_expression.span,
+            )
+        }
+        Argument::TSNonNullExpression(non_null_expression) => {
+            let (expression, _expression_span) = parse_expression(&non_null_expression.expression);
+            (
+                ParsedExpression::NonNullAssertion {
+                    expression: Box::new(expression),
+                    span: Some(text_span_from_oxc_span(non_null_expression.span)),
+                    in_optional_chain: false,
+                },
+                non_null_expression.span,
             )
         }
         _ => (ParsedExpression::Unknown, argument.span()),
@@ -643,13 +679,10 @@ pub(crate) fn parse_static_member_expression(
         });
     }
 
-    let Expression::Identifier(object_identifier) = &member_expression.object else {
-        return None;
-    };
-
+    let (object, object_span) = parse_expression(&member_expression.object);
     Some(ParsedExpression::PropertyAccess {
-        object_name: object_identifier.name.to_string(),
-        object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+        object: Box::new(object),
+        object_span: Some(text_span_from_oxc_span(object_span)),
         property_name: member_expression.property.name.to_string(),
         property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
     })
@@ -665,6 +698,14 @@ fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<Pars
         }
         ChainElement::ComputedMemberExpression(member_expression) => {
             parse_computed_member_expression(member_expression)
+        }
+        ChainElement::TSNonNullExpression(non_null_expression) => {
+            let (expression, _expression_span) = parse_expression(&non_null_expression.expression);
+            Some(ParsedExpression::NonNullAssertion {
+                expression: Box::new(expression),
+                span: Some(text_span_from_oxc_span(non_null_expression.span)),
+                in_optional_chain: true,
+            })
         }
         _ => None,
     }
