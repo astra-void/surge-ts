@@ -107,3 +107,6 @@ Type assertions (`as` expressions) were chosen for v0.73 because they are extrem
 
 ## Note on Optional Chaining and Nullish Coalescing (v0.74)
 v0.74 supports a narrow optional chaining and nullish coalescing subset. Optional property access and optional calls return `T | undefined` under the current conservative policy. Nullish coalescing (`??`) removes `undefined` from the left side in the supported subset. Full control-flow narrowing, optional element access, deeply nested chains, `??=`, and `null`-accurate semantics remain unsupported.
+
+## Note on Benchmark Harness (v0.75)
+v0.75 adds a compiler speed benchmark harness (`scripts/bench/compare-compilers.ts`) along with diagnostic-drift-aware reporting. This is a developer-facing regression tool comparing no-emit project checks across `tsc`, `tsgo` (optional), and the `typescript-rust-cli` release binary. It enforces a TS 7-oriented policy that avoids `ignoreDeprecations` in committed fixtures and requires looking at semantic equivalence alongside wall-clock performance.

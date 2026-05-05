@@ -13,4 +13,5 @@ coverage
 .local-projects/
 pnpm-debug.log*
 npm-debug.log*
-ppnpm-debug.log*
+pnpm-debug.log*
+.bench
