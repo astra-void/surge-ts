@@ -8,6 +8,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS1360",
+    "category": "Error",
+    "message": "Type '{0}' does not satisfy the expected type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2304",
     "category": "Error",
     "message": "Cannot find name '{0}'.",

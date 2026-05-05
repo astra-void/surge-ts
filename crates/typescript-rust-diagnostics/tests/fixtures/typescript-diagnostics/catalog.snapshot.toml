@@ -9,6 +9,14 @@ message = "tsconfig.json is present but will not be loaded if files are specifie
 arity = 0
 
 [[diagnostic]]
+code = "TS1360"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' does not satisfy the expected type '{1}'."
+arity = 2
+
+[[diagnostic]]
 code = "TS2304"
 category = "Error"
 source = "typescript"

@@ -15,6 +15,16 @@ pub const TS5112: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1360: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1360",
+    number: Some(1360),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' does not satisfy the expected type '{1}'.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2304: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2304",
     number: Some(2304),
@@ -617,6 +627,7 @@ pub const TYPESCRIPT_RUST_TYPE_DECLARATION_CYCLE: DiagnosticDescriptor = Diagnos
 
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS5112,
+    TS1360,
     TS2304,
     TS2300,
     TS2305,
@@ -683,6 +694,18 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts5112(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS5112, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1360(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1360,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)]

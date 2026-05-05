@@ -7,6 +7,12 @@ oracle = [
   "CLI tests",
 ]
 
+[TS1360]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/satisfies-basic",
+]
+
 [TS2304]
 status = "emitted"
 fixtures = [

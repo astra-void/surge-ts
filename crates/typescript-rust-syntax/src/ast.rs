@@ -284,6 +284,12 @@ pub enum ParsedExpression {
         ty: ParsedType,
         type_span: Option<TextSpan>,
     },
+    SatisfiesExpression {
+        expression: Box<ParsedExpression>,
+        target_type: ParsedType,
+        span: Option<TextSpan>,
+        target_span: Option<TextSpan>,
+    },
     OptionalPropertyAccess {
         object: Box<ParsedExpression>,
         object_span: Option<TextSpan>,

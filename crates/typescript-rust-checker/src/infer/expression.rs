@@ -106,6 +106,9 @@ pub(crate) fn infer_expression(
                 _ => InferredExpression::Unknown,
             }
         }
+        ParsedExpression::SatisfiesExpression { expression, .. } => {
+            infer_expression(expression, symbols)
+        }
         ParsedExpression::TypeAssertion { expression, ty, .. } => {
             // Primitive types can be inferred purely from AST
             match ty {

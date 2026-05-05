@@ -12,6 +12,7 @@ use crate::symbols::SymbolTable;
 pub(crate) enum ExpectedTypeDiagnostic {
     TypeNotAssignable,
     ArgumentNotAssignable,
+    SatisfiesNotAssignable,
 }
 
 pub(crate) fn evaluate_expression_with_expected_type(
@@ -70,6 +71,7 @@ pub(crate) fn evaluate_expression_with_expected_type(
             properties,
             expected_object_type,
             choose_span(*span, fallback_span),
+            _expected_diagnostic,
             symbols,
             ctx,
         );
@@ -206,6 +208,7 @@ fn evaluate_object_literal_with_expected_type(
     properties: &[ParsedObjectProperty],
     expected_object_type: &typescript_rust_types::ObjectType,
     fallback_span: Option<SyntaxTextSpan>,
+    expected_diagnostic: ExpectedTypeDiagnostic,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
@@ -290,12 +293,18 @@ fn evaluate_object_literal_with_expected_type(
     {
         let source_type_name = object_literal_source_type_name(properties, symbols).name();
         let target_type_name = Type::Object(expected_object_type.clone()).name();
-        let diagnostic = Diagnostic::ts2741(
-            property_name,
-            &source_type_name,
-            &target_type_name,
-            ctx.file_name.clone(),
-        );
+
+        let diagnostic = match expected_diagnostic {
+            ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
+                Diagnostic::ts1360(&source_type_name, &target_type_name, ctx.file_name.clone())
+            }
+            _ => Diagnostic::ts2741(
+                property_name,
+                &source_type_name,
+                &target_type_name,
+                ctx.file_name.clone(),
+            ),
+        };
 
         ctx.push(diagnostic_with_syntax_span(diagnostic, fallback_span));
         return InferredExpression::Unknown;
@@ -469,6 +478,11 @@ fn push_expected_type_mismatch(
             ctx.file_name.clone(),
         ),
         ExpectedTypeDiagnostic::ArgumentNotAssignable => Diagnostic::ts2345(
+            &source_type_name,
+            &expected_type_name,
+            ctx.file_name.clone(),
+        ),
+        ExpectedTypeDiagnostic::SatisfiesNotAssignable => Diagnostic::ts1360(
             &source_type_name,
             &expected_type_name,
             ctx.file_name.clone(),

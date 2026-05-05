@@ -3,12 +3,20 @@ use typescript_rust_syntax::TextSpan as SyntaxTextSpan;
 
 use crate::symbols::{SymbolTable, TypeDeclarationTable};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiagnosticProfile {
+    #[default]
+    Tsc,
+    Native,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
     pub no_lib: bool,
+    pub diagnostic_profile: DiagnosticProfile,
 }
 
 impl Default for CheckerOptions {
@@ -18,6 +26,7 @@ impl Default for CheckerOptions {
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
             no_lib: false,
+            diagnostic_profile: DiagnosticProfile::default(),
         }
     }
 }

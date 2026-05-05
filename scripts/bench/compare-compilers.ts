@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
+import { renderBenchmarkSvg, renderBenchmarkHtml } from './report.js';
+
 import {
   resolveProjectPresetOrPath,
   parseTypeScriptDiagnostics,
@@ -41,6 +43,9 @@ type ParsedArgs = {
   iterations: number;
   warmup: number;
   json: string | null;
+  chart: string | null;
+  html: string | null;
+  fromJson: string | null;
   includeTsgo: boolean;
   generate: string | null;
   files: number;
@@ -69,6 +74,25 @@ const presets: Record<string, string[]> = {
 
 function main(argv = process.argv.slice(2)): void {
   const args = parseArgs(argv);
+
+  if (args.fromJson) {
+    const data = JSON.parse(readFileSync(args.fromJson, 'utf8'));
+    let printed = false;
+    if (args.chart) {
+      mkdirSync(path.dirname(args.chart), { recursive: true });
+      writeFileSync(args.chart, renderBenchmarkSvg(data));
+      printed = true;
+    }
+    if (args.html) {
+      mkdirSync(path.dirname(args.html), { recursive: true });
+      writeFileSync(args.html, renderBenchmarkHtml(data));
+      printed = true;
+    }
+    if (!printed) {
+      printResults(data);
+    }
+    return;
+  }
 
   if (args.generate) {
     const generatedProject = generateScaleFixture(args.generate, args.files, args.symbols);
@@ -169,7 +193,16 @@ function main(argv = process.argv.slice(2)): void {
   printResults(results);
 
   if (args.json) {
+    mkdirSync(path.dirname(args.json), { recursive: true });
     writeFileSync(args.json, JSON.stringify(results, null, 2));
+  }
+  if (args.chart) {
+    mkdirSync(path.dirname(args.chart), { recursive: true });
+    writeFileSync(args.chart, renderBenchmarkSvg(results));
+  }
+  if (args.html) {
+    mkdirSync(path.dirname(args.html), { recursive: true });
+    writeFileSync(args.html, renderBenchmarkHtml(results));
   }
 }
 
@@ -209,6 +242,11 @@ function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number): { 
     } else if (tool === 'ts-rust') {
       let exePath = path.join(workspaceRoot, 'target/release/typescript-rust-cli');
       if (process.platform === 'win32') exePath += '.exe';
+      if (!existsSync(exePath)) {
+        console.error(`Missing release binary: target/release/typescript-rust-cli${process.platform === 'win32' ? '.exe' : ''}`);
+        console.error(`Run: cargo build --release -p typescript-rust-cli`);
+        process.exit(1);
+      }
       res = spawnSync(exePath, ['--project', tsconfig, '--format', 'json', '--maxDiagnostics', '10000'], { cwd: workspaceRoot, encoding: 'utf8' });
     } else {
       throw new Error(`Unknown tool ${tool}`);
@@ -306,7 +344,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     iterations: 5,
     warmup: 1,
     json: null,
-    includeTsgo: false,
+    chart: null,
+    html: null,
+    fromJson: null,
+    includeTsgo: true,
     generate: null,
     files: 10,
     symbols: 50,
@@ -330,6 +371,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.warmup = parseInt(argv[++i], 10);
     } else if (arg === '--json') {
       parsed.json = argv[++i];
+    } else if (arg === '--chart') {
+      parsed.chart = argv[++i];
+    } else if (arg === '--html') {
+      parsed.html = argv[++i];
+    } else if (arg === '--fromJson') {
+      parsed.fromJson = argv[++i];
     } else if (arg === '--include-tsgo') {
       parsed.includeTsgo = true;
     } else if (arg === '--generate') {

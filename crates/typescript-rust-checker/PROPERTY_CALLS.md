@@ -13,9 +13,8 @@ Supported in this phase:
 
 Not supported in this phase:
 
-- Chained property calls.
-- Nested property access calls.
-- Bracket notation.
+- Chained non-optional property calls (e.g. `obj.prop.prop()`).
+- Bracket notation for non-optional access.
 - Method declarations or shorthand methods.
 - Receiver or `this` binding semantics.
 - Callable unions.

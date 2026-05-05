@@ -5,6 +5,7 @@ Supported surface:
 - `T[]` in type positions
 - array literals like `[]` and `["Ada", "Grace"]`
 - numeric index access like `values[0]` on simple identifier receivers
+- optional numeric index access like `values?.[0]` returning `T | undefined`
 - array literal inference that preserves literal element types and unions
 - contextual checking of array literal elements against `T[]`
 - `any` array elements collapse inference to `any[]`

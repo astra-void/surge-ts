@@ -7,6 +7,7 @@ checker against a pinned compiler without changing the checker to chase parity.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
+v0.76/v0.76.1 narrowly supports `expr satisfies T` by contextually checking `expr` against `T` and preserving the inferred type of `expr`. It correctly emits `TS1360` for assignability and shape mismatches at the satisfies boundary, returning an unknown/marker type on failure to prevent noisy downstream `TS2322`/`TS2345` cascades. Full contextual typing parity, `as const`, and non-null assertions are not yet supported.
 v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics and control-flow narrowing remain unsupported. `ignoreDeprecations` is not used in committed fixtures because TS 7-oriented compatibility should not hide deprecated option behavior.
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
@@ -106,8 +107,8 @@ diagnostic catalog/codegen foundation are implemented. Current likely blockers a
 ## Note on Type Assertions (v0.73)
 Type assertions (`as` expressions) were chosen for v0.73 because they are extremely common in real TypeScript projects, particularly around parsed data, library boundaries, and compatibility shims. By implementing a narrow parsing and inference surface for primitive assertions, aliases, and built-in arrays, we significantly reduce false-positive TS2322 cascades without needing full TypeScript assertion semantics. Dominant blockers remaining after this phase continue to revolve around ambient `@types` package discovery, missing DOM/Node globals, and `lib.d.ts` semantics which often surface as TS2304 errors.
 
-## Note on Optional Chaining and Nullish Coalescing (v0.74)
-v0.74 supports a narrow optional chaining and nullish coalescing subset. Optional property access and optional calls return `T | undefined` under the current conservative policy. Nullish coalescing (`??`) removes `undefined` from the left side in the supported subset. Full control-flow narrowing, optional element access, deeply nested chains, `??=`, and `null`-accurate semantics remain unsupported.
+## Note on Optional Chaining and Nullish Coalescing (v0.74/v0.74.1)
+v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics, full control-flow narrowing, `??=`, and non-null assertions remain unsupported.
 
-## Note on Benchmark Harness (v0.75)
-v0.75 adds a compiler speed benchmark harness (`scripts/bench/compare-compilers.ts`) along with diagnostic-drift-aware reporting. This is a developer-facing regression tool comparing no-emit project checks across `tsc`, `tsgo` (optional), and the `typescript-rust-cli` release binary. It enforces a TS 7-oriented policy that avoids `ignoreDeprecations` in committed fixtures and requires looking at semantic equivalence alongside wall-clock performance.
+## Note on Benchmark Harness (v0.75/v0.75.2)
+v0.75/v0.75.2 adds a compiler speed benchmark harness (`scripts/bench/compare-compilers.ts`) along with diagnostic-drift-aware reporting. This is a developer-facing regression tool comparing no-emit project checks across `tsc`, `tsgo` (optional), and the `typescript-rust-cli` release binary. It enforces a TS 7-oriented policy that avoids `ignoreDeprecations` in committed fixtures and requires looking at semantic equivalence alongside wall-clock performance. These are local-machine-relative developer aids; SVG/HTML reports are visualization aids, not marketing claims. Diagnostic drift must be read with timing.

@@ -378,6 +378,15 @@ pub(crate) fn check_expression_flow(
             statement_index,
             ctx,
         ),
+        ParsedExpression::SatisfiesExpression {
+            expression, span, ..
+        } => check_expression_flow(
+            expression,
+            span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
         ParsedExpression::OptionalPropertyAccess { object, .. } => {
             check_expression_flow(object, fallback_span, flow_state, statement_index, ctx)
         }

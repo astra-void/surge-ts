@@ -84,6 +84,19 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
                 )),
             }
         }
+        Expression::TSSatisfiesExpression(satisfies_expression) => {
+            let (expression, expression_span) = parse_expression(&satisfies_expression.expression);
+            let ty = crate::parser::types::parse_type(&satisfies_expression.type_annotation)
+                .unwrap_or(crate::ParsedType::Unknown);
+            ParsedExpression::SatisfiesExpression {
+                expression: Box::new(expression),
+                span: Some(text_span_from_oxc_span(expression_span)),
+                target_type: ty,
+                target_span: Some(text_span_from_oxc_span(
+                    satisfies_expression.type_annotation.span(),
+                )),
+            }
+        }
         Expression::ChainExpression(chain_expression) => {
             parse_chain_expression(chain_expression).unwrap_or(ParsedExpression::Unknown)
         }
@@ -422,7 +435,23 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                         as_expression.type_annotation.span(),
                     )),
                 },
-                argument.span(),
+                as_expression.span,
+            )
+        }
+        Argument::TSSatisfiesExpression(satisfies_expression) => {
+            let (expression, expression_span) = parse_expression(&satisfies_expression.expression);
+            let ty = crate::parser::types::parse_type(&satisfies_expression.type_annotation)
+                .unwrap_or(crate::ParsedType::Unknown);
+            (
+                ParsedExpression::SatisfiesExpression {
+                    expression: Box::new(expression),
+                    span: Some(text_span_from_oxc_span(expression_span)),
+                    target_type: ty,
+                    target_span: Some(text_span_from_oxc_span(
+                        satisfies_expression.type_annotation.span(),
+                    )),
+                },
+                satisfies_expression.span,
             )
         }
         _ => (ParsedExpression::Unknown, argument.span()),

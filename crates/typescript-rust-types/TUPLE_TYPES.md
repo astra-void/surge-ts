@@ -7,6 +7,7 @@ Supported surface:
 - tuple arrays like `[string, number][]`
 - contextual array literal checking against tuple types
 - numeric literal index access into tuples
+- optional numeric literal index access like `tuple?.[0]` returning `T | undefined`
 - non-literal number index access returns the union of tuple element types
 - tuple values are assignable to compatible arrays
 - arrays are not assignable to tuples

@@ -266,6 +266,79 @@ pub(crate) fn evaluate_expression(
             symbols,
             ctx,
         ),
+        ParsedExpression::SatisfiesExpression {
+            expression: satisfied_expression,
+            span,
+            target_type,
+            target_span: _,
+        } => {
+            // Resolve the target type
+            let resolved_target_type = crate::infer::map_parsed_type(target_type.clone(), ctx);
+
+            // Evaluate the left expression contextually against the target type
+            // This pushes contextual diagnostics (like excess properties, missing properties).
+            let contextual_inferred =
+                crate::checks::expected::evaluate_expression_with_expected_type(
+                    satisfied_expression,
+                    span.or(fallback_span),
+                    Some(&resolved_target_type),
+                    crate::checks::expected::ExpectedTypeDiagnostic::SatisfiesNotAssignable,
+                    symbols,
+                    ctx,
+                );
+
+            // We must also perform a top-level assignability check for things that don't do it
+            // contextually (e.g. primitives, identifiers). However, if contextual checking already
+            // failed and returned Unknown, we might get false cascades. Let's do a clean check
+            // against the original inferred type.
+            let original_inferred = crate::infer::infer_expression(satisfied_expression, symbols);
+
+            // Check if contextual check already failed (meaning it returned Unknown when actual wasn't Unknown).
+            let mut failed = matches!(
+                contextual_inferred,
+                crate::infer::InferredExpression::Unknown
+            );
+
+            if let crate::infer::InferredExpression::Known(actual_type) = &original_inferred {
+                if *actual_type != typescript_rust_types::Type::Unknown
+                    && resolved_target_type != typescript_rust_types::Type::Unknown
+                {
+                    let needs_top_level_check = match satisfied_expression.as_ref() {
+                        typescript_rust_syntax::ParsedExpression::ObjectLiteral { .. }
+                        | typescript_rust_syntax::ParsedExpression::ArrayLiteral { .. }
+                        | typescript_rust_syntax::ParsedExpression::Conditional { .. } => !failed,
+                        _ => true,
+                    };
+
+                    if needs_top_level_check
+                        && !typescript_rust_types::is_assignable_to(
+                            actual_type,
+                            &resolved_target_type,
+                        )
+                    {
+                        failed = true;
+                        let actual_type_name = actual_type.name();
+                        let target_type_name = resolved_target_type.name();
+                        let diagnostic = typescript_rust_diagnostics::Diagnostic::ts1360(
+                            &actual_type_name,
+                            &target_type_name,
+                            ctx.file_name.clone(),
+                        );
+                        let diagnostic = match span.or(fallback_span) {
+                            Some(span) => diagnostic.with_span(crate::context::convert_span(span)),
+                            None => diagnostic,
+                        };
+                        ctx.push(diagnostic);
+                    }
+                }
+            }
+
+            if failed {
+                crate::infer::InferredExpression::Unknown
+            } else {
+                original_inferred
+            }
+        }
         ParsedExpression::TypeAssertion {
             expression: asserted_expression,
             expression_span,

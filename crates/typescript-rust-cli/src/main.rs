@@ -17,6 +17,21 @@ use typescript_rust_checker::{
 use typescript_rust_config::{TsConfigLoadOptions, load_tsconfig};
 use typescript_rust_diagnostics::render_diagnostics;
 
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum CliDiagnosticProfile {
+    Tsc,
+    Native,
+}
+
+impl Into<typescript_rust_checker::DiagnosticProfile> for CliDiagnosticProfile {
+    fn into(self) -> typescript_rust_checker::DiagnosticProfile {
+        match self {
+            CliDiagnosticProfile::Tsc => typescript_rust_checker::DiagnosticProfile::Tsc,
+            CliDiagnosticProfile::Native => typescript_rust_checker::DiagnosticProfile::Native,
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(author, version, about, disable_help_subcommand = true)]
 struct Cli {
@@ -40,6 +55,9 @@ struct Cli {
 
     #[arg(long, value_enum)]
     format: Option<ReportFormat>,
+
+    #[arg(long = "diagnosticProfile", value_enum)]
+    diagnostic_profile: Option<CliDiagnosticProfile>,
 
     #[arg(long = "maxDiagnostics")]
     max_diagnostics: Option<usize>,
@@ -89,6 +107,7 @@ fn main() -> ExitCode {
             cli.format.unwrap_or(ReportFormat::Text),
             cli.max_diagnostics,
             cli.stub_external_modules,
+            cli.diagnostic_profile.unwrap_or(CliDiagnosticProfile::Tsc).into(),
         );
     }
 
@@ -125,6 +144,7 @@ fn main() -> ExitCode {
         cli.format.unwrap_or(ReportFormat::Text),
         cli.max_diagnostics,
         cli.ignore_config,
+        cli.diagnostic_profile.unwrap_or(CliDiagnosticProfile::Tsc).into(),
     )
 }
 
@@ -137,6 +157,7 @@ fn run_single_file_mode(
     format: ReportFormat,
     max_diagnostics: Option<usize>,
     ignore_config: bool,
+    diagnostic_profile: typescript_rust_checker::DiagnosticProfile,
 ) -> ExitCode {
     if !ignore_config
         && std::env::current_dir()

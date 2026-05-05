@@ -1,17 +1,25 @@
+# Editor / IDE
 .vscode
+.idea
+
+# Rust / build artifacts
 target
-digest.txt
+
+# JavaScript / TypeScript
 node_modules/
 .pnpm-store/
 dist
 coverage
-*.log
 *.tsbuildinfo
-.env
-.DS_Store
-.idea
+
+# Generated / local files
+digest.txt
 .local-projects/
+.bench
+.env
+
+# Logs / OS cruft
+*.log
 pnpm-debug.log*
 npm-debug.log*
-pnpm-debug.log*
-.bench
+.DS_Store
