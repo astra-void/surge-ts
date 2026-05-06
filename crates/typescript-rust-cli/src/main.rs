@@ -15,7 +15,7 @@ use typescript_rust_checker::{
     CheckerOptions, SourceFileInput, check_program_with_options, check_source_with_options,
 };
 use typescript_rust_config::{TsConfigLoadOptions, load_tsconfig};
-use typescript_rust_diagnostics::render_diagnostics;
+use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode, render_diagnostics};
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum CliDiagnosticProfile {
@@ -251,6 +251,19 @@ fn run_project_mode(
         return ExitCode::SUCCESS;
     }
 
+    if loaded.files.is_empty() {
+        let diagnostics = vec![project_has_no_source_files_diagnostic(&loaded)];
+        return render_project_mode_output(
+            &loaded,
+            &diagnostics,
+            &[],
+            show_spans,
+            compat_report,
+            format,
+            max_diagnostics,
+        );
+    }
+
     let mut inputs = Vec::with_capacity(loaded.files.len());
     let mut sources = Vec::with_capacity(loaded.files.len());
 
@@ -298,14 +311,34 @@ fn run_project_mode(
     };
 
     let diagnostics = check_program_with_options(inputs, checker_options);
+    render_project_mode_output(
+        &loaded,
+        &diagnostics,
+        &sources,
+        show_spans,
+        compat_report,
+        format,
+        max_diagnostics,
+    )
+}
+
+fn render_project_mode_output(
+    loaded: &typescript_rust_config::LoadedTsConfig,
+    diagnostics: &[Diagnostic],
+    sources: &[(PathBuf, String, String)],
+    show_spans: bool,
+    compat_report: bool,
+    format: ReportFormat,
+    max_diagnostics: Option<usize>,
+) -> ExitCode {
     if compat_report {
-        let report = build_project_compatibility_report(&loaded, &diagnostics, &sources);
+        let report = build_project_compatibility_report(loaded, diagnostics, sources);
         match format {
             ReportFormat::Text => {
                 println!("{}", render_project_compatibility_report_text(&report));
                 let preview = render_project_diagnostics_preview(
-                    &diagnostics,
-                    &sources,
+                    diagnostics,
+                    sources,
                     show_spans,
                     max_diagnostics,
                 );
@@ -330,8 +363,8 @@ fn run_project_mode(
     match format {
         ReportFormat::Text => {
             let preview = render_project_diagnostics_preview(
-                &diagnostics,
-                &sources,
+                diagnostics,
+                sources,
                 show_spans,
                 max_diagnostics,
             );
@@ -343,9 +376,9 @@ fn run_project_mode(
             println!(
                 "{}",
                 serde_json::to_string_pretty(&render_project_diagnostics_json(
-                    &loaded,
-                    &diagnostics,
-                    &sources,
+                    loaded,
+                    diagnostics,
+                    sources,
                     max_diagnostics
                 ))
                 .unwrap()
@@ -471,6 +504,19 @@ fn build_show_config_json(loaded: &typescript_rust_config::LoadedTsConfig) -> Va
     );
 
     Value::Object(root)
+}
+
+fn project_has_no_source_files_diagnostic(
+    loaded: &typescript_rust_config::LoadedTsConfig,
+) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticCode::Custom("typescript-rust::project-has-no-source-files"),
+        format!(
+            "no source files were discovered for {}",
+            loaded.config_path.display()
+        ),
+        loaded.config_path.display().to_string(),
+    )
 }
 
 fn render_diagnostics_with_spans(

@@ -1419,6 +1419,48 @@ fn cli_compat_report_includes_files_loaded() {
 }
 
 #[test]
+fn cli_project_reports_zero_source_files_explicitly() {
+    let root = temp_dir("project-no-source-files");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["src"] }"#);
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(
+        codes,
+        vec!["typescript-rust::project-has-no-source-files".to_string()]
+    );
+}
+
+#[test]
+fn cli_compat_report_reports_visibility_warning_when_no_sources_load() {
+    let root = temp_dir("project-no-source-files-report");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["src"] }"#);
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["filesLoaded"], Value::from(0));
+    assert_eq!(
+        parsed["visibilityWarning"],
+        Value::String("no source files were discovered for the project".to_string())
+    );
+    assert_eq!(
+        parsed["byCode"][0]["code"],
+        Value::String("typescript-rust::project-has-no-source-files".to_string())
+    );
+}
+
+#[test]
 fn cli_compat_report_includes_parser_error_count() {
     let root = temp_dir("project-parser-error-count");
     write_file(
@@ -1463,6 +1505,45 @@ fn cli_compat_report_with_max_diagnostics_counts_all() {
     assert!(stdout.contains("Diagnostics: 2"));
     assert!(stdout.contains("TS2322  2"));
     assert!(stdout.contains("Showing first 1 of 2 diagnostics."));
+}
+
+#[test]
+fn cli_project_file_discovery_fixture_loads_all_supported_extensions() {
+    let project = compat_project_root("project-file-discovery-extensions").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert_eq!(codes.iter().filter(|code| *code == "TS2322").count(), 4);
+    assert!(codes.contains(&"typescript-rust::unsupported-declaration".to_string()));
+}
+
+#[test]
+fn cli_project_file_discovery_fixture_compat_report_counts_loaded_files() {
+    let project = compat_project_root("project-file-discovery-extensions").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["filesLoaded"], Value::from(5));
+    assert!(parsed.get("visibilityWarning").is_none());
+}
+
+#[test]
+fn cli_tsx_parser_safe_basic_fixture_reports_ts2322() {
+    let project = compat_project_root("tsx-parser-safe-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert_eq!(json_diagnostic_codes(&parsed), vec!["TS2322".to_string()]);
 }
 
 #[test]

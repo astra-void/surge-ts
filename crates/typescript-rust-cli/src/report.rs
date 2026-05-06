@@ -32,6 +32,7 @@ pub struct CompatReportParserErrorEntry {
 pub struct ProjectCompatibilityReport {
     pub root_dir: String,
     pub files_loaded: usize,
+    pub visibility_warning: Option<String>,
     pub diagnostics_total: usize,
     pub by_code: Vec<CompatReportCountEntry>,
     pub by_file: Vec<CompatReportCountEntry>,
@@ -126,6 +127,11 @@ pub fn build_project_compatibility_report(
     ProjectCompatibilityReport {
         root_dir: loaded.root_dir.display().to_string(),
         files_loaded: loaded.files.len(),
+        visibility_warning: if loaded.files.is_empty() {
+            Some("no source files were discovered for the project".to_string())
+        } else {
+            None
+        },
         diagnostics_total: diagnostics.len(),
         by_code: sort_counts(by_code),
         by_file: sort_counts(by_file),
@@ -166,6 +172,9 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     lines.push("Compatibility report".to_string());
     lines.push(format!("Root dir: {}", report.root_dir));
     lines.push(format!("Files loaded: {}", report.files_loaded));
+    if let Some(warning) = &report.visibility_warning {
+        lines.push(format!("Visibility warning: {warning}"));
+    }
     lines.push(format!("Diagnostics: {}", report.diagnostics_total));
     lines.push(String::new());
     lines.push("Diagnostic coverage:".to_string());
@@ -262,6 +271,12 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
         "filesLoaded".to_string(),
         Value::from(report.files_loaded as u64),
     );
+    if let Some(warning) = &report.visibility_warning {
+        root.insert(
+            "visibilityWarning".to_string(),
+            Value::String(warning.clone()),
+        );
+    }
     root.insert(
         "diagnosticsTotal".to_string(),
         Value::from(report.diagnostics_total as u64),

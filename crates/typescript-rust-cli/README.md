@@ -14,6 +14,12 @@ Diagnostics are catalog-driven and rendered through the shared diagnostics crate
 - Compatibility report: `typescript-rust-cli --project <tsconfig.json> --compatReport`
 - Stub external modules: `typescript-rust-cli --project <tsconfig.json> --stubExternalModules`
 
+`--compatReport` always prints the discovered file count. If project mode loads
+zero source files, the CLI emits a custom
+`typescript-rust::project-has-no-source-files` diagnostic and the report
+includes a visibility warning instead of silently returning an empty
+comparison.
+
 ## External Modules (v0.63)
 
 By default, unresolved non-relative package imports emit TS2307.
@@ -24,8 +30,11 @@ This is a typescript-rust-only compatibility/triage mode.
 
 Loaded `.d.ts` files from project inputs participate in semantic checking.
 Bare package imports (`pkg`, `@scope/pkg`) and exact subpaths resolve their `.d.ts` entrypoints via `types`, `typings`, `exports["types"]`, or `index.d.ts` fallback.
-Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. The CLI still does not discover full package resolution, wildcard `exports`, `@types`, or `lib.d.ts`. `baseUrl` resolution remains unsupported/deprecated. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`, to reduce TS2304 noise. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. Utility types mostly suppress TS2304 and do not implement mapped/conditional type semantics yet. `noLib: true` disables synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
+Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. The CLI still does not discover full package resolution, wildcard `exports`, `@types`, or `lib.d.ts`. `baseUrl` resolution remains unsupported/deprecated. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`, to reduce TS2304 noise. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit`, but not the full utility-type ecosystem; `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers, and `Record<string, T>` / index-signature style behavior remains unsupported. `noLib: true` disables synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
 Default export, namespace import, named re-export, type-only re-export, star re-export, duplicate ambient module, and duplicate ambient global behavior is pinned rather than full TypeScript declaration merging.
+
+`.tsx` files are visible to project mode, but that does not imply JSX
+transforms, JSX namespace modeling, React globals, or DOM support.
 
 
 ## Single-file behavior
