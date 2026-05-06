@@ -110,9 +110,7 @@ function main(argv = process.argv.slice(2)): void {
   for (const projectInput of args.projects) {
     const resolvedTsconfig = path.isAbsolute(projectInput)
       ? projectInput
-      : resolveProjectPresetOrPath(projectInput).catch
-        ? resolveProjectPresetOrPath(projectInput) // Handle if it throws? Actually just let it throw or resolve manually
-        : resolveProjectLocally(projectInput);
+      : resolveProjectLocally(projectInput);
 
     // Guard against ignoreDeprecations in committed fixtures
     if (!resolvedTsconfig.includes('.bench/generated') && !resolvedTsconfig.includes('target/bench')) {

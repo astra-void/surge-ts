@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {},
+  "files": [
+    "src/source.ts",
+    "src/defaultThing.ts",
+    "src/starSource.ts",
+    "src/barrel.ts",
+    "src/consumer.ts"
+  ]
+}

@@ -42,33 +42,21 @@ fn parse_package_specifier(specifier: &str) -> Option<(String, Option<String>)> 
     }
 }
 
-fn find_types_condition(val: &serde_json::Value) -> Option<String> {
-    match val {
-        serde_json::Value::Object(obj) => {
-            if let Some(types_val) = obj.get("types") {
-                if let serde_json::Value::String(s) = types_val {
-                    return Some(s.clone());
-                }
-            }
-            // search nested
-            for (_, v) in obj {
-                if let Some(s) = find_types_condition(v) {
-                    return Some(s);
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
 fn resolve_exports_types(exports: &serde_json::Value, subpath_key: &str) -> Option<String> {
+    if subpath_key.contains('*') {
+        return None;
+    }
+
     match exports {
         serde_json::Value::Object(map) => {
             if let Some(val) = map.get(subpath_key) {
                 match val {
                     serde_json::Value::String(s) if is_declaration_file_path(s) => Some(s.clone()),
-                    serde_json::Value::Object(_) => find_types_condition(val),
+                    serde_json::Value::Object(obj) => obj
+                        .get("types")
+                        .and_then(|types_val| types_val.as_str())
+                        .filter(|s| is_declaration_file_path(s))
+                        .map(|s| s.to_string()),
                     _ => None,
                 }
             } else {
@@ -387,14 +375,8 @@ mod tests {
             Some("./dist/string-dts.d.ts".to_string())
         );
         assert_eq!(resolve_exports_types(&exports, "./runtime-only"), None);
-        assert_eq!(
-            resolve_exports_types(&exports, "./feature-nested"),
-            Some("./dist/feature.d.ts".to_string())
-        );
-        assert_eq!(
-            resolve_exports_types(&exports, "./wild/*"),
-            Some("./dist/*.d.ts".to_string())
-        );
+        assert_eq!(resolve_exports_types(&exports, "./feature-nested"), None);
+        assert_eq!(resolve_exports_types(&exports, "./wild/*"), None);
         assert_eq!(resolve_exports_types(&exports, "./wild/feature"), None);
         assert_eq!(resolve_exports_types(&exports, "./missing"), None);
     }

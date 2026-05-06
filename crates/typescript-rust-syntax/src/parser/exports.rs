@@ -95,6 +95,11 @@ pub(crate) fn parse_export_default_declaration(
 
             ParsedDefaultExportDeclaration::Function(function)
         }
+        ExportDefaultDeclarationKind::ClassDeclaration(_) => {
+            ParsedDefaultExportDeclaration::Class {
+                span: Some(text_span_from_oxc_span(declaration.span)),
+            }
+        }
         ExportDefaultDeclarationKind::BooleanLiteral(boolean_literal) => {
             ParsedDefaultExportDeclaration::Expression(ParsedExpression::BooleanLiteral(
                 boolean_literal.value,
@@ -200,10 +205,21 @@ pub(crate) fn parse_export_all_declaration(
     let module_specifier = declaration.source.value.to_string();
     let module_specifier_span = Some(text_span_from_oxc_span(declaration.source.span));
 
-    if declaration.exported.is_some() || matches!(declaration.export_kind, ImportOrExportKind::Type)
-    {
+    if matches!(declaration.export_kind, ImportOrExportKind::Type) {
         return Some(vec![ParsedStatement::ExportDeclaration(
             ParsedExportDeclaration::Unsupported { span },
+        )]);
+    }
+
+    if let Some(exported) = declaration.exported.as_ref() {
+        return Some(vec![ParsedStatement::ExportDeclaration(
+            ParsedExportDeclaration::Namespace {
+                exported_name: module_export_name_to_string(exported),
+                exported_name_span: Some(text_span_from_oxc_span(exported.span())),
+                module_specifier,
+                module_specifier_span,
+                span,
+            },
         )]);
     }
 
@@ -244,6 +260,7 @@ fn parse_export_specifier(specifier: &ExportSpecifier<'_>) -> Option<ParsedExpor
         local_name,
         exported_name,
         name_span: Some(text_span_from_oxc_span(specifier.local.span())),
+        is_type_only: matches!(specifier.export_kind, ImportOrExportKind::Type),
     })
 }
 

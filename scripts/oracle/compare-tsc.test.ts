@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 
 import {
+  classifyTs2304Identifier,
+  classifyTs2307ModuleSpecifier,
   buildTypeScriptCommand,
   buildTypeScriptRustCommand,
   compareDiagnostics,
   countDiagnostics,
+  extractTs2305ModuleExport,
   parseArgs,
   parseTypeScriptDiagnostics,
   parseTypeScriptRustDiagnostics,
+  nodeModulesSourcePrefix,
   renderComparisonText,
   resolveOracleMode,
   resolveFilePath,
@@ -26,6 +30,10 @@ function run() {
   oracle_count_by_code();
   oracle_count_by_file_code();
   oracle_count_by_file_code_line();
+  oracle_extract_ts2305_module_export();
+  oracle_classify_ts2307_module_specifier();
+  oracle_classify_ts2304_identifier();
+  oracle_node_modules_source_prefix();
   oracle_compare_match();
   oracle_compare_only_typescript();
   oracle_compare_only_typescript_rust();
@@ -42,8 +50,12 @@ function run() {
   oracle_args_accepts_package_declarations_project_preset();
   oracle_args_accepts_declarations_basic_project_preset();
   oracle_args_accepts_declarations_hardening_project_preset();
+  oracle_args_accepts_module_export_visibility_hardening_project_preset();
+  oracle_args_accepts_declaration_reexports_hardening_project_preset();
+  oracle_args_accepts_package_exports_types_hardening_project_preset();
   oracle_args_accepts_module_forms_project_preset();
   oracle_args_accepts_relative_js_extension_substitution_basic_project_preset();
+  oracle_args_accepts_relative_directory_index_basic_project_preset();
   oracle_args_accepts_skip_lib_check_dependency_dts_project_preset();
   oracle_args_accepts_skip_lib_check_local_dts_project_preset();
   oracle_args_accepts_project_tsconfig_path();
@@ -57,10 +69,16 @@ function run() {
   oracle_builds_tsc_project_command_with_project();
   oracle_builds_tsc_project_command_with_declarations_basic_preset();
   oracle_builds_tsc_project_command_with_declarations_hardening_preset();
+  oracle_builds_tsc_project_command_with_module_export_visibility_hardening_preset();
+  oracle_builds_tsc_project_command_with_declaration_reexports_hardening_preset();
+  oracle_builds_tsc_project_command_with_package_exports_types_hardening_preset();
   oracle_builds_tsc_file_command_without_project();
   oracle_builds_rust_project_command_with_project();
   oracle_builds_rust_project_command_with_declarations_basic_preset();
   oracle_builds_rust_project_command_with_declarations_hardening_preset();
+  oracle_builds_rust_project_command_with_module_export_visibility_hardening_preset();
+  oracle_builds_rust_project_command_with_declaration_reexports_hardening_preset();
+  oracle_builds_rust_project_command_with_package_exports_types_hardening_preset();
   oracle_builds_rust_file_command_without_project();
   oracle_output_includes_mode_project();
   oracle_output_includes_mode_file();
@@ -211,6 +229,41 @@ function oracle_count_by_file_code_line() {
 
   assert.equal(counts.get('src/a.ts :: TS2322 :: line=3'), 2);
   assert.equal(counts.get('src/a.ts :: TS2322 :: line=4'), 1);
+}
+
+function oracle_extract_ts2305_module_export() {
+  assert.deepEqual(
+    extractTs2305ModuleExport("Module 'react' has no exported member 'default'."),
+    { moduleSpecifier: 'react', exportName: 'default' },
+  );
+}
+
+function oracle_classify_ts2307_module_specifier() {
+  assert.equal(classifyTs2307ModuleSpecifier('..'), 'relative');
+  assert.equal(classifyTs2307ModuleSpecifier('../core/auth.gen'), 'generated-file');
+  assert.equal(classifyTs2307ModuleSpecifier('../../vitest.config'), 'config/tooling');
+  assert.equal(classifyTs2307ModuleSpecifier('../../package.json'), 'json');
+  assert.equal(classifyTs2307ModuleSpecifier('@trpc/client'), 'package');
+  assert.equal(classifyTs2307ModuleSpecifier('@trpc/server/adapters/standalone'), 'package-subpath');
+}
+
+function oracle_classify_ts2304_identifier() {
+  assert.equal(classifyTs2304Identifier('Headers'), 'dom-like');
+  assert.equal(classifyTs2304Identifier('process'), 'node-like');
+  assert.equal(classifyTs2304Identifier('JSX'), 'jsx-like');
+  assert.equal(classifyTs2304Identifier('queryClient'), 'local unresolved');
+  assert.equal(classifyTs2304Identifier('Maybe'), 'package-derived');
+}
+
+function oracle_node_modules_source_prefix() {
+  assert.equal(
+    nodeModulesSourcePrefix('/repo/node_modules/fetch-blob/index.d.ts'),
+    'fetch-blob',
+  );
+  assert.equal(
+    nodeModulesSourcePrefix('/repo/node_modules/.pnpm/fetch-blob@3.2.0/node_modules/fetch-blob/index.js'),
+    'fetch-blob',
+  );
 }
 
 function oracle_compare_match() {
@@ -397,6 +450,39 @@ function oracle_args_accepts_declarations_hardening_project_preset() {
   );
 }
 
+function oracle_args_accepts_module_export_visibility_hardening_project_preset() {
+  const parsed = parseArgs(['--project', 'module-export-visibility-hardening']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/module-export-visibility-hardening/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_declaration_reexports_hardening_project_preset() {
+  const parsed = parseArgs(['--project', 'declaration-reexports-hardening']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/declaration-reexports-hardening/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_package_exports_types_hardening_project_preset() {
+  const parsed = parseArgs(['--project', 'package-exports-types-hardening']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/package-exports-types-hardening/tsconfig.json'),
+  );
+}
+
 function oracle_args_accepts_module_forms_project_preset() {
   const parsed = parseArgs(['--project', 'module-forms']);
   const mode = resolveOracleMode(parsed);
@@ -413,6 +499,17 @@ function oracle_args_accepts_relative_js_extension_substitution_basic_project_pr
   assert.equal(
     mode.resolvedTsconfig,
     path.resolve('tests/compat-projects/relative-js-extension-substitution-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_relative_directory_index_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'relative-directory-index-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/relative-directory-index-basic/tsconfig.json'),
   );
 }
 
@@ -508,6 +605,27 @@ function oracle_builds_tsc_project_command_with_declarations_hardening_preset() 
   );
 }
 
+function oracle_builds_tsc_project_command_with_module_export_visibility_hardening_preset() {
+  assert.equal(
+    buildTypeScriptCommand('project', 'tests/compat-projects/module-export-visibility-hardening/tsconfig.json'),
+    'pnpm exec tsc --noEmit --pretty false --project tests/compat-projects/module-export-visibility-hardening/tsconfig.json',
+  );
+}
+
+function oracle_builds_tsc_project_command_with_declaration_reexports_hardening_preset() {
+  assert.equal(
+    buildTypeScriptCommand('project', 'tests/compat-projects/declaration-reexports-hardening/tsconfig.json'),
+    'pnpm exec tsc --noEmit --pretty false --project tests/compat-projects/declaration-reexports-hardening/tsconfig.json',
+  );
+}
+
+function oracle_builds_tsc_project_command_with_package_exports_types_hardening_preset() {
+  assert.equal(
+    buildTypeScriptCommand('project', 'tests/compat-projects/package-exports-types-hardening/tsconfig.json'),
+    'pnpm exec tsc --noEmit --pretty false --project tests/compat-projects/package-exports-types-hardening/tsconfig.json',
+  );
+}
+
 function oracle_builds_tsc_file_command_without_project() {
   assert.equal(
     buildTypeScriptCommand('file', 'examples/basic.ts'),
@@ -530,6 +648,24 @@ function oracle_builds_rust_project_command_with_declarations_basic_preset() {
 function oracle_builds_rust_project_command_with_declarations_hardening_preset() {
   const actual = buildTypeScriptRustCommand('project', 'tests/compat-projects/declarations-hardening/tsconfig.json').replace(/\\/g, '/');
   const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/declarations-hardening/tsconfig.json --format json`.replace(/\\/g, '/');
+  assert.equal(actual, expected);
+}
+
+function oracle_builds_rust_project_command_with_module_export_visibility_hardening_preset() {
+  const actual = buildTypeScriptRustCommand('project', 'tests/compat-projects/module-export-visibility-hardening/tsconfig.json').replace(/\\/g, '/');
+  const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/module-export-visibility-hardening/tsconfig.json --format json`.replace(/\\/g, '/');
+  assert.equal(actual, expected);
+}
+
+function oracle_builds_rust_project_command_with_declaration_reexports_hardening_preset() {
+  const actual = buildTypeScriptRustCommand('project', 'tests/compat-projects/declaration-reexports-hardening/tsconfig.json').replace(/\\/g, '/');
+  const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/declaration-reexports-hardening/tsconfig.json --format json`.replace(/\\/g, '/');
+  assert.equal(actual, expected);
+}
+
+function oracle_builds_rust_project_command_with_package_exports_types_hardening_preset() {
+  const actual = buildTypeScriptRustCommand('project', 'tests/compat-projects/package-exports-types-hardening/tsconfig.json').replace(/\\/g, '/');
+  const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/package-exports-types-hardening/tsconfig.json --format json`.replace(/\\/g, '/');
   assert.equal(actual, expected);
 }
 
@@ -566,6 +702,28 @@ function oracle_output_highlights_project_visibility_failure() {
   const rendered = renderComparisonText(comparison);
   assert.ok(rendered.includes('Project/file discovery problems: likely blocker'));
   assert.ok(rendered.includes('0 rust diagnostics'));
+}
+
+function oracle_output_includes_ts2305_module_export_details() {
+  const comparison = compareDiagnostics(
+    'project',
+    'tests/compat-projects/generics-basic/tsconfig.json',
+    [],
+    [
+      {
+        source: 'typescript-rust',
+        code: 'TS2305',
+        fileName: 'src/index.ts',
+        line: 1,
+        column: 1,
+        message: "Module 'react' has no exported member 'default'.",
+      },
+    ],
+  );
+
+  const rendered = renderComparisonText(comparison);
+  assert.ok(rendered.includes('Top ONLY_RUST TS2305 by module/export:'));
+  assert.ok(rendered.includes('react :: default  1'));
 }
 
 function oracle_json_output_includes_mode() {

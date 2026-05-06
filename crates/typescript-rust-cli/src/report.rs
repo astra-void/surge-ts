@@ -30,6 +30,20 @@ pub struct CompatReportParserErrorEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct CompatReportCategorizedCountEntry {
+    pub key: String,
+    pub category: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompatReportModuleExportCountEntry {
+    pub module_specifier: String,
+    pub export_name: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct ProjectCompatibilityReport {
     pub root_dir: String,
     pub files_loaded: usize,
@@ -48,6 +62,11 @@ pub struct ProjectCompatibilityReport {
     pub diagnostics_by_file_kind: Vec<CompatReportCountEntry>,
     pub by_code: Vec<CompatReportCountEntry>,
     pub by_file: Vec<CompatReportCountEntry>,
+    pub ts2305_by_module_and_export: Vec<CompatReportModuleExportCountEntry>,
+    pub ts2307_by_module_specifier: Vec<CompatReportCategorizedCountEntry>,
+    pub ts2304_by_identifier: Vec<CompatReportCategorizedCountEntry>,
+    pub node_modules_source_diagnostics_total: usize,
+    pub node_modules_source_diagnostics_by_prefix: Vec<CompatReportCountEntry>,
     pub parser_errors: Vec<CompatReportParserErrorEntry>,
     pub external_module_stubs_total: usize,
     pub external_module_stubs: Vec<CompatReportCountEntry>,
@@ -57,7 +76,9 @@ pub struct ProjectCompatibilityReport {
 }
 
 fn is_relative_specifier(specifier: &str) -> bool {
-    specifier.starts_with("./")
+    specifier == "."
+        || specifier == ".."
+        || specifier.starts_with("./")
         || specifier.starts_with("../")
         || specifier.starts_with(".\\")
         || specifier.starts_with("..\\")
@@ -72,6 +93,10 @@ pub fn build_project_compatibility_report(
     let mut by_code = HashMap::<String, usize>::new();
     let mut by_file = HashMap::<String, usize>::new();
     let mut parser_errors = HashMap::<(String, String), usize>::new();
+    let mut ts2305_by_module_and_export = HashMap::<(String, String), usize>::new();
+    let mut ts2307_by_module_specifier = HashMap::<(String, String), usize>::new();
+    let mut ts2304_by_identifier = HashMap::<(String, String), usize>::new();
+    let mut node_modules_source_diagnostics_by_prefix = HashMap::<String, usize>::new();
     let mut external_module_stubs = HashMap::<String, usize>::new();
     let mut external_module_stubs_total = 0;
     let mut declaration_files_loaded = 0;
@@ -83,6 +108,7 @@ pub fn build_project_compatibility_report(
     let mut diagnostics_root_declaration_total = 0;
     let mut diagnostics_dependency_declaration_total = 0;
     let mut diagnostics_generated_declaration_total = 0;
+    let mut node_modules_source_diagnostics_total = 0;
     let mut diagnostics_by_file_kind = HashMap::<String, usize>::new();
     let mut ambient_external_modules_set = std::collections::HashSet::new();
 
@@ -138,7 +164,8 @@ pub fn build_project_compatibility_report(
     }
 
     for diagnostic in diagnostics {
-        *by_code.entry(diagnostic.code.to_string()).or_default() += 1;
+        let code = diagnostic.code.to_string();
+        *by_code.entry(code.clone()).or_default() += 1;
         let file_label = report_path_label(&loaded.root_dir, &diagnostic.file_name);
         *by_file.entry(file_label.clone()).or_default() += 1;
 
@@ -156,10 +183,48 @@ pub fn build_project_compatibility_report(
             )
             .or_default() += 1;
 
-        if diagnostic.code.to_string() == "typescript-rust::parser-error" {
+        if is_node_modules_source_file(&diagnostic.file_name) {
+            node_modules_source_diagnostics_total += 1;
+            if let Some(prefix) = node_modules_source_prefix(&diagnostic.file_name) {
+                *node_modules_source_diagnostics_by_prefix
+                    .entry(prefix)
+                    .or_default() += 1;
+            }
+        }
+
+        if code == "typescript-rust::parser-error" {
             *parser_errors
                 .entry((file_label, diagnostic.message.clone()))
                 .or_default() += 1;
+        }
+
+        match code.as_str() {
+            "TS2305" => {
+                if let Some((module_specifier, export_name)) =
+                    extract_ts2305_module_export(&diagnostic.message)
+                {
+                    *ts2305_by_module_and_export
+                        .entry((module_specifier, export_name))
+                        .or_default() += 1;
+                }
+            }
+            "TS2307" => {
+                if let Some(specifier) = extract_ts2307_module_specifier(&diagnostic.message) {
+                    let category = classify_ts2307_module_specifier(&specifier);
+                    *ts2307_by_module_specifier
+                        .entry((specifier, category.to_string()))
+                        .or_default() += 1;
+                }
+            }
+            "TS2304" => {
+                if let Some(identifier) = extract_ts2304_identifier(&diagnostic.message) {
+                    let category = classify_ts2304_identifier(&identifier);
+                    *ts2304_by_identifier
+                        .entry((identifier, category.to_string()))
+                        .or_default() += 1;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -185,6 +250,13 @@ pub fn build_project_compatibility_report(
         diagnostics_by_file_kind: sort_counts(diagnostics_by_file_kind),
         by_code: sort_counts(by_code),
         by_file: sort_counts(by_file),
+        ts2305_by_module_and_export: sort_module_export_counts(ts2305_by_module_and_export),
+        ts2307_by_module_specifier: sort_categorized_counts(ts2307_by_module_specifier),
+        ts2304_by_identifier: sort_categorized_counts(ts2304_by_identifier),
+        node_modules_source_diagnostics_total,
+        node_modules_source_diagnostics_by_prefix: sort_counts(
+            node_modules_source_diagnostics_by_prefix,
+        ),
         parser_errors: sort_parser_errors(parser_errors),
         external_module_stubs_total,
         external_module_stubs: sort_counts(external_module_stubs),
@@ -316,6 +388,60 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
             lines.push(format!("{}  {}", entry.key, entry.count));
         }
     }
+
+    lines.push(String::new());
+    lines.push("TS2305 by module/export:".to_string());
+    if report.ts2305_by_module_and_export.is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for entry in &report.ts2305_by_module_and_export {
+            lines.push(format!(
+                "{} :: {}  {}",
+                entry.module_specifier, entry.export_name, entry.count
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("TS2307 by module specifier:".to_string());
+    if report.ts2307_by_module_specifier.is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for entry in &report.ts2307_by_module_specifier {
+            lines.push(format!(
+                "{} [{}]  {}",
+                entry.key, entry.category, entry.count
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("TS2304 by identifier:".to_string());
+    if report.ts2304_by_identifier.is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for entry in &report.ts2304_by_identifier {
+            lines.push(format!(
+                "{} [{}]  {}",
+                entry.key, entry.category, entry.count
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(format!(
+        "Node_modules source diagnostics: {}",
+        report.node_modules_source_diagnostics_total
+    ));
+    lines.push("Node_modules source diagnostics by package/source prefix:".to_string());
+    if report.node_modules_source_diagnostics_by_prefix.is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for entry in &report.node_modules_source_diagnostics_by_prefix {
+            lines.push(format!("{}  {}", entry.key, entry.count));
+        }
+    }
+
     lines.push(String::new());
     lines.push(format!("Parser errors: {}", parser_error_total(report)));
     lines.push("Top parser errors:".to_string());
@@ -492,6 +618,90 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
                 })
                 .collect(),
         ),
+    );
+    root.insert(
+        "ts2305ByModuleAndExport".to_string(),
+        Value::Array(
+            report
+                .ts2305_by_module_and_export
+                .iter()
+                .map(|entry| {
+                    let mut item = Map::new();
+                    item.insert(
+                        "moduleSpecifier".to_string(),
+                        Value::String(entry.module_specifier.clone()),
+                    );
+                    item.insert(
+                        "exportName".to_string(),
+                        Value::String(entry.export_name.clone()),
+                    );
+                    item.insert("count".to_string(), Value::from(entry.count as u64));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "ts2307ByModuleSpecifier".to_string(),
+        Value::Array(
+            report
+                .ts2307_by_module_specifier
+                .iter()
+                .map(|entry| {
+                    let mut item = Map::new();
+                    item.insert("specifier".to_string(), Value::String(entry.key.clone()));
+                    item.insert(
+                        "category".to_string(),
+                        Value::String(entry.category.clone()),
+                    );
+                    item.insert("count".to_string(), Value::from(entry.count as u64));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "ts2304ByIdentifier".to_string(),
+        Value::Array(
+            report
+                .ts2304_by_identifier
+                .iter()
+                .map(|entry| {
+                    let mut item = Map::new();
+                    item.insert("identifier".to_string(), Value::String(entry.key.clone()));
+                    item.insert(
+                        "category".to_string(),
+                        Value::String(entry.category.clone()),
+                    );
+                    item.insert("count".to_string(), Value::from(entry.count as u64));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
+    );
+    let mut node_modules_source_json = Map::new();
+    node_modules_source_json.insert(
+        "total".to_string(),
+        Value::from(report.node_modules_source_diagnostics_total as u64),
+    );
+    node_modules_source_json.insert(
+        "byPrefix".to_string(),
+        Value::Array(
+            report
+                .node_modules_source_diagnostics_by_prefix
+                .iter()
+                .map(|entry| {
+                    let mut item = Map::new();
+                    item.insert("prefix".to_string(), Value::String(entry.key.clone()));
+                    item.insert("count".to_string(), Value::from(entry.count as u64));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "nodeModulesSourceDiagnostics".to_string(),
+        Value::Object(node_modules_source_json),
     );
     root.insert(
         "parserErrors".to_string(),
@@ -778,6 +988,29 @@ fn sort_counts(counts: HashMap<String, usize>) -> Vec<CompatReportCountEntry> {
     entries
 }
 
+fn sort_module_export_counts(
+    counts: HashMap<(String, String), usize>,
+) -> Vec<CompatReportModuleExportCountEntry> {
+    let mut entries = counts
+        .into_iter()
+        .map(
+            |((module_specifier, export_name), count)| CompatReportModuleExportCountEntry {
+                module_specifier,
+                export_name,
+                count,
+            },
+        )
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.module_specifier.cmp(&right.module_specifier))
+            .then_with(|| left.export_name.cmp(&right.export_name))
+    });
+    entries
+}
+
 fn sort_parser_errors(
     counts: HashMap<(String, String), usize>,
 ) -> Vec<CompatReportParserErrorEntry> {
@@ -803,6 +1036,29 @@ fn sort_parser_errors(
 
 fn parser_error_total(report: &ProjectCompatibilityReport) -> usize {
     report.parser_errors.iter().map(|entry| entry.count).sum()
+}
+
+fn sort_categorized_counts(
+    counts: HashMap<(String, String), usize>,
+) -> Vec<CompatReportCategorizedCountEntry> {
+    let mut entries = counts
+        .into_iter()
+        .map(
+            |((key, category), count)| CompatReportCategorizedCountEntry {
+                key,
+                category,
+                count,
+            },
+        )
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.key.cmp(&right.key))
+            .then_with(|| left.category.cmp(&right.category))
+    });
+    entries
 }
 
 fn report_path_label(root_dir: &Path, file_name: &str) -> String {
@@ -857,4 +1113,246 @@ fn classify_file_kind(file_name: &str) -> FileKindLabel {
 fn is_declaration_file_name(file_name: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
     lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+}
+
+fn is_node_modules_source_file(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.contains("/node_modules/") && !is_declaration_file_name(file_name)
+}
+
+fn node_modules_source_prefix(file_name: &str) -> Option<String> {
+    let normalized = file_name.replace('\\', "/");
+    let needle = "/node_modules/";
+    let index = normalized.find(needle)?;
+    let remainder = &normalized[index + needle.len()..];
+    let mut segments = remainder.split('/');
+
+    let first = segments.next()?;
+    if first == ".pnpm" {
+        let _package_version = segments.next()?;
+        let _nested = segments.next()?;
+        let package_name = segments.next()?;
+        if package_name.is_empty() {
+            return None;
+        }
+        if package_name.starts_with('@') {
+            let package_subpath = segments.next()?;
+            return Some(format!("{package_name}/{package_subpath}"));
+        }
+        return Some(package_name.to_string());
+    }
+
+    if first.starts_with('@') {
+        let package_subpath = segments.next()?;
+        return Some(format!("{first}/{package_subpath}"));
+    }
+
+    Some(first.to_string())
+}
+
+fn extract_ts2305_module_export(message: &str) -> Option<(String, String)> {
+    let prefix = "Module ";
+    let suffix = " has no exported member ";
+    let start = message.find(prefix)? + prefix.len();
+    let rest = &message[start..];
+    let quote = rest.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let rest = &rest[1..];
+    let module_end = rest.find(quote)?;
+    let module = &rest[..module_end];
+    let rest = &rest[module_end + 1..];
+    let suffix_start = rest.find(suffix)? + suffix.len();
+    let rest = &rest[suffix_start..];
+    let member_quote = rest.chars().next()?;
+    if member_quote != '\'' && member_quote != '"' {
+        return None;
+    }
+    let rest = &rest[1..];
+    let member_end = rest.find(member_quote)?;
+    let member = &rest[..member_end];
+    Some((module.to_string(), member.to_string()))
+}
+
+fn extract_ts2307_module_specifier(message: &str) -> Option<String> {
+    let prefix = "module ";
+    let start = message.find(prefix)? + prefix.len();
+    let rest = &message[start..];
+    let quote = rest.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let rest = &rest[1..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
+}
+
+fn extract_ts2304_identifier(message: &str) -> Option<String> {
+    for prefix in ["Cannot find name ", "Cannot find namespace "] {
+        if let Some(start) = message.find(prefix) {
+            let rest = &message[start + prefix.len()..];
+            let quote = rest.chars().next()?;
+            if quote != '\'' && quote != '"' {
+                continue;
+            }
+            let rest = &rest[1..];
+            if let Some(end) = rest.find(quote) {
+                return Some(rest[..end].to_string());
+            }
+        }
+    }
+
+    None
+}
+
+// These are triage categories for reporting, not semantic claims about the
+// underlying compiler behavior.
+fn classify_ts2307_module_specifier(specifier: &str) -> String {
+    if is_relative_specifier(specifier) {
+        if is_json_module_specifier(specifier) {
+            return "json".to_string();
+        }
+        if is_generated_module_specifier(specifier) {
+            return "generated-file".to_string();
+        }
+        if is_config_tooling_module_specifier(specifier) {
+            return "config/tooling".to_string();
+        }
+        return "relative".to_string();
+    }
+
+    if is_package_subpath_specifier(specifier) {
+        return "package-subpath".to_string();
+    }
+
+    "package".to_string()
+}
+
+fn classify_ts2304_identifier(identifier: &str) -> String {
+    if is_jsx_like_identifier(identifier) {
+        return "jsx-like".to_string();
+    }
+    if is_dom_like_identifier(identifier) {
+        return "dom-like".to_string();
+    }
+    if is_node_like_identifier(identifier) {
+        return "node-like".to_string();
+    }
+    if is_local_unresolved_identifier(identifier) {
+        return "local unresolved".to_string();
+    }
+    if is_package_derived_identifier(identifier) {
+        return "package-derived".to_string();
+    }
+
+    "unknown".to_string()
+}
+
+fn is_json_module_specifier(specifier: &str) -> bool {
+    specifier.to_ascii_lowercase().ends_with(".json")
+}
+
+fn is_generated_module_specifier(specifier: &str) -> bool {
+    let lower = specifier.to_ascii_lowercase();
+    lower.contains(".gen") || lower.contains("/generated/")
+}
+
+fn is_config_tooling_module_specifier(specifier: &str) -> bool {
+    let lower = specifier.to_ascii_lowercase();
+    lower.ends_with(".config")
+        || lower.ends_with(".config.ts")
+        || lower.ends_with(".config.tsx")
+        || lower.ends_with(".config.mts")
+        || lower.ends_with(".config.cts")
+        || lower.ends_with(".config.js")
+        || lower.ends_with(".config.mjs")
+        || lower.ends_with(".config.cjs")
+        || lower.contains(".config/")
+        || lower.contains("/config.")
+        || lower.contains("/config/")
+        || lower.contains("vitest.config")
+        || lower.contains("eslint.config")
+        || lower.contains("tailwind.config")
+        || lower.contains("next.config")
+        || lower.contains("postcss.config")
+        || lower.contains("drizzle.config")
+        || lower.contains("sandbox.config")
+        || lower.contains("playwright.config")
+        || lower.contains("turbo.json")
+        || lower.ends_with("package.json")
+        || lower.ends_with("tsconfig.json")
+        || lower.ends_with("deno.json")
+        || lower.ends_with("vercel.json")
+        || lower.ends_with("package-lock.json")
+}
+
+fn is_package_subpath_specifier(specifier: &str) -> bool {
+    if !specifier.contains('/') {
+        return false;
+    }
+
+    if !specifier.starts_with('@') {
+        return true;
+    }
+
+    specifier.split('/').count() > 2
+}
+
+fn is_jsx_like_identifier(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "JSX" | "IntrinsicElements" | "Fragment" | "React"
+    )
+}
+
+fn is_dom_like_identifier(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "document"
+            | "window"
+            | "navigator"
+            | "Headers"
+            | "FormData"
+            | "URLSearchParams"
+            | "Blob"
+            | "File"
+            | "Response"
+            | "Request"
+            | "ReadableStream"
+            | "WritableStream"
+            | "TransformStream"
+            | "Event"
+            | "MessageEvent"
+            | "HTMLElement"
+            | "Element"
+            | "Node"
+            | "Text"
+            | "Document"
+            | "console"
+    )
+}
+
+fn is_node_like_identifier(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "process" | "Buffer" | "require" | "module" | "exports" | "__dirname" | "__filename"
+    )
+}
+
+fn is_local_unresolved_identifier(identifier: &str) -> bool {
+    identifier
+        .chars()
+        .next()
+        .map(|first| first.is_ascii_lowercase() || first == '_')
+        .unwrap_or(false)
+}
+
+fn is_package_derived_identifier(identifier: &str) -> bool {
+    identifier.len() > 1
+        && identifier
+            .chars()
+            .next()
+            .map(|first| first.is_ascii_uppercase())
+            .unwrap_or(false)
 }

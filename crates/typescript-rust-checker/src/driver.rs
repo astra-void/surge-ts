@@ -317,6 +317,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             }
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Namespace { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
             declaration,
             span,
@@ -324,6 +325,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             ParsedDefaultExportDeclaration::Function(function) => {
                 check_function::check_function_declaration(function, ctx);
             }
+            ParsedDefaultExportDeclaration::Class { .. } => {}
             ParsedDefaultExportDeclaration::Expression(expression) => {
                 expr::check_expression_statement(expression, ctx);
             }

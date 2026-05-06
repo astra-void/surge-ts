@@ -1515,12 +1515,7 @@ fn span_module_unsupported_syntax_points_to_syntax_or_pinned() {
         source_text: source.to_string(),
     }]);
 
-    assert_single_span(
-        source,
-        diagnostics,
-        "typescript-rust::unsupported-module-syntax",
-        span(source, source),
-    );
+    assert_single_span(source, diagnostics, "TS2307", span(source, "\"./foo\""));
 }
 
 #[test]
@@ -1547,12 +1542,7 @@ fn span_module_re_export_star_as_points_to_export_span_or_module_specifier() {
         source_text: source.to_string(),
     }]);
 
-    assert_single_span(
-        source,
-        diagnostics,
-        "typescript-rust::unsupported-module-syntax",
-        span(source, source),
-    );
+    assert_single_span(source, diagnostics, "TS2307", span(source, "\"./foo\""));
 }
 
 #[test]

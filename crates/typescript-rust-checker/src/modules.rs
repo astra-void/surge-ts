@@ -42,7 +42,9 @@ pub(crate) struct ModuleImportBindings {
 }
 
 pub(crate) fn is_relative_specifier(specifier: &str) -> bool {
-    specifier.starts_with("./")
+    specifier == "."
+        || specifier == ".."
+        || specifier.starts_with("./")
         || specifier.starts_with("../")
         || specifier.starts_with(".\\")
         || specifier.starts_with("..\\")
@@ -77,21 +79,33 @@ pub(crate) fn resolve_relative_module(
 
     let candidate_paths = match relative_specifier_kind(&normalized_specifier) {
         RelativeSpecifierKind::ExplicitTs => vec![joined_specifier],
-        RelativeSpecifierKind::ExplicitJs => relative_resolution_candidates_with_js_substitution(
-            &strip_extension(&joined_specifier),
-            &[".ts", ".tsx", ".mts", ".cts"],
-            &[".d.ts", ".d.mts", ".d.cts"],
-        ),
-        RelativeSpecifierKind::ExplicitMjs => relative_resolution_candidates_with_js_substitution(
-            &strip_extension(&joined_specifier),
-            &[".mts", ".d.mts"],
-            &[".mts", ".d.mts"],
-        ),
-        RelativeSpecifierKind::ExplicitCjs => relative_resolution_candidates_with_js_substitution(
-            &strip_extension(&joined_specifier),
-            &[".cts", ".d.cts"],
-            &[".cts", ".d.cts"],
-        ),
+        RelativeSpecifierKind::ExplicitJs => {
+            let mut candidates = vec![joined_specifier.clone()];
+            candidates.extend(relative_resolution_candidates_with_js_substitution(
+                &strip_extension(&joined_specifier),
+                &[".ts", ".tsx"],
+                &[".d.ts"],
+            ));
+            candidates
+        }
+        RelativeSpecifierKind::ExplicitMjs => {
+            let mut candidates = vec![joined_specifier.clone()];
+            candidates.extend(relative_resolution_candidates_with_js_substitution(
+                &strip_extension(&joined_specifier),
+                &[".mts"],
+                &[".d.mts"],
+            ));
+            candidates
+        }
+        RelativeSpecifierKind::ExplicitCjs => {
+            let mut candidates = vec![joined_specifier.clone()];
+            candidates.extend(relative_resolution_candidates_with_js_substitution(
+                &strip_extension(&joined_specifier),
+                &[".cts"],
+                &[".d.cts"],
+            ));
+            candidates
+        }
         RelativeSpecifierKind::Extensionless => relative_resolution_candidates(&joined_specifier),
         RelativeSpecifierKind::Unsupported => return None,
     };
@@ -363,26 +377,20 @@ pub(crate) fn resolve_module_export_table(
                     }
 
                     for specifier in specifiers {
-                        if *is_type_only {
-                            insert_unknown_type_import(
-                                &mut resolved_export_table.type_declarations,
-                                &specifier.exported_name,
-                                ctx.file_name.clone(),
-                                specifier.name_span,
-                            );
-                            continue;
-                        }
-
+                        let specifier_is_type_only = *is_type_only || specifier.is_type_only;
                         insert_unknown_type_import(
                             &mut resolved_export_table.type_declarations,
                             &specifier.exported_name,
                             ctx.file_name.clone(),
                             specifier.name_span,
                         );
-                        insert_unknown_value_import(
-                            &specifier.exported_name,
-                            &mut resolved_export_table.symbols,
-                        );
+
+                        if !specifier_is_type_only {
+                            insert_unknown_value_import(
+                                &specifier.exported_name,
+                                &mut resolved_export_table.symbols,
+                            );
+                        }
                     }
 
                     continue;
@@ -391,16 +399,13 @@ pub(crate) fn resolve_module_export_table(
                 ctx.set_file_name(parsed_files[file_index].file_name.clone());
 
                 for specifier in specifiers {
-                    let type_export = target_export_table
-                        .type_declarations
-                        .get(&specifier.local_name)
-                        .cloned();
-                    let value_export = target_export_table
-                        .symbols
-                        .get(&specifier.local_name)
-                        .cloned();
+                    let specifier_is_type_only = *is_type_only || specifier.is_type_only;
+                    let type_export =
+                        lookup_type_export(&target_export_table, &specifier.local_name);
+                    let value_export =
+                        lookup_value_export(&target_export_table, &specifier.local_name);
 
-                    if *is_type_only {
+                    if specifier_is_type_only {
                         if let Some(type_export) = type_export {
                             export_local_type_declaration(
                                 &type_export,
@@ -461,10 +466,12 @@ pub(crate) fn resolve_module_export_table(
                                 ctx.file_name.clone(),
                                 specifier.name_span,
                             );
-                            insert_unknown_value_import(
-                                &specifier.exported_name,
-                                &mut resolved_export_table.symbols,
-                            );
+                            if !specifier_is_type_only {
+                                insert_unknown_value_import(
+                                    &specifier.exported_name,
+                                    &mut resolved_export_table.symbols,
+                                );
+                            }
                             continue;
                         }
 
@@ -480,12 +487,58 @@ pub(crate) fn resolve_module_export_table(
                             ctx.file_name.clone(),
                             specifier.name_span,
                         );
-                        insert_unknown_value_import(
-                            &specifier.exported_name,
-                            &mut resolved_export_table.symbols,
-                        );
+                        if !specifier_is_type_only {
+                            insert_unknown_value_import(
+                                &specifier.exported_name,
+                                &mut resolved_export_table.symbols,
+                            );
+                        }
                     }
                 }
+            }
+            ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Namespace {
+                exported_name,
+                module_specifier,
+                module_specifier_span,
+                ..
+            }) => {
+                let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table(
+                    module_specifier,
+                    ctx,
+                    parsed_files,
+                    local_module_export_tables,
+                    resolved_module_export_tables,
+                    resolving,
+                    &parsed_files[file_index].file_name,
+                ) else {
+                    if resolve_relative_module(
+                        &parsed_files[file_index].file_name,
+                        module_specifier,
+                        parsed_files,
+                    )
+                    .is_none()
+                    {
+                        if !(ctx.options.stub_external_modules
+                            && is_external_specifier(module_specifier))
+                        {
+                            emit_unresolved_export_module_diagnostic(
+                                ctx,
+                                module_specifier,
+                                *module_specifier_span,
+                            );
+                        }
+                    }
+
+                    insert_unknown_value_import(exported_name, &mut resolved_export_table.symbols);
+                    continue;
+                };
+
+                ctx.set_file_name(parsed_files[file_index].file_name.clone());
+                insert_namespace_export(
+                    &mut resolved_export_table.symbols,
+                    exported_name,
+                    &target_export_table,
+                );
             }
             _ => {}
         }
@@ -639,7 +692,9 @@ fn collect_exports_from_statement(
             }
 
             for specifier in specifiers {
-                if *is_type_only {
+                let specifier_is_type_only = *is_type_only || specifier.is_type_only;
+
+                if specifier_is_type_only {
                     export_local_type_name(
                         &specifier.local_name,
                         &specifier.exported_name,
@@ -693,6 +748,16 @@ fn collect_exports_from_statement(
                     push_duplicate_default_export_diagnostic(ctx, function.name_span.or(*span));
                 }
             }
+            ParsedDefaultExportDeclaration::Class { .. } => {
+                if default_symbol.is_some() {
+                    push_duplicate_default_export_diagnostic(ctx, *span);
+                } else {
+                    *default_symbol = Some(SymbolInfo {
+                        ty: Type::Unknown,
+                        kind: SymbolKind::Const,
+                    });
+                }
+            }
             ParsedDefaultExportDeclaration::Expression(expression) => {
                 if default_symbol.is_some() {
                     push_duplicate_default_export_diagnostic(ctx, *span);
@@ -714,6 +779,7 @@ fn collect_exports_from_statement(
             }
             ParsedDefaultExportDeclaration::Unsupported { .. } => {}
         },
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Namespace { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All { .. }) => {}
         ParsedStatement::TypeAliasDeclaration(alias) => {
             export_local_type_name(
@@ -891,11 +957,8 @@ fn resolve_import_declaration(
             }
 
             for specifier in specifiers {
-                let type_export = export_table
-                    .type_declarations
-                    .get(&specifier.local_name)
-                    .cloned();
-                let value_export = export_table.symbols.get(&specifier.local_name).cloned();
+                let type_export = lookup_type_export(&export_table, &specifier.local_name);
+                let value_export = lookup_value_export(&export_table, &specifier.local_name);
 
                 if *is_type_only {
                     if let Some(type_export) = type_export {
@@ -1189,11 +1252,8 @@ fn resolve_import_declaration(
                     continue;
                 }
 
-                let type_export = export_table
-                    .type_declarations
-                    .get(&specifier.imported_name)
-                    .cloned();
-                let value_export = export_table.symbols.get(&specifier.imported_name).cloned();
+                let type_export = lookup_type_export(&export_table, &specifier.imported_name);
+                let value_export = lookup_value_export(&export_table, &specifier.imported_name);
 
                 if *is_type_only {
                     if let Some(type_export) = type_export {
@@ -1332,6 +1392,35 @@ fn insert_unknown_value_import(local_name: &str, symbols: &mut SymbolTable) {
         SymbolInfo {
             ty: Type::Unknown,
             kind: SymbolKind::Var,
+        },
+    );
+}
+
+fn lookup_type_export(
+    export_table: &ModuleExportTable,
+    local_name: &str,
+) -> Option<TypeDeclarationInfo> {
+    export_table.type_declarations.get(local_name).cloned()
+}
+
+fn lookup_value_export(export_table: &ModuleExportTable, local_name: &str) -> Option<SymbolInfo> {
+    if local_name == "default" {
+        return export_table.default_symbol.clone();
+    }
+
+    export_table.symbols.get(local_name).cloned()
+}
+
+fn insert_namespace_export(
+    symbols: &mut SymbolTable,
+    exported_name: &str,
+    export_table: &ModuleExportTable,
+) {
+    let _ = symbols.insert(
+        exported_name.to_string(),
+        SymbolInfo {
+            ty: namespace_export_object_type(export_table),
+            kind: SymbolKind::Const,
         },
     );
 }
@@ -1490,6 +1579,10 @@ enum RelativeSpecifierKind {
 fn relative_specifier_kind(specifier: &str) -> RelativeSpecifierKind {
     let last_segment = specifier.rsplit('/').next().unwrap_or(specifier);
 
+    if last_segment == "." || last_segment == ".." {
+        return RelativeSpecifierKind::Extensionless;
+    }
+
     if last_segment.ends_with(".d.ts")
         || last_segment.ends_with(".d.mts")
         || last_segment.ends_with(".d.cts")
@@ -1576,18 +1669,19 @@ fn normalize_module_path(path: &str) -> String {
 
 fn relative_resolution_candidates(base: &str) -> Vec<String> {
     vec![
+        base.to_string(),
         format!("{base}.ts"),
         format!("{base}.tsx"),
+        format!("{base}.d.ts"),
         format!("{base}.mts"),
         format!("{base}.cts"),
-        format!("{base}.d.ts"),
         format!("{base}.d.mts"),
         format!("{base}.d.cts"),
         format!("{base}/index.ts"),
         format!("{base}/index.tsx"),
+        format!("{base}/index.d.ts"),
         format!("{base}/index.mts"),
         format!("{base}/index.cts"),
-        format!("{base}/index.d.ts"),
         format!("{base}/index.d.mts"),
         format!("{base}/index.d.cts"),
     ]
@@ -1609,9 +1703,9 @@ fn relative_resolution_candidates_with_js_substitution(
 
     candidates.push(format!("{base}/index.ts"));
     candidates.push(format!("{base}/index.tsx"));
+    candidates.push(format!("{base}/index.d.ts"));
     candidates.push(format!("{base}/index.mts"));
     candidates.push(format!("{base}/index.cts"));
-    candidates.push(format!("{base}/index.d.ts"));
     candidates.push(format!("{base}/index.d.mts"));
     candidates.push(format!("{base}/index.d.cts"));
 
@@ -1706,6 +1800,29 @@ mod tests {
         ]);
         let resolved = resolve_relative_module("src/pages/index.ts", "../user", &files).unwrap();
         assert_eq!(resolved.resolved_file_name, "src/user.ts");
+    }
+
+    #[test]
+    fn module_resolver_directory_index_current_directory() {
+        let files = program(&[
+            ("src/index.ts", "export {}"),
+            ("src/models/index.ts", "export {}"),
+            ("src/pages/index.ts", "export {}"),
+        ]);
+        let resolved = resolve_relative_module("src/pages/index.ts", "..", &files).unwrap();
+        assert_eq!(resolved.resolved_file_name, "src/index.ts");
+    }
+
+    #[test]
+    fn module_resolver_directory_index_grandparent_directory() {
+        let files = program(&[
+            ("src/index.ts", "export {}"),
+            ("src/models/index.ts", "export {}"),
+            ("src/pages/nested/index.ts", "export {}"),
+        ]);
+        let resolved =
+            resolve_relative_module("src/pages/nested/index.ts", "../..", &files).unwrap();
+        assert_eq!(resolved.resolved_file_name, "src/index.ts");
     }
 
     #[test]

@@ -28,6 +28,18 @@ export type CountEntry = {
   count: number;
 };
 
+export type CategorizedCountEntry = {
+  key: string;
+  category: string;
+  count: number;
+};
+
+export type ModuleExportCountEntry = {
+  moduleSpecifier: string;
+  exportName: string;
+  count: number;
+};
+
 export type DiagnosticTotals = {
   total: number;
   byCode: CountEntry[];
@@ -66,6 +78,14 @@ export type ComparisonResult = {
     byCodeMatch: boolean;
     byFileCodeMatch: boolean;
     byFileCodeLineMatch: boolean | null;
+  };
+  details?: {
+    onlyTypeScriptRust?: {
+      ts2305ByModuleAndExport?: ModuleExportCountEntry[];
+      ts2307ByModuleSpecifier?: CategorizedCountEntry[];
+      ts2304ByIdentifier?: CategorizedCountEntry[];
+      nodeModulesSourceDiagnosticsByPrefix?: CountEntry[];
+    };
   };
 };
 
@@ -113,9 +133,13 @@ const subprocessMaxBuffer = 50 * 1024 * 1024;
 const fixturePresets: Record<string, string> = {
   'declarations-basic': path.join(workspaceRoot, 'tests/compat-projects/declarations-basic/tsconfig.json'),
   'declarations-hardening': path.join(workspaceRoot, 'tests/compat-projects/declarations-hardening/tsconfig.json'),
+  'module-export-visibility-hardening': path.join(workspaceRoot, 'tests/compat-projects/module-export-visibility-hardening/tsconfig.json'),
+  'declaration-reexports-hardening': path.join(workspaceRoot, 'tests/compat-projects/declaration-reexports-hardening/tsconfig.json'),
+  'package-exports-types-hardening': path.join(workspaceRoot, 'tests/compat-projects/package-exports-types-hardening/tsconfig.json'),
   'diagnostics-pack': path.join(workspaceRoot, 'tests/compat-projects/diagnostics-pack/tsconfig.json'),
   'generics-basic': path.join(workspaceRoot, 'tests/compat-projects/generics-basic/tsconfig.json'),
   'relative-js-extension-substitution-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-js-extension-substitution-basic/tsconfig.json'),
+  'relative-directory-index-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-directory-index-basic/tsconfig.json'),
   'skip-lib-check-dependency-dts': path.join(workspaceRoot, 'tests/compat-projects/skip-lib-check-dependency-dts/tsconfig.json'),
   'skip-lib-check-local-dts': path.join(workspaceRoot, 'tests/compat-projects/skip-lib-check-local-dts/tsconfig.json'),
   'package-imports': path.join(workspaceRoot, 'tests/compat-projects/package-imports/tsconfig.json'),
@@ -607,6 +631,12 @@ export function compareDiagnostics(
     typescriptRust.filter(hasLineInfo),
     keyByFileCodeLine,
   );
+  const onlyLineDiagnostics = subtractDiagnosticsByKey(
+    typescript.filter(hasLineInfo),
+    typescriptRust.filter(hasLineInfo),
+    keyByFileCodeLine,
+  );
+  const onlyTypeScriptRustDiagnostics = onlyLineDiagnostics.onlyRight;
 
   return {
     mode,
@@ -646,6 +676,42 @@ export function compareDiagnostics(
           ? byFileCodeLine.onlyTypeScript.length === 0 &&
             byFileCodeLine.onlyTypeScriptRust.length === 0
           : null,
+    },
+    details: {
+      onlyTypeScriptRust: {
+        ts2305ByModuleAndExport: groupDiagnosticsByModuleExportExtractor(
+          onlyTypeScriptRustDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2305'),
+          (diagnostic) => extractTs2305ModuleExport(diagnostic.message),
+        ),
+        ts2307ByModuleSpecifier: groupDiagnosticsByCategorizedExtractor(
+          onlyTypeScriptRustDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2307'),
+          (diagnostic) => {
+            const specifier = extractTs2307ModuleSpecifier(diagnostic.message);
+            return specifier
+              ? {
+                  key: specifier,
+                  category: classifyTs2307ModuleSpecifier(specifier),
+                }
+              : null;
+          },
+        ),
+        ts2304ByIdentifier: groupDiagnosticsByCategorizedExtractor(
+          onlyTypeScriptRustDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2304'),
+          (diagnostic) => {
+            const identifier = extractTs2304Identifier(diagnostic.message);
+            return identifier
+              ? {
+                  key: identifier,
+                  category: classifyTs2304Identifier(identifier),
+                }
+              : null;
+          },
+        ),
+        nodeModulesSourceDiagnosticsByPrefix: groupDiagnosticsByKey(
+          onlyTypeScriptRustDiagnostics.filter((diagnostic) => isNodeModulesSourceDiagnostic(diagnostic)),
+          (diagnostic) => nodeModulesSourcePrefix(diagnostic.fileName) ?? diagnostic.fileName,
+        ),
+      },
     },
   };
 }
@@ -760,6 +826,355 @@ export function countEntriesFromCounts(counts: Map<string, number>): CountEntry[
     .sort((left, right) => left.key.localeCompare(right.key));
 }
 
+export function subtractDiagnosticsByKey(
+  left: NormalizedDiagnostic[],
+  right: NormalizedDiagnostic[],
+  keyFn: (diagnostic: NormalizedDiagnostic) => string,
+): {
+  onlyLeft: NormalizedDiagnostic[];
+  onlyRight: NormalizedDiagnostic[];
+} {
+  const leftRemaining = countDiagnostics(left, keyFn);
+  const rightRemaining = countDiagnostics(right, keyFn);
+  const onlyLeft: NormalizedDiagnostic[] = [];
+  const onlyRight: NormalizedDiagnostic[] = [];
+
+  for (const diagnostic of left) {
+    const key = keyFn(diagnostic);
+    const remaining = rightRemaining.get(key) ?? 0;
+    if (remaining > 0) {
+      rightRemaining.set(key, remaining - 1);
+    } else {
+      onlyLeft.push(diagnostic);
+    }
+  }
+
+  for (const diagnostic of right) {
+    const key = keyFn(diagnostic);
+    const remaining = leftRemaining.get(key) ?? 0;
+    if (remaining > 0) {
+      leftRemaining.set(key, remaining - 1);
+    } else {
+      onlyRight.push(diagnostic);
+    }
+  }
+
+  return { onlyLeft, onlyRight };
+}
+
+export function groupDiagnosticsByKey(
+  diagnostics: NormalizedDiagnostic[],
+  keyFn: (diagnostic: NormalizedDiagnostic) => string,
+): CountEntry[] {
+  return countEntriesFromCounts(countDiagnostics(diagnostics, keyFn));
+}
+
+export function groupDiagnosticsByExtractor(
+  diagnostics: NormalizedDiagnostic[],
+  extractor: (diagnostic: NormalizedDiagnostic) => string | null,
+): CountEntry[] {
+  const counts = new Map<string, number>();
+
+  for (const diagnostic of diagnostics) {
+    const key = extractor(diagnostic);
+    if (!key) {
+      continue;
+    }
+
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  return countEntriesFromCounts(counts);
+}
+
+export function groupDiagnosticsByModuleExportExtractor(
+  diagnostics: NormalizedDiagnostic[],
+  extractor: (diagnostic: NormalizedDiagnostic) => { moduleSpecifier: string; exportName: string } | null,
+): ModuleExportCountEntry[] {
+  const counts = new Map<string, ModuleExportCountEntry>();
+
+  for (const diagnostic of diagnostics) {
+    const bucket = extractor(diagnostic);
+    if (!bucket) {
+      continue;
+    }
+
+    const dedupeKey = `${bucket.moduleSpecifier} :: ${bucket.exportName}`;
+    const existing = counts.get(dedupeKey);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+
+    counts.set(dedupeKey, { ...bucket, count: 1 });
+  }
+
+  return [...counts.values()].sort(
+    (left, right) =>
+      right.count - left.count ||
+      left.moduleSpecifier.localeCompare(right.moduleSpecifier) ||
+      left.exportName.localeCompare(right.exportName),
+  );
+}
+
+export function groupDiagnosticsByCategorizedExtractor(
+  diagnostics: NormalizedDiagnostic[],
+  extractor: (diagnostic: NormalizedDiagnostic) => { key: string; category: string } | null,
+): CategorizedCountEntry[] {
+  const counts = new Map<string, CategorizedCountEntry>();
+
+  for (const diagnostic of diagnostics) {
+    const bucket = extractor(diagnostic);
+    if (!bucket) {
+      continue;
+    }
+
+    const dedupeKey = `${bucket.key} :: ${bucket.category}`;
+    const existing = counts.get(dedupeKey);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+
+    counts.set(dedupeKey, { ...bucket, count: 1 });
+  }
+
+  return [...counts.values()].sort(
+    (left, right) =>
+      right.count - left.count || left.key.localeCompare(right.key) || left.category.localeCompare(right.category),
+  );
+}
+
+export function extractTs2307ModuleSpecifier(message?: string): string | null {
+  if (!message) {
+    return null;
+  }
+
+  const match = message.match(/module ['"]([^'"]+)['"]/i);
+  return match ? match[1] : null;
+}
+
+export function extractTs2305ModuleExport(
+  message?: string,
+): { moduleSpecifier: string; exportName: string } | null {
+  if (!message) {
+    return null;
+  }
+
+  const match = message.match(
+    /Module ['"]([^'"]+)['"] has no exported member ['"]([^'"]+)['"]/i,
+  );
+  return match ? { moduleSpecifier: match[1], exportName: match[2] } : null;
+}
+
+// These are triage categories for reporting, not semantic claims about the
+// underlying compiler behavior.
+function isDeclarationFileName(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  return lower.endsWith('.d.ts') || lower.endsWith('.d.mts') || lower.endsWith('.d.cts');
+}
+
+function isJsonModuleSpecifier(specifier: string): boolean {
+  return specifier.toLowerCase().endsWith('.json');
+}
+
+function isGeneratedModuleSpecifier(specifier: string): boolean {
+  const lower = specifier.toLowerCase();
+  return lower.includes('.gen') || lower.includes('/generated/');
+}
+
+function isConfigToolingModuleSpecifier(specifier: string): boolean {
+  const lower = specifier.toLowerCase();
+  return (
+    lower.endsWith('.config') ||
+    lower.endsWith('.config.ts') ||
+    lower.endsWith('.config.tsx') ||
+    lower.endsWith('.config.mts') ||
+    lower.endsWith('.config.cts') ||
+    lower.endsWith('.config.js') ||
+    lower.endsWith('.config.mjs') ||
+    lower.endsWith('.config.cjs') ||
+    lower.includes('.config/') ||
+    lower.includes('/config.') ||
+    lower.includes('/config/') ||
+    lower.includes('vitest.config') ||
+    lower.includes('eslint.config') ||
+    lower.includes('tailwind.config') ||
+    lower.includes('next.config') ||
+    lower.includes('postcss.config') ||
+    lower.includes('drizzle.config') ||
+    lower.includes('sandbox.config') ||
+    lower.includes('playwright.config') ||
+    lower.includes('turbo.json') ||
+    lower.endsWith('package.json') ||
+    lower.endsWith('tsconfig.json') ||
+    lower.endsWith('deno.json') ||
+    lower.endsWith('vercel.json') ||
+    lower.endsWith('package-lock.json')
+  );
+}
+
+function isRelativeSpecifier(specifier: string): boolean {
+  return (
+    specifier === '.' ||
+    specifier === '..' ||
+    specifier.startsWith('./') ||
+    specifier.startsWith('../') ||
+    specifier.startsWith('.\\') ||
+    specifier.startsWith('..\\')
+  );
+}
+
+function isPackageSubpathSpecifier(specifier: string): boolean {
+  if (!specifier.includes('/')) {
+    return false;
+  }
+
+  if (!specifier.startsWith('@')) {
+    return true;
+  }
+
+  return specifier.split('/').length > 2;
+}
+
+function isJsxLikeIdentifier(identifier: string): boolean {
+  return ['JSX', 'IntrinsicElements', 'Fragment', 'React'].includes(identifier);
+}
+
+function isDomLikeIdentifier(identifier: string): boolean {
+  return new Set([
+    'document',
+    'window',
+    'navigator',
+    'Headers',
+    'FormData',
+    'URLSearchParams',
+    'Blob',
+    'File',
+    'Response',
+    'Request',
+    'ReadableStream',
+    'WritableStream',
+    'TransformStream',
+    'Event',
+    'MessageEvent',
+    'HTMLElement',
+    'Element',
+    'Node',
+    'Text',
+    'Document',
+    'console',
+  ]).has(identifier);
+}
+
+function isNodeLikeIdentifier(identifier: string): boolean {
+  return ['process', 'Buffer', 'require', 'module', 'exports', '__dirname', '__filename'].includes(identifier);
+}
+
+function isLocalUnresolvedIdentifier(identifier: string): boolean {
+  const first = identifier[0];
+  return Boolean(first && (/[a-z_]/.test(first) || /\d/.test(first)));
+}
+
+function isPackageDerivedIdentifier(identifier: string): boolean {
+  const first = identifier[0];
+  return Boolean(first && identifier.length > 1 && /[A-Z]/.test(first));
+}
+
+export function extractTs2304Identifier(message?: string): string | null {
+  if (!message) {
+    return null;
+  }
+
+  const match = message.match(/Cannot find (?:name|namespace) ['"]([^'"]+)['"]/i);
+  return match ? match[1] : null;
+}
+
+export function classifyTs2307ModuleSpecifier(specifier: string): string {
+  if (isJsonModuleSpecifier(specifier)) {
+    return 'json';
+  }
+  if (isGeneratedModuleSpecifier(specifier)) {
+    return 'generated-file';
+  }
+  if (isConfigToolingModuleSpecifier(specifier)) {
+    return 'config/tooling';
+  }
+  if (isRelativeSpecifier(specifier)) {
+    return 'relative';
+  }
+  if (isPackageSubpathSpecifier(specifier)) {
+    return 'package-subpath';
+  }
+  return 'package';
+}
+
+export function classifyTs2304Identifier(identifier: string): string {
+  if (isJsxLikeIdentifier(identifier)) {
+    return 'jsx-like';
+  }
+  if (isDomLikeIdentifier(identifier)) {
+    return 'dom-like';
+  }
+  if (isNodeLikeIdentifier(identifier)) {
+    return 'node-like';
+  }
+  if (isLocalUnresolvedIdentifier(identifier)) {
+    return 'local unresolved';
+  }
+  if (isPackageDerivedIdentifier(identifier)) {
+    return 'package-derived';
+  }
+  return 'unknown';
+}
+
+export function isNodeModulesSourceDiagnostic(diagnostic: NormalizedDiagnostic): boolean {
+  return diagnostic.fileName.includes('/node_modules/') && !isDeclarationFileName(diagnostic.fileName);
+}
+
+export function nodeModulesSourcePrefix(fileName: string): string | null {
+  const normalized = fileName.replace(/\\/g, '/');
+  const needle = '/node_modules/';
+  const index = normalized.indexOf(needle);
+  if (index === -1) {
+    return null;
+  }
+
+  const remainder = normalized.slice(index + needle.length);
+  const segments = remainder.split('/');
+  const first = segments[0];
+  if (!first) {
+    return null;
+  }
+
+  if (first === '.pnpm') {
+    const packageName = segments[3];
+    if (!segments[1] || !packageName) {
+      return null;
+    }
+
+    if (packageName.startsWith('@')) {
+      const packageSubpath = segments[4];
+      if (!packageSubpath) {
+        return null;
+      }
+      return `${packageName}/${packageSubpath}`;
+    }
+
+    return packageName;
+  }
+
+  if (first.startsWith('@')) {
+    const packageSubpath = segments[1];
+    if (!packageSubpath) {
+      return null;
+    }
+    return `${first}/${packageSubpath}`;
+  }
+
+  return first;
+}
+
 export function keyByCode(diagnostic: NormalizedDiagnostic): string {
   return diagnostic.code;
 }
@@ -807,6 +1222,34 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   }
   appendTriageSection(lines, comparison);
   lines.push('');
+  if (comparison.details?.onlyTypeScriptRust?.ts2305ByModuleAndExport?.length) {
+    lines.push('Top ONLY_RUST TS2305 by module/export:');
+    for (const entry of comparison.details.onlyTypeScriptRust.ts2305ByModuleAndExport.slice(0, 10)) {
+      lines.push(`  ${entry.moduleSpecifier} :: ${entry.exportName}  ${entry.count}`);
+    }
+    lines.push('');
+  }
+  if (comparison.details?.onlyTypeScriptRust?.ts2307ByModuleSpecifier?.length) {
+    lines.push('Top ONLY_RUST TS2307 by module specifier:');
+    for (const entry of comparison.details.onlyTypeScriptRust.ts2307ByModuleSpecifier.slice(0, 10)) {
+      lines.push(`  ${entry.key} [${entry.category}]  ${entry.count}`);
+    }
+    lines.push('');
+  }
+  if (comparison.details?.onlyTypeScriptRust?.ts2304ByIdentifier?.length) {
+    lines.push('Top ONLY_RUST TS2304 by identifier:');
+    for (const entry of comparison.details.onlyTypeScriptRust.ts2304ByIdentifier.slice(0, 10)) {
+      lines.push(`  ${entry.key} [${entry.category}]  ${entry.count}`);
+    }
+    lines.push('');
+  }
+  if (comparison.details?.onlyTypeScriptRust?.nodeModulesSourceDiagnosticsByPrefix?.length) {
+    lines.push('Top ONLY_RUST node_modules source diagnostics by prefix:');
+    for (const entry of comparison.details.onlyTypeScriptRust.nodeModulesSourceDiagnosticsByPrefix.slice(0, 10)) {
+      lines.push(`  ${entry.key}  ${entry.count}`);
+    }
+    lines.push('');
+  }
   lines.push('By code:');
   appendBucketSection(
     lines,

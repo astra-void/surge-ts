@@ -1635,6 +1635,19 @@ fn cli_project_file_discovery_fixture_compat_report_counts_loaded_files() {
 }
 
 #[test]
+fn cli_relative_directory_index_basic_fixture_resolves_loaded_directory_indexes() {
+    let project = compat_project_root("relative-directory-index-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert_eq!(codes.iter().filter(|code| *code == "TS2305").count(), 1);
+    assert_eq!(codes.iter().filter(|code| *code == "TS2307").count(), 1);
+    assert!(!codes.contains(&"typescript-rust::unsupported-module-syntax".to_string()));
+}
+
+#[test]
 fn cli_tsx_parser_safe_basic_fixture_reports_ts2322() {
     let project = compat_project_root("tsx-parser-safe-basic").join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
@@ -1666,6 +1679,10 @@ fn cli_compat_report_format_json_still_report_shape() {
     assert_eq!(parsed["diagnosticsTotal"], Value::from(8));
     assert!(parsed["byCode"].is_array());
     assert!(parsed["byFile"].is_array());
+    assert!(parsed["ts2305ByModuleAndExport"].is_array());
+    assert!(parsed["ts2307ByModuleSpecifier"].is_array());
+    assert!(parsed["ts2304ByIdentifier"].is_array());
+    assert!(parsed["nodeModulesSourceDiagnostics"]["byPrefix"].is_array());
     assert!(parsed["parserErrors"].is_array());
     assert_eq!(
         parsed["byCode"][0]["code"],
@@ -1712,6 +1729,50 @@ fn cli_max_diagnostics_limits_json_diagnostics_but_not_report_counts() {
     let report_json: Value = serde_json::from_str(&report_stdout).unwrap();
     assert_eq!(report_json["diagnosticsTotal"], Value::from(2));
     assert_eq!(report_json["byCode"][0]["count"], Value::from(2));
+}
+
+#[test]
+fn cli_compat_report_json_matches_plain_json_diagnostics_total() {
+    let root = temp_dir("project-compat-report-parity");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        "export * from \"./models\";\nexport { Missing } from \"./models\";",
+    );
+    write_file(
+        &root,
+        "src/models/index.ts",
+        "export interface User { name: string; }",
+    );
+    write_file(
+        &root,
+        "src/pages/index.ts",
+        "import { User } from \"..\";\nexport const currentUser: User = { name: \"Ada\" };",
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let plain = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let report = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(plain["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(report["diagnosticsTotal"], Value::from(1));
+    assert_eq!(
+        report["byCode"][0]["code"],
+        Value::String("TS2305".to_string())
+    );
 }
 
 #[test]
@@ -1953,7 +2014,7 @@ fn cli_stub_external_modules_compat_report() {
         "--stubExternalModules",
     ]);
     assert!(stdout.contains("External module stubs: 2"));
-    assert!(!stdout.contains("TS2307"));
+    assert!(!stdout.contains("error[TS2307]"));
 }
 
 #[test]

@@ -2197,6 +2197,26 @@ fn module_re_export_named_missing_module() {
 }
 
 #[test]
+fn module_re_export_named_default_valid() {
+    let diagnostics = program(&[
+        (
+            "foo.ts",
+            "export default function getName(): string { return \"Ada\"; }",
+        ),
+        (
+            "index.ts",
+            "export { default as DefaultThing } from \"./foo\";",
+        ),
+        (
+            "app.ts",
+            "import { DefaultThing } from \"./index\";\nlet name: string = DefaultThing();",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
 fn module_re_export_named_no_cascade_consumer() {
     let diagnostics = program(&[
         ("foo.ts", "export const version: number = 1;"),
@@ -2374,9 +2394,23 @@ fn module_re_export_star_missing_module_no_consumer_cascade() {
 
 #[test]
 fn module_re_export_star_as_parser_safe_or_pinned() {
-    let diagnostics = program(&[("index.ts", "export * as Foo from \"./foo\";")]);
+    let diagnostics = program(&[
+        ("foo.ts", "export const value: number = 1;"),
+        ("index.ts", "export * as Foo from \"./foo\";"),
+        (
+            "app.ts",
+            "import { Foo } from \"./index\";\nlet value: number = Foo.value;",
+        ),
+    ]);
 
     assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn module_re_export_star_as_missing_module_reports_ts2307() {
+    let diagnostics = program(&[("index.ts", "export * as Foo from \"./foo\";")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
 }
 
 #[test]

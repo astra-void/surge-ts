@@ -3134,6 +3134,26 @@ fn parse_export_type_named_multiple() {
 }
 
 #[test]
+fn parse_export_mixed_type_and_value_specifiers() {
+    let parsed = parse_source("export { type User, value as renamedValue };", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { specifiers, .. }) =
+        &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+
+    assert_eq!(specifiers.len(), 2);
+    assert!(specifiers[0].is_type_only);
+    assert!(!specifiers[1].is_type_only);
+    assert_eq!(specifiers[0].local_name, "User");
+    assert_eq!(specifiers[0].exported_name, "User");
+    assert_eq!(specifiers[1].local_name, "value");
+    assert_eq!(specifiers[1].exported_name, "renamedValue");
+}
+
+#[test]
 fn parse_export_type_named_marks_module() {
     let parsed = parse_source("export type { User };", "example.ts");
     assert!(parsed.is_module);
@@ -3207,7 +3227,7 @@ fn parse_export_default_class_unsupported_no_panic() {
     assert!(matches!(
         &parsed.statements[0],
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Unsupported { .. },
+            declaration: ParsedDefaultExportDeclaration::Class { .. },
             ..
         })
     ));
@@ -3259,7 +3279,11 @@ fn parse_export_star_as_from_unsupported_no_panic() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. })
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Namespace {
+            exported_name,
+            module_specifier,
+            ..
+        }) if exported_name == "Foo" && module_specifier == "./foo"
     ));
 }
 

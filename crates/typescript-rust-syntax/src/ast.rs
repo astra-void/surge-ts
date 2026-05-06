@@ -229,6 +229,13 @@ pub enum ParsedExportDeclaration {
         module_specifier_span: Option<TextSpan>,
         span: Option<TextSpan>,
     },
+    Namespace {
+        exported_name: String,
+        exported_name_span: Option<TextSpan>,
+        module_specifier: String,
+        module_specifier_span: Option<TextSpan>,
+        span: Option<TextSpan>,
+    },
     Empty {
         span: Option<TextSpan>,
     },
@@ -242,11 +249,13 @@ pub struct ParsedExportSpecifier {
     pub local_name: String,
     pub exported_name: String,
     pub name_span: Option<TextSpan>,
+    pub is_type_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedDefaultExportDeclaration {
     Function(ParsedFunctionDeclaration),
+    Class { span: Option<TextSpan> },
     Expression(ParsedExpression),
     Unsupported { span: Option<TextSpan> },
 }

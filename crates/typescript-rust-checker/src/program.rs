@@ -644,6 +644,7 @@ fn check_program_statement(
             ctx,
         ),
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Namespace { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
             declaration,
             ..
@@ -660,6 +661,7 @@ fn check_program_statement(
             ParsedDefaultExportDeclaration::Expression(expression) => {
                 expr::check_expression_statement(expression, ctx);
             }
+            ParsedDefaultExportDeclaration::Class { .. } => {}
             ParsedDefaultExportDeclaration::Unsupported { span } => {
                 let mut diagnostic =
                     Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());

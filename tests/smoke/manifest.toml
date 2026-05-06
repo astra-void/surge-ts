@@ -5619,12 +5619,12 @@ expected_diagnostics = ["TS2307"]
 [[case]]
 name = "module-namespace-import-missing-module-no-cascade"
 path = "tests/smoke/module_namespace_import_missing_module_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = []
 
 [[case]]
 name = "module-re-export-named-missing-module"
 path = "tests/smoke/module_re_export_named_missing_module.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = []
 
 [[case]]
 name = "module-re-export-named-non-relative-unsupported"
@@ -5634,12 +5634,12 @@ expected_diagnostics = ["TS2307"]
 [[case]]
 name = "module-re-export-star-missing-module"
 path = "tests/smoke/module_re_export_star_missing_module.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = []
 
 [[case]]
 name = "module-re-export-star-as-unsupported"
 path = "tests/smoke/module_re_export_star_as_unsupported.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = []
 
 [[case]]
 name = "module-re-export-star-non-relative-unsupported"
@@ -5665,7 +5665,7 @@ expected_diagnostics = ["TS2305"]
 [[case]]
 name = "module-default-import-missing-module-no-cascade"
 path = "tests/smoke/module_default_import_missing_module_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = []
 
 [[case]]
 name = "module-default-import-does-not-bind-type"
