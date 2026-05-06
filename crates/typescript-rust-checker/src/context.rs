@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use typescript_rust_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
 use typescript_rust_syntax::TextSpan as SyntaxTextSpan;
 
@@ -37,6 +39,7 @@ pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
     pub(crate) options: CheckerOptions,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
@@ -50,6 +53,7 @@ impl CheckerContext {
             file_name,
             options,
             diagnostics: Vec::new(),
+            utility_diagnostic_keys: HashSet::new(),
             symbols: SymbolTable::new(),
             type_declarations: TypeDeclarationTable::new(),
             ambient_modules: std::collections::HashMap::new(),
@@ -70,6 +74,18 @@ impl CheckerContext {
         self.diagnostics.push(diagnostic);
     }
 
+    pub(crate) fn push_utility_diagnostic_once(&mut self, diagnostic: Diagnostic) {
+        let key = UtilityDiagnosticKey {
+            code: diagnostic.code.to_string(),
+            file_name: diagnostic.file_name.clone(),
+            span: diagnostic.span.map(|span| (span.start, span.end)),
+        };
+
+        if self.utility_diagnostic_keys.insert(key) {
+            self.push(diagnostic);
+        }
+    }
+
     pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
@@ -88,4 +104,11 @@ pub(crate) fn convert_span(span: SyntaxTextSpan) -> DiagnosticTextSpan {
         start: span.start,
         end: span.end,
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct UtilityDiagnosticKey {
+    code: String,
+    file_name: String,
+    span: Option<(usize, usize)>,
 }

@@ -749,7 +749,7 @@ fn resolve_pick_utility_type(
             if let Some(span) = name_span {
                 diagnostic = diagnostic.with_span(convert_span(span));
             }
-            ctx.push(diagnostic);
+            ctx.push_utility_diagnostic_once(diagnostic);
             return ResolvedType {
                 ty: Type::Unknown,
                 had_error: true,

@@ -190,6 +190,24 @@ fn span_generic_non_generic_type_args_points_to_type_reference_name() {
 }
 
 #[test]
+fn span_invalid_pick_alias_points_to_pick_reference_and_dedupes_usage() {
+    let source = "interface User { id: number; name: string; active: boolean; } type InvalidPick = Pick<User, \"id\" | \"missing\">; let invalidPickUsage: InvalidPick;";
+    let diagnostics = check_source_with_options(
+        source,
+        "example.ts",
+        CheckerOptions {
+            diagnostic_profile: Default::default(),
+            resolved_modules: Default::default(),
+            stub_external_modules: false,
+            no_implicit_any: false,
+            no_lib: false,
+        },
+    );
+
+    assert_single_span(source, diagnostics, "TS2344", span_nth(source, "Pick", 1));
+}
+
+#[test]
 fn span_generic_default_unknown_points_to_default_type_name() {
     let source = "type Box<T = Missing> = { value: T }; let box: Box = { value: 123 };";
     let diagnostics = check_source_with_options(
