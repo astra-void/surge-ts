@@ -37,7 +37,13 @@ export type CategorizedCountEntry = {
 export type ModuleExportCountEntry = {
   moduleSpecifier: string;
   exportName: string;
+  category: string;
   count: number;
+};
+
+export type TsconfigPathMapping = {
+  pattern: string;
+  substitutions: string[];
 };
 
 export type DiagnosticTotals = {
@@ -140,6 +146,9 @@ const fixturePresets: Record<string, string> = {
   'generics-basic': path.join(workspaceRoot, 'tests/compat-projects/generics-basic/tsconfig.json'),
   'relative-js-extension-substitution-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-js-extension-substitution-basic/tsconfig.json'),
   'relative-directory-index-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-directory-index-basic/tsconfig.json'),
+  'import-graph-generated-relative-basic': path.join(workspaceRoot, 'tests/compat-projects/import-graph-generated-relative-basic/tsconfig.json'),
+  'paths-wildcard-import-graph-basic': path.join(workspaceRoot, 'tests/compat-projects/paths-wildcard-import-graph-basic/tsconfig.json'),
+  'dependency-incomplete-declaration-export-fallback': path.join(workspaceRoot, 'tests/compat-projects/dependency-incomplete-declaration-export-fallback/tsconfig.json'),
   'skip-lib-check-dependency-dts': path.join(workspaceRoot, 'tests/compat-projects/skip-lib-check-dependency-dts/tsconfig.json'),
   'skip-lib-check-local-dts': path.join(workspaceRoot, 'tests/compat-projects/skip-lib-check-local-dts/tsconfig.json'),
   'package-imports': path.join(workspaceRoot, 'tests/compat-projects/package-imports/tsconfig.json'),
@@ -623,6 +632,8 @@ export function compareDiagnostics(
   typescriptRust: NormalizedDiagnostic[],
   ignoreConfig?: boolean,
   stubExternalModules?: boolean,
+  projectRoot?: string,
+  pathsMappings: TsconfigPathMapping[] = [],
 ): ComparisonResult {
   const byCode = compareBuckets(typescript, typescriptRust, keyByCode);
   const byFileCode = compareBuckets(typescript, typescriptRust, keyByFileCode);
@@ -681,7 +692,23 @@ export function compareDiagnostics(
       onlyTypeScriptRust: {
         ts2305ByModuleAndExport: groupDiagnosticsByModuleExportExtractor(
           onlyTypeScriptRustDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2305'),
-          (diagnostic) => extractTs2305ModuleExport(diagnostic.message),
+          (diagnostic) => {
+            const exportInfo = extractTs2305ModuleExport(diagnostic.message);
+            if (!exportInfo) {
+              return null;
+            }
+
+            return {
+              moduleSpecifier: exportInfo.moduleSpecifier,
+              exportName: exportInfo.exportName,
+              category: classifyTs2305ModuleExport(
+                exportInfo.moduleSpecifier,
+                diagnostic.fileName,
+                projectRoot,
+                pathsMappings,
+              ),
+            };
+          },
         ),
         ts2307ByModuleSpecifier: groupDiagnosticsByCategorizedExtractor(
           onlyTypeScriptRustDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2307'),
@@ -690,7 +717,7 @@ export function compareDiagnostics(
             return specifier
               ? {
                   key: specifier,
-                  category: classifyTs2307ModuleSpecifier(specifier),
+                  category: classifyTs2307ModuleSpecifier(specifier, diagnostic.fileName, projectRoot, pathsMappings),
                 }
               : null;
           },
@@ -889,7 +916,9 @@ export function groupDiagnosticsByExtractor(
 
 export function groupDiagnosticsByModuleExportExtractor(
   diagnostics: NormalizedDiagnostic[],
-  extractor: (diagnostic: NormalizedDiagnostic) => { moduleSpecifier: string; exportName: string } | null,
+  extractor: (
+    diagnostic: NormalizedDiagnostic,
+  ) => { moduleSpecifier: string; exportName: string; category: string } | null,
 ): ModuleExportCountEntry[] {
   const counts = new Map<string, ModuleExportCountEntry>();
 
@@ -969,9 +998,48 @@ export function extractTs2305ModuleExport(
 
 // These are triage categories for reporting, not semantic claims about the
 // underlying compiler behavior.
+export function classifyTs2305ModuleExport(
+  moduleSpecifier: string,
+  diagnosticFileName?: string,
+  projectRoot?: string,
+  pathsMappings: TsconfigPathMapping[] = [],
+): string {
+  if (isRelativeSpecifier(moduleSpecifier)) {
+    const resolvedPath = resolveRelativeCandidateForReporting(
+      diagnosticFileName ?? '',
+      moduleSpecifier,
+      projectRoot,
+    );
+    return resolvedPath ? classifyLoadedModulePath(resolvedPath) : 'unknown';
+  }
+
+  const pathAliasCategory = classifyPathsAliasModuleSpecifier(moduleSpecifier, projectRoot, pathsMappings);
+  if (pathAliasCategory === 'paths-alias-explicit-relative-target') {
+    const resolvedPath = resolvePathsAliasCandidate(moduleSpecifier, projectRoot, pathsMappings);
+    return resolvedPath ? classifyLoadedModulePath(resolvedPath) : 'unknown';
+  }
+
+  const packageName = packageNameFromSpecifier(moduleSpecifier);
+  if (packageName && projectRoot) {
+    const resolvedPath = resolvePackageDeclarationCandidate(packageName, projectRoot);
+    if (resolvedPath) {
+      return hasIncompleteDeclarationSurface(resolvedPath)
+        ? 'package-derived-incomplete-declaration'
+        : 'dependency-declaration-module';
+    }
+  }
+
+  return 'unknown';
+}
+
 function isDeclarationFileName(fileName: string): boolean {
   const lower = fileName.toLowerCase();
   return lower.endsWith('.d.ts') || lower.endsWith('.d.mts') || lower.endsWith('.d.cts');
+}
+
+function isDependencyDeclarationPath(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  return isDeclarationFileName(fileName) && (lower.includes('/node_modules/') || lower.includes('\\node_modules\\'));
 }
 
 function isJsonModuleSpecifier(specifier: string): boolean {
@@ -1071,6 +1139,34 @@ function isNodeLikeIdentifier(identifier: string): boolean {
   return ['process', 'Buffer', 'require', 'module', 'exports', '__dirname', '__filename'].includes(identifier);
 }
 
+function isGenericOrTypeParameterScopeIdentifier(identifier: string): boolean {
+  return ['T', 'K', 'V', 'U', 'P', 'R', 'S', 'E', 'A', 'B', 'C', 'D', 'M', 'N', 'O'].includes(identifier);
+}
+
+function isMissingSyntheticLibGlobalIdentifier(identifier: string): boolean {
+  return [
+    'Object',
+    'Array',
+    'String',
+    'Number',
+    'Boolean',
+    'Symbol',
+    'Promise',
+    'Map',
+    'Set',
+    'WeakMap',
+    'WeakSet',
+    'Date',
+    'RegExp',
+    'Error',
+    'Math',
+    'JSON',
+    'Intl',
+    'Console',
+    'ReadonlyArray',
+  ].includes(identifier);
+}
+
 function isLocalUnresolvedIdentifier(identifier: string): boolean {
   const first = identifier[0];
   return Boolean(first && (/[a-z_]/.test(first) || /\d/.test(first)));
@@ -1090,18 +1186,45 @@ export function extractTs2304Identifier(message?: string): string | null {
   return match ? match[1] : null;
 }
 
-export function classifyTs2307ModuleSpecifier(specifier: string): string {
+export function classifyTs2307ModuleSpecifier(
+  specifier: string,
+  diagnosticFileName?: string,
+  projectRoot?: string,
+  pathsMappings: TsconfigPathMapping[] = [],
+): string {
   if (isJsonModuleSpecifier(specifier)) {
-    return 'json';
+    return 'package-json';
   }
   if (isGeneratedModuleSpecifier(specifier)) {
-    return 'generated-file';
+    if (diagnosticFileName && projectRoot) {
+      const resolvedPath = resolveRelativeCandidateForReporting(diagnosticFileName, specifier, projectRoot);
+      if (resolvedPath) {
+        return resolvedPath ? 'relative-generated-existing-not-loaded' : 'relative-generated-missing';
+      }
+    }
+    return 'relative-generated-missing';
   }
   if (isConfigToolingModuleSpecifier(specifier)) {
-    return 'config/tooling';
+    return 'package-json';
   }
   if (isRelativeSpecifier(specifier)) {
-    return 'relative';
+    if (diagnosticFileName && projectRoot) {
+      const resolvedPath = resolveRelativeCandidateForReporting(diagnosticFileName, specifier, projectRoot);
+      if (resolvedPath) {
+        return 'relative-existing-not-loaded';
+      }
+    }
+    return 'relative-missing';
+  }
+  const pathAliasCategory = classifyPathsAliasModuleSpecifier(specifier, projectRoot, pathsMappings);
+  if (pathAliasCategory) {
+    return pathAliasCategory;
+  }
+  if (isNodeBuiltinModuleSpecifier(specifier)) {
+    return 'node-builtin';
+  }
+  if (isPackageJsonModuleSpecifier(specifier)) {
+    return 'package-json';
   }
   if (isPackageSubpathSpecifier(specifier)) {
     return 'package-subpath';
@@ -1117,15 +1240,427 @@ export function classifyTs2304Identifier(identifier: string): string {
     return 'dom-like';
   }
   if (isNodeLikeIdentifier(identifier)) {
-    return 'node-like';
+    return 'missing-node-like-global';
   }
-  if (isLocalUnresolvedIdentifier(identifier)) {
-    return 'local unresolved';
+  if (isGenericOrTypeParameterScopeIdentifier(identifier)) {
+    return 'generic-or-type-parameter-scope';
+  }
+  if (isMissingSyntheticLibGlobalIdentifier(identifier)) {
+    return 'missing-synthetic-lib-global';
   }
   if (isPackageDerivedIdentifier(identifier)) {
-    return 'package-derived';
+    return 'package-derived-incomplete-declaration';
+  }
+  if (isLocalUnresolvedIdentifier(identifier)) {
+    return 'local-unresolved';
   }
   return 'unknown';
+}
+
+function classifyPathsAliasModuleSpecifier(
+  specifier: string,
+  projectRoot: string | undefined,
+  pathsMappings: TsconfigPathMapping[],
+): string | null {
+  for (const mapping of pathsMappings) {
+    const wildcardIndex = mapping.pattern.indexOf('*');
+    const isWildcard = wildcardIndex !== -1;
+
+    let matched = false;
+    if (isWildcard) {
+      const parts = mapping.pattern.split('*');
+      if (parts.length !== 2) {
+        continue;
+      }
+
+      const prefix = parts[0];
+      const suffix = parts[1];
+      matched =
+        specifier.startsWith(prefix) &&
+        specifier.endsWith(suffix) &&
+        specifier.length >= prefix.length + suffix.length;
+    } else {
+      matched = specifier === mapping.pattern;
+    }
+
+    if (!matched) {
+      continue;
+    }
+
+    if (mapping.substitutions.some((substitution) => isExplicitRelativeTarget(substitution))) {
+      return 'paths-alias-explicit-relative-target';
+    }
+
+    return 'paths-alias-unsupported-baseUrl-dependent-target';
+  }
+
+  return null;
+}
+
+function classifyLoadedModulePath(resolvedPath: string): string {
+  if (isDependencyDeclarationPath(resolvedPath)) {
+    return hasIncompleteDeclarationSurface(resolvedPath)
+      ? 'package-derived-incomplete-declaration'
+      : 'dependency-declaration-module';
+  }
+
+  if (isDeclarationFileName(resolvedPath)) {
+    return 'local-declaration-module';
+  }
+
+  return 'source-module';
+}
+
+function resolveRelativeCandidateForReporting(
+  importerFileName: string,
+  specifier: string,
+  projectRoot?: string,
+): string | null {
+  if (!projectRoot) {
+    return null;
+  }
+
+  const importerPath = path.isAbsolute(importerFileName)
+    ? importerFileName
+    : path.resolve(projectRoot, importerFileName);
+  const importerDir = path.dirname(importerPath);
+  const normalizedSpecifier = normalizePathForDisplay(specifier);
+  const joined = normalizePathForDisplay(path.join(importerDir, normalizedSpecifier));
+  const candidatePaths = relativeResolutionCandidatesForSpecifier(joined, normalizedSpecifier);
+
+  for (const candidate of candidatePaths) {
+    if (existsSync(candidate) && statSync(candidate).isFile()) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function resolvePathsAliasCandidate(
+  specifier: string,
+  projectRoot: string | undefined,
+  pathsMappings: TsconfigPathMapping[],
+): string | null {
+  if (!projectRoot) {
+    return null;
+  }
+
+  for (const mapping of pathsMappings) {
+    const matchedText = matchPathMappingSpecifier(mapping.pattern, specifier);
+    if (matchedText === null) {
+      continue;
+    }
+
+    for (const substitution of mapping.substitutions) {
+      if (!isExplicitRelativeTarget(substitution)) {
+        continue;
+      }
+
+      const targetPath = mapping.pattern.includes('*')
+        ? substitution.replace('*', matchedText)
+        : substitution;
+      if (relativeSpecifierKind(targetPath) === 'unsupported') {
+        continue;
+      }
+      const absoluteTarget = path.resolve(projectRoot, targetPath);
+      const candidatePaths = relativeResolutionCandidatesForSpecifier(absoluteTarget, targetPath);
+
+      for (const candidate of candidatePaths) {
+        if (existsSync(candidate) && statSync(candidate).isFile()) {
+          return candidate;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function matchPathMappingSpecifier(pattern: string, specifier: string): string | null {
+  if (pattern.indexOf('*') === -1) {
+    return specifier === pattern ? '' : null;
+  }
+
+  const parts = pattern.split('*');
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const prefix = parts[0];
+  const suffix = parts[1];
+  if (
+    !specifier.startsWith(prefix) ||
+    !specifier.endsWith(suffix) ||
+    specifier.length < prefix.length + suffix.length
+  ) {
+    return null;
+  }
+
+  return specifier.slice(prefix.length, specifier.length - suffix.length);
+}
+
+function packageNameFromSpecifier(specifier: string): string | null {
+  if (specifier.startsWith('@')) {
+    const parts = specifier.split('/');
+    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : null;
+  }
+
+  const slashIndex = specifier.indexOf('/');
+  return slashIndex === -1 ? specifier : specifier.slice(0, slashIndex);
+}
+
+function resolvePackageDeclarationCandidate(packageName: string, projectRoot: string): string | null {
+  const packageRoot = path.join(projectRoot, 'node_modules', packageName);
+  const packageJson = readJsonIfExists(path.join(packageRoot, 'package.json'));
+  const typesField =
+    packageJson && typeof packageJson.types === 'string'
+      ? packageJson.types
+      : packageJson && typeof packageJson.typings === 'string'
+        ? packageJson.typings
+        : null;
+
+  if (typesField) {
+    const candidate = path.resolve(packageRoot, typesField);
+    if (existsSync(candidate) && statSync(candidate).isFile()) {
+      return candidate;
+    }
+  }
+
+  for (const candidate of [
+    path.join(packageRoot, 'index.d.ts'),
+    path.join(packageRoot, 'types.d.ts'),
+    path.join(packageRoot, 'typings.d.ts'),
+  ]) {
+    if (existsSync(candidate) && statSync(candidate).isFile()) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function readJsonIfExists(pathname: string): Record<string, unknown> | null {
+  if (!existsSync(pathname)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(pathname, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function hasIncompleteDeclarationSurface(resolvedPath: string): boolean {
+  try {
+    return hasIncompleteDeclarationSurfaceText(readFileSync(resolvedPath, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+function hasIncompleteDeclarationSurfaceText(sourceText: string): boolean {
+  return /export\s*=\s*/.test(sourceText) || /declare\s+namespace\b/.test(sourceText) || /export\s+as\s+namespace\b/.test(sourceText);
+}
+
+function isExplicitRelativeTarget(target: string): boolean {
+  return target.startsWith('./') || target.startsWith('../') || target.startsWith('.\\') || target.startsWith('..\\');
+}
+
+function relativeSpecifierKind(specifier: string): 'explicit-ts' | 'explicit-js' | 'explicit-mjs' | 'explicit-cjs' | 'extensionless' | 'unsupported' {
+  const lastSegment = specifier.replace(/\\/g, '/').split('/').pop() ?? specifier;
+
+  if (lastSegment === '.' || lastSegment === '..') {
+    return 'extensionless';
+  }
+
+  if (
+    lastSegment.endsWith('.tsx') ||
+    lastSegment.endsWith('.jsx') ||
+    lastSegment.endsWith('.mts') ||
+    lastSegment.endsWith('.cts') ||
+    lastSegment.endsWith('.d.ts') ||
+    lastSegment.endsWith('.d.mts') ||
+    lastSegment.endsWith('.d.cts') ||
+    lastSegment.endsWith('.json')
+  ) {
+    return 'unsupported';
+  }
+
+  if (lastSegment.endsWith('.ts')) {
+    return 'explicit-ts';
+  }
+
+  if (lastSegment.endsWith('.js')) {
+    return 'explicit-js';
+  }
+
+  if (lastSegment.endsWith('.mjs')) {
+    return 'explicit-mjs';
+  }
+
+  if (lastSegment.endsWith('.cjs')) {
+    return 'explicit-cjs';
+  }
+
+  return 'extensionless';
+}
+
+function isPackageJsonModuleSpecifier(specifier: string): boolean {
+  return specifier.toLowerCase().endsWith('.json');
+}
+
+function isNodeBuiltinModuleSpecifier(specifier: string): boolean {
+  return new Set([
+    'assert',
+    'buffer',
+    'child_process',
+    'cluster',
+    'console',
+    'constants',
+    'crypto',
+    'dgram',
+    'diagnostics_channel',
+    'dns',
+    'domain',
+    'events',
+    'fs',
+    'http',
+    'http2',
+    'https',
+    'inspector',
+    'module',
+    'net',
+    'os',
+    'path',
+    'perf_hooks',
+    'process',
+    'punycode',
+    'querystring',
+    'readline',
+    'repl',
+    'stream',
+    'string_decoder',
+    'sys',
+    'timers',
+    'tls',
+    'trace_events',
+    'tty',
+    'url',
+    'util',
+    'v8',
+    'vm',
+    'worker_threads',
+    'zlib',
+    'node:assert',
+    'node:buffer',
+    'node:child_process',
+    'node:cluster',
+    'node:console',
+    'node:constants',
+    'node:crypto',
+    'node:dgram',
+    'node:diagnostics_channel',
+    'node:dns',
+    'node:domain',
+    'node:events',
+    'node:fs',
+    'node:http',
+    'node:http2',
+    'node:https',
+    'node:inspector',
+    'node:module',
+    'node:net',
+    'node:os',
+    'node:path',
+    'node:perf_hooks',
+    'node:process',
+    'node:punycode',
+    'node:querystring',
+    'node:readline',
+    'node:repl',
+    'node:stream',
+    'node:string_decoder',
+    'node:sys',
+    'node:timers',
+    'node:tls',
+    'node:trace_events',
+    'node:tty',
+    'node:url',
+    'node:util',
+    'node:v8',
+    'node:vm',
+    'node:worker_threads',
+    'node:zlib',
+  ]).has(specifier);
+}
+
+function relativeResolutionCandidatesForSpecifier(base: string, specifier: string): string[] {
+  const kind = relativeSpecifierKind(specifier);
+  if (kind === 'unsupported') {
+    return [];
+  }
+
+  const candidates = [base];
+
+  if (kind === 'explicit-ts') {
+    return candidates.map(normalizePathForDisplay);
+  }
+
+  if (kind === 'explicit-js') {
+    const stripped = stripExtension(base);
+    candidates.push(
+      `${stripped}.ts`,
+      `${stripped}.tsx`,
+      `${stripped}.d.ts`,
+      `${stripped}/index.ts`,
+      `${stripped}/index.tsx`,
+      `${stripped}/index.d.ts`,
+    );
+    return candidates.map(normalizePathForDisplay);
+  }
+
+  if (kind === 'explicit-mjs') {
+    const stripped = stripExtension(base);
+    candidates.push(`${stripped}.mts`, `${stripped}.d.mts`, `${stripped}/index.mts`, `${stripped}/index.d.mts`);
+    return candidates.map(normalizePathForDisplay);
+  }
+
+  if (kind === 'explicit-cjs') {
+    const stripped = stripExtension(base);
+    candidates.push(`${stripped}.cts`, `${stripped}.d.cts`, `${stripped}/index.cts`, `${stripped}/index.d.cts`);
+    return candidates.map(normalizePathForDisplay);
+  }
+
+  candidates.push(
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.d.ts`,
+    `${base}.mts`,
+    `${base}.cts`,
+    `${base}.d.mts`,
+    `${base}.d.cts`,
+    `${base}/index.ts`,
+    `${base}/index.tsx`,
+    `${base}/index.d.ts`,
+    `${base}/index.mts`,
+    `${base}/index.cts`,
+    `${base}/index.d.mts`,
+    `${base}/index.d.cts`,
+  );
+
+  return candidates.map(normalizePathForDisplay);
+}
+
+function stripExtension(value: string): string {
+  const lastSlash = value.lastIndexOf('/');
+  const lastDot = value.lastIndexOf('.');
+  if (lastDot <= lastSlash) {
+    return value;
+  }
+
+  return value.slice(0, lastDot);
 }
 
 export function isNodeModulesSourceDiagnostic(diagnostic: NormalizedDiagnostic): boolean {
@@ -1225,7 +1760,7 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   if (comparison.details?.onlyTypeScriptRust?.ts2305ByModuleAndExport?.length) {
     lines.push('Top ONLY_RUST TS2305 by module/export:');
     for (const entry of comparison.details.onlyTypeScriptRust.ts2305ByModuleAndExport.slice(0, 10)) {
-      lines.push(`  ${entry.moduleSpecifier} :: ${entry.exportName}  ${entry.count}`);
+      lines.push(`  ${entry.moduleSpecifier} :: ${entry.exportName} [${entry.category}]  ${entry.count}`);
     }
     lines.push('');
   }
@@ -1521,6 +2056,46 @@ function readPinnedTypeScriptVersion(): string {
   return packageJson.devDependencies?.typescript ?? 'unknown';
 }
 
+export function readTsconfigPathsMappings(tsconfigPath: string): TsconfigPathMapping[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(tsconfigPath, 'utf8')) as unknown;
+  } catch {
+    return [];
+  }
+
+  const compilerOptions = (parsed as { compilerOptions?: unknown }).compilerOptions;
+  if (!compilerOptions || typeof compilerOptions !== 'object') {
+    return [];
+  }
+
+  const paths = (compilerOptions as { paths?: unknown }).paths;
+  if (!paths || typeof paths !== 'object') {
+    return [];
+  }
+
+  const mappings: TsconfigPathMapping[] = [];
+  for (const [pattern, substitutions] of Object.entries(paths as Record<string, unknown>)) {
+    if (typeof pattern !== 'string') {
+      continue;
+    }
+
+    const entries = Array.isArray(substitutions)
+      ? substitutions.filter((substitution): substitution is string => typeof substitution === 'string')
+      : typeof substitutions === 'string'
+        ? [substitutions]
+        : [];
+
+    if (entries.length === 0) {
+      continue;
+    }
+
+    mappings.push({ pattern, substitutions: entries });
+  }
+
+  return mappings;
+}
+
 function looksLikePath(value: string): boolean {
   return value.includes('/') || value.includes('\\') || value.endsWith('.json') || value.startsWith('.');
 }
@@ -1555,6 +2130,7 @@ function executeComparison(
   const comparisonPath = mode.kind === 'project' ? mode.resolvedTsconfig : mode.resolvedFile;
   const comparisonDisplay = displayComparisonTargetPath(comparisonPath);
   const projectDir = path.dirname(comparisonPath);
+  const pathsMappings = mode.kind === 'project' ? readTsconfigPathsMappings(mode.resolvedTsconfig) : [];
   const tsc = runTsc(mode);
   const rust = runTypeScriptRust(mode, maxDiagnostics);
   const rustOutput = rust.stdout.trim() ? rust.stdout : rust.stderr;
@@ -1565,7 +2141,16 @@ function executeComparison(
   );
   const rustDiagnostics = limitDiagnostics(parseTypeScriptRustDiagnostics(rustOutput, projectDir), maxDiagnostics);
 
-  return compareDiagnostics(mode.kind, comparisonDisplay, tscDiagnostics, rustDiagnostics, mode.ignoreConfig, mode.stubExternalModules);
+  return compareDiagnostics(
+    mode.kind,
+    comparisonDisplay,
+    tscDiagnostics,
+    rustDiagnostics,
+    mode.ignoreConfig,
+    mode.stubExternalModules,
+    projectDir,
+    pathsMappings,
+  );
 }
 
 export function displayComparisonTargetPath(targetPath: string): string {

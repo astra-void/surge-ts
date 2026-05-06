@@ -33,6 +33,7 @@ pub(crate) struct ModuleExportTable {
     pub(crate) symbols: SymbolTable,
     pub(crate) default_symbol: Option<SymbolInfo>,
     pub(crate) has_unresolved_star_export: bool,
+    pub(crate) has_incomplete_declaration_surface: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -157,6 +158,7 @@ pub(crate) fn build_module_export_table(
         symbols,
         default_symbol,
         has_unresolved_star_export: false,
+        has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
     }
 }
 
@@ -460,6 +462,26 @@ pub(crate) fn resolve_module_export_table(
                                 .map(|i| module_has_unresolved_star_export(i, parsed_files))
                                 .unwrap_or(false)
                         {
+                            insert_unknown_type_import(
+                                &mut resolved_export_table.type_declarations,
+                                &specifier.exported_name,
+                                ctx.file_name.clone(),
+                                specifier.name_span,
+                            );
+                            if !specifier_is_type_only {
+                                insert_unknown_value_import(
+                                    &specifier.exported_name,
+                                    &mut resolved_export_table.symbols,
+                                );
+                            }
+                            continue;
+                        }
+
+                        if should_bind_unknown_for_missing_export(
+                            &target_export_table,
+                            resolved_index,
+                            parsed_files,
+                        ) {
                             insert_unknown_type_import(
                                 &mut resolved_export_table.type_declarations,
                                 &specifier.exported_name,
@@ -842,7 +864,7 @@ fn resolve_import_declaration(
             is_type_only,
             specifiers,
         } => {
-            let Some((export_table, _, _)) = try_resolve_module(
+            let Some((export_table, _, resolved_index)) = try_resolve_module(
                 &import.module_specifier,
                 ctx,
                 program_files,
@@ -916,6 +938,29 @@ fn resolve_import_declaration(
             };
 
             let Some(default_symbol) = export_table.default_symbol.clone() else {
+                if should_bind_unknown_for_missing_export(
+                    &export_table,
+                    resolved_index,
+                    program_files,
+                ) {
+                    if *is_type_only {
+                        let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+                            name: local_name.clone(),
+                            file_name: ctx.file_name.clone(),
+                            name_span: *name_span,
+                            type_parameters: vec![],
+                            ty: ParsedType::Unknown,
+                            resolution_scope: None,
+                        });
+                        if type_declarations.get(local_name).is_none() {
+                            let _ = type_declarations.insert(local_name.clone(), declaration);
+                        }
+                    } else {
+                        insert_unknown_value_import(local_name, symbols);
+                    }
+                    return;
+                }
+
                 emit_missing_export_diagnostic(
                     ctx,
                     &import.module_specifier,
@@ -1004,6 +1049,21 @@ fn resolve_import_declaration(
                 }
 
                 if !found {
+                    if should_bind_unknown_for_missing_export(
+                        &export_table,
+                        resolved_index,
+                        program_files,
+                    ) {
+                        insert_unknown_type_import(
+                            type_declarations,
+                            &specifier.local_name,
+                            ctx.file_name.clone(),
+                            specifier.name_span,
+                        );
+                        insert_unknown_value_import(&specifier.local_name, symbols);
+                        continue;
+                    }
+
                     emit_missing_export_diagnostic(
                         ctx,
                         &import.module_specifier,
@@ -1025,7 +1085,7 @@ fn resolve_import_declaration(
             local_name,
             name_span,
         } => {
-            let Some((export_table, _, _)) = try_resolve_module(
+            let Some((export_table, _, resolved_index)) = try_resolve_module(
                 &import.module_specifier,
                 ctx,
                 program_files,
@@ -1053,6 +1113,15 @@ fn resolve_import_declaration(
             };
 
             let Some(default_symbol) = export_table.default_symbol.clone() else {
+                if should_bind_unknown_for_missing_export(
+                    &export_table,
+                    resolved_index,
+                    program_files,
+                ) {
+                    insert_unknown_value_import(local_name, symbols);
+                    return;
+                }
+
                 emit_missing_export_diagnostic(
                     ctx,
                     &import.module_specifier,
@@ -1299,6 +1368,21 @@ fn resolve_import_declaration(
                 }
 
                 if !found {
+                    if should_bind_unknown_for_missing_export(
+                        &export_table,
+                        resolved_index,
+                        program_files,
+                    ) {
+                        insert_unknown_type_import(
+                            type_declarations,
+                            &specifier.local_name,
+                            ctx.file_name.clone(),
+                            specifier.name_span,
+                        );
+                        insert_unknown_value_import(&specifier.local_name, symbols);
+                        continue;
+                    }
+
                     emit_missing_export_diagnostic(
                         ctx,
                         &import.module_specifier,
@@ -1507,6 +1591,51 @@ fn module_has_unresolved_star_export(
     })
 }
 
+fn should_bind_unknown_for_missing_export(
+    export_table: &ModuleExportTable,
+    resolved_index: Option<usize>,
+    parsed_files: &[ParsedProgramFile],
+) -> bool {
+    let Some(file_index) = resolved_index else {
+        return false;
+    };
+
+    matches!(
+        parsed_files.get(file_index).map(|file| file.file_kind),
+        Some(FileKind::DependencyDeclaration)
+    ) && export_table.has_incomplete_declaration_surface
+}
+
+fn module_has_incomplete_declaration_surface(parsed_file: &ParsedProgramFile) -> bool {
+    if !parsed_file.file_kind.is_declaration() {
+        return false;
+    }
+
+    parsed_file
+        .statements
+        .iter()
+        .any(statement_has_unsupported_declaration_surface)
+}
+
+fn statement_has_unsupported_declaration_surface(statement: &ParsedStatement) -> bool {
+    match statement {
+        ParsedStatement::UnsupportedDeclaration { .. } => true,
+        ParsedStatement::ImportDeclaration(import) => {
+            matches!(import.kind, ParsedImportKind::Unsupported)
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. }) => true,
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Unsupported { .. },
+            ..
+        }) => true,
+        ParsedStatement::DeclareModuleDeclaration(module) => module
+            .statements
+            .iter()
+            .any(statement_has_unsupported_declaration_surface),
+        _ => false,
+    }
+}
+
 fn emit_unsupported_module_syntax_diagnostic(
     ctx: &mut CheckerContext,
     import: &ParsedImportDeclaration,
@@ -1583,9 +1712,14 @@ fn relative_specifier_kind(specifier: &str) -> RelativeSpecifierKind {
         return RelativeSpecifierKind::Extensionless;
     }
 
-    if last_segment.ends_with(".d.ts")
+    if last_segment.ends_with(".tsx")
+        || last_segment.ends_with(".jsx")
+        || last_segment.ends_with(".mts")
+        || last_segment.ends_with(".cts")
+        || last_segment.ends_with(".d.ts")
         || last_segment.ends_with(".d.mts")
         || last_segment.ends_with(".d.cts")
+        || last_segment.ends_with(".json")
     {
         return RelativeSpecifierKind::Unsupported;
     }
@@ -1604,10 +1738,6 @@ fn relative_specifier_kind(specifier: &str) -> RelativeSpecifierKind {
 
     if last_segment.ends_with(".cjs") {
         return RelativeSpecifierKind::ExplicitCjs;
-    }
-
-    if last_segment.contains('.') {
-        return RelativeSpecifierKind::Unsupported;
     }
 
     RelativeSpecifierKind::Extensionless

@@ -1055,6 +1055,7 @@ fn merge_module_export_tables(target: &mut ModuleExportTable, source: &ModuleExp
     }
 
     target.has_unresolved_star_export |= source.has_unresolved_star_export;
+    target.has_incomplete_declaration_surface |= source.has_incomplete_declaration_surface;
 }
 
 fn collect_global_variables(

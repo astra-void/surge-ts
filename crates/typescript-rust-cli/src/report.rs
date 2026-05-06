@@ -40,6 +40,7 @@ pub struct CompatReportCategorizedCountEntry {
 pub struct CompatReportModuleExportCountEntry {
     pub module_specifier: String,
     pub export_name: String,
+    pub category: String,
     pub count: usize,
 }
 
@@ -93,7 +94,7 @@ pub fn build_project_compatibility_report(
     let mut by_code = HashMap::<String, usize>::new();
     let mut by_file = HashMap::<String, usize>::new();
     let mut parser_errors = HashMap::<(String, String), usize>::new();
-    let mut ts2305_by_module_and_export = HashMap::<(String, String), usize>::new();
+    let mut ts2305_by_module_and_export = HashMap::<(String, String, String), usize>::new();
     let mut ts2307_by_module_specifier = HashMap::<(String, String), usize>::new();
     let mut ts2304_by_identifier = HashMap::<(String, String), usize>::new();
     let mut node_modules_source_diagnostics_by_prefix = HashMap::<String, usize>::new();
@@ -203,14 +204,26 @@ pub fn build_project_compatibility_report(
                 if let Some((module_specifier, export_name)) =
                     extract_ts2305_module_export(&diagnostic.message)
                 {
+                    let category = classify_ts2305_module_export(
+                        &module_specifier,
+                        &diagnostic.file_name,
+                        loaded,
+                        sources,
+                        &ambient_external_modules_set,
+                    );
                     *ts2305_by_module_and_export
-                        .entry((module_specifier, export_name))
+                        .entry((module_specifier, export_name, category))
                         .or_default() += 1;
                 }
             }
             "TS2307" => {
                 if let Some(specifier) = extract_ts2307_module_specifier(&diagnostic.message) {
-                    let category = classify_ts2307_module_specifier(&specifier);
+                    let category = classify_ts2307_module_specifier(
+                        &specifier,
+                        &diagnostic.file_name,
+                        loaded,
+                        sources,
+                    );
                     *ts2307_by_module_specifier
                         .entry((specifier, category.to_string()))
                         .or_default() += 1;
@@ -396,8 +409,8 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     } else {
         for entry in &report.ts2305_by_module_and_export {
             lines.push(format!(
-                "{} :: {}  {}",
-                entry.module_specifier, entry.export_name, entry.count
+                "{} :: {} [{}]  {}",
+                entry.module_specifier, entry.export_name, entry.category, entry.count
             ));
         }
     }
@@ -634,6 +647,10 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
                     item.insert(
                         "exportName".to_string(),
                         Value::String(entry.export_name.clone()),
+                    );
+                    item.insert(
+                        "category".to_string(),
+                        Value::String(entry.category.clone()),
                     );
                     item.insert("count".to_string(), Value::from(entry.count as u64));
                     Value::Object(item)
@@ -989,17 +1006,18 @@ fn sort_counts(counts: HashMap<String, usize>) -> Vec<CompatReportCountEntry> {
 }
 
 fn sort_module_export_counts(
-    counts: HashMap<(String, String), usize>,
+    counts: HashMap<(String, String, String), usize>,
 ) -> Vec<CompatReportModuleExportCountEntry> {
     let mut entries = counts
         .into_iter()
-        .map(
-            |((module_specifier, export_name), count)| CompatReportModuleExportCountEntry {
+        .map(|((module_specifier, export_name, category), count)| {
+            CompatReportModuleExportCountEntry {
                 module_specifier,
                 export_name,
+                category,
                 count,
-            },
-        )
+            }
+        })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         right
@@ -1007,6 +1025,7 @@ fn sort_module_export_counts(
             .cmp(&left.count)
             .then_with(|| left.module_specifier.cmp(&right.module_specifier))
             .then_with(|| left.export_name.cmp(&right.export_name))
+            .then_with(|| left.category.cmp(&right.category))
     });
     entries
 }
@@ -1208,25 +1227,101 @@ fn extract_ts2304_identifier(message: &str) -> Option<String> {
 
 // These are triage categories for reporting, not semantic claims about the
 // underlying compiler behavior.
-fn classify_ts2307_module_specifier(specifier: &str) -> String {
+fn classify_ts2305_module_export(
+    module_specifier: &str,
+    diagnostic_file_name: &str,
+    loaded: &LoadedTsConfig,
+    sources: &[(PathBuf, String, String)],
+    ambient_modules: &std::collections::HashSet<String>,
+) -> String {
+    if ambient_modules.contains(module_specifier) {
+        return "ambient-module".to_string();
+    }
+
+    if is_relative_specifier(module_specifier) {
+        if let Some(resolved_path) = resolve_relative_candidate_for_reporting(
+            diagnostic_file_name,
+            module_specifier,
+            &loaded.root_dir,
+        ) {
+            return classify_loaded_module_path(&resolved_path, sources);
+        }
+
+        return "unknown".to_string();
+    }
+
+    if let Some(package_name) = package_name_from_specifier(module_specifier) {
+        if let Some((resolved_path, incomplete)) =
+            find_loaded_package_declaration_file(&package_name, sources)
+        {
+            if incomplete {
+                return "package-derived-incomplete-declaration".to_string();
+            }
+
+            return classify_loaded_module_path(&resolved_path, sources);
+        }
+    }
+
+    "unknown".to_string()
+}
+
+fn classify_ts2307_module_specifier(
+    specifier: &str,
+    diagnostic_file_name: &str,
+    loaded: &LoadedTsConfig,
+    sources: &[(PathBuf, String, String)],
+) -> String {
+    if is_node_builtin_module_specifier(specifier) {
+        return "node-builtin".to_string();
+    }
+
+    if is_package_json_module_specifier(specifier) {
+        return "package-json".to_string();
+    }
+
     if is_relative_specifier(specifier) {
-        if is_json_module_specifier(specifier) {
-            return "json".to_string();
+        if let Some(resolved_path) = resolve_relative_candidate_for_reporting(
+            diagnostic_file_name,
+            specifier,
+            &loaded.root_dir,
+        ) {
+            return if is_generated_module_specifier(specifier) {
+                if resolved_path.exists() {
+                    "relative-generated-existing-not-loaded".to_string()
+                } else {
+                    "relative-generated-missing".to_string()
+                }
+            } else if resolved_path.exists() {
+                "relative-existing-not-loaded".to_string()
+            } else {
+                "relative-missing".to_string()
+            };
         }
-        if is_generated_module_specifier(specifier) {
-            return "generated-file".to_string();
-        }
-        if is_config_tooling_module_specifier(specifier) {
-            return "config/tooling".to_string();
-        }
-        return "relative".to_string();
+
+        return if is_generated_module_specifier(specifier) {
+            "relative-generated-missing".to_string()
+        } else {
+            "relative-missing".to_string()
+        };
+    }
+
+    if let Some(category) = classify_paths_alias_module_specifier(specifier, loaded) {
+        return category;
     }
 
     if is_package_subpath_specifier(specifier) {
         return "package-subpath".to_string();
     }
 
-    "package".to_string()
+    if is_package_specifier(specifier) {
+        return "package".to_string();
+    }
+
+    if !sources.is_empty() {
+        return "unknown".to_string();
+    }
+
+    "unknown".to_string()
 }
 
 fn classify_ts2304_identifier(identifier: &str) -> String {
@@ -1237,20 +1332,289 @@ fn classify_ts2304_identifier(identifier: &str) -> String {
         return "dom-like".to_string();
     }
     if is_node_like_identifier(identifier) {
-        return "node-like".to_string();
+        return "missing-node-like-global".to_string();
+    }
+    if is_generic_or_type_parameter_scope_identifier(identifier) {
+        return "generic-or-type-parameter-scope".to_string();
+    }
+    if is_missing_synthetic_lib_global_identifier(identifier) {
+        return "missing-synthetic-lib-global".to_string();
     }
     if is_local_unresolved_identifier(identifier) {
-        return "local unresolved".to_string();
+        return "local-unresolved".to_string();
     }
-    if is_package_derived_identifier(identifier) {
-        return "package-derived".to_string();
+    if is_package_derived_incomplete_declaration_identifier(identifier) {
+        return "package-derived-incomplete-declaration".to_string();
     }
 
     "unknown".to_string()
 }
 
-fn is_json_module_specifier(specifier: &str) -> bool {
+fn classify_paths_alias_module_specifier(
+    specifier: &str,
+    loaded: &LoadedTsConfig,
+) -> Option<String> {
+    for mapping in &loaded.compiler_options.paths {
+        if mapping.pattern.matches('*').count() > 1 {
+            continue;
+        }
+
+        let matches = if mapping.pattern.contains('*') {
+            let parts: Vec<&str> = mapping.pattern.split('*').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+
+            let prefix = parts[0];
+            let suffix = parts[1];
+            specifier.starts_with(prefix)
+                && specifier.ends_with(suffix)
+                && specifier.len() >= prefix.len() + suffix.len()
+        } else {
+            specifier == mapping.pattern
+        };
+
+        if !matches {
+            continue;
+        }
+
+        if mapping.substitutions.iter().any(|substitution| {
+            let target = if mapping.pattern.contains('*') {
+                substitution.replace('*', "placeholder")
+            } else {
+                substitution.clone()
+            };
+            is_explicit_relative_target(&target)
+        }) {
+            return Some("paths-alias-explicit-relative-target".to_string());
+        }
+
+        return Some("paths-alias-unsupported-baseUrl-dependent-target".to_string());
+    }
+
+    None
+}
+
+fn classify_loaded_module_path(
+    resolved_path: &Path,
+    sources: &[(PathBuf, String, String)],
+) -> String {
+    if is_declaration_path(resolved_path) {
+        if is_dependency_declaration_path(resolved_path) {
+            if module_has_incomplete_declaration_surface(resolved_path, sources) {
+                return "package-derived-incomplete-declaration".to_string();
+            }
+
+            return "dependency-declaration-module".to_string();
+        }
+
+        return "local-declaration-module".to_string();
+    }
+
+    "source-module".to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelativeSpecifierKind {
+    ExplicitTs,
+    ExplicitJs,
+    ExplicitMjs,
+    ExplicitCjs,
+    Extensionless,
+    Unsupported,
+}
+
+fn resolve_relative_candidate_for_reporting(
+    importer_file_name: &str,
+    specifier: &str,
+    root_dir: &Path,
+) -> Option<PathBuf> {
+    let importer_dir = Path::new(importer_file_name)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| root_dir.to_path_buf());
+    let normalized_specifier = normalize_path_string(specifier);
+    let joined = normalize_path_string(&importer_dir.join(&normalized_specifier).to_string_lossy());
+
+    let candidate_paths = match relative_specifier_kind(&normalized_specifier) {
+        RelativeSpecifierKind::ExplicitTs => vec![joined],
+        RelativeSpecifierKind::ExplicitJs => {
+            let mut candidates = vec![joined.clone()];
+            candidates.extend(relative_resolution_candidates_with_js_substitution(
+                &strip_extension(&joined),
+                &[".ts", ".tsx"],
+                &[".d.ts"],
+            ));
+            candidates
+        }
+        RelativeSpecifierKind::ExplicitMjs => {
+            let mut candidates = vec![joined.clone()];
+            candidates.extend(relative_resolution_candidates_with_js_substitution(
+                &strip_extension(&joined),
+                &[".mts"],
+                &[".d.mts"],
+            ));
+            candidates
+        }
+        RelativeSpecifierKind::ExplicitCjs => {
+            let mut candidates = vec![joined.clone()];
+            candidates.extend(relative_resolution_candidates_with_js_substitution(
+                &strip_extension(&joined),
+                &[".cts"],
+                &[".d.cts"],
+            ));
+            candidates
+        }
+        RelativeSpecifierKind::Extensionless => relative_resolution_candidates(&joined),
+        RelativeSpecifierKind::Unsupported => return None,
+    };
+
+    candidate_paths
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.exists() && candidate.is_file())
+}
+
+fn find_loaded_package_declaration_file(
+    package_name: &str,
+    sources: &[(PathBuf, String, String)],
+) -> Option<(PathBuf, bool)> {
+    for (file_path, file_name, source_text) in sources {
+        let normalized = normalize_path_string(file_name);
+        if !is_dependency_declaration_path(Path::new(file_path)) {
+            continue;
+        }
+
+        if !package_path_matches_specifier(&normalized, package_name) {
+            continue;
+        }
+
+        let incomplete = module_has_incomplete_declaration_surface_text(source_text, file_name);
+        return Some((file_path.clone(), incomplete));
+    }
+
+    None
+}
+
+fn package_name_from_specifier(specifier: &str) -> Option<String> {
+    if specifier.starts_with('@') {
+        let parts: Vec<&str> = specifier.splitn(3, '/').collect();
+        if parts.len() >= 2 {
+            return Some(format!("{}/{}", parts[0], parts[1]));
+        }
+        return None;
+    }
+
+    specifier.split('/').next().map(|name| name.to_string())
+}
+
+fn package_path_matches_specifier(normalized_path: &str, package_name: &str) -> bool {
+    let needle = format!("/node_modules/{package_name}/");
+    if normalized_path.contains(&needle) {
+        return true;
+    }
+
+    normalized_path.contains("/node_modules/.pnpm/")
+        && normalized_path.contains(&format!("/{package_name}/"))
+}
+
+fn is_package_specifier(specifier: &str) -> bool {
+    !specifier.starts_with("./")
+        && !specifier.starts_with("../")
+        && !specifier.starts_with(".\\")
+        && !specifier.starts_with("..\\")
+        && !specifier.starts_with("node:")
+        && !specifier.starts_with("bun:")
+}
+
+fn is_package_json_module_specifier(specifier: &str) -> bool {
     specifier.to_ascii_lowercase().ends_with(".json")
+}
+
+fn is_node_builtin_module_specifier(specifier: &str) -> bool {
+    matches!(
+        specifier,
+        "assert"
+            | "buffer"
+            | "child_process"
+            | "cluster"
+            | "console"
+            | "constants"
+            | "crypto"
+            | "dgram"
+            | "diagnostics_channel"
+            | "dns"
+            | "domain"
+            | "events"
+            | "fs"
+            | "http"
+            | "http2"
+            | "https"
+            | "inspector"
+            | "module"
+            | "net"
+            | "os"
+            | "path"
+            | "perf_hooks"
+            | "process"
+            | "punycode"
+            | "querystring"
+            | "readline"
+            | "repl"
+            | "stream"
+            | "string_decoder"
+            | "sys"
+            | "timers"
+            | "tls"
+            | "trace_events"
+            | "tty"
+            | "url"
+            | "util"
+            | "v8"
+            | "vm"
+            | "worker_threads"
+            | "zlib"
+            | "node:assert"
+            | "node:buffer"
+            | "node:child_process"
+            | "node:cluster"
+            | "node:console"
+            | "node:constants"
+            | "node:crypto"
+            | "node:dgram"
+            | "node:diagnostics_channel"
+            | "node:dns"
+            | "node:domain"
+            | "node:events"
+            | "node:fs"
+            | "node:http"
+            | "node:http2"
+            | "node:https"
+            | "node:inspector"
+            | "node:module"
+            | "node:net"
+            | "node:os"
+            | "node:path"
+            | "node:perf_hooks"
+            | "node:process"
+            | "node:punycode"
+            | "node:querystring"
+            | "node:readline"
+            | "node:repl"
+            | "node:stream"
+            | "node:string_decoder"
+            | "node:sys"
+            | "node:timers"
+            | "node:tls"
+            | "node:trace_events"
+            | "node:tty"
+            | "node:url"
+            | "node:util"
+            | "node:v8"
+            | "node:vm"
+            | "node:worker_threads"
+            | "node:zlib"
+    )
 }
 
 fn is_generated_module_specifier(specifier: &str) -> bool {
@@ -1258,45 +1622,218 @@ fn is_generated_module_specifier(specifier: &str) -> bool {
     lower.contains(".gen") || lower.contains("/generated/")
 }
 
-fn is_config_tooling_module_specifier(specifier: &str) -> bool {
-    let lower = specifier.to_ascii_lowercase();
-    lower.ends_with(".config")
-        || lower.ends_with(".config.ts")
-        || lower.ends_with(".config.tsx")
-        || lower.ends_with(".config.mts")
-        || lower.ends_with(".config.cts")
-        || lower.ends_with(".config.js")
-        || lower.ends_with(".config.mjs")
-        || lower.ends_with(".config.cjs")
-        || lower.contains(".config/")
-        || lower.contains("/config.")
-        || lower.contains("/config/")
-        || lower.contains("vitest.config")
-        || lower.contains("eslint.config")
-        || lower.contains("tailwind.config")
-        || lower.contains("next.config")
-        || lower.contains("postcss.config")
-        || lower.contains("drizzle.config")
-        || lower.contains("sandbox.config")
-        || lower.contains("playwright.config")
-        || lower.contains("turbo.json")
-        || lower.ends_with("package.json")
-        || lower.ends_with("tsconfig.json")
-        || lower.ends_with("deno.json")
-        || lower.ends_with("vercel.json")
-        || lower.ends_with("package-lock.json")
+fn is_explicit_relative_target(target: &str) -> bool {
+    target.starts_with("./")
+        || target.starts_with("../")
+        || target.starts_with(".\\")
+        || target.starts_with("..\\")
 }
 
-fn is_package_subpath_specifier(specifier: &str) -> bool {
-    if !specifier.contains('/') {
-        return false;
+fn module_has_incomplete_declaration_surface_text(source_text: &str, file_name: &str) -> bool {
+    let parsed = typescript_rust_syntax::parse_source(source_text, file_name);
+    parsed
+        .statements
+        .iter()
+        .any(statement_has_unsupported_declaration_surface)
+}
+
+fn module_has_incomplete_declaration_surface(
+    resolved_path: &Path,
+    sources: &[(PathBuf, String, String)],
+) -> bool {
+    if let Some((_, _, source_text)) = sources
+        .iter()
+        .find(|(file_path, _, _)| file_path == resolved_path)
+    {
+        return module_has_incomplete_declaration_surface_text(
+            source_text,
+            &resolved_path.to_string_lossy(),
+        );
     }
 
-    if !specifier.starts_with('@') {
-        return true;
+    if let Ok(source_text) = std::fs::read_to_string(resolved_path) {
+        return module_has_incomplete_declaration_surface_text(
+            &source_text,
+            &resolved_path.to_string_lossy(),
+        );
     }
 
-    specifier.split('/').count() > 2
+    false
+}
+
+fn statement_has_unsupported_declaration_surface(
+    statement: &typescript_rust_syntax::ParsedStatement,
+) -> bool {
+    match statement {
+        typescript_rust_syntax::ParsedStatement::UnsupportedDeclaration { .. } => true,
+        typescript_rust_syntax::ParsedStatement::ImportDeclaration(import) => {
+            matches!(
+                import.kind,
+                typescript_rust_syntax::ParsedImportKind::Unsupported
+            )
+        }
+        typescript_rust_syntax::ParsedStatement::ExportDeclaration(
+            typescript_rust_syntax::ParsedExportDeclaration::Unsupported { .. },
+        ) => true,
+        typescript_rust_syntax::ParsedStatement::ExportDeclaration(
+            typescript_rust_syntax::ParsedExportDeclaration::Default {
+                declaration:
+                    typescript_rust_syntax::ParsedDefaultExportDeclaration::Unsupported { .. },
+                ..
+            },
+        ) => true,
+        typescript_rust_syntax::ParsedStatement::DeclareModuleDeclaration(module) => module
+            .statements
+            .iter()
+            .any(statement_has_unsupported_declaration_surface),
+        _ => false,
+    }
+}
+
+fn relative_specifier_kind(specifier: &str) -> RelativeSpecifierKind {
+    let last_segment = specifier.rsplit('/').next().unwrap_or(specifier);
+
+    if last_segment == "." || last_segment == ".." {
+        return RelativeSpecifierKind::Extensionless;
+    }
+
+    if last_segment.ends_with(".tsx")
+        || last_segment.ends_with(".jsx")
+        || last_segment.ends_with(".mts")
+        || last_segment.ends_with(".cts")
+        || last_segment.ends_with(".d.ts")
+        || last_segment.ends_with(".d.mts")
+        || last_segment.ends_with(".d.cts")
+        || last_segment.ends_with(".json")
+    {
+        return RelativeSpecifierKind::Unsupported;
+    }
+
+    if last_segment.ends_with(".ts") {
+        return RelativeSpecifierKind::ExplicitTs;
+    }
+
+    if last_segment.ends_with(".js") {
+        return RelativeSpecifierKind::ExplicitJs;
+    }
+
+    if last_segment.ends_with(".mjs") {
+        return RelativeSpecifierKind::ExplicitMjs;
+    }
+
+    if last_segment.ends_with(".cjs") {
+        return RelativeSpecifierKind::ExplicitCjs;
+    }
+
+    RelativeSpecifierKind::Extensionless
+}
+
+fn relative_resolution_candidates(base: &str) -> Vec<String> {
+    vec![
+        base.to_string(),
+        format!("{base}.ts"),
+        format!("{base}.tsx"),
+        format!("{base}.d.ts"),
+        format!("{base}.mts"),
+        format!("{base}.cts"),
+        format!("{base}.d.mts"),
+        format!("{base}.d.cts"),
+        format!("{base}/index.ts"),
+        format!("{base}/index.tsx"),
+        format!("{base}/index.d.ts"),
+        format!("{base}/index.mts"),
+        format!("{base}/index.cts"),
+        format!("{base}/index.d.mts"),
+        format!("{base}/index.d.cts"),
+    ]
+}
+
+fn relative_resolution_candidates_with_js_substitution(
+    base: &str,
+    source_extensions: &[&str],
+    declaration_extensions: &[&str],
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    for extension in source_extensions {
+        candidates.push(format!("{base}{extension}"));
+    }
+    for extension in declaration_extensions {
+        candidates.push(format!("{base}{extension}"));
+    }
+
+    candidates.push(format!("{base}/index.ts"));
+    candidates.push(format!("{base}/index.tsx"));
+    candidates.push(format!("{base}/index.d.ts"));
+    candidates.push(format!("{base}/index.mts"));
+    candidates.push(format!("{base}/index.cts"));
+    candidates.push(format!("{base}/index.d.mts"));
+    candidates.push(format!("{base}/index.d.cts"));
+
+    candidates
+}
+
+fn strip_extension(path: &str) -> String {
+    match path.rsplit_once('.') {
+        Some((head, _)) => head.to_string(),
+        None => path.to_string(),
+    }
+}
+
+fn normalize_path_string(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let is_absolute = path.starts_with('/');
+    let mut segments = Vec::new();
+
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+
+        if segment == ".." {
+            if let Some(last) = segments.last() {
+                if last != ".." {
+                    segments.pop();
+                    continue;
+                }
+            }
+
+            if !is_absolute {
+                segments.push(segment.to_string());
+            }
+
+            continue;
+        }
+
+        segments.push(segment.to_string());
+    }
+
+    let mut result = String::new();
+    if is_absolute {
+        result.push('/');
+    }
+    result.push_str(&segments.join("/"));
+
+    if result.is_empty() {
+        if is_absolute {
+            "/".to_string()
+        } else {
+            ".".to_string()
+        }
+    } else {
+        result
+    }
+}
+
+fn is_declaration_path(file_name: &Path) -> bool {
+    let lower = file_name.to_string_lossy().to_ascii_lowercase();
+    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+}
+
+fn is_dependency_declaration_path(file_name: &Path) -> bool {
+    let lower = file_name.to_string_lossy().to_ascii_lowercase();
+    is_declaration_path(file_name)
+        && (lower.contains("/node_modules/") || lower.contains("\\node_modules\\"))
 }
 
 fn is_jsx_like_identifier(identifier: &str) -> bool {
@@ -1340,6 +1877,38 @@ fn is_node_like_identifier(identifier: &str) -> bool {
     )
 }
 
+fn is_generic_or_type_parameter_scope_identifier(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "T" | "K" | "V" | "U" | "P" | "R" | "S" | "E" | "A" | "B" | "C" | "D" | "M" | "N" | "O"
+    )
+}
+
+fn is_missing_synthetic_lib_global_identifier(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "Object"
+            | "Array"
+            | "String"
+            | "Number"
+            | "Boolean"
+            | "Symbol"
+            | "Promise"
+            | "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "Date"
+            | "RegExp"
+            | "Error"
+            | "Math"
+            | "JSON"
+            | "Intl"
+            | "Console"
+            | "ReadonlyArray"
+    )
+}
+
 fn is_local_unresolved_identifier(identifier: &str) -> bool {
     identifier
         .chars()
@@ -1348,11 +1917,23 @@ fn is_local_unresolved_identifier(identifier: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn is_package_derived_identifier(identifier: &str) -> bool {
+fn is_package_derived_incomplete_declaration_identifier(identifier: &str) -> bool {
     identifier.len() > 1
         && identifier
             .chars()
             .next()
             .map(|first| first.is_ascii_uppercase())
             .unwrap_or(false)
+}
+
+fn is_package_subpath_specifier(specifier: &str) -> bool {
+    if !specifier.contains('/') {
+        return false;
+    }
+
+    if !specifier.starts_with('@') {
+        return true;
+    }
+
+    specifier.split('/').count() > 2
 }

@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "~/*": ["./src/*"]
+    }
+  },
+  "include": ["src/index.ts"]
+}

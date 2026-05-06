@@ -1,3 +1,4 @@
+mod import_graph;
 mod package_declarations;
 mod path_mapping;
 mod report;
@@ -287,11 +288,30 @@ fn run_project_mode(
         sources.push((file_path.clone(), file_name, source_text));
     }
 
-    let mut resolved_modules = package_declarations::resolve_package_declaration_entrypoints(
-        &mut inputs,
-        &mut sources,
-        &loaded.root_dir,
-    );
+    let mut resolved_modules = std::collections::HashMap::new();
+    loop {
+        let files_before = inputs.len();
+
+        let package_modules = package_declarations::resolve_package_declaration_entrypoints(
+            &mut inputs,
+            &mut sources,
+            &loaded.root_dir,
+        );
+        for (specifier, resolved_file) in package_modules {
+            resolved_modules.insert(specifier, resolved_file);
+        }
+
+        let graph_loaded = import_graph::expand_project_inputs(
+            &mut inputs,
+            &mut sources,
+            &loaded.root_dir,
+            &loaded.compiler_options.paths,
+        );
+
+        if graph_loaded == 0 && inputs.len() == files_before {
+            break;
+        }
+    }
 
     let path_modules = path_mapping::resolve_path_mappings(
         &inputs,
@@ -299,8 +319,6 @@ fn run_project_mode(
         &loaded.root_dir,
     );
 
-    // Path mappings should win only when they match an explicit alias pattern.
-    // Prefer paths alias precedence for explicit user config.
     for (k, v) in path_modules {
         resolved_modules.insert(k, v);
     }

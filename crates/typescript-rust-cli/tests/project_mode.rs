@@ -1635,6 +1635,76 @@ fn cli_project_file_discovery_fixture_compat_report_counts_loaded_files() {
 }
 
 #[test]
+fn cli_import_graph_generated_relative_basic_fixture_loads_relative_candidates() {
+    let project =
+        compat_project_root("import-graph-generated-relative-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert_eq!(codes.iter().filter(|code| *code == "TS2307").count(), 1);
+}
+
+#[test]
+fn cli_import_graph_generated_relative_basic_fixture_compat_report_loads_files() {
+    let project =
+        compat_project_root("import-graph-generated-relative-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["loadedSourceFiles"], Value::from(3));
+    assert_eq!(parsed["diagnosticsTotal"], Value::from(1));
+}
+
+#[test]
+fn cli_paths_wildcard_import_graph_basic_fixture_resolves_relative_alias_target() {
+    let project = compat_project_root("paths-wildcard-import-graph-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert_eq!(codes.iter().filter(|code| *code == "TS2307").count(), 1);
+}
+
+#[test]
+fn cli_paths_wildcard_import_graph_basic_fixture_compat_report_loads_files() {
+    let project = compat_project_root("paths-wildcard-import-graph-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["loadedSourceFiles"], Value::from(2));
+    assert_eq!(parsed["diagnosticsTotal"], Value::from(1));
+}
+
+#[test]
+fn cli_dependency_incomplete_declaration_export_fallback_fixture_keeps_local_ts2305() {
+    let project = compat_project_root("dependency-incomplete-declaration-export-fallback")
+        .join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert_eq!(codes.iter().filter(|code| *code == "TS2305").count(), 2);
+}
+
+#[test]
 fn cli_relative_directory_index_basic_fixture_resolves_loaded_directory_indexes() {
     let project = compat_project_root("relative-directory-index-basic").join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();

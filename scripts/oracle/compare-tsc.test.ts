@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 
 import {
+  classifyTs2305ModuleExport,
   classifyTs2304Identifier,
   classifyTs2307ModuleSpecifier,
   buildTypeScriptCommand,
@@ -14,6 +15,7 @@ import {
   parseTypeScriptRustDiagnostics,
   nodeModulesSourcePrefix,
   renderComparisonText,
+  readTsconfigPathsMappings,
   resolveOracleMode,
   resolveFilePath,
   resolveProjectPresetOrPath,
@@ -32,7 +34,10 @@ function run() {
   oracle_count_by_file_code_line();
   oracle_extract_ts2305_module_export();
   oracle_classify_ts2307_module_specifier();
+  oracle_classify_ts2307_module_specifier_relative_existing();
+  oracle_classify_ts2307_module_specifier_paths_alias();
   oracle_classify_ts2304_identifier();
+  oracle_classify_ts2305_module_export();
   oracle_node_modules_source_prefix();
   oracle_compare_match();
   oracle_compare_only_typescript();
@@ -56,6 +61,9 @@ function run() {
   oracle_args_accepts_module_forms_project_preset();
   oracle_args_accepts_relative_js_extension_substitution_basic_project_preset();
   oracle_args_accepts_relative_directory_index_basic_project_preset();
+  oracle_args_accepts_import_graph_generated_relative_basic_project_preset();
+  oracle_args_accepts_paths_wildcard_import_graph_basic_project_preset();
+  oracle_args_accepts_dependency_incomplete_declaration_export_fallback_project_preset();
   oracle_args_accepts_skip_lib_check_dependency_dts_project_preset();
   oracle_args_accepts_skip_lib_check_local_dts_project_preset();
   oracle_args_accepts_project_tsconfig_path();
@@ -239,20 +247,47 @@ function oracle_extract_ts2305_module_export() {
 }
 
 function oracle_classify_ts2307_module_specifier() {
-  assert.equal(classifyTs2307ModuleSpecifier('..'), 'relative');
-  assert.equal(classifyTs2307ModuleSpecifier('../core/auth.gen'), 'generated-file');
-  assert.equal(classifyTs2307ModuleSpecifier('../../vitest.config'), 'config/tooling');
-  assert.equal(classifyTs2307ModuleSpecifier('../../package.json'), 'json');
+  assert.equal(classifyTs2307ModuleSpecifier('..'), 'relative-missing');
+  assert.equal(classifyTs2307ModuleSpecifier('../core/auth.gen'), 'relative-generated-missing');
+  assert.equal(classifyTs2307ModuleSpecifier('../../vitest.config'), 'package-json');
+  assert.equal(classifyTs2307ModuleSpecifier('../../package.json'), 'package-json');
   assert.equal(classifyTs2307ModuleSpecifier('@trpc/client'), 'package');
   assert.equal(classifyTs2307ModuleSpecifier('@trpc/server/adapters/standalone'), 'package-subpath');
 }
 
+function oracle_classify_ts2307_module_specifier_relative_existing() {
+  const projectRoot = path.resolve('tests/compat-projects/import-graph-generated-relative-basic');
+  assert.equal(
+    classifyTs2307ModuleSpecifier('../core/auth.gen', 'src/pages/index.ts', projectRoot),
+    'relative-generated-existing-not-loaded',
+  );
+}
+
+function oracle_classify_ts2307_module_specifier_paths_alias() {
+  const projectRoot = path.resolve('tests/compat-projects/paths-wildcard-import-graph-basic');
+  const pathsMappings = readTsconfigPathsMappings(path.join(projectRoot, 'tsconfig.json'));
+  assert.equal(
+    classifyTs2307ModuleSpecifier('~/server/trpc', 'src/index.ts', projectRoot, pathsMappings),
+    'paths-alias-explicit-relative-target',
+  );
+}
+
 function oracle_classify_ts2304_identifier() {
   assert.equal(classifyTs2304Identifier('Headers'), 'dom-like');
-  assert.equal(classifyTs2304Identifier('process'), 'node-like');
+  assert.equal(classifyTs2304Identifier('process'), 'missing-node-like-global');
   assert.equal(classifyTs2304Identifier('JSX'), 'jsx-like');
-  assert.equal(classifyTs2304Identifier('queryClient'), 'local unresolved');
-  assert.equal(classifyTs2304Identifier('Maybe'), 'package-derived');
+  assert.equal(classifyTs2304Identifier('T'), 'generic-or-type-parameter-scope');
+  assert.equal(classifyTs2304Identifier('Object'), 'missing-synthetic-lib-global');
+  assert.equal(classifyTs2304Identifier('queryClient'), 'local-unresolved');
+  assert.equal(classifyTs2304Identifier('Maybe'), 'package-derived-incomplete-declaration');
+}
+
+function oracle_classify_ts2305_module_export() {
+  const projectRoot = path.resolve('tests/compat-projects/dependency-incomplete-declaration-export-fallback');
+  assert.equal(
+    classifyTs2305ModuleExport('dep-incomplete', 'src/index.ts', projectRoot),
+    'package-derived-incomplete-declaration',
+  );
 }
 
 function oracle_node_modules_source_prefix() {
@@ -513,6 +548,41 @@ function oracle_args_accepts_relative_directory_index_basic_project_preset() {
   );
 }
 
+function oracle_args_accepts_import_graph_generated_relative_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'import-graph-generated-relative-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/import-graph-generated-relative-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_paths_wildcard_import_graph_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'paths-wildcard-import-graph-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/paths-wildcard-import-graph-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_dependency_incomplete_declaration_export_fallback_project_preset() {
+  const parsed = parseArgs(['--project', 'dependency-incomplete-declaration-export-fallback']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve(
+      'tests/compat-projects/dependency-incomplete-declaration-export-fallback/tsconfig.json',
+    ),
+  );
+}
+
 function oracle_args_accepts_skip_lib_check_dependency_dts_project_preset() {
   const parsed = parseArgs(['--project', 'skip-lib-check-dependency-dts']);
   const mode = resolveOracleMode(parsed);
@@ -723,7 +793,7 @@ function oracle_output_includes_ts2305_module_export_details() {
 
   const rendered = renderComparisonText(comparison);
   assert.ok(rendered.includes('Top ONLY_RUST TS2305 by module/export:'));
-  assert.ok(rendered.includes('react :: default  1'));
+  assert.ok(rendered.includes('react :: default [unknown]  1'));
 }
 
 function oracle_json_output_includes_mode() {
