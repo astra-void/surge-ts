@@ -67,7 +67,7 @@ fn program_single_file_matches_check_source_for_basic_valid() {
 
 #[test]
 fn program_parser_errors_preserve_file_name() {
-    let diagnostics = program(&[("a.ts", "let value: string | = \"ok\";")]);
+    let diagnostics = native_program(&[("a.ts", "let value: string | = \"ok\";")]);
 
     assert!(!diagnostics.is_empty());
     assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
@@ -516,7 +516,7 @@ fn program_order_parser_before_type_prepass() {
             ("c.ts", "function f(value): string { return 123; }"),
         ],
         CheckerOptions {
-            diagnostic_profile: Default::default(),
+            diagnostic_profile: DiagnosticProfile::Native,
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
@@ -1007,7 +1007,7 @@ fn program_exported_unknown_type_no_cascade() {
 
 #[test]
 fn program_parser_import_export_recovery_does_not_stop_other_files() {
-    let diagnostics = program(&[
+    let diagnostics = native_program(&[
         ("a.ts", "import { User from \"./user\";"),
         ("b.ts", "let value: string = \"ok\";"),
     ]);
@@ -1507,7 +1507,7 @@ fn program_module_order_all_import_errors_before_all_statement_errors() {
 
 #[test]
 fn program_order_parser_error_before_module_resolution_error() {
-    let diagnostics = program(&[
+    let diagnostics = native_program(&[
         ("a.ts", "import { User from \"./user\";"),
         ("b.ts", "import { User } from \"./missing\";"),
     ]);
@@ -1675,7 +1675,7 @@ fn program_module_exported_private_type_dependency_valid() {
 
 #[test]
 fn program_module_exported_private_type_dependency_cycle_no_stack_overflow() {
-    let diagnostics = program(&[
+    let diagnostics = native_program(&[
         (
             "a.ts",
             "interface A { next: B; }\ninterface B { next: A; }\nexport type Box = A;",
@@ -2049,7 +2049,7 @@ fn module_export_default_expression_string_import_valid() {
 
 #[test]
 fn module_export_default_duplicate_pinned() {
-    let diagnostics = program(&[("index.ts", "export default 123;\nexport default 456;")]);
+    let diagnostics = native_program(&[("index.ts", "export default 123;\nexport default 456;")]);
 
     assert_eq!(
         codes(&diagnostics),
@@ -2404,7 +2404,7 @@ fn program_order_re_export_error_before_importer_statement() {
 
 #[test]
 fn program_order_default_export_duplicate_before_statement() {
-    let diagnostics = program(&[(
+    let diagnostics = native_program(&[(
         "index.ts",
         "export default 123;\nexport default 456;\nlet value: string = 123;",
     )]);

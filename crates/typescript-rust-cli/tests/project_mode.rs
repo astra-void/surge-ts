@@ -202,7 +202,12 @@ fn project_mode_empty_config_triggers_ts7006() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("TS7006"));
@@ -243,7 +248,12 @@ fn project_mode_package_extends_reports_ts7006_and_show_config_defaults() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("TS7006"));
@@ -272,7 +282,12 @@ fn project_mode_cross_file_interface_valid() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.trim().is_empty());
@@ -291,7 +306,12 @@ fn project_mode_cross_file_interface_mismatch() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("src/b.ts"));
@@ -312,7 +332,12 @@ fn project_mode_cross_file_type_alias_valid() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.trim().is_empty());
@@ -331,7 +356,12 @@ fn project_mode_uses_program_checker_for_cross_file_type_alias() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("src/b.ts"));
@@ -356,7 +386,12 @@ fn project_mode_cross_file_function_valid() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.trim().is_empty());
@@ -379,7 +414,12 @@ fn project_mode_uses_program_checker_for_cross_file_function() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("src/b.ts"));
@@ -404,7 +444,12 @@ fn project_mode_cross_file_function_return_mismatch() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("src/b.ts"));
@@ -466,7 +511,12 @@ fn project_mode_parser_diagnostic_grouped_by_file() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("src/a.ts"));
@@ -1172,7 +1222,12 @@ fn project_mode_malformed_import_parser_error_grouped_by_file() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("src/a.ts"));
@@ -1193,7 +1248,12 @@ fn project_mode_malformed_export_parser_error_grouped_by_file() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("src/a.ts"));
@@ -1474,11 +1534,48 @@ fn cli_compat_report_includes_parser_error_count() {
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
-    let (stdout, stderr) = run_cli(&["--project", project.as_str(), "--compatReport"]);
+    let (stdout, stderr) = run_cli(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--diagnosticProfile",
+        "native",
+    ]);
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("Parser errors: 1"));
     assert!(stdout.contains("typescript-rust::parser-error"));
+}
+
+#[test]
+fn cli_project_tsc_profile_suppresses_custom_checker_diagnostics() {
+    let root = temp_dir("project-tsc-profile-custom-suppression");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "import { User from \"./user\";");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let tsc = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    assert!(json_diagnostic_codes(&tsc).is_empty());
+
+    let native = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--diagnosticProfile",
+        "native",
+    ]);
+    assert!(
+        json_diagnostic_codes(&native)
+            .iter()
+            .any(|code| code.starts_with("typescript-rust::"))
+    );
 }
 
 #[test]
@@ -2399,4 +2496,22 @@ fn cli_package_declarations_missing_export_from_resolved_subpath_reports_ts2305(
     let lines = json_diagnostic_lines(&parsed, "TS2305");
     // We'll add an import in missing-export.ts line 2 that expects TS2305
     assert!(lines.contains(&Some(2)));
+}
+
+#[test]
+fn cli_skip_lib_check_dependency_dts_loads_as_symbol_source_without_noise() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/skip-lib-check-dependency-dts/tsconfig.json",
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["loadedDependencyDeclarationFiles"], Value::from(1));
+    assert_eq!(
+        parsed["diagnosticsDependencyDeclarationTotal"],
+        Value::from(0)
+    );
+    assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
 }

@@ -1,5 +1,6 @@
 use typescript_rust_checker::{
-    CheckerOptions, SourceFileInput, check_program, check_source_with_options,
+    CheckerOptions, DiagnosticProfile, SourceFileInput, check_program, check_program_with_options,
+    check_source_with_options,
 };
 use typescript_rust_diagnostics::Diagnostic;
 
@@ -56,7 +57,7 @@ fn span_generic_arity_missing_points_to_type_reference_name() {
         source,
         "example.ts",
         CheckerOptions {
-            diagnostic_profile: Default::default(),
+            diagnostic_profile: DiagnosticProfile::Native,
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
@@ -254,11 +255,13 @@ fn span_generic_constraint_unknown_points_to_constraint_type_name() {
 #[test]
 fn span_generic_duplicate_type_parameter_points_to_duplicate_name() {
     let source = "type Pair<T, T> = [T, T];";
-    let diagnostics = check_source_with_options(
-        source,
-        "example.ts",
+    let diagnostics = check_program_with_options(
+        vec![SourceFileInput {
+            file_name: "example.ts".to_string(),
+            source_text: source.to_string(),
+        }],
         CheckerOptions {
-            diagnostic_profile: Default::default(),
+            diagnostic_profile: DiagnosticProfile::Native,
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,

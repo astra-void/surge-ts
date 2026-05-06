@@ -1526,7 +1526,7 @@ fn span_module_unsupported_syntax_points_to_syntax_or_pinned() {
 #[test]
 fn span_default_export_duplicate_points_to_default_keyword_or_export_span() {
     let source = "export default 123;\nexport default 456;";
-    let diagnostics = check_program(vec![typescript_rust_checker::SourceFileInput {
+    let diagnostics = native_program(vec![typescript_rust_checker::SourceFileInput {
         file_name: "example.ts".to_string(),
         source_text: source.to_string(),
     }]);

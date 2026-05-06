@@ -888,13 +888,30 @@ function buildComparisonWarnings(
   const rustDiagnosticsInNodeModules = typescriptRust.filter((diagnostic) =>
     diagnostic.fileName.includes('/node_modules/'),
   );
+  const rustDiagnosticsInNodeModulesDeclarations = rustDiagnosticsInNodeModules.filter((diagnostic) =>
+    diagnostic.fileName.endsWith('.d.ts') ||
+    diagnostic.fileName.endsWith('.d.mts') ||
+    diagnostic.fileName.endsWith('.d.cts'),
+  );
+  const rustDiagnosticsInNodeModulesSourceFiles = rustDiagnosticsInNodeModules.filter(
+    (diagnostic) =>
+      !diagnostic.fileName.endsWith('.d.ts') &&
+      !diagnostic.fileName.endsWith('.d.mts') &&
+      !diagnostic.fileName.endsWith('.d.cts'),
+  );
   const rustOnlyDiagnostics = typescriptRust.filter((diagnostic) =>
     diagnostic.code.startsWith('typescript-rust::'),
   );
 
-  if (rustDiagnosticsInNodeModules.length > 0) {
+  if (rustDiagnosticsInNodeModulesDeclarations.length > 0) {
     warnings.push(
-      `Rust diagnostics from node_modules: ${rustDiagnosticsInNodeModules.length}`,
+      `Rust diagnostics from node_modules dependency declarations: ${rustDiagnosticsInNodeModulesDeclarations.length}`,
+    );
+  }
+
+  if (rustDiagnosticsInNodeModulesSourceFiles.length > 0) {
+    warnings.push(
+      `Rust diagnostics from node_modules source files: ${rustDiagnosticsInNodeModulesSourceFiles.length}`,
     );
   }
 
@@ -904,9 +921,9 @@ function buildComparisonWarnings(
     );
   }
 
-  if (typescriptRust.length > typescript.length * 5) {
+  if (typescriptRust.length > typescript.length * 2) {
     warnings.push(
-      `Severe over-report: typescript-rust diagnostics (${typescriptRust.length}) exceed TypeScript diagnostics (${typescript.length}) by more than 5x`,
+      `Severe over-report: typescript-rust diagnostics (${typescriptRust.length}) exceed TypeScript diagnostics (${typescript.length}) by more than 2x`,
     );
   }
 

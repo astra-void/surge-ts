@@ -161,18 +161,15 @@ impl CheckerContext {
         }
 
         let code = diagnostic.code.to_string();
-        match code.as_str() {
-            "typescript-rust::unsupported-module-syntax"
-            | "typescript-rust::unsupported-declaration" => true,
-            "typescript-rust::type-alias-cycle" | "typescript-rust::type-declaration-cycle" => {
-                self.current_file_kind.is_declaration()
-            }
-            _ => {
-                self.options.skip_lib_check
-                    && self.current_file_kind.is_declaration()
-                    && code != "typescript-rust::parser-error"
-            }
+        if code.starts_with("typescript-rust::") {
+            return true;
         }
+
+        if self.options.skip_lib_check && self.current_file_kind.is_declaration() {
+            return true;
+        }
+
+        false
     }
 
     fn record_suppressed(&mut self, diagnostic: &Diagnostic) {
@@ -203,11 +200,5 @@ pub(crate) struct UtilityDiagnosticKey {
 }
 
 fn is_rust_only_compat_diagnostic(code: &str) -> bool {
-    matches!(
-        code,
-        "typescript-rust::unsupported-module-syntax"
-            | "typescript-rust::unsupported-declaration"
-            | "typescript-rust::type-alias-cycle"
-            | "typescript-rust::type-declaration-cycle"
-    )
+    code.starts_with("typescript-rust::")
 }

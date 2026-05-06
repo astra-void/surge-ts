@@ -1,5 +1,6 @@
 use typescript_rust_checker::{
-    CheckerOptions, SourceFileInput, check_program, check_source_with_options,
+    CheckerOptions, DiagnosticProfile, SourceFileInput, check_program, check_program_with_options,
+    check_source_with_options,
 };
 
 fn codes(diagnostics: &[typescript_rust_diagnostics::Diagnostic]) -> Vec<String> {
@@ -25,6 +26,22 @@ fn program(files: &[(&str, &str)]) -> Vec<typescript_rust_diagnostics::Diagnosti
                 source_text: (*source_text).to_string(),
             })
             .collect(),
+    )
+}
+
+fn native_program(files: &[(&str, &str)]) -> Vec<typescript_rust_diagnostics::Diagnostic> {
+    let mut options = CheckerOptions::default();
+    options.diagnostic_profile = DiagnosticProfile::Native;
+
+    check_program_with_options(
+        files
+            .iter()
+            .map(|(file_name, source_text)| SourceFileInput {
+                file_name: (*file_name).to_string(),
+                source_text: (*source_text).to_string(),
+            })
+            .collect(),
+        options,
     )
 }
 
@@ -981,7 +998,7 @@ fn generic_module_unknown_type_argument_across_module_no_cascade() {
 
 #[test]
 fn generic_duplicate_type_parameter_alias() {
-    let diagnostics = program(&[("index.ts", "type Pair<T, T> = [T, T];")]);
+    let diagnostics = native_program(&[("index.ts", "type Pair<T, T> = [T, T];")]);
 
     assert_eq!(
         codes(&diagnostics),
@@ -991,7 +1008,7 @@ fn generic_duplicate_type_parameter_alias() {
 
 #[test]
 fn generic_duplicate_type_parameter_interface() {
-    let diagnostics = program(&[("index.ts", "interface Pair<T, T> { value: T; }")]);
+    let diagnostics = native_program(&[("index.ts", "interface Pair<T, T> { value: T; }")]);
 
     assert_eq!(
         codes(&diagnostics),
@@ -1001,7 +1018,7 @@ fn generic_duplicate_type_parameter_interface() {
 
 #[test]
 fn generic_duplicate_type_parameter_function() {
-    let diagnostics = program(&[(
+    let diagnostics = native_program(&[(
         "index.ts",
         "function identity<T, T>(value: T): T { return value; }",
     )]);
@@ -1014,7 +1031,7 @@ fn generic_duplicate_type_parameter_function() {
 
 #[test]
 fn generic_duplicate_type_parameter_no_cascade() {
-    let diagnostics = program(&[("index.ts", "type Pair<T, T> = [T, T];")]);
+    let diagnostics = native_program(&[("index.ts", "type Pair<T, T> = [T, T];")]);
 
     assert_eq!(
         codes(&diagnostics),
