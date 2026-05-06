@@ -9,7 +9,7 @@ use typescript_rust_syntax::{
 use typescript_rust_types::FunctionType;
 
 use crate::checks::{assign, call, expr, function as check_function, var};
-use crate::context::{CheckerContext, CheckerOptions};
+use crate::context::{CheckerContext, CheckerOptions, CompatibilityStats, FileKind};
 use crate::driver::collect_type_declarations;
 use crate::driver::validate_direct_utility_aliases;
 use crate::modules::{
@@ -38,6 +38,13 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) statements: Vec<ParsedStatement>,
     pub(crate) parser_errors: Vec<String>,
     pub(crate) is_module: bool,
+    pub(crate) file_kind: FileKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProgramCheckResult {
+    pub diagnostics: Vec<Diagnostic>,
+    pub stats: CompatibilityStats,
 }
 
 #[derive(Debug, Clone)]
@@ -63,16 +70,30 @@ pub fn check_program_with_options(
     files: Vec<SourceFileInput>,
     options: CheckerOptions,
 ) -> Vec<Diagnostic> {
+    check_program_with_stats(files, options).diagnostics
+}
+
+pub fn check_program_with_stats(
+    files: Vec<SourceFileInput>,
+    options: CheckerOptions,
+) -> ProgramCheckResult {
     if files.is_empty() {
-        return Vec::new();
+        return ProgramCheckResult {
+            diagnostics: Vec::new(),
+            stats: CompatibilityStats::default(),
+        };
     }
 
     let parsed_files = parse_program_files(files);
+    let file_kinds = parsed_files
+        .iter()
+        .map(|file| (file.file_name.clone(), file.file_kind))
+        .collect::<HashMap<_, _>>();
     let first_file_name = parsed_files
         .first()
         .map(|file| file.file_name.clone())
         .unwrap_or_default();
-    let mut ctx = CheckerContext::new(first_file_name, options);
+    let mut ctx = CheckerContext::new(first_file_name, options, file_kinds);
 
     crate::builtins::inject_builtins(&mut ctx);
 
@@ -138,7 +159,9 @@ pub fn check_program_with_options(
         &mut ctx,
     );
 
-    ctx.finish()
+    let (diagnostics, stats) = ctx.finish_with_stats();
+
+    ProgramCheckResult { diagnostics, stats }
 }
 
 fn collect_preliminary_module_type_bindings(
@@ -287,15 +310,46 @@ fn parse_program_files(files: Vec<SourceFileInput>) -> Vec<ParsedProgramFile> {
         .into_iter()
         .map(|input| {
             let parsed = parse_source(&input.source_text, &input.file_name);
+            let file_name = parsed.file_name;
             ParsedProgramFile {
-                file_name: parsed.file_name,
+                file_name: file_name.clone(),
                 source_text: input.source_text,
                 statements: parsed.statements,
                 parser_errors: parsed.parser_errors,
                 is_module: parsed.is_module,
+                file_kind: classify_file_kind(&file_name),
             }
         })
         .collect()
+}
+
+fn classify_file_kind(file_name: &str) -> FileKind {
+    if is_declaration_file_name(file_name) {
+        if is_generated_declaration_file_name(file_name) {
+            return FileKind::GeneratedDeclaration;
+        }
+
+        if file_name.contains("/node_modules/") || file_name.contains("/node_modules/.pnpm/") {
+            return FileKind::DependencyDeclaration;
+        }
+
+        return FileKind::RootDeclaration;
+    }
+
+    FileKind::RootSource
+}
+
+fn is_declaration_file_name(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+}
+
+fn is_generated_declaration_file_name(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.contains("/.nuxt/")
+        || lower.contains("/.generated/")
+        || lower.contains("/generated/")
+        || lower.contains("/dist/")
 }
 
 fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
@@ -313,7 +367,7 @@ fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
 
 fn collect_global_type_declarations(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
     for parsed_file in parsed_files {
-        if parsed_file.is_module && !parsed_file.file_name.ends_with(".d.ts") {
+        if parsed_file.is_module && !parsed_file.file_kind.is_declaration() {
             continue;
         }
 
@@ -329,7 +383,7 @@ fn collect_global_function_signatures(
     ctx: &mut CheckerContext,
 ) {
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-        if parsed_file.is_module || parsed_file.file_name.ends_with(".d.ts") {
+        if parsed_file.is_module || parsed_file.file_kind.is_declaration() {
             continue;
         }
 
@@ -357,7 +411,11 @@ fn check_program_files(
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         ctx.set_file_name(parsed_file.file_name.clone());
 
-        if parsed_file.file_name.ends_with(".d.ts") {
+        if ctx.options.skip_lib_check && parsed_file.file_kind.is_declaration() {
+            continue;
+        }
+
+        if parsed_file.file_kind.is_declaration() {
             emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
             continue;
         }
@@ -705,7 +763,7 @@ fn check_program_function_declaration(
 
 fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
     for parsed_file in parsed_files {
-        if !parsed_file.file_name.ends_with(".d.ts") {
+        if !parsed_file.file_kind.is_declaration() {
             continue;
         }
 
@@ -1003,7 +1061,7 @@ fn collect_global_variables(
     ctx: &mut CheckerContext,
 ) {
     for parsed_file in parsed_files {
-        if parsed_file.is_module && !parsed_file.file_name.ends_with(".d.ts") {
+        if parsed_file.is_module && !parsed_file.file_kind.is_declaration() {
             continue;
         }
 
@@ -1026,13 +1084,13 @@ fn collect_global_variables(
             };
 
             if let Some(var) = var {
-                if var.is_declare || parsed_file.file_name.ends_with(".d.ts") {
+                if var.is_declare || parsed_file.file_kind.is_declaration() {
                     let ty = var
                         .declared_type
                         .as_ref()
                         .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
                         .unwrap_or(typescript_rust_types::Type::Unknown);
-                    if !parsed_file.file_name.ends_with(".d.ts")
+                    if !parsed_file.file_kind.is_declaration()
                         || global_symbols.get(&var.name).is_none()
                     {
                         global_symbols.insert(

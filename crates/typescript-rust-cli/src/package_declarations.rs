@@ -67,7 +67,7 @@ fn resolve_exports_types(exports: &serde_json::Value, subpath_key: &str) -> Opti
         serde_json::Value::Object(map) => {
             if let Some(val) = map.get(subpath_key) {
                 match val {
-                    serde_json::Value::String(s) if s.ends_with(".d.ts") => Some(s.clone()),
+                    serde_json::Value::String(s) if is_declaration_file_path(s) => Some(s.clone()),
                     serde_json::Value::Object(_) => find_types_condition(val),
                     _ => None,
                 }
@@ -161,15 +161,7 @@ pub fn resolve_package_declaration_entrypoints(
                             }
 
                             if let Some(path) = types_path {
-                                let path = if path.exists() && path.is_file() {
-                                    Some(path)
-                                } else if path.extension().is_none()
-                                    && path.with_extension("d.ts").exists()
-                                {
-                                    Some(path.with_extension("d.ts"))
-                                } else {
-                                    None
-                                };
+                                let path = resolve_declaration_candidate(&path);
 
                                 if path.is_some() {
                                     resolved_path = path;
@@ -182,20 +174,23 @@ pub fn resolve_package_declaration_entrypoints(
 
                 // Fallbacks
                 if let Some(subpath) = &req.subpath {
-                    let direct_dts = pkg_dir.join(format!("{}.d.ts", subpath));
-                    if direct_dts.exists() && direct_dts.is_file() {
-                        resolved_path = Some(direct_dts);
-                        break;
+                    for candidate in declaration_candidates(pkg_dir.join(subpath)) {
+                        if candidate.exists() && candidate.is_file() {
+                            resolved_path = Some(candidate);
+                            break;
+                        }
                     }
-                    let index_dts = pkg_dir.join(subpath).join("index.d.ts");
-                    if index_dts.exists() && index_dts.is_file() {
-                        resolved_path = Some(index_dts);
+                    if resolved_path.is_some() {
                         break;
                     }
                 } else {
-                    let index_dts = pkg_dir.join("index.d.ts");
-                    if index_dts.exists() && index_dts.is_file() {
-                        resolved_path = Some(index_dts);
+                    for candidate in declaration_candidates(pkg_dir.join("index")) {
+                        if candidate.exists() && candidate.is_file() {
+                            resolved_path = Some(candidate);
+                            break;
+                        }
+                    }
+                    if resolved_path.is_some() {
                         break;
                     }
                 }
@@ -238,6 +233,40 @@ pub fn resolve_package_declaration_entrypoints(
     }
 
     resolved_packages
+}
+
+fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
+    if path.exists() && path.is_file() {
+        return Some(path.to_path_buf());
+    }
+
+    if path.extension().is_none() {
+        for candidate in declaration_candidates(path.to_path_buf()) {
+            if candidate.exists() && candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if path.extension().is_some() {
+        candidates.push(path);
+        return candidates;
+    }
+
+    candidates.push(path.with_extension("d.ts"));
+    candidates.push(path.with_extension("d.mts"));
+    candidates.push(path.with_extension("d.cts"));
+    candidates
+}
+
+fn is_declaration_file_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
 }
 
 fn extract_packages_from_source(

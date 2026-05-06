@@ -7,7 +7,7 @@ use typescript_rust_syntax::{
     ParsedImportKind, ParsedStatement, ParsedType, TextSpan,
 };
 
-use crate::context::{CheckerContext, convert_span};
+use crate::context::{CheckerContext, FileKind, convert_span};
 use crate::program::ParsedProgramFile;
 use crate::symbols::{
     SymbolInfo, SymbolKind, SymbolTable, TypeAliasInfo, TypeDeclarationInfo, TypeDeclarationTable,
@@ -77,10 +77,22 @@ pub(crate) fn resolve_relative_module(
 
     let candidate_paths = match relative_specifier_kind(&normalized_specifier) {
         RelativeSpecifierKind::ExplicitTs => vec![joined_specifier],
-        RelativeSpecifierKind::Extensionless => vec![
-            format!("{joined_specifier}.ts"),
-            format!("{joined_specifier}/index.ts"),
-        ],
+        RelativeSpecifierKind::ExplicitJs => relative_resolution_candidates_with_js_substitution(
+            &strip_extension(&joined_specifier),
+            &[".ts", ".tsx", ".mts", ".cts"],
+            &[".d.ts", ".d.mts", ".d.cts"],
+        ),
+        RelativeSpecifierKind::ExplicitMjs => relative_resolution_candidates_with_js_substitution(
+            &strip_extension(&joined_specifier),
+            &[".mts", ".d.mts"],
+            &[".mts", ".d.mts"],
+        ),
+        RelativeSpecifierKind::ExplicitCjs => relative_resolution_candidates_with_js_substitution(
+            &strip_extension(&joined_specifier),
+            &[".cts", ".d.cts"],
+            &[".cts", ".d.cts"],
+        ),
+        RelativeSpecifierKind::Extensionless => relative_resolution_candidates(&joined_specifier),
         RelativeSpecifierKind::Unsupported => return None,
     };
 
@@ -539,7 +551,10 @@ fn collect_exportable_value_symbols(
     local_symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> SymbolTable {
-    let mut shadow_ctx = CheckerContext::new(ctx.file_name.clone(), ctx.options.clone());
+    let mut file_kinds = HashMap::new();
+    file_kinds.insert(ctx.file_name.clone(), FileKind::RootSource);
+    let mut shadow_ctx =
+        CheckerContext::new(ctx.file_name.clone(), ctx.options.clone(), file_kinds);
     shadow_ctx.type_declarations = local_type_declarations.clone();
 
     let mut exportable_values = local_symbols.clone();
@@ -750,8 +765,196 @@ fn resolve_import_declaration(
 ) {
     match &import.kind {
         ParsedImportKind::Unsupported => {
-            if !ctx.file_name.ends_with(".d.ts") {
+            if !is_declaration_file_name(&ctx.file_name) {
                 emit_unsupported_module_syntax_diagnostic(ctx, import);
+            }
+            return;
+        }
+        ParsedImportKind::DefaultAndNamed {
+            local_name,
+            name_span,
+            is_type_only,
+            specifiers,
+        } => {
+            let Some((export_table, _, _)) = try_resolve_module(
+                &import.module_specifier,
+                ctx,
+                program_files,
+                module_export_tables,
+                module_resolution_scopes,
+            ) else {
+                if resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
+                    .is_none()
+                {
+                    if !(ctx.options.stub_external_modules
+                        && is_external_specifier(&import.module_specifier))
+                    {
+                        emit_unresolved_module_diagnostic(ctx, import);
+                    }
+                } else {
+                    emit_missing_export_diagnostic(
+                        ctx,
+                        &import.module_specifier,
+                        "default",
+                        *name_span,
+                    );
+                }
+
+                if *is_type_only {
+                    let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+                        name: local_name.clone(),
+                        file_name: ctx.file_name.clone(),
+                        name_span: *name_span,
+                        type_parameters: vec![],
+                        ty: ParsedType::Unknown,
+                        resolution_scope: None,
+                    });
+                    if type_declarations.get(local_name).is_none() {
+                        let _ = type_declarations.insert(local_name.clone(), declaration);
+                    }
+                } else {
+                    insert_unknown_value_import(local_name, symbols);
+                }
+
+                for specifier in specifiers {
+                    if *is_type_only {
+                        let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+                            name: specifier.local_name.to_string(),
+                            file_name: ctx.file_name.clone(),
+                            name_span: specifier.name_span,
+                            type_parameters: vec![],
+                            ty: ParsedType::Unknown,
+                            resolution_scope: None,
+                        });
+                        if type_declarations.get(&specifier.local_name).is_none() {
+                            let _ =
+                                type_declarations.insert(specifier.local_name.clone(), declaration);
+                        }
+                    } else {
+                        let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+                            name: specifier.local_name.to_string(),
+                            file_name: ctx.file_name.clone(),
+                            name_span: specifier.name_span,
+                            type_parameters: vec![],
+                            ty: ParsedType::Unknown,
+                            resolution_scope: None,
+                        });
+                        if type_declarations.get(&specifier.local_name).is_none() {
+                            let _ =
+                                type_declarations.insert(specifier.local_name.clone(), declaration);
+                        }
+                        insert_unknown_value_import(&specifier.local_name, symbols);
+                    }
+                }
+                return;
+            };
+
+            let Some(default_symbol) = export_table.default_symbol.clone() else {
+                emit_missing_export_diagnostic(
+                    ctx,
+                    &import.module_specifier,
+                    "default",
+                    *name_span,
+                );
+                if *is_type_only {
+                    let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+                        name: local_name.clone(),
+                        file_name: ctx.file_name.clone(),
+                        name_span: *name_span,
+                        type_parameters: vec![],
+                        ty: ParsedType::Unknown,
+                        resolution_scope: None,
+                    });
+                    if type_declarations.get(local_name).is_none() {
+                        let _ = type_declarations.insert(local_name.clone(), declaration);
+                    }
+                } else {
+                    insert_unknown_value_import(local_name, symbols);
+                }
+                return;
+            };
+
+            if *is_type_only {
+                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+                    name: local_name.clone(),
+                    file_name: ctx.file_name.clone(),
+                    name_span: *name_span,
+                    type_parameters: vec![],
+                    ty: ParsedType::Unknown,
+                    resolution_scope: None,
+                });
+                if type_declarations.get(local_name).is_none() {
+                    let _ = type_declarations.insert(local_name.clone(), declaration);
+                }
+            } else if local_symbols.get(local_name).is_none() {
+                symbols.insert(local_name.clone(), default_symbol);
+            }
+
+            for specifier in specifiers {
+                let type_export = export_table
+                    .type_declarations
+                    .get(&specifier.local_name)
+                    .cloned();
+                let value_export = export_table.symbols.get(&specifier.local_name).cloned();
+
+                if *is_type_only {
+                    if let Some(type_export) = type_export {
+                        export_local_type_declaration(
+                            &type_export,
+                            &specifier.local_name,
+                            type_declarations,
+                        );
+                        continue;
+                    }
+
+                    emit_missing_export_diagnostic(
+                        ctx,
+                        &import.module_specifier,
+                        &specifier.imported_name,
+                        specifier.name_span,
+                    );
+                    insert_unknown_type_import(
+                        type_declarations,
+                        &specifier.local_name,
+                        ctx.file_name.clone(),
+                        specifier.name_span,
+                    );
+                    continue;
+                }
+
+                let mut found = false;
+
+                if let Some(type_export) = type_export {
+                    export_local_type_declaration(
+                        &type_export,
+                        &specifier.local_name,
+                        type_declarations,
+                    );
+                    found = true;
+                }
+
+                if let Some(value_export) = value_export {
+                    if symbols.get(&specifier.local_name).is_none() {
+                        symbols.insert(specifier.local_name.clone(), value_export);
+                    }
+                    found = true;
+                }
+
+                if !found {
+                    emit_missing_export_diagnostic(
+                        ctx,
+                        &import.module_specifier,
+                        &specifier.imported_name,
+                        specifier.name_span,
+                    );
+                    insert_unknown_type_import(
+                        type_declarations,
+                        &specifier.local_name,
+                        ctx.file_name.clone(),
+                        specifier.name_span,
+                    );
+                    insert_unknown_value_import(&specifier.local_name, symbols);
+                }
             }
             return;
         }
@@ -805,7 +1008,23 @@ fn resolve_import_declaration(
         ParsedImportKind::Namespace {
             local_name,
             name_span: _,
+            is_type_only,
         } => {
+            if *is_type_only {
+                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+                    name: local_name.clone(),
+                    file_name: ctx.file_name.clone(),
+                    name_span: None,
+                    type_parameters: vec![],
+                    ty: ParsedType::Unknown,
+                    resolution_scope: None,
+                });
+                if type_declarations.get(local_name).is_none() {
+                    let _ = type_declarations.insert(local_name.clone(), declaration);
+                }
+                return;
+            }
+
             let namespace_type = if let Some((export_table, _, _)) = try_resolve_module(
                 &import.module_specifier,
                 ctx,
@@ -1261,6 +1480,9 @@ fn attach_type_resolution_scope(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RelativeSpecifierKind {
     ExplicitTs,
+    ExplicitJs,
+    ExplicitMjs,
+    ExplicitCjs,
     Extensionless,
     Unsupported,
 }
@@ -1268,12 +1490,27 @@ enum RelativeSpecifierKind {
 fn relative_specifier_kind(specifier: &str) -> RelativeSpecifierKind {
     let last_segment = specifier.rsplit('/').next().unwrap_or(specifier);
 
-    if last_segment.ends_with(".d.ts") {
+    if last_segment.ends_with(".d.ts")
+        || last_segment.ends_with(".d.mts")
+        || last_segment.ends_with(".d.cts")
+    {
         return RelativeSpecifierKind::Unsupported;
     }
 
     if last_segment.ends_with(".ts") {
         return RelativeSpecifierKind::ExplicitTs;
+    }
+
+    if last_segment.ends_with(".js") {
+        return RelativeSpecifierKind::ExplicitJs;
+    }
+
+    if last_segment.ends_with(".mjs") {
+        return RelativeSpecifierKind::ExplicitMjs;
+    }
+
+    if last_segment.ends_with(".cjs") {
+        return RelativeSpecifierKind::ExplicitCjs;
     }
 
     if last_segment.contains('.') {
@@ -1337,6 +1574,62 @@ fn normalize_module_path(path: &str) -> String {
     }
 }
 
+fn relative_resolution_candidates(base: &str) -> Vec<String> {
+    vec![
+        format!("{base}.ts"),
+        format!("{base}.tsx"),
+        format!("{base}.mts"),
+        format!("{base}.cts"),
+        format!("{base}.d.ts"),
+        format!("{base}.d.mts"),
+        format!("{base}.d.cts"),
+        format!("{base}/index.ts"),
+        format!("{base}/index.tsx"),
+        format!("{base}/index.mts"),
+        format!("{base}/index.cts"),
+        format!("{base}/index.d.ts"),
+        format!("{base}/index.d.mts"),
+        format!("{base}/index.d.cts"),
+    ]
+}
+
+fn relative_resolution_candidates_with_js_substitution(
+    base: &str,
+    source_extensions: &[&str],
+    declaration_extensions: &[&str],
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    for extension in source_extensions {
+        candidates.push(format!("{base}{extension}"));
+    }
+    for extension in declaration_extensions {
+        candidates.push(format!("{base}{extension}"));
+    }
+
+    candidates.push(format!("{base}/index.ts"));
+    candidates.push(format!("{base}/index.tsx"));
+    candidates.push(format!("{base}/index.mts"));
+    candidates.push(format!("{base}/index.cts"));
+    candidates.push(format!("{base}/index.d.ts"));
+    candidates.push(format!("{base}/index.d.mts"));
+    candidates.push(format!("{base}/index.d.cts"));
+
+    candidates
+}
+
+fn strip_extension(path: &str) -> String {
+    match path.rsplit_once('.') {
+        Some((head, _)) => head.to_string(),
+        None => path.to_string(),
+    }
+}
+
+fn is_declaration_file_name(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1352,6 +1645,7 @@ mod tests {
                     statements: parsed.statements,
                     parser_errors: parsed.parser_errors,
                     is_module: parsed.is_module,
+                    file_kind: FileKind::RootSource,
                 }
             })
             .collect()
@@ -1447,7 +1741,10 @@ mod tests {
     #[test]
     fn module_resolver_marks_unresolved_star_exports() {
         let files = program(&[("src/index.ts", "export * from \"./missing\";")]);
-        let mut ctx = CheckerContext::new("src/index.ts".to_string(), Default::default());
+        let mut file_kinds = HashMap::new();
+        file_kinds.insert("src/index.ts".to_string(), FileKind::RootSource);
+        let mut ctx =
+            CheckerContext::new("src/index.ts".to_string(), Default::default(), file_kinds);
         let local_tables = files
             .iter()
             .map(|file| {
@@ -1548,7 +1845,7 @@ mod tests {
     }
 
     #[test]
-    fn module_resolver_does_not_match_tsx_js_json_dts() {
+    fn module_resolver_relative_js_specifier_matches_ts_source() {
         let files = program(&[
             ("src/index.ts", "export {}"),
             ("src/user.tsx", "export {}"),
@@ -1559,7 +1856,7 @@ mod tests {
         ]);
 
         assert!(resolve_relative_module("src/index.ts", "./user.tsx", &files).is_none());
-        assert!(resolve_relative_module("src/index.ts", "./user.js", &files).is_none());
+        assert!(resolve_relative_module("src/index.ts", "./user.js", &files).is_some());
         assert!(resolve_relative_module("src/index.ts", "./user.jsx", &files).is_none());
         assert!(resolve_relative_module("src/index.ts", "./user.json", &files).is_none());
         assert!(resolve_relative_module("src/index.ts", "./user.d.ts", &files).is_none());

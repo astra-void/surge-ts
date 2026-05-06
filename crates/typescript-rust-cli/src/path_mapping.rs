@@ -184,14 +184,7 @@ fn try_resolve_path_mapping(
                 // Normalize path to use forward slashes
                 let normalized = normalize_path_string(&joined.to_string_lossy());
 
-                // Try candidate extensions
-                let candidates = vec![
-                    normalized.clone(),
-                    format!("{}.ts", normalized),
-                    format!("{}.d.ts", normalized),
-                    format!("{}/index.ts", normalized),
-                    format!("{}/index.d.ts", normalized),
-                ];
+                let candidates = path_resolution_candidates(&normalized);
 
                 for candidate in candidates {
                     if let Some(original_name) = loaded_files.get(&candidate) {
@@ -203,4 +196,66 @@ fn try_resolve_path_mapping(
     }
 
     None
+}
+
+fn path_resolution_candidates(base: &str) -> Vec<String> {
+    let lower = base.to_ascii_lowercase();
+
+    if lower.ends_with(".js") {
+        let stem = strip_extension(base);
+        return vec![
+            format!("{stem}.ts"),
+            format!("{stem}.tsx"),
+            format!("{stem}.mts"),
+            format!("{stem}.cts"),
+            format!("{stem}.d.ts"),
+            format!("{stem}.d.mts"),
+            format!("{stem}.d.cts"),
+        ];
+    }
+
+    if lower.ends_with(".mjs") {
+        let stem = strip_extension(base);
+        return vec![format!("{stem}.mts"), format!("{stem}.d.mts")];
+    }
+
+    if lower.ends_with(".cjs") {
+        let stem = strip_extension(base);
+        return vec![format!("{stem}.cts"), format!("{stem}.d.cts")];
+    }
+
+    if lower.ends_with(".ts")
+        || lower.ends_with(".tsx")
+        || lower.ends_with(".mts")
+        || lower.ends_with(".cts")
+        || lower.ends_with(".d.ts")
+        || lower.ends_with(".d.mts")
+        || lower.ends_with(".d.cts")
+    {
+        return vec![base.to_string()];
+    }
+
+    vec![
+        format!("{base}.ts"),
+        format!("{base}.tsx"),
+        format!("{base}.mts"),
+        format!("{base}.cts"),
+        format!("{base}.d.ts"),
+        format!("{base}.d.mts"),
+        format!("{base}.d.cts"),
+        format!("{base}/index.ts"),
+        format!("{base}/index.tsx"),
+        format!("{base}/index.mts"),
+        format!("{base}/index.cts"),
+        format!("{base}/index.d.ts"),
+        format!("{base}/index.d.mts"),
+        format!("{base}/index.d.cts"),
+    ]
+}
+
+fn strip_extension(path: &str) -> String {
+    match path.rsplit_once('.') {
+        Some((head, _)) => head.to_string(),
+        None => path.to_string(),
+    }
 }

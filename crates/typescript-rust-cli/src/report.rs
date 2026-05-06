@@ -4,6 +4,7 @@ use std::{
 };
 
 use serde_json::{Map, Value};
+use typescript_rust_checker::CompatibilityStats;
 use typescript_rust_config::LoadedTsConfig;
 use typescript_rust_diagnostics::{
     Diagnostic, DiagnosticCoverageStats, catalog_coverage_stats, render_diagnostics,
@@ -34,6 +35,17 @@ pub struct ProjectCompatibilityReport {
     pub files_loaded: usize,
     pub visibility_warning: Option<String>,
     pub diagnostics_total: usize,
+    pub loaded_source_files: usize,
+    pub loaded_root_declaration_files: usize,
+    pub loaded_dependency_declaration_files: usize,
+    pub loaded_generated_declaration_files: usize,
+    pub suppressed_declaration_diagnostics_total: usize,
+    pub suppressed_rust_only_diagnostics_total: usize,
+    pub diagnostics_root_source_total: usize,
+    pub diagnostics_root_declaration_total: usize,
+    pub diagnostics_dependency_declaration_total: usize,
+    pub diagnostics_generated_declaration_total: usize,
+    pub diagnostics_by_file_kind: Vec<CompatReportCountEntry>,
     pub by_code: Vec<CompatReportCountEntry>,
     pub by_file: Vec<CompatReportCountEntry>,
     pub parser_errors: Vec<CompatReportParserErrorEntry>,
@@ -55,6 +67,7 @@ pub fn build_project_compatibility_report(
     loaded: &LoadedTsConfig,
     diagnostics: &[Diagnostic],
     sources: &[(PathBuf, String, String)],
+    stats: &CompatibilityStats,
 ) -> ProjectCompatibilityReport {
     let mut by_code = HashMap::<String, usize>::new();
     let mut by_file = HashMap::<String, usize>::new();
@@ -62,10 +75,26 @@ pub fn build_project_compatibility_report(
     let mut external_module_stubs = HashMap::<String, usize>::new();
     let mut external_module_stubs_total = 0;
     let mut declaration_files_loaded = 0;
+    let mut loaded_source_files = 0;
+    let mut loaded_root_declaration_files = 0;
+    let mut loaded_dependency_declaration_files = 0;
+    let mut loaded_generated_declaration_files = 0;
+    let mut diagnostics_root_source_total = 0;
+    let mut diagnostics_root_declaration_total = 0;
+    let mut diagnostics_dependency_declaration_total = 0;
+    let mut diagnostics_generated_declaration_total = 0;
+    let mut diagnostics_by_file_kind = HashMap::<String, usize>::new();
     let mut ambient_external_modules_set = std::collections::HashSet::new();
 
     for (_, file_name, source_text) in sources {
-        if file_name.ends_with(".d.ts") {
+        match classify_file_kind(file_name) {
+            FileKindLabel::RootSource => loaded_source_files += 1,
+            FileKindLabel::RootDeclaration => loaded_root_declaration_files += 1,
+            FileKindLabel::DependencyDeclaration => loaded_dependency_declaration_files += 1,
+            FileKindLabel::GeneratedDeclaration => loaded_generated_declaration_files += 1,
+        }
+
+        if is_declaration_file_name(file_name) {
             declaration_files_loaded += 1;
         }
         let parsed = typescript_rust_syntax::parse_source(source_text, file_name);
@@ -110,16 +139,26 @@ pub fn build_project_compatibility_report(
 
     for diagnostic in diagnostics {
         *by_code.entry(diagnostic.code.to_string()).or_default() += 1;
-        *by_file
-            .entry(report_path_label(&loaded.root_dir, &diagnostic.file_name))
+        let file_label = report_path_label(&loaded.root_dir, &diagnostic.file_name);
+        *by_file.entry(file_label.clone()).or_default() += 1;
+
+        match classify_file_kind(&diagnostic.file_name) {
+            FileKindLabel::RootSource => diagnostics_root_source_total += 1,
+            FileKindLabel::RootDeclaration => diagnostics_root_declaration_total += 1,
+            FileKindLabel::DependencyDeclaration => diagnostics_dependency_declaration_total += 1,
+            FileKindLabel::GeneratedDeclaration => diagnostics_generated_declaration_total += 1,
+        }
+        *diagnostics_by_file_kind
+            .entry(
+                classify_file_kind(&diagnostic.file_name)
+                    .label()
+                    .to_string(),
+            )
             .or_default() += 1;
 
         if diagnostic.code.to_string() == "typescript-rust::parser-error" {
             *parser_errors
-                .entry((
-                    report_path_label(&loaded.root_dir, &diagnostic.file_name),
-                    diagnostic.message.clone(),
-                ))
+                .entry((file_label, diagnostic.message.clone()))
                 .or_default() += 1;
         }
     }
@@ -133,6 +172,17 @@ pub fn build_project_compatibility_report(
             None
         },
         diagnostics_total: diagnostics.len(),
+        loaded_source_files,
+        loaded_root_declaration_files,
+        loaded_dependency_declaration_files,
+        loaded_generated_declaration_files,
+        suppressed_declaration_diagnostics_total: stats.suppressed_declaration_diagnostics_total,
+        suppressed_rust_only_diagnostics_total: stats.suppressed_rust_only_diagnostics_total,
+        diagnostics_root_source_total,
+        diagnostics_root_declaration_total,
+        diagnostics_dependency_declaration_total,
+        diagnostics_generated_declaration_total,
+        diagnostics_by_file_kind: sort_counts(diagnostics_by_file_kind),
         by_code: sort_counts(by_code),
         by_file: sort_counts(by_file),
         parser_errors: sort_parser_errors(parser_errors),
@@ -172,10 +222,60 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     lines.push("Compatibility report".to_string());
     lines.push(format!("Root dir: {}", report.root_dir));
     lines.push(format!("Files loaded: {}", report.files_loaded));
+    lines.push(format!(
+        "Loaded source files: {}",
+        report.loaded_source_files
+    ));
+    lines.push(format!(
+        "Loaded root declarations: {}",
+        report.loaded_root_declaration_files
+    ));
+    lines.push(format!(
+        "Loaded dependency declarations: {}",
+        report.loaded_dependency_declaration_files
+    ));
+    lines.push(format!(
+        "Loaded generated declarations: {}",
+        report.loaded_generated_declaration_files
+    ));
     if let Some(warning) = &report.visibility_warning {
         lines.push(format!("Visibility warning: {warning}"));
     }
     lines.push(format!("Diagnostics: {}", report.diagnostics_total));
+    lines.push(format!(
+        "Suppressed declaration diagnostics: {}",
+        report.suppressed_declaration_diagnostics_total
+    ));
+    lines.push(format!(
+        "Suppressed Rust-only diagnostics: {}",
+        report.suppressed_rust_only_diagnostics_total
+    ));
+    lines.push(String::new());
+    lines.push("Diagnostics by file kind:".to_string());
+    if report.diagnostics_by_file_kind.is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for entry in &report.diagnostics_by_file_kind {
+            lines.push(format!("{}  {}", entry.key, entry.count));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "Diagnostics from root source files: {}",
+        report.diagnostics_root_source_total
+    ));
+    lines.push(format!(
+        "Diagnostics from root declaration files: {}",
+        report.diagnostics_root_declaration_total
+    ));
+    lines.push(format!(
+        "Diagnostics from dependency declarations: {}",
+        report.diagnostics_dependency_declaration_total
+    ));
+    lines.push(format!(
+        "Diagnostics from generated declarations: {}",
+        report.diagnostics_generated_declaration_total
+    ));
     lines.push(String::new());
     lines.push("Diagnostic coverage:".to_string());
     lines.push(format!(
@@ -280,6 +380,61 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
     root.insert(
         "diagnosticsTotal".to_string(),
         Value::from(report.diagnostics_total as u64),
+    );
+    root.insert(
+        "loadedSourceFiles".to_string(),
+        Value::from(report.loaded_source_files as u64),
+    );
+    root.insert(
+        "loadedRootDeclarationFiles".to_string(),
+        Value::from(report.loaded_root_declaration_files as u64),
+    );
+    root.insert(
+        "loadedDependencyDeclarationFiles".to_string(),
+        Value::from(report.loaded_dependency_declaration_files as u64),
+    );
+    root.insert(
+        "loadedGeneratedDeclarationFiles".to_string(),
+        Value::from(report.loaded_generated_declaration_files as u64),
+    );
+    root.insert(
+        "suppressedDeclarationDiagnosticsTotal".to_string(),
+        Value::from(report.suppressed_declaration_diagnostics_total as u64),
+    );
+    root.insert(
+        "suppressedRustOnlyDiagnosticsTotal".to_string(),
+        Value::from(report.suppressed_rust_only_diagnostics_total as u64),
+    );
+    root.insert(
+        "diagnosticsRootSourceTotal".to_string(),
+        Value::from(report.diagnostics_root_source_total as u64),
+    );
+    root.insert(
+        "diagnosticsRootDeclarationTotal".to_string(),
+        Value::from(report.diagnostics_root_declaration_total as u64),
+    );
+    root.insert(
+        "diagnosticsDependencyDeclarationTotal".to_string(),
+        Value::from(report.diagnostics_dependency_declaration_total as u64),
+    );
+    root.insert(
+        "diagnosticsGeneratedDeclarationTotal".to_string(),
+        Value::from(report.diagnostics_generated_declaration_total as u64),
+    );
+    root.insert(
+        "diagnosticsByFileKind".to_string(),
+        Value::Array(
+            report
+                .diagnostics_by_file_kind
+                .iter()
+                .map(|entry| {
+                    let mut item = Map::new();
+                    item.insert("kind".to_string(), Value::String(entry.key.clone()));
+                    item.insert("count".to_string(), Value::from(entry.count as u64));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
     );
 
     let mut coverage_map = Map::new();
@@ -655,4 +810,51 @@ fn report_path_label(root_dir: &Path, file_name: &str) -> String {
     path.strip_prefix(root_dir)
         .map(|relative| relative.display().to_string())
         .unwrap_or_else(|_| file_name.to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileKindLabel {
+    RootSource,
+    RootDeclaration,
+    DependencyDeclaration,
+    GeneratedDeclaration,
+}
+
+impl FileKindLabel {
+    fn label(self) -> &'static str {
+        match self {
+            FileKindLabel::RootSource => "root-source",
+            FileKindLabel::RootDeclaration => "root-declaration",
+            FileKindLabel::DependencyDeclaration => "dependency-declaration",
+            FileKindLabel::GeneratedDeclaration => "generated-declaration",
+        }
+    }
+}
+
+fn classify_file_kind(file_name: &str) -> FileKindLabel {
+    let lower = file_name.to_ascii_lowercase();
+    let is_decl = is_declaration_file_name(file_name);
+
+    if is_decl {
+        if lower.contains("/.nuxt/")
+            || lower.contains("/.generated/")
+            || lower.contains("/generated/")
+            || lower.contains("/dist/")
+        {
+            return FileKindLabel::GeneratedDeclaration;
+        }
+
+        if lower.contains("/node_modules/") || lower.contains("/node_modules/.pnpm/") {
+            return FileKindLabel::DependencyDeclaration;
+        }
+
+        return FileKindLabel::RootDeclaration;
+    }
+
+    FileKindLabel::RootSource
+}
+
+fn is_declaration_file_name(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
 }

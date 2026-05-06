@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use typescript_rust_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
 use typescript_rust_syntax::TextSpan as SyntaxTextSpan;
@@ -12,12 +12,39 @@ pub enum DiagnosticProfile {
     Native,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileKind {
+    RootSource,
+    RootDeclaration,
+    DependencyDeclaration,
+    GeneratedDeclaration,
+}
+
+impl FileKind {
+    pub(crate) fn is_declaration(self) -> bool {
+        matches!(
+            self,
+            FileKind::RootDeclaration
+                | FileKind::DependencyDeclaration
+                | FileKind::GeneratedDeclaration
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompatibilityStats {
+    pub suppressed_diagnostics_total: usize,
+    pub suppressed_declaration_diagnostics_total: usize,
+    pub suppressed_rust_only_diagnostics_total: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
     pub no_lib: bool,
+    pub skip_lib_check: bool,
     pub diagnostic_profile: DiagnosticProfile,
 }
 
@@ -28,6 +55,7 @@ impl Default for CheckerOptions {
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
             no_lib: false,
+            skip_lib_check: false,
             diagnostic_profile: DiagnosticProfile::default(),
         }
     }
@@ -37,32 +65,52 @@ use crate::modules::ModuleExportTable;
 
 pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
+    pub(crate) current_file_kind: FileKind,
     pub(crate) options: CheckerOptions,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) stats: CompatibilityStats,
     pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
+    file_kinds: HashMap<String, FileKind>,
 }
 
 impl CheckerContext {
-    pub(crate) fn new(file_name: String, options: CheckerOptions) -> Self {
+    pub(crate) fn new(
+        file_name: String,
+        options: CheckerOptions,
+        file_kinds: HashMap<String, FileKind>,
+    ) -> Self {
+        let current_file_kind = file_kinds
+            .get(&file_name)
+            .copied()
+            .unwrap_or(FileKind::RootSource);
+
         Self {
             file_name,
+            current_file_kind,
             options,
             diagnostics: Vec::new(),
+            stats: CompatibilityStats::default(),
             utility_diagnostic_keys: HashSet::new(),
             symbols: SymbolTable::new(),
             type_declarations: TypeDeclarationTable::new(),
             ambient_modules: std::collections::HashMap::new(),
             ambient_global_symbols: SymbolTable::new(),
             ambient_global_type_declarations: TypeDeclarationTable::new(),
+            file_kinds,
         }
     }
 
     pub(crate) fn set_file_name(&mut self, file_name: String) {
+        self.current_file_kind = self
+            .file_kinds
+            .get(&file_name)
+            .copied()
+            .unwrap_or(FileKind::RootSource);
         self.file_name = file_name;
     }
 
@@ -71,6 +119,11 @@ impl CheckerContext {
     }
 
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
+        if self.should_suppress(&diagnostic) {
+            self.record_suppressed(&diagnostic);
+            return;
+        }
+
         self.diagnostics.push(diagnostic);
     }
 
@@ -97,6 +150,42 @@ impl CheckerContext {
     pub(crate) fn finish(self) -> Vec<Diagnostic> {
         self.diagnostics
     }
+
+    pub(crate) fn finish_with_stats(self) -> (Vec<Diagnostic>, CompatibilityStats) {
+        (self.diagnostics, self.stats)
+    }
+
+    fn should_suppress(&self, diagnostic: &Diagnostic) -> bool {
+        if self.options.diagnostic_profile == DiagnosticProfile::Native {
+            return false;
+        }
+
+        let code = diagnostic.code.to_string();
+        match code.as_str() {
+            "typescript-rust::unsupported-module-syntax"
+            | "typescript-rust::unsupported-declaration" => true,
+            "typescript-rust::type-alias-cycle" | "typescript-rust::type-declaration-cycle" => {
+                self.current_file_kind.is_declaration()
+            }
+            _ => {
+                self.options.skip_lib_check
+                    && self.current_file_kind.is_declaration()
+                    && code != "typescript-rust::parser-error"
+            }
+        }
+    }
+
+    fn record_suppressed(&mut self, diagnostic: &Diagnostic) {
+        self.stats.suppressed_diagnostics_total += 1;
+
+        if self.current_file_kind.is_declaration() {
+            self.stats.suppressed_declaration_diagnostics_total += 1;
+        }
+
+        if is_rust_only_compat_diagnostic(&diagnostic.code.to_string()) {
+            self.stats.suppressed_rust_only_diagnostics_total += 1;
+        }
+    }
 }
 
 pub(crate) fn convert_span(span: SyntaxTextSpan) -> DiagnosticTextSpan {
@@ -111,4 +200,14 @@ pub(crate) struct UtilityDiagnosticKey {
     code: String,
     file_name: String,
     span: Option<(usize, usize)>,
+}
+
+fn is_rust_only_compat_diagnostic(code: &str) -> bool {
+    matches!(
+        code,
+        "typescript-rust::unsupported-module-syntax"
+            | "typescript-rust::unsupported-declaration"
+            | "typescript-rust::type-alias-cycle"
+            | "typescript-rust::type-declaration-cycle"
+    )
 }

@@ -5,7 +5,7 @@ use typescript_rust_syntax::{
 };
 
 use crate::checks::{assign, call, expr, function as check_function, var};
-use crate::context::CheckerContext;
+use crate::context::{CheckerContext, FileKind};
 use crate::infer::report_duplicate_type_parameters;
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
 
@@ -24,7 +24,9 @@ pub fn check_source_with_options(
 ) -> Vec<Diagnostic> {
     let parsed = parse_source(source_text, file_name);
     let file_name = parsed.file_name;
-    let mut ctx = CheckerContext::new(file_name.clone(), options);
+    let mut file_kinds = std::collections::HashMap::new();
+    file_kinds.insert(file_name.clone(), classify_file_kind(&file_name));
+    let mut ctx = CheckerContext::new(file_name.clone(), options, file_kinds);
 
     crate::builtins::inject_builtins(&mut ctx);
 
@@ -165,6 +167,75 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                             }
                         }
                     }
+                    typescript_rust_syntax::ParsedImportKind::DefaultAndNamed {
+                        local_name,
+                        name_span,
+                        is_type_only,
+                        specifiers,
+                    } => {
+                        if *is_type_only {
+                            let declaration = crate::symbols::TypeDeclarationInfo::Alias(
+                                crate::symbols::TypeAliasInfo {
+                                    name: local_name.clone(),
+                                    file_name: ctx.file_name.clone(),
+                                    name_span: *name_span,
+                                    type_parameters: vec![],
+                                    ty: typescript_rust_syntax::ParsedType::Unknown,
+                                    resolution_scope: None,
+                                },
+                            );
+                            let _ = ctx
+                                .type_declarations
+                                .insert(local_name.clone(), declaration);
+                        } else {
+                            let _ = ctx.symbols.insert(
+                                local_name.clone(),
+                                crate::symbols::SymbolInfo {
+                                    ty: typescript_rust_types::Type::Unknown,
+                                    kind: crate::symbols::SymbolKind::Var,
+                                },
+                            );
+                        }
+
+                        for specifier in specifiers {
+                            if *is_type_only {
+                                let declaration = crate::symbols::TypeDeclarationInfo::Alias(
+                                    crate::symbols::TypeAliasInfo {
+                                        name: specifier.local_name.to_string(),
+                                        file_name: ctx.file_name.clone(),
+                                        name_span: specifier.name_span,
+                                        type_parameters: vec![],
+                                        ty: typescript_rust_syntax::ParsedType::Unknown,
+                                        resolution_scope: None,
+                                    },
+                                );
+                                let _ = ctx
+                                    .type_declarations
+                                    .insert(specifier.local_name.clone(), declaration);
+                            } else {
+                                let declaration = crate::symbols::TypeDeclarationInfo::Alias(
+                                    crate::symbols::TypeAliasInfo {
+                                        name: specifier.local_name.to_string(),
+                                        file_name: ctx.file_name.clone(),
+                                        name_span: specifier.name_span,
+                                        type_parameters: vec![],
+                                        ty: typescript_rust_syntax::ParsedType::Unknown,
+                                        resolution_scope: None,
+                                    },
+                                );
+                                let _ = ctx
+                                    .type_declarations
+                                    .insert(specifier.local_name.clone(), declaration);
+                                let _ = ctx.symbols.insert(
+                                    specifier.local_name.clone(),
+                                    crate::symbols::SymbolInfo {
+                                        ty: typescript_rust_types::Type::Unknown,
+                                        kind: crate::symbols::SymbolKind::Var,
+                                    },
+                                );
+                            }
+                        }
+                    }
                     typescript_rust_syntax::ParsedImportKind::Default { local_name, .. } => {
                         let _ = ctx.symbols.insert(
                             local_name.clone(),
@@ -174,14 +245,34 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                             },
                         );
                     }
-                    typescript_rust_syntax::ParsedImportKind::Namespace { local_name, .. } => {
-                        let _ = ctx.symbols.insert(
-                            local_name.clone(),
-                            crate::symbols::SymbolInfo {
-                                ty: typescript_rust_types::Type::Unknown,
-                                kind: crate::symbols::SymbolKind::Const,
-                            },
-                        );
+                    typescript_rust_syntax::ParsedImportKind::Namespace {
+                        local_name,
+                        is_type_only,
+                        ..
+                    } => {
+                        if *is_type_only {
+                            let declaration = crate::symbols::TypeDeclarationInfo::Alias(
+                                crate::symbols::TypeAliasInfo {
+                                    name: local_name.clone(),
+                                    file_name: ctx.file_name.clone(),
+                                    name_span: None,
+                                    type_parameters: vec![],
+                                    ty: typescript_rust_syntax::ParsedType::Unknown,
+                                    resolution_scope: None,
+                                },
+                            );
+                            let _ = ctx
+                                .type_declarations
+                                .insert(local_name.clone(), declaration);
+                        } else {
+                            let _ = ctx.symbols.insert(
+                                local_name.clone(),
+                                crate::symbols::SymbolInfo {
+                                    ty: typescript_rust_types::Type::Unknown,
+                                    kind: crate::symbols::SymbolKind::Const,
+                                },
+                            );
+                        }
                     }
                     _ => {}
                 }
@@ -331,6 +422,15 @@ fn validate_direct_utility_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
         ctx,
         &crate::infer::TypeParameterSubstitution::new(),
     );
+}
+
+fn classify_file_kind(file_name: &str) -> FileKind {
+    let lower = file_name.to_ascii_lowercase();
+    if lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts") {
+        return FileKind::RootDeclaration;
+    }
+
+    FileKind::RootSource
 }
 
 pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut CheckerContext) {

@@ -9,9 +9,12 @@ mod program;
 mod spans;
 mod symbols;
 
-pub use context::{CheckerOptions, DiagnosticProfile};
+pub use context::{CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind};
 pub use driver::{check_source, check_source_with_options};
-pub use program::{SourceFileInput, check_program, check_program_with_options};
+pub use program::{
+    ProgramCheckResult, SourceFileInput, check_program, check_program_with_options,
+    check_program_with_stats,
+};
 
 #[cfg(test)]
 mod tests {

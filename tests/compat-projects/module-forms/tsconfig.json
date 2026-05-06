@@ -1,4 +1,8 @@
 {
   "compilerOptions": {},
-  "include": ["src/**/*.ts"]
+  "files": [
+    "src/source.ts",
+    "src/barrel.ts",
+    "src/consumer.ts"
+  ]
 }

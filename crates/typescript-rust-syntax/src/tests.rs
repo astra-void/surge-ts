@@ -2825,7 +2825,7 @@ fn parse_import_namespace() {
 }
 
 #[test]
-fn parse_import_default_plus_named_unsupported_no_panic() {
+fn parse_import_default_plus_named_parsed_no_panic() {
     let parsed = parse_source("import User, { Role } from \"./user\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
@@ -2833,7 +2833,14 @@ fn parse_import_default_plus_named_unsupported_no_panic() {
         panic!("expected an import declaration");
     };
 
-    assert!(matches!(import.kind, ParsedImportKind::Unsupported));
+    assert!(matches!(
+        import.kind,
+        ParsedImportKind::DefaultAndNamed {
+            ref local_name,
+            ref specifiers,
+            ..
+        } if local_name == "User" && specifiers.len() == 1 && specifiers[0].imported_name == "Role"
+    ));
 }
 
 #[test]

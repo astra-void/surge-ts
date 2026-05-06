@@ -42,6 +42,10 @@ function run() {
   oracle_args_accepts_package_declarations_project_preset();
   oracle_args_accepts_declarations_basic_project_preset();
   oracle_args_accepts_declarations_hardening_project_preset();
+  oracle_args_accepts_module_forms_project_preset();
+  oracle_args_accepts_relative_js_extension_substitution_basic_project_preset();
+  oracle_args_accepts_skip_lib_check_dependency_dts_project_preset();
+  oracle_args_accepts_skip_lib_check_local_dts_project_preset();
   oracle_args_accepts_project_tsconfig_path();
   oracle_args_accepts_file_ts_path();
   oracle_args_rejects_file_tsx_path_current_policy();
@@ -69,6 +73,7 @@ function run() {
   oracle_output_mentions_stub_external_modules_as_rust_only();
   oracle_json_output_includes_stub_external_modules_flag();
   oracle_default_does_not_use_stub_external_modules();
+  oracle_output_includes_comparison_warnings();
 }
 
 function oracle_parse_tsc_single_line() {
@@ -392,6 +397,47 @@ function oracle_args_accepts_declarations_hardening_project_preset() {
   );
 }
 
+function oracle_args_accepts_module_forms_project_preset() {
+  const parsed = parseArgs(['--project', 'module-forms']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(mode.resolvedTsconfig, path.resolve('tests/compat-projects/module-forms/tsconfig.json'));
+}
+
+function oracle_args_accepts_relative_js_extension_substitution_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'relative-js-extension-substitution-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/relative-js-extension-substitution-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_skip_lib_check_dependency_dts_project_preset() {
+  const parsed = parseArgs(['--project', 'skip-lib-check-dependency-dts']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/skip-lib-check-dependency-dts/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_skip_lib_check_local_dts_project_preset() {
+  const parsed = parseArgs(['--project', 'skip-lib-check-local-dts']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/skip-lib-check-local-dts/tsconfig.json'),
+  );
+}
+
 function oracle_args_accepts_project_tsconfig_path() {
   const parsed = parseArgs(['--project', 'tests/compat-projects/generics-basic/tsconfig.json']);
   const mode = resolveOracleMode(parsed);
@@ -668,4 +714,29 @@ function oracle_default_does_not_use_stub_external_modules() {
   if (mode.kind === 'project') {
     assert.equal(mode.stubExternalModules, undefined);
   }
+}
+
+function oracle_output_includes_comparison_warnings() {
+  const comparison = compareDiagnostics(
+    'project',
+    'tsconfig.json',
+    [{ source: 'typescript', code: 'TS2307', fileName: 'src/index.ts' }],
+    [
+      {
+        source: 'typescript-rust',
+        code: 'typescript-rust::unsupported-module-syntax',
+        fileName: 'node_modules/pkg/index.d.ts',
+      },
+      {
+        source: 'typescript-rust',
+        code: 'TS2307',
+        fileName: 'src/index.ts',
+      },
+    ],
+  );
+
+  const rendered = renderComparisonText(comparison);
+  assert.ok(rendered.includes('Warnings:'));
+  assert.ok(rendered.includes('node_modules'));
+  assert.ok(rendered.includes('typescript-rust::* diagnostics'));
 }

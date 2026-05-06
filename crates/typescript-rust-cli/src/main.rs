@@ -12,7 +12,7 @@ use report::{
 };
 use serde_json::{Map, Value};
 use typescript_rust_checker::{
-    CheckerOptions, SourceFileInput, check_program_with_options, check_source_with_options,
+    CheckerOptions, SourceFileInput, check_program_with_stats, check_source_with_options,
 };
 use typescript_rust_config::{TsConfigLoadOptions, load_tsconfig};
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode, render_diagnostics};
@@ -198,6 +198,7 @@ fn run_single_file_mode(
         CheckerOptions {
             no_implicit_any,
             no_lib,
+            skip_lib_check: false,
             stub_external_modules,
             resolved_modules: std::collections::HashMap::new(),
             diagnostic_profile,
@@ -253,10 +254,12 @@ fn run_project_mode(
 
     if loaded.files.is_empty() {
         let diagnostics = vec![project_has_no_source_files_diagnostic(&loaded)];
+        let stats = typescript_rust_checker::CompatibilityStats::default();
         return render_project_mode_output(
             &loaded,
             &diagnostics,
             &[],
+            &stats,
             show_spans,
             compat_report,
             format,
@@ -305,16 +308,18 @@ fn run_project_mode(
     let checker_options = CheckerOptions {
         no_implicit_any: loaded.compiler_options.no_implicit_any,
         no_lib: loaded.compiler_options.no_lib,
+        skip_lib_check: loaded.compiler_options.skip_lib_check,
         stub_external_modules,
         resolved_modules,
         diagnostic_profile,
     };
 
-    let diagnostics = check_program_with_options(inputs, checker_options);
+    let result = check_program_with_stats(inputs, checker_options);
     render_project_mode_output(
         &loaded,
-        &diagnostics,
+        &result.diagnostics,
         &sources,
+        &result.stats,
         show_spans,
         compat_report,
         format,
@@ -326,13 +331,14 @@ fn render_project_mode_output(
     loaded: &typescript_rust_config::LoadedTsConfig,
     diagnostics: &[Diagnostic],
     sources: &[(PathBuf, String, String)],
+    stats: &typescript_rust_checker::CompatibilityStats,
     show_spans: bool,
     compat_report: bool,
     format: ReportFormat,
     max_diagnostics: Option<usize>,
 ) -> ExitCode {
     if compat_report {
-        let report = build_project_compatibility_report(loaded, diagnostics, sources);
+        let report = build_project_compatibility_report(loaded, diagnostics, sources, stats);
         match format {
             ReportFormat::Text => {
                 println!("{}", render_project_compatibility_report_text(&report));

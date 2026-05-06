@@ -11,6 +11,51 @@ comparisons impossible, especially when `tsc` sees `.tsx`, `.mts`, `.cts`,
 `.d.ts`, and nested `examples/**` inputs that the Rust loader might otherwise
 miss. `.tsx` visibility is not the same as JSX or React type support.
 
+## v0.83 Real-Project Audit
+
+Preflight audit for `.local-projects/trpc/tsconfig.json`:
+
+- `CheckerOptions::default().diagnostic_profile == DiagnosticProfile::Tsc`
+- CLI default profile is `tsc`; `--diagnosticProfile native` is opt-in
+- `DiagnosticProfile` is publicly exported
+- `skipLibCheck: true`
+- `baseUrl` is not present
+- `ignoreDeprecations` is not present
+- Loaded files: 1126 total, 1101 source, 12 root declarations, 101 dependency declarations, 96 generated declarations
+
+Real-project comparison after the v0.83 pass:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| TypeScript diagnostics | 1223 | 1223 |
+| typescript-rust diagnostics | 14883 | 2000 |
+| Rust diagnostics from `node_modules/**` | not separately recorded in the preflight baseline | 6 |
+| Rust-only `typescript-rust::*` diagnostics in `tsc` profile | not separately recorded in the preflight baseline | 3 |
+| Suppressed declaration diagnostics | not separately recorded in the preflight baseline | 9723 |
+| Suppressed Rust-only diagnostics | not separately recorded in the preflight baseline | 906 |
+
+Current after-state file-kind split:
+
+- Root source diagnostics: 4928
+- Root declaration diagnostics: 0
+- Dependency declaration diagnostics: 0
+- Generated declaration diagnostics: 0
+
+Remaining top Rust-only / inflated buckets after v0.83:
+
+- `TS2307` TypeScript 170, typescript-rust 853
+- `TS2305` TypeScript 0, typescript-rust 819
+- `TS2304` TypeScript 3, typescript-rust 164
+- `TS7006` TypeScript 52, typescript-rust 81
+- `TS2315` TypeScript 0, typescript-rust 39
+- `TS2314` TypeScript 0, typescript-rust 10
+- `TS2339` TypeScript 29, typescript-rust 9
+- `TS2882` TypeScript 0, typescript-rust 5
+- `typescript-rust::parser-error` TypeScript 0, typescript-rust 2
+- `typescript-rust::type-alias-cycle` TypeScript 0, typescript-rust 1
+
+The default profile remains `tsc`, and `native` remains opt-in.
+
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
 v0.77.1 implements non-null assertions and a parser-safe `as const` foundation under the default `tsc` diagnostic profile. Literal types and tuple constraints are preserved on primitive literals and object/array properties for `as const` expressions. `satisfies` with `as const` behaves correctly. Optional chaining AST evaluation now correctly propagates the `undefined` short-circuit across subsequent non-null assertions (e.g. `a?.b!.c` evaluates to `C | undefined`).

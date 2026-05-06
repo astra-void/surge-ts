@@ -73,6 +73,7 @@ pub(crate) fn parse_import_declaration(
                 parsed_namespace_specifier = Some(ParsedImportKind::Namespace {
                     local_name: specifier.local.name.to_string(),
                     name_span: Some(text_span_from_oxc_span(specifier.local.span)),
+                    is_type_only: false,
                 });
             }
         }
@@ -80,8 +81,7 @@ pub(crate) fn parse_import_declaration(
 
     let is_type_only = matches!(declaration.import_kind, ImportOrExportKind::Type);
 
-    if is_type_only && (parsed_default_specifier.is_some() || parsed_namespace_specifier.is_some())
-    {
+    if is_type_only && parsed_default_specifier.is_some() {
         return Some(ParsedImportDeclaration {
             kind: ParsedImportKind::Unsupported,
             module_specifier,
@@ -92,8 +92,21 @@ pub(crate) fn parse_import_declaration(
 
     if let Some(default_specifier) = parsed_default_specifier {
         if !parsed_specifiers.is_empty() {
+            let ParsedImportKind::Default {
+                local_name,
+                name_span,
+            } = default_specifier
+            else {
+                unreachable!();
+            };
+
             return Some(ParsedImportDeclaration {
-                kind: ParsedImportKind::Unsupported,
+                kind: ParsedImportKind::DefaultAndNamed {
+                    local_name,
+                    name_span,
+                    is_type_only,
+                    specifiers: parsed_specifiers,
+                },
                 module_specifier,
                 module_specifier_span,
                 span,
@@ -109,8 +122,21 @@ pub(crate) fn parse_import_declaration(
     }
 
     if let Some(namespace_specifier) = parsed_namespace_specifier {
+        let kind = match namespace_specifier {
+            ParsedImportKind::Namespace {
+                local_name,
+                name_span,
+                ..
+            } => ParsedImportKind::Namespace {
+                local_name,
+                name_span,
+                is_type_only,
+            },
+            _ => namespace_specifier,
+        };
+
         return Some(ParsedImportDeclaration {
-            kind: namespace_specifier,
+            kind,
             module_specifier,
             module_specifier_span,
             span,

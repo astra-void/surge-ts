@@ -181,6 +181,12 @@ pub enum ParsedImportKind {
         is_type_only: bool,
         specifiers: Vec<ParsedImportSpecifier>,
     },
+    DefaultAndNamed {
+        local_name: String,
+        name_span: Option<TextSpan>,
+        is_type_only: bool,
+        specifiers: Vec<ParsedImportSpecifier>,
+    },
     Default {
         local_name: String,
         name_span: Option<TextSpan>,
@@ -188,6 +194,7 @@ pub enum ParsedImportKind {
     Namespace {
         local_name: String,
         name_span: Option<TextSpan>,
+        is_type_only: bool,
     },
     SideEffect,
     Unsupported,

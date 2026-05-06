@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {},
+  "files": [
+    "src/server.ts",
+    "src/client.ts"
+  ]
+}

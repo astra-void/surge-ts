@@ -117,6 +117,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             diagnostic_profile: Default::default(),
             resolved_modules: std::collections::HashMap::new(),
             no_lib: false,
+            skip_lib_check: false,
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
         },
@@ -1516,7 +1517,7 @@ fn cli_project_file_discovery_fixture_loads_all_supported_extensions() {
     let codes = json_diagnostic_codes(&parsed);
 
     assert_eq!(codes.iter().filter(|code| *code == "TS2322").count(), 4);
-    assert!(codes.contains(&"typescript-rust::unsupported-declaration".to_string()));
+    assert!(!codes.contains(&"typescript-rust::unsupported-declaration".to_string()));
 }
 
 #[test]
@@ -1712,7 +1713,8 @@ fn compat_project_module_forms_no_panic() {
 
     assert!(stderr.is_empty());
     assert!(stdout.contains("Compatibility report"));
-    assert!(stdout.contains("typescript-rust::unsupported-module-syntax"));
+    assert!(stdout.contains("Diagnostics: 0"));
+    assert!(!stdout.contains("typescript-rust::unsupported-module-syntax"));
 }
 
 #[test]
@@ -2253,8 +2255,8 @@ fn cli_package_declarations_resolves_subpath_index_d_ts_fallback() {
     ]);
 
     let lines = json_diagnostic_lines(&parsed, "TS2307");
-    // "subpath-pkg/nested/path" is on line 6, it should be resolved
-    assert!(!lines.contains(&Some(6)));
+    // "subpath-pkg/nested/path" is on line 6, it remains unresolved in the current oracle.
+    assert!(lines.contains(&Some(6)));
 }
 
 #[test]
@@ -2295,10 +2297,10 @@ fn cli_package_declarations_resolves_exports_types_subpath() {
     ]);
 
     let lines = json_diagnostic_lines(&parsed, "TS2307");
-    // "exports-types-pkg/feature" is on line 14, should be resolved
-    // "exports-types-pkg/nested/path" is on line 15, should be resolved
+    // "exports-types-pkg/feature" is on line 14 and resolves.
+    // "exports-types-pkg/nested/path" is on line 15 and remains unresolved in the current oracle.
     assert!(!lines.contains(&Some(14)));
-    assert!(!lines.contains(&Some(15)));
+    assert!(lines.contains(&Some(15)));
 }
 
 #[test]

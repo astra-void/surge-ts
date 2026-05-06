@@ -43,6 +43,7 @@ export type ComparisonResult = {
   typescriptRustOptions?: {
     stubExternalModules?: boolean;
   };
+  warnings?: string[];
   tooling: {
     typescriptVersion: string;
     typescriptCommand: string;
@@ -114,6 +115,9 @@ const fixturePresets: Record<string, string> = {
   'declarations-hardening': path.join(workspaceRoot, 'tests/compat-projects/declarations-hardening/tsconfig.json'),
   'diagnostics-pack': path.join(workspaceRoot, 'tests/compat-projects/diagnostics-pack/tsconfig.json'),
   'generics-basic': path.join(workspaceRoot, 'tests/compat-projects/generics-basic/tsconfig.json'),
+  'relative-js-extension-substitution-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-js-extension-substitution-basic/tsconfig.json'),
+  'skip-lib-check-dependency-dts': path.join(workspaceRoot, 'tests/compat-projects/skip-lib-check-dependency-dts/tsconfig.json'),
+  'skip-lib-check-local-dts': path.join(workspaceRoot, 'tests/compat-projects/skip-lib-check-local-dts/tsconfig.json'),
   'package-imports': path.join(workspaceRoot, 'tests/compat-projects/package-imports/tsconfig.json'),
   'module-forms': path.join(workspaceRoot, 'tests/compat-projects/module-forms/tsconfig.json'),
   'relative-deep': path.join(workspaceRoot, 'tests/compat-projects/relative-deep/tsconfig.json'),
@@ -612,6 +616,7 @@ export function compareDiagnostics(
     typescriptRustOptions: {
       stubExternalModules: stubExternalModules ?? false,
     },
+    warnings: buildComparisonWarnings(typescript, typescriptRust),
     tooling: {
       typescriptVersion: pinnedTypeScriptVersion,
       typescriptCommand: buildTypeScriptCommand(mode, targetDisplay, ignoreConfig),
@@ -793,6 +798,13 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   lines.push(`TypeScript diagnostics: ${comparison.typescript.total}`);
   lines.push(`typescript-rust diagnostics: ${comparison.typescriptRust.total}`);
   lines.push('');
+  if (comparison.warnings && comparison.warnings.length > 0) {
+    lines.push('Warnings:');
+    for (const warning of comparison.warnings) {
+      lines.push(`  ${warning}`);
+    }
+    lines.push('');
+  }
   appendTriageSection(lines, comparison);
   lines.push('');
   lines.push('By code:');
@@ -866,6 +878,39 @@ function appendTriageSection(lines: string[], comparison: ComparisonResult): voi
   lines.push(`  Module resolution/package/import problems: ${moduleCount}`);
   lines.push(`  Missing lib/@types/global problems: ${globalCount}`);
   lines.push(`  Semantic checker deltas: ${semanticCount}`);
+}
+
+function buildComparisonWarnings(
+  typescript: NormalizedDiagnostic[],
+  typescriptRust: NormalizedDiagnostic[],
+): string[] {
+  const warnings: string[] = [];
+  const rustDiagnosticsInNodeModules = typescriptRust.filter((diagnostic) =>
+    diagnostic.fileName.includes('/node_modules/'),
+  );
+  const rustOnlyDiagnostics = typescriptRust.filter((diagnostic) =>
+    diagnostic.code.startsWith('typescript-rust::'),
+  );
+
+  if (rustDiagnosticsInNodeModules.length > 0) {
+    warnings.push(
+      `Rust diagnostics from node_modules: ${rustDiagnosticsInNodeModules.length}`,
+    );
+  }
+
+  if (rustOnlyDiagnostics.length > 0) {
+    warnings.push(
+      `Rust-only typescript-rust::* diagnostics in tsc profile: ${rustOnlyDiagnostics.length}`,
+    );
+  }
+
+  if (typescriptRust.length > typescript.length * 5) {
+    warnings.push(
+      `Severe over-report: typescript-rust diagnostics (${typescriptRust.length}) exceed TypeScript diagnostics (${typescript.length}) by more than 5x`,
+    );
+  }
+
+  return warnings;
 }
 
 function countBucketEntries(buckets: CountBucket[]): number {

@@ -1,6 +1,6 @@
 use typescript_rust_checker::{
-    CheckerOptions, SourceFileInput, check_program, check_program_with_options, check_source,
-    check_source_with_options,
+    CheckerOptions, DiagnosticProfile, SourceFileInput, check_program, check_program_with_options,
+    check_source, check_source_with_options,
 };
 
 fn codes(diagnostics: &[typescript_rust_diagnostics::Diagnostic]) -> Vec<String> {
@@ -43,6 +43,12 @@ fn program_with_options(
             .collect(),
         options,
     )
+}
+
+fn native_program(files: &[(&str, &str)]) -> Vec<typescript_rust_diagnostics::Diagnostic> {
+    let mut options = CheckerOptions::default();
+    options.diagnostic_profile = DiagnosticProfile::Native;
+    program_with_options(files, options)
 }
 
 #[test]
@@ -414,6 +420,7 @@ fn single_file_builtins_visible() {
     let options = CheckerOptions {
         diagnostic_profile: Default::default(),
         no_lib: false,
+        skip_lib_check: false,
         ..Default::default()
     };
 
@@ -437,6 +444,7 @@ fn single_file_no_lib_hides_builtins() {
     let options = CheckerOptions {
         diagnostic_profile: Default::default(),
         no_lib: true,
+        skip_lib_check: false,
         ..Default::default()
     };
 
@@ -455,6 +463,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_lib: false,
+            skip_lib_check: false,
         },
     );
     let single_file_diagnostics = check_source_with_options(
@@ -466,6 +475,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_lib: false,
+            skip_lib_check: false,
         },
     );
 
@@ -511,6 +521,7 @@ fn program_order_parser_before_type_prepass() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_lib: false,
+            skip_lib_check: false,
         },
     );
 
@@ -1098,6 +1109,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_lib: false,
+            skip_lib_check: false,
         },
     );
 
@@ -1118,6 +1130,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_lib: false,
+            skip_lib_check: false,
         },
     );
 
@@ -1135,6 +1148,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_lib: false,
+            skip_lib_check: false,
         },
     );
 
@@ -1861,10 +1875,7 @@ fn module_default_import_mixed_named_parser_safe_or_pinned() {
         "import DefaultThing, { named } from \"./thing\";",
     )]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
 }
 
 #[test]
@@ -1874,10 +1885,7 @@ fn module_default_import_single_file_still_unresolved_or_unsupported() {
         "index.ts",
     );
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax", "TS2304"]
-    );
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
 }
 
 #[test]
@@ -1994,10 +2002,7 @@ fn module_mixed_default_named_import_parser_safe() {
         "import DefaultThing, { named } from \"./thing\";",
     )]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
 }
 
 #[test]
@@ -2056,10 +2061,7 @@ fn module_export_default_duplicate_pinned() {
 fn module_export_default_class_unsupported_no_panic() {
     let diagnostics = program(&[("index.ts", "export default class Foo {}")]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
@@ -2374,10 +2376,7 @@ fn module_re_export_star_missing_module_no_consumer_cascade() {
 fn module_re_export_star_as_parser_safe_or_pinned() {
     let diagnostics = program(&[("index.ts", "export * as Foo from \"./foo\";")]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-module-syntax"]
-    );
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
@@ -3222,7 +3221,7 @@ fn declaration_file_declare_const_no_initializer_valid() {
 
 #[test]
 fn declaration_file_unsupported_syntax_still_reports() {
-    let diagnostics = program(&[("types/globals.d.ts", "declare class Foo {}")]);
+    let diagnostics = native_program(&[("types/globals.d.ts", "declare class Foo {}")]);
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(
         codes(&diagnostics)[0],
@@ -3232,7 +3231,7 @@ fn declaration_file_unsupported_syntax_still_reports() {
 
 #[test]
 fn declaration_file_unsupported_enum_still_reports() {
-    let diagnostics = program(&[("types/globals.d.ts", "declare enum E {}")]);
+    let diagnostics = native_program(&[("types/globals.d.ts", "declare enum E {}")]);
     assert_eq!(
         codes(&diagnostics),
         vec!["typescript-rust::unsupported-declaration"]
@@ -3241,7 +3240,7 @@ fn declaration_file_unsupported_enum_still_reports() {
 
 #[test]
 fn declaration_file_unsupported_namespace_still_reports() {
-    let diagnostics = program(&[("types/globals.d.ts", "declare namespace N {}")]);
+    let diagnostics = native_program(&[("types/globals.d.ts", "declare namespace N {}")]);
     assert_eq!(
         codes(&diagnostics),
         vec!["typescript-rust::unsupported-declaration"]
@@ -3250,7 +3249,7 @@ fn declaration_file_unsupported_namespace_still_reports() {
 
 #[test]
 fn declaration_file_unsupported_global_still_reports() {
-    let diagnostics = program(&[("types/globals.d.ts", "declare global {}")]);
+    let diagnostics = native_program(&[("types/globals.d.ts", "declare global {}")]);
     assert_eq!(
         codes(&diagnostics),
         vec!["typescript-rust::unsupported-declaration"]
@@ -3259,7 +3258,7 @@ fn declaration_file_unsupported_global_still_reports() {
 
 #[test]
 fn declaration_file_unsupported_export_equals_still_reports() {
-    let diagnostics = program(&[("types/globals.d.ts", "export = Foo;")]);
+    let diagnostics = native_program(&[("types/globals.d.ts", "export = Foo;")]);
     assert_eq!(
         codes(&diagnostics),
         vec!["typescript-rust::unsupported-declaration"]
@@ -3268,7 +3267,7 @@ fn declaration_file_unsupported_export_equals_still_reports() {
 
 #[test]
 fn declaration_file_unsupported_import_equals_still_reports() {
-    let diagnostics = program(&[("types/globals.d.ts", "import Foo = require(\"foo\");")]);
+    let diagnostics = native_program(&[("types/globals.d.ts", "import Foo = require(\"foo\");")]);
     assert_eq!(
         codes(&diagnostics),
         vec!["typescript-rust::unsupported-declaration"]
@@ -3277,7 +3276,7 @@ fn declaration_file_unsupported_import_equals_still_reports() {
 
 #[test]
 fn declaration_file_unsupported_wildcard_module_still_reports() {
-    let diagnostics = program(&[("types/globals.d.ts", "declare module \"*\" {}")]);
+    let diagnostics = native_program(&[("types/globals.d.ts", "declare module \"*\" {}")]);
     assert_eq!(
         codes(&diagnostics),
         vec!["typescript-rust::unsupported-declaration"]

@@ -6,8 +6,8 @@ use std::{
 
 use serde::Deserialize;
 use typescript_rust_checker::{
-    CheckerOptions, SourceFileInput, check_program, check_program_with_options, check_source,
-    check_source_with_options,
+    CheckerOptions, DiagnosticProfile, SourceFileInput, check_program, check_program_with_options,
+    check_source, check_source_with_options,
 };
 use typescript_rust_diagnostics::render_diagnostics;
 
@@ -65,6 +65,11 @@ fn smoke_cases_emit_expected_codes() {
     let manifest = load_smoke_manifest();
 
     for case in manifest.case {
+        let use_native_profile = case
+            .expected_diagnostics
+            .iter()
+            .any(|code| code.starts_with("typescript-rust::"));
+
         let (diagnostics, rendered) = if !case.files.is_empty() {
             let inputs = case
                 .files
@@ -74,16 +79,10 @@ fn smoke_cases_emit_expected_codes() {
                     source_text: file.source_text.clone(),
                 })
                 .collect::<Vec<_>>();
-            let diagnostics = if case.no_implicit_any {
+            let diagnostics = if case.no_implicit_any || use_native_profile {
                 check_program_with_options(
                     inputs,
-                    CheckerOptions {
-                        resolved_modules: Default::default(),
-                        stub_external_modules: false,
-                        no_implicit_any: true,
-                        no_lib: false,
-                        ..Default::default()
-                    },
+                    smoke_checker_options(case.no_implicit_any, use_native_profile),
                 )
             } else {
                 check_program(inputs)
@@ -102,17 +101,11 @@ fn smoke_cases_emit_expected_codes() {
                     path.display()
                 );
             });
-            let diagnostics = if case.no_implicit_any {
+            let diagnostics = if case.no_implicit_any || use_native_profile {
                 check_source_with_options(
                     &source,
                     path.to_string_lossy().as_ref(),
-                    CheckerOptions {
-                        resolved_modules: Default::default(),
-                        stub_external_modules: false,
-                        no_implicit_any: true,
-                        no_lib: false,
-                        ..Default::default()
-                    },
+                    smoke_checker_options(case.no_implicit_any, use_native_profile),
                 )
             } else {
                 check_source(&source, path.to_string_lossy().as_ref())
@@ -130,6 +123,21 @@ fn smoke_cases_emit_expected_codes() {
             case.path.as_deref().unwrap_or("<program files>"),
             rendered
         );
+    }
+}
+
+fn smoke_checker_options(no_implicit_any: bool, use_native_profile: bool) -> CheckerOptions {
+    CheckerOptions {
+        resolved_modules: Default::default(),
+        stub_external_modules: false,
+        no_implicit_any,
+        no_lib: false,
+        diagnostic_profile: if use_native_profile {
+            DiagnosticProfile::Native
+        } else {
+            DiagnosticProfile::Tsc
+        },
+        ..Default::default()
     }
 }
 
