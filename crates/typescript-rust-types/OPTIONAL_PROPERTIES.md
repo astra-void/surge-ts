@@ -8,6 +8,7 @@ Current semantics:
 - `get_property_type(...)` is for writes/contextual checks
 - `get_property_access_type(...)` is for reads
 - mapped types support optional mapped properties via the `?` modifier
+- `Partial<T>` lowering in v0.81 reuses the same optional-property model: concrete object/interface properties are copied and marked optional while preserving their declared value types
 
 Why optionality lives on `ObjectProperty`:
 - optionality is a property-level attribute, not a type-level wrapper

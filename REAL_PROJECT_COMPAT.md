@@ -11,7 +11,7 @@ v0.77.1 implements non-null assertions and a parser-safe `as const` foundation u
 v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics and control-flow narrowing remain unsupported. `ignoreDeprecations` is not used in committed fixtures because TS 7-oriented compatibility should not hide deprecated option behavior.
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
-v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. Utility types mostly suppress TS2304 as synthetic aliases/noise reducers, and do not automatically implement full utility type semantics despite the narrow mapped types support introduced in v0.80.1. `noLib: true` disables synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
+v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds a narrow synthetic lowering pack for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-type foundation introduced in v0.80.1. This is still not full utility-type support, and physical `lib.d.ts`, `@types`, DOM, Node, and true lib loading remain unsupported. `noLib: true` disables synthetic built-ins.
 Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exports["types"] condition.
 Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, physical `lib.d.ts` loading, DOM/Node globals, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
 
@@ -78,6 +78,7 @@ The current baseline still intentionally avoids:
 - generic call-site inference
 - mixed default + named imports
 - default class exports
+- full utility-type ecosystem support; v0.81 only lowers `Record`, `Partial`, `Pick`, and `Omit` in a narrow synthetic path
 
 The current declaration and diagnostic baseline includes:
 

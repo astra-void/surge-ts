@@ -9,6 +9,7 @@ Current scope:
 - `keyof T` and `keyof typeof` type queries returning unions of string literal types
 - `T[keyof T]` indexed access resolving to a union of property values
 - Homomorphic mapped types iterating over string literal unions to map properties
+- utility-type lowering for `Record` and `Pick`/`Omit` key selection accepts only unions of string-literal keys in the narrow supported subset
 
 Normalization:
 - flatten nested unions

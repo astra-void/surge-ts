@@ -5,7 +5,7 @@
 - `check_program(files: Vec<SourceFileInput>)`
 - `check_program_with_options(files: Vec<SourceFileInput>, options: CheckerOptions)`
 
-The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, v0.65 hardens the ambient declaration path for loaded `.d.ts` files, and v0.69/v0.69.1/v0.70 add and harden bare package declaration entrypoint and subpath support, v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts` (disabled by `noLib: true`), providing basic `Array<T>` support while utility types mostly suppress TS2304. v0.74 adds a narrow optional chaining and nullish coalescing compatibility foundation for expression evaluation. v0.74.1 hardens nested optional property/call chains, adds optional element access for arrays and tuples, and maintains ?? conservative undefined-removal.
+The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, v0.65 hardens the ambient declaration path for loaded `.d.ts` files, and v0.69/v0.69.1/v0.70 add and harden bare package declaration entrypoint and subpath support, v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts` (disabled by `noLib: true`), providing basic `Array<T>` support while utility types mostly suppress TS2304, and v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of mapped types. v0.74 adds a narrow optional chaining and nullish coalescing compatibility foundation for expression evaluation. v0.74.1 hardens nested optional property/call chains, adds optional element access for arrays and tuples, and maintains ?? conservative undefined-removal.
 
 ## Public API
 
@@ -124,6 +124,7 @@ See [MODULES.md](./MODULES.md) for the import/export syntax surface, module-file
   counts in the compatibility summary.
 - Positional single-file mode still uses the single-file checker APIs and does not resolve sibling files.
 - Diagnostic span policy lives in [DIAGNOSTIC_SPANS.md](./DIAGNOSTIC_SPANS.md).
+- v0.81 synthetic utility lowering covers `Record<K, T>`, `Partial<T>`, `Pick<T, K>`, and `Omit<T, K>` for concrete object/interface shapes and string-literal key unions. It does not imply physical `lib.d.ts`, `@types`, DOM/Node globals, conditional types, template literal types, or the rest of the utility-type ecosystem.
 
 ## Upstream Virtual Files
 
@@ -149,5 +150,4 @@ The checker supports two diagnostic profiles, controlled via `CheckerOptions.dia
 2. **`Native`**: Uses `typescript-rust`-specific behaviors. For example, it aggressively returns `Unknown` from failed contextual checks (like `satisfies` failures) to suppress noisy downstream cascade errors. This produces a cleaner developer experience but diverges from the TypeScript compiler baseline.
 
 The `compat-projects` oracle testing runs exclusively in `tsc` profile.
-
 
