@@ -312,6 +312,42 @@ fn include_selects_matching_ts_files() {
 }
 
 #[test]
+fn include_treats_directories_as_recursive_roots_and_keeps_source_extensions() {
+    let root = temp_dir("include-directory-roots");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "include": ["src", "examples"] }"#,
+    );
+    write_file(&root, "src/index.ts", "const fromTs: string = 1;");
+    write_file(&root, "src/component.tsx", "const fromTsx: string = 1;");
+    write_file(&root, "src/types.d.ts", "declare class Thing {}");
+    write_file(
+        &root,
+        "examples/nested/module.mts",
+        "const fromMts: string = 1;",
+    );
+    write_file(
+        &root,
+        "examples/nested/common.cts",
+        "const fromCts: string = 1;",
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert_eq!(
+        loaded.files,
+        vec![
+            root.join("examples/nested/common.cts"),
+            root.join("examples/nested/module.mts"),
+            root.join("src/component.tsx"),
+            root.join("src/index.ts"),
+            root.join("src/types.d.ts"),
+        ]
+    );
+}
+
+#[test]
 fn exclude_removes_matching_files() {
     let root = temp_dir("exclude");
     write_file(

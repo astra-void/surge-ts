@@ -32,6 +32,7 @@ pub(crate) fn resolve_source_files(
         ),
         None => vec!["**/*".to_string()],
     };
+    let include_roots = collect_literal_include_roots(root_dir, &include_patterns);
     let mut exclude_patterns = vec![
         "**/node_modules".to_string(),
         "**/node_modules/**".to_string(),
@@ -72,7 +73,7 @@ pub(crate) fn resolve_source_files(
         };
 
         if let Some(set) = include_set.as_ref() {
-            if !set.is_match(relative) {
+            if !set.is_match(relative) && !is_under_any_include_root(relative, &include_roots) {
                 continue;
             }
         }
@@ -85,6 +86,41 @@ pub(crate) fn resolve_source_files(
     files.sort();
     files.dedup();
     files
+}
+
+fn collect_literal_include_roots(root_dir: &Path, patterns: &[String]) -> Vec<PathBuf> {
+    patterns
+        .iter()
+        .filter_map(|pattern| literal_include_root(root_dir, pattern))
+        .collect()
+}
+
+fn literal_include_root(root_dir: &Path, pattern: &str) -> Option<PathBuf> {
+    if contains_glob_metacharacters(pattern) {
+        return None;
+    }
+
+    let candidate = resolve_path(root_dir, pattern);
+    if candidate.exists() && candidate.is_dir() {
+        return Some(
+            candidate
+                .strip_prefix(root_dir)
+                .map(Path::to_path_buf)
+                .unwrap_or(candidate),
+        );
+    }
+
+    None
+}
+
+fn contains_glob_metacharacters(pattern: &str) -> bool {
+    pattern
+        .chars()
+        .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+}
+
+fn is_under_any_include_root(relative: &Path, include_roots: &[PathBuf]) -> bool {
+    include_roots.iter().any(|root| relative.starts_with(root))
 }
 
 fn resolve_explicit_files(
