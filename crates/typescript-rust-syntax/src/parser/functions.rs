@@ -1,11 +1,13 @@
 use oxc_ast::ast::{
-    BindingPattern, BlockStatement, Declaration, Expression, ExpressionStatement, FormalParameter,
-    Function, IfStatement, Statement, VariableDeclaration, WhileStatement,
+    BindingPattern, BindingProperty, BlockStatement, Declaration, Expression, ExpressionStatement,
+    FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey, Statement,
+    VariableDeclaration, WhileStatement,
 };
 
 use crate::{
-    ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
-    ParsedFunctionParameter, ParsedIfStatement, ParsedReturnStatement, ParsedWhileStatement,
+    ParsedBindingName, ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
+    ParsedFunctionParameter, ParsedIfStatement, ParsedObjectBindingElement,
+    ParsedObjectBindingPattern, ParsedReturnStatement, ParsedWhileStatement,
 };
 
 use super::expressions::parse_expression;
@@ -90,7 +92,7 @@ fn parse_function_body_statement(
     }
 }
 
-fn parse_statement_list_as_function_body(
+pub(crate) fn parse_statement_list_as_function_body(
     statements: &[Statement<'_>],
 ) -> Vec<ParsedFunctionBodyStatement> {
     statements
@@ -184,18 +186,80 @@ fn parse_branch_body(statement: &Statement<'_>) -> Vec<ParsedFunctionBodyStateme
 pub(crate) fn parse_function_parameter(
     parameter: &FormalParameter<'_>,
 ) -> Option<ParsedFunctionParameter> {
-    let BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
-        return None;
-    };
-
     let declared_type = parameter
         .type_annotation
         .as_ref()
         .and_then(|annotation| parse_type_annotation(annotation));
 
     Some(ParsedFunctionParameter {
-        name: binding.name.to_string(),
-        name_span: Some(text_span_from_oxc_span(binding.span)),
+        binding_name: parse_binding_name(&parameter.pattern),
         declared_type,
+    })
+}
+
+pub(crate) fn parse_binding_name(binding: &BindingPattern<'_>) -> ParsedBindingName {
+    match binding {
+        BindingPattern::BindingIdentifier(binding) => ParsedBindingName::Identifier {
+            name: binding.name.to_string(),
+            span: Some(text_span_from_oxc_span(binding.span)),
+        },
+        BindingPattern::ObjectPattern(object_pattern) => {
+            ParsedBindingName::ObjectPattern(parse_object_binding_pattern(object_pattern))
+        }
+        BindingPattern::AssignmentPattern(assignment_pattern) => {
+            parse_binding_name(&assignment_pattern.left)
+        }
+        BindingPattern::ArrayPattern(array_pattern) => ParsedBindingName::Unsupported {
+            span: Some(text_span_from_oxc_span(array_pattern.span)),
+        },
+    }
+}
+
+fn parse_object_binding_pattern(object_pattern: &ObjectPattern<'_>) -> ParsedObjectBindingPattern {
+    ParsedObjectBindingPattern {
+        elements: object_pattern
+            .properties
+            .iter()
+            .filter_map(parse_object_binding_element)
+            .collect(),
+        span: Some(text_span_from_oxc_span(object_pattern.span)),
+    }
+}
+
+fn parse_object_binding_element(
+    property: &BindingProperty<'_>,
+) -> Option<ParsedObjectBindingElement> {
+    let property_name = match &property.key {
+        PropertyKey::StaticIdentifier(identifier) => identifier.name.to_string(),
+        _ => {
+            return Some(ParsedObjectBindingElement {
+                property_name: "<unsupported>".to_string(),
+                binding_name: ParsedBindingName::Unsupported {
+                    span: Some(text_span_from_oxc_span(property.span)),
+                },
+                name_span: Some(text_span_from_oxc_span(property.span)),
+                has_default: false,
+                span: Some(text_span_from_oxc_span(property.span)),
+            });
+        }
+    };
+
+    let has_default = matches!(&property.value, BindingPattern::AssignmentPattern(_));
+    let binding_name = match &property.value {
+        BindingPattern::AssignmentPattern(assignment) => parse_binding_name(&assignment.left),
+        _ => parse_binding_name(&property.value),
+    };
+    let name_span = match &binding_name {
+        ParsedBindingName::Identifier { span, .. } => *span,
+        ParsedBindingName::ObjectPattern(pattern) => pattern.span,
+        ParsedBindingName::Unsupported { span } => *span,
+    };
+
+    Some(ParsedObjectBindingElement {
+        property_name,
+        binding_name,
+        name_span,
+        has_default,
+        span: Some(text_span_from_oxc_span(property.span)),
     })
 }

@@ -418,6 +418,7 @@ pub(crate) fn check_expression_flow(
             }
             check_expression_flow(right, fallback_span, flow_state, statement_index, ctx)
         }
+        ParsedExpression::ArrowFunction(_) => FlowCheck::Clear,
         ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)
         | ParsedExpression::BooleanLiteral(_)

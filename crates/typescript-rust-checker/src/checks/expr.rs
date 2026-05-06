@@ -7,6 +7,7 @@ use super::call::{
     check_property_call_like,
 };
 use super::emit_type_only_as_value_diagnostic;
+use super::function::check_arrow_function_expression;
 use super::ops;
 use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, infer_expression};
@@ -495,6 +496,11 @@ pub(crate) fn evaluate_expression(
             symbols,
             ctx,
         ),
+        ParsedExpression::ArrowFunction(arrow_function) => {
+            let function_type =
+                check_arrow_function_expression(arrow_function.as_ref().clone(), symbols, ctx);
+            InferredExpression::Known(Type::Function(function_type))
+        }
         ParsedExpression::NonNullAssertion {
             expression: asserted_expression,
             span: expression_span,

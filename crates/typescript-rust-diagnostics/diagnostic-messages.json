@@ -357,7 +357,7 @@
     "message": "Binding element '{0}' implicitly has an '{1}' type.",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7034",

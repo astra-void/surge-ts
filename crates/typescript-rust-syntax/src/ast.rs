@@ -106,6 +106,33 @@ pub struct ParsedFunctionTypeParameter {
     pub ty: ParsedType,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedBindingName {
+    Identifier {
+        name: String,
+        span: Option<TextSpan>,
+    },
+    ObjectPattern(ParsedObjectBindingPattern),
+    Unsupported {
+        span: Option<TextSpan>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedObjectBindingPattern {
+    pub elements: Vec<ParsedObjectBindingElement>,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedObjectBindingElement {
+    pub property_name: String,
+    pub binding_name: ParsedBindingName,
+    pub name_span: Option<TextSpan>,
+    pub has_default: bool,
+    pub span: Option<TextSpan>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedNamedType {
     pub name: String,
@@ -361,6 +388,7 @@ pub enum ParsedExpression {
         expression: Box<ParsedExpression>,
         span: Option<TextSpan>,
     },
+    ArrowFunction(Box<ParsedArrowFunction>),
     Unknown,
 }
 
@@ -473,9 +501,23 @@ pub struct ParsedWhileStatement {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedFunctionParameter {
-    pub name: String,
-    pub name_span: Option<TextSpan>,
+    pub binding_name: ParsedBindingName,
     pub declared_type: Option<ParsedType>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedArrowFunction {
+    pub type_parameters: Vec<ParsedTypeParameter>,
+    pub parameters: Vec<ParsedFunctionParameter>,
+    pub return_type: Option<ParsedType>,
+    pub body: ParsedArrowFunctionBody,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedArrowFunctionBody {
+    Expression(Box<ParsedExpression>),
+    Block(Vec<ParsedFunctionBodyStatement>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

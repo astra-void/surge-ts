@@ -203,6 +203,23 @@ fn span_ts7006_points_to_parameter_name() {
 }
 
 #[test]
+fn span_ts7031_points_to_binding_element_name() {
+    let source = "function f({ id: userId }): void { }";
+    let diagnostics = check_source_with_options(
+        source,
+        "example.ts",
+        CheckerOptions {
+            diagnostic_profile: Default::default(),
+            resolved_modules: Default::default(),
+            stub_external_modules: false,
+            no_implicit_any: true,
+            no_lib: false,
+        },
+    );
+    assert_single_span(source, diagnostics, "TS7031", span(source, "userId"));
+}
+
+#[test]
 fn span_ts7005_points_to_variable_name() {
     let source = "let value;";
     let diagnostics = check_source_with_options(

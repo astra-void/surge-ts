@@ -452,7 +452,7 @@ pub const TS7031: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Binding element '{0}' implicitly has an '{1}' type.",
     argument_count: 2,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS7034: DiagnosticDescriptor = DiagnosticDescriptor {

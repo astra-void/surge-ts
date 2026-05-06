@@ -356,7 +356,7 @@ arity = 0
 code = "TS7031"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Binding element '{0}' implicitly has an '{1}' type."
 arity = 2
 

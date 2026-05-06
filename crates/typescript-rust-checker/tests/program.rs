@@ -1106,6 +1106,43 @@ fn program_module_export_function_parameter_no_implicit_any() {
 }
 
 #[test]
+fn program_module_export_function_binding_pattern_no_implicit_any() {
+    let diagnostics = program_with_options(
+        &[(
+            "a.ts",
+            "export function f({ id: userId }) { return userId; }",
+        )],
+        CheckerOptions {
+            diagnostic_profile: Default::default(),
+            resolved_modules: Default::default(),
+            stub_external_modules: false,
+            no_implicit_any: true,
+            no_lib: false,
+        },
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS7031"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
+fn program_module_arrow_function_binding_pattern_no_implicit_any() {
+    let diagnostics = program_with_options(
+        &[("a.ts", "const fn = ({ id: userId }) => userId;")],
+        CheckerOptions {
+            diagnostic_profile: Default::default(),
+            resolved_modules: Default::default(),
+            stub_external_modules: false,
+            no_implicit_any: true,
+            no_lib: false,
+        },
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS7031"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+}
+
+#[test]
 fn program_module_export_variable_initializer_mismatch() {
     let diagnostics = program(&[("a.ts", "export const value: string = 123;")]);
 

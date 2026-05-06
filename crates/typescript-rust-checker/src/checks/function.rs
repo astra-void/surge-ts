@@ -1,8 +1,10 @@
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
-    ParsedAssignment, ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
-    ParsedFunctionParameter, ParsedIfStatement, ParsedReturnStatement, ParsedType,
-    ParsedVariableDeclaration, ParsedVariableKind, ParsedWhileStatement,
+    ParsedArrowFunction, ParsedArrowFunctionBody, ParsedAssignment, ParsedBindingName,
+    ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
+    ParsedFunctionParameter, ParsedIfStatement, ParsedObjectBindingElement,
+    ParsedObjectBindingPattern, ParsedReturnStatement, ParsedType, ParsedVariableDeclaration,
+    ParsedVariableKind, ParsedWhileStatement,
 };
 use typescript_rust_types::{FunctionType, Type, is_assignable_to};
 
@@ -24,10 +26,137 @@ use crate::infer::{
 };
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
+fn emit_parameter_diagnostics(
+    parameter: &ParsedFunctionParameter,
+    contextual_type: Option<&Type>,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_implicit_any || parameter.declared_type.is_some() {
+        return;
+    }
+
+    match &parameter.binding_name {
+        ParsedBindingName::Identifier { name, span } => {
+            if contextual_type.is_some() {
+                return;
+            }
+            let diagnostic = Diagnostic::ts7006(name, ctx.file_name.clone());
+            let diagnostic = match span {
+                Some(span) => diagnostic.with_span(convert_span(*span)),
+                None => diagnostic,
+            };
+            ctx.push(diagnostic);
+        }
+        ParsedBindingName::ObjectPattern(pattern) => {
+            if contextual_type.is_some() {
+                return;
+            }
+            emit_object_binding_pattern_diagnostics(pattern, ctx);
+        }
+        ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
+fn emit_object_binding_pattern_diagnostics(
+    pattern: &ParsedObjectBindingPattern,
+    ctx: &mut CheckerContext,
+) {
+    for element in &pattern.elements {
+        emit_object_binding_element_diagnostic(element, ctx);
+    }
+}
+
+fn emit_object_binding_element_diagnostic(
+    element: &ParsedObjectBindingElement,
+    ctx: &mut CheckerContext,
+) {
+    match &element.binding_name {
+        ParsedBindingName::Identifier { name, span } => {
+            let diagnostic = Diagnostic::ts7031(name, "any", ctx.file_name.clone());
+            let span = (*span).or(element.name_span);
+            let diagnostic = match span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            };
+            ctx.push(diagnostic);
+        }
+        ParsedBindingName::ObjectPattern(pattern) => {
+            emit_object_binding_pattern_diagnostics(pattern, ctx);
+        }
+        ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
+fn parameter_scope_type(parameter: &ParsedFunctionParameter, parameter_type: &Type) -> Type {
+    match &parameter.binding_name {
+        ParsedBindingName::Identifier { .. } => parameter_type.clone(),
+        ParsedBindingName::ObjectPattern(_) | ParsedBindingName::Unsupported { .. } => Type::Any,
+    }
+}
+
+fn insert_parameter_bindings(
+    parameter: &ParsedFunctionParameter,
+    parameter_type: &Type,
+    scopes: &mut ScopeStack,
+) {
+    match &parameter.binding_name {
+        ParsedBindingName::Identifier { name, .. } => {
+            scopes.insert_current(
+                name.clone(),
+                SymbolInfo {
+                    ty: parameter_scope_type(parameter, parameter_type),
+                    kind: SymbolKind::Parameter,
+                },
+            );
+        }
+        ParsedBindingName::ObjectPattern(pattern) => {
+            insert_object_binding_pattern_bindings(
+                pattern,
+                parameter_scope_type(parameter, parameter_type),
+                scopes,
+            );
+        }
+        ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
+fn insert_object_binding_pattern_bindings(
+    pattern: &ParsedObjectBindingPattern,
+    parameter_type: Type,
+    scopes: &mut ScopeStack,
+) {
+    for element in &pattern.elements {
+        insert_object_binding_element_binding(element, parameter_type.clone(), scopes);
+    }
+}
+
+fn insert_object_binding_element_binding(
+    element: &ParsedObjectBindingElement,
+    parameter_type: Type,
+    scopes: &mut ScopeStack,
+) {
+    match &element.binding_name {
+        ParsedBindingName::Identifier { name, .. } => {
+            scopes.insert_current(
+                name.clone(),
+                SymbolInfo {
+                    ty: parameter_type,
+                    kind: SymbolKind::Parameter,
+                },
+            );
+        }
+        ParsedBindingName::ObjectPattern(pattern) => {
+            insert_object_binding_pattern_bindings(pattern, parameter_type, scopes);
+        }
+        ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
 fn map_function_signature(
     parameters: &[ParsedFunctionParameter],
     return_type: Option<&ParsedType>,
     type_parameters: &[typescript_rust_syntax::ParsedTypeParameter],
+    contextual_parameter_types: Option<&[Type]>,
     ctx: &mut CheckerContext,
 ) -> FunctionType {
     report_duplicate_type_parameters(type_parameters, ctx);
@@ -40,7 +169,7 @@ fn map_function_signature(
             parameter
                 .declared_type
                 .clone()
-                .map_or(Type::Unknown, |declared_type| {
+                .map_or(Type::Any, |declared_type| {
                     map_parsed_type_with_substitution(
                         declared_type,
                         ctx,
@@ -61,16 +190,9 @@ fn map_function_signature(
         .unwrap_or(Type::Unknown);
 
     if ctx.options.no_implicit_any {
-        for parameter in parameters {
-            if parameter.declared_type.is_none() {
-                let diagnostic = Diagnostic::ts7006(&parameter.name, ctx.file_name.clone());
-                let diagnostic = match parameter.name_span {
-                    Some(span) => diagnostic.with_span(convert_span(span)),
-                    None => diagnostic,
-                };
-
-                ctx.push(diagnostic);
-            }
+        for (index, parameter) in parameters.iter().enumerate() {
+            let contextual_type = contextual_parameter_types.and_then(|types| types.get(index));
+            emit_parameter_diagnostics(parameter, contextual_type, ctx);
         }
     }
 
@@ -79,6 +201,23 @@ fn map_function_signature(
         return_type: Box::new(function_return_type),
         is_variadic: false,
     }
+}
+
+fn has_contextual_unknown_object_binding_pattern(
+    parameters: &[ParsedFunctionParameter],
+    contextual_parameter_types: Option<&[Type]>,
+) -> bool {
+    let Some(contextual_parameter_types) = contextual_parameter_types else {
+        return false;
+    };
+
+    parameters.iter().enumerate().any(|(index, parameter)| {
+        matches!(parameter.binding_name, ParsedBindingName::ObjectPattern(_))
+            && parameter.declared_type.is_none()
+            && contextual_parameter_types
+                .get(index)
+                .is_some_and(|ty| *ty == Type::Unknown)
+    })
 }
 
 fn build_type_parameter_substitution(
@@ -147,13 +286,7 @@ fn check_function_body_with_signature(
         .into_iter()
         .zip(function_type.parameters.iter().cloned())
     {
-        scopes.insert_current(
-            parameter.name,
-            SymbolInfo {
-                ty: parameter_type,
-                kind: SymbolKind::Parameter,
-            },
-        );
+        insert_parameter_bindings(&parameter, &parameter_type, &mut scopes);
     }
 
     check_function_body(
@@ -185,6 +318,7 @@ pub(crate) fn collect_function_declaration_signature(
         &function.parameters,
         function.return_type.as_ref(),
         &function.type_parameters,
+        None,
         ctx,
     );
 
@@ -226,8 +360,13 @@ pub(crate) fn check_function_declaration(
         ..
     } = function;
 
-    let function_type =
-        map_function_signature(&parameters, return_type.as_ref(), &type_parameters, ctx);
+    let function_type = map_function_signature(
+        &parameters,
+        return_type.as_ref(),
+        &type_parameters,
+        None,
+        ctx,
+    );
 
     let duplicate = {
         let symbols = &mut ctx.symbols;
@@ -260,6 +399,110 @@ pub(crate) fn check_function_declaration_body(
     } = function;
 
     check_function_body_with_signature(name, parameters, body, function_type, ctx);
+}
+
+pub(crate) fn check_arrow_function_expression(
+    arrow: ParsedArrowFunction,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    check_arrow_function_expression_with_expected_type(arrow, None, symbols, ctx)
+}
+
+pub(crate) fn check_arrow_function_expression_with_expected_type(
+    arrow: ParsedArrowFunction,
+    expected_type: Option<&FunctionType>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    let ParsedArrowFunction {
+        type_parameters,
+        parameters,
+        return_type,
+        body,
+        span: arrow_span,
+    } = arrow;
+
+    let contextual_parameter_types =
+        expected_type.map(|expected_type| expected_type.parameters.as_slice());
+    let mut function_type = map_function_signature(
+        &parameters,
+        return_type.as_ref(),
+        &type_parameters,
+        contextual_parameter_types,
+        ctx,
+    );
+    let raw_function_type = function_type.clone();
+    let has_explicit_return_type = return_type.is_some();
+
+    if let Some(expected_type) = expected_type {
+        for (index, parameter_type) in expected_type.parameters.iter().cloned().enumerate() {
+            if index < function_type.parameters.len() && parameters[index].declared_type.is_none() {
+                function_type.parameters[index] = parameter_type;
+            }
+        }
+
+        if has_contextual_unknown_object_binding_pattern(&parameters, contextual_parameter_types) {
+            let source_type_name = Type::Function(raw_function_type).name();
+            let target_type_name = Type::Function(expected_type.clone()).name();
+            let diagnostic =
+                Diagnostic::ts2345(&source_type_name, &target_type_name, ctx.file_name.clone());
+            let diagnostic = match arrow_span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            };
+            ctx.push(diagnostic);
+        }
+    }
+
+    let mut scopes = ScopeStack::from_root(symbols.clone());
+    scopes.push_child();
+    for (index, parameter) in parameters.iter().enumerate() {
+        let parameter_type = function_type
+            .parameters
+            .get(index)
+            .cloned()
+            .unwrap_or(Type::Any);
+        insert_parameter_bindings(parameter, &parameter_type, &mut scopes);
+    }
+
+    let visible_symbols = visible_symbols(&scopes);
+    match body {
+        ParsedArrowFunctionBody::Expression(expression) => {
+            let return_type = (*function_type.return_type).clone();
+            let inferred_body = match return_type {
+                Type::Any | Type::Unknown | Type::Void => {
+                    evaluate_expression(&expression, None, &visible_symbols, ctx)
+                }
+                _ => evaluate_expression_with_expected_type(
+                    &expression,
+                    None,
+                    Some(&return_type),
+                    ExpectedTypeDiagnostic::TypeNotAssignable,
+                    &visible_symbols,
+                    ctx,
+                ),
+            };
+
+            if !has_explicit_return_type {
+                if let InferredExpression::Known(body_type) = inferred_body {
+                    if body_type != Type::Unknown {
+                        function_type.return_type = Box::new(body_type);
+                    }
+                }
+            }
+        }
+        ParsedArrowFunctionBody::Block(statements) => {
+            let mut flow_state = FunctionFlowState::new();
+            let return_type = match function_type.return_type.as_ref() {
+                Type::Any | Type::Unknown | Type::Void => None,
+                ty => Some(ty.clone()),
+            };
+            check_function_body(statements, return_type, &mut scopes, &mut flow_state, ctx);
+        }
+    }
+
+    function_type
 }
 
 fn should_check_missing_return(return_type: &Type) -> bool {

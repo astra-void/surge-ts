@@ -22,6 +22,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2344 invalid utility key constraint | type reference name span, pinned |
 | typescript-rust::duplicate-type-parameter | duplicate type-parameter name span |
 | TS7006 parameter implicitly any | parameter name span |
+| TS7031 binding element implicitly any | object binding element local name span |
 | TS7005 variable implicitly any | variable name span |
 | TS2451 duplicate block-scoped declaration | duplicate declaration name span |
 | TS2393 duplicate function implementation | duplicate function name span |
@@ -76,6 +77,8 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
   separate span policy in this phase.
 - Duplicate generic type parameters use a custom checker diagnostic and should
   underline the repeated name span, not the declaration keyword.
+- `TS7031` underlines the local binding name in object-pattern parameters.
+  Aliases like `{ id: userId }` should underline `userId`, not `id`.
 - Call-expression type arguments are parsed for syntax stability, but v0.59
   ignores them in checker flow, so no dedicated diagnostic span is emitted yet.
 - Unresolved non-relative package-style imports emit TS2307. Missing side-effect imports emit catalog-backed

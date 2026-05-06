@@ -1,18 +1,22 @@
 use oxc_ast::ast::{
-    Argument, ArrayExpression, BinaryExpression, BinaryOperator, ChainElement, ChainExpression,
-    ComputedMemberExpression, ConditionalExpression, Expression, LogicalExpression,
-    LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKey, PropertyKind,
-    StaticMemberExpression, UnaryExpression, UnaryOperator,
+    Argument, ArrayExpression, ArrowFunctionExpression, BinaryExpression, BinaryOperator,
+    ChainElement, ChainExpression, ComputedMemberExpression, ConditionalExpression, Expression,
+    LogicalExpression, LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKey,
+    PropertyKind, StaticMemberExpression, UnaryExpression, UnaryOperator,
 };
 use oxc_span::{GetSpan, Span};
 
 use crate::{
-    ParsedBinaryOperator, ParsedCall, ParsedCallArgument, ParsedExpression, ParsedLogicalOperator,
-    ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
+    ParsedArrowFunction, ParsedArrowFunctionBody, ParsedBinaryOperator, ParsedCall,
+    ParsedCallArgument, ParsedExpression, ParsedLogicalOperator, ParsedObjectProperty,
+    ParsedUnaryOperator, TextSpan,
 };
 
 use super::spans::text_span_from_oxc_span;
-use super::types::parse_type_arguments;
+use super::types::{parse_type_annotation, parse_type_arguments, parse_type_parameters};
+use super::{
+    functions::parse_function_parameter, functions::parse_statement_list_as_function_body,
+};
 
 pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression, Span) {
     let parsed_expression = match expression {
@@ -120,6 +124,11 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         }
         Expression::ChainExpression(chain_expression) => {
             parse_chain_expression(chain_expression).unwrap_or(ParsedExpression::Unknown)
+        }
+        Expression::ArrowFunctionExpression(arrow_expression) => {
+            parse_arrow_function_expression(arrow_expression)
+                .map(|arrow| ParsedExpression::ArrowFunction(Box::new(arrow)))
+                .unwrap_or(ParsedExpression::Unknown)
         }
         _ => ParsedExpression::Unknown,
     };
@@ -425,6 +434,12 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             parse_call_expression_expression(call_expression).unwrap_or(ParsedExpression::Unknown),
             argument.span(),
         ),
+        Argument::ArrowFunctionExpression(arrow_expression) => (
+            parse_arrow_function_expression(arrow_expression)
+                .map(|arrow| ParsedExpression::ArrowFunction(Box::new(arrow)))
+                .unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
         Argument::StaticMemberExpression(member_expression) => (
             parse_static_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown),
             argument.span(),
@@ -497,6 +512,38 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
         expression,
         span: Some(text_span_from_oxc_span(span)),
     }
+}
+
+fn parse_arrow_function_expression(
+    arrow_expression: &ArrowFunctionExpression<'_>,
+) -> Option<ParsedArrowFunction> {
+    let parameters = arrow_expression
+        .params
+        .items
+        .iter()
+        .filter_map(parse_function_parameter)
+        .collect::<Vec<_>>();
+    let return_type = arrow_expression
+        .return_type
+        .as_ref()
+        .and_then(|annotation| parse_type_annotation(annotation));
+
+    let body = if let Some(expression) = arrow_expression.get_expression() {
+        let (expression, _) = parse_expression(expression);
+        ParsedArrowFunctionBody::Expression(Box::new(expression))
+    } else {
+        ParsedArrowFunctionBody::Block(parse_statement_list_as_function_body(
+            &arrow_expression.body.statements,
+        ))
+    };
+
+    Some(ParsedArrowFunction {
+        type_parameters: parse_type_parameters(arrow_expression.type_parameters.as_deref()),
+        parameters,
+        return_type,
+        body,
+        span: Some(text_span_from_oxc_span(arrow_expression.span)),
+    })
 }
 
 fn parse_binary_expression(binary_expression: &BinaryExpression<'_>) -> Option<ParsedExpression> {

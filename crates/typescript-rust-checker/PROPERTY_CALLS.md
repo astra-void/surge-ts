@@ -19,7 +19,7 @@ Not supported in this phase:
 - Receiver or `this` binding semantics.
 - Callable unions.
 - Callback contextual typing.
-- Function expressions or arrow functions.
+- Full function-expression semantics. Arrow functions are parsed as checked expressions, but they are only lowered far enough to participate in implicit-any binding diagnostics and shallow function-type inference.
 
 Diagnostic behavior:
 

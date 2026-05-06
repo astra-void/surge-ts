@@ -697,6 +697,36 @@ fn parse_function_declaration_generic_type_parameters_parsed() {
 }
 
 #[test]
+fn parse_function_declaration_object_binding_parameter_parsed() {
+    let parsed = parse_source(
+        "function identity({ id: userId, name }) { return userId + name; }",
+        "example.ts",
+    );
+
+    assert_eq!(parsed.file_name, "example.ts");
+    let ParsedStatement::FunctionDeclaration(function) = &parsed.statements[0] else {
+        panic!("expected a function declaration");
+    };
+
+    assert_eq!(function.parameters.len(), 1);
+    let ParsedBindingName::ObjectPattern(pattern) = &function.parameters[0].binding_name else {
+        panic!("expected an object binding pattern");
+    };
+
+    assert_eq!(pattern.elements.len(), 2);
+    assert_eq!(pattern.elements[0].property_name, "id");
+    assert!(matches!(
+        pattern.elements[0].binding_name,
+        ParsedBindingName::Identifier { ref name, .. } if name == "userId"
+    ));
+    assert_eq!(pattern.elements[1].property_name, "name");
+    assert!(matches!(
+        pattern.elements[1].binding_name,
+        ParsedBindingName::Identifier { ref name, .. } if name == "name"
+    ));
+}
+
+#[test]
 fn parse_function_type_default_param_unsupported_no_panic() {
     let parsed = parse_source("type Fn = (value = \"ok\") => string;", "example.ts");
 
@@ -1711,6 +1741,32 @@ fn parse_property_call_in_assignment() {
     assert!(matches!(
         assignment.value,
         ParsedExpression::PropertyCall { .. }
+    ));
+}
+
+#[test]
+fn parse_arrow_function_expression_parsed() {
+    let parsed = parse_source("const fn = ({ ctx, input }) => input;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+
+    let Some(ParsedExpression::ArrowFunction(arrow)) = variable.initializer.as_ref() else {
+        panic!("expected an arrow function expression");
+    };
+
+    assert_eq!(arrow.parameters.len(), 1);
+    let ParsedBindingName::ObjectPattern(pattern) = &arrow.parameters[0].binding_name else {
+        panic!("expected an object binding pattern");
+    };
+
+    assert_eq!(pattern.elements.len(), 2);
+    assert!(matches!(
+        &arrow.body,
+        ParsedArrowFunctionBody::Expression(expression)
+        if matches!(expression.as_ref(), ParsedExpression::Identifier { name, .. } if name == "input")
     ));
 }
 

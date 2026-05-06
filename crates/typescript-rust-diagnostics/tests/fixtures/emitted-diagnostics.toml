@@ -376,8 +376,14 @@ status = "catalog-only"
 reason = "Cataloged for future coverage"
 
 [TS7031]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/binding-pattern-parameters-basic/tsconfig.json",
+  "tests/compat-projects/trpc-like-callbacks-basic/tsconfig.json",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
+]
 
 [TS7034]
 status = "catalog-only"

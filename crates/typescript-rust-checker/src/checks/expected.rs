@@ -3,6 +3,7 @@ use typescript_rust_syntax::{ParsedExpression, ParsedObjectProperty, TextSpan as
 use typescript_rust_types::{ObjectProperty, Type, is_assignable_to};
 
 use super::expr::evaluate_expression;
+use super::function::check_arrow_function_expression_with_expected_type;
 use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, infer_expression};
 use crate::spans::{choose_span, diagnostic_with_syntax_span};
@@ -26,6 +27,18 @@ pub(crate) fn evaluate_expression_with_expected_type(
     let Some(expected_type) = expected_type else {
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
+
+    if let (Type::Function(expected_function_type), ParsedExpression::ArrowFunction(arrow)) =
+        (expected_type, expression)
+    {
+        let function_type = check_arrow_function_expression_with_expected_type(
+            arrow.as_ref().clone(),
+            Some(expected_function_type),
+            symbols,
+            ctx,
+        );
+        return InferredExpression::Known(Type::Function(function_type));
+    }
 
     if let ParsedExpression::ConstAssertion {
         expression: inner, ..

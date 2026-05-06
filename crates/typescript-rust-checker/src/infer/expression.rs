@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use typescript_rust_syntax::{
-    ParsedArrayElement, ParsedBinaryOperator, ParsedExpression, ParsedObjectProperty,
-    ParsedUnaryOperator, TextSpan,
+    ParsedArrayElement, ParsedArrowFunction, ParsedArrowFunctionBody, ParsedBinaryOperator,
+    ParsedExpression, ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
 };
 use typescript_rust_types::{
     NumberLiteralType, ObjectProperty, ObjectType, Type, is_assignable_to, union_type,
@@ -134,6 +134,9 @@ pub(crate) fn infer_expression(
         ParsedExpression::ConstAssertion { expression, .. } => {
             infer_expression(expression, symbols)
         }
+        ParsedExpression::ArrowFunction(arrow_function) => InferredExpression::Known(
+            Type::Function(infer_arrow_function(arrow_function.as_ref(), symbols)),
+        ),
         ParsedExpression::TypeAssertion {
             expression: _, ty, ..
         } => {
@@ -230,6 +233,56 @@ pub(crate) fn infer_expression(
             index_span,
         } => infer_optional_index_access(object, object_span, index, index_span, symbols),
         ParsedExpression::Unknown => InferredExpression::Unknown,
+    }
+}
+
+fn infer_arrow_function(
+    arrow_function: &ParsedArrowFunction,
+    symbols: &SymbolTable,
+) -> typescript_rust_types::FunctionType {
+    let parameters = arrow_function
+        .parameters
+        .iter()
+        .map(|parameter| {
+            if parameter.declared_type.is_some() {
+                Type::Any
+            } else {
+                match &parameter.binding_name {
+                    typescript_rust_syntax::ParsedBindingName::Identifier { .. } => Type::Any,
+                    typescript_rust_syntax::ParsedBindingName::ObjectPattern(_) => Type::Any,
+                    typescript_rust_syntax::ParsedBindingName::Unsupported { .. } => Type::Any,
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let return_type = match &arrow_function.body {
+        ParsedArrowFunctionBody::Expression(expression) => {
+            match infer_expression(expression, symbols) {
+                InferredExpression::Known(ty) => ty,
+                _ => Type::Unknown,
+            }
+        }
+        ParsedArrowFunctionBody::Block(_) => arrow_function
+            .return_type
+            .as_ref()
+            .and_then(|ty| match ty {
+                typescript_rust_syntax::ParsedType::String => Some(Type::String),
+                typescript_rust_syntax::ParsedType::Number => Some(Type::Number),
+                typescript_rust_syntax::ParsedType::Boolean => Some(Type::Boolean),
+                typescript_rust_syntax::ParsedType::Any => Some(Type::Any),
+                typescript_rust_syntax::ParsedType::Unknown => Some(Type::Unknown),
+                typescript_rust_syntax::ParsedType::Undefined => Some(Type::Undefined),
+                typescript_rust_syntax::ParsedType::Void => Some(Type::Void),
+                _ => None,
+            })
+            .unwrap_or(Type::Unknown),
+    };
+
+    typescript_rust_types::FunctionType {
+        parameters,
+        return_type: Box::new(return_type),
+        is_variadic: false,
     }
 }
 
