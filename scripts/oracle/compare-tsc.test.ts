@@ -60,6 +60,7 @@ function run() {
   oracle_builds_rust_file_command_without_project();
   oracle_output_includes_mode_project();
   oracle_output_includes_mode_file();
+  oracle_output_highlights_project_visibility_failure();
   oracle_json_output_includes_mode();
   oracle_args_accepts_stub_external_modules();
   oracle_builds_rust_project_command_with_stub_external_modules();
@@ -506,6 +507,19 @@ function oracle_output_includes_mode_file() {
   const rendered = renderComparisonText(comparison);
   assert.ok(rendered.includes('Mode: file'));
   assert.ok(rendered.includes('File: examples/basic.ts'));
+}
+
+function oracle_output_highlights_project_visibility_failure() {
+  const comparison = compareDiagnostics(
+    'project',
+    'tests/compat-projects/trpc/tsconfig.json',
+    [{ source: 'typescript', code: 'TS2307', fileName: 'src/index.ts' }],
+    [],
+  );
+
+  const rendered = renderComparisonText(comparison);
+  assert.ok(rendered.includes('Project/file discovery problems: likely blocker'));
+  assert.ok(rendered.includes('0 rust diagnostics'));
 }
 
 function oracle_json_output_includes_mode() {

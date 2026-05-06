@@ -789,6 +789,8 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   lines.push(`TypeScript diagnostics: ${comparison.typescript.total}`);
   lines.push(`typescript-rust diagnostics: ${comparison.typescriptRust.total}`);
   lines.push('');
+  appendTriageSection(lines, comparison);
+  lines.push('');
   lines.push('By code:');
   appendBucketSection(
     lines,
@@ -831,6 +833,86 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   );
   return `${lines.join('\n')}\n`;
 }
+
+function appendTriageSection(lines: string[], comparison: ComparisonResult): void {
+  lines.push('Triage:');
+
+  if (comparison.typescript.total > 0 && comparison.typescriptRust.total === 0) {
+    lines.push(
+      `  Project/file discovery problems: likely blocker (${comparison.typescript.total} TypeScript diagnostics, 0 rust diagnostics)`,
+    );
+    lines.push('  Parser unsupported syntax problems: deferred until source loading is fixed');
+    lines.push('  Module resolution/package/import problems: deferred until source loading is fixed');
+    lines.push('  Missing lib/@types/global problems: deferred until source loading is fixed');
+    lines.push('  Semantic checker deltas: deferred until source loading is fixed');
+    return;
+  }
+
+  const onlyTypeScriptBuckets = comparison.matches.onlyTypeScript;
+  const parserCount = countBucketsByCode(onlyTypeScriptBuckets, PARSER_TRIAGE_CODES);
+  const moduleCount = countBucketsByCode(onlyTypeScriptBuckets, MODULE_TRIAGE_CODES);
+  const globalCount = countBucketsByCode(onlyTypeScriptBuckets, GLOBAL_TRIAGE_CODES);
+  const semanticCount = Math.max(
+    0,
+    countBucketEntries(onlyTypeScriptBuckets) - parserCount - moduleCount - globalCount,
+  );
+
+  lines.push(`  Project/file discovery problems: ${comparison.typescriptRust.total === 0 ? comparison.typescript.total : 0}`);
+  lines.push(`  Parser unsupported syntax problems: ${parserCount}`);
+  lines.push(`  Module resolution/package/import problems: ${moduleCount}`);
+  lines.push(`  Missing lib/@types/global problems: ${globalCount}`);
+  lines.push(`  Semantic checker deltas: ${semanticCount}`);
+}
+
+function countBucketEntries(buckets: CountBucket[]): number {
+  return buckets.reduce((total, bucket) => total + bucket.typescript, 0);
+}
+
+function countBucketsByCode(buckets: CountBucket[], codes: Set<string>): number {
+  return buckets
+    .filter((bucket) => codes.has(bucket.key))
+    .reduce((total, bucket) => total + bucket.typescript, 0);
+}
+
+const PARSER_TRIAGE_CODES = new Set([
+  'TS1005',
+  'TS1109',
+  'TS1128',
+  'TS1134',
+  'TS1160',
+  'TS1161',
+  'TS1206',
+  'TS1308',
+  'TS1434',
+  'TS1435',
+  'TS1443',
+  'TS1450',
+  'TS1451',
+  'TS1472',
+  'TS17008',
+  'TS17009',
+]);
+
+const MODULE_TRIAGE_CODES = new Set([
+  'TS2306',
+  'TS2307',
+  'TS2664',
+  'TS2671',
+  'TS2792',
+  'TS2794',
+  'TS5097',
+]);
+
+const GLOBAL_TRIAGE_CODES = new Set([
+  'TS2304',
+  'TS2552',
+  'TS2580',
+  'TS2584',
+  'TS2686',
+  'TS2688',
+  'TS7016',
+  'TS7017',
+]);
 
 export function appendBucketSection(
   lines: string[],
