@@ -19,6 +19,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2882 unresolved side-effect import | module specifier string span |
 | TS2314 generic type arity mismatch | type reference name span, pinned |
 | TS2315 non-generic type with type arguments | type reference name span, pinned |
+| TS2344 invalid utility key constraint | type reference name span, pinned |
 | typescript-rust::duplicate-type-parameter | duplicate type-parameter name span |
 | TS7006 parameter implicitly any | parameter name span |
 | TS7005 variable implicitly any | variable name span |
@@ -57,6 +58,10 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 - TS2305 should underline the imported specifier name. TS2307 and TS2882 should underline the module specifier string.
 - TS2314/TS2315 should stay pinned to the type reference name; v0.59 uses
   these as stable arity diagnostics for generic alias/interface references.
+- TS2344 for invalid `Pick` keys is currently pinned to the `Pick` reference
+  span. The parser does not retain a richer type-argument span for this path,
+  so the checker keeps the underline stable at the utility reference and
+  deduplicates repeated validation of the same alias body.
 - Missing default exports underline the default-import identifier, and missing
   relative default-import modules underline the module specifier string.
 - Missing re-export modules underline the module specifier string. Missing

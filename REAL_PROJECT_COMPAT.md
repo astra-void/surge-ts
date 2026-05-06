@@ -5,13 +5,19 @@ not a claim that large TypeScript packages pass. `v0.60` adds a TypeScript
 oracle comparison harness on top of that baseline so we can measure the current
 checker against a pinned compiler without changing the checker to chase parity.
 
+v0.82 is a project visibility and file-discovery hardening phase. It does not
+claim full real-project parity. The goal is to make silent zero-file project
+comparisons impossible, especially when `tsc` sees `.tsx`, `.mts`, `.cts`,
+`.d.ts`, and nested `examples/**` inputs that the Rust loader might otherwise
+miss. `.tsx` visibility is not the same as JSX or React type support.
+
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
 v0.77.1 implements non-null assertions and a parser-safe `as const` foundation under the default `tsc` diagnostic profile. Literal types and tuple constraints are preserved on primitive literals and object/array properties for `as const` expressions. `satisfies` with `as const` behaves correctly. Optional chaining AST evaluation now correctly propagates the `undefined` short-circuit across subsequent non-null assertions (e.g. `a?.b!.c` evaluates to `C | undefined`).
 v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics and control-flow narrowing remain unsupported. `ignoreDeprecations` is not used in committed fixtures because TS 7-oriented compatibility should not hide deprecated option behavior.
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
-v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds a narrow synthetic lowering pack for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-type foundation introduced in v0.80.1. This is still not full utility-type support, and physical `lib.d.ts`, `@types`, DOM, Node, and true lib loading remain unsupported. `noLib: true` disables synthetic built-ins.
+v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-type foundation introduced in v0.80.1. This is still not full utility-type support: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers, and `Record<string, T>` / index-signature style behavior remains unsupported unless a later phase proves it with oracle evidence. Physical `lib.d.ts`, `@types`, DOM, Node, and true lib loading remain unsupported. `noLib: true` disables synthetic built-ins.
 Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exports["types"] condition.
 Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, physical `lib.d.ts` loading, DOM/Node globals, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
 
@@ -78,7 +84,7 @@ The current baseline still intentionally avoids:
 - generic call-site inference
 - mixed default + named imports
 - default class exports
-- full utility-type ecosystem support; v0.81 only lowers `Record`, `Partial`, `Pick`, and `Omit` in a narrow synthetic path
+- v0.81 only lowers `Record`, `Partial`, `Pick`, and `Omit` in a narrow synthetic path; the rest of the utility-type ecosystem remains out of scope
 
 The current declaration and diagnostic baseline includes:
 

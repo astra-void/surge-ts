@@ -31,4 +31,9 @@ Alias limitations:
 - program-mode relative module visibility now includes default imports,
   namespace imports, named re-exports, type-only re-exports, and star
   re-exports for loaded `.ts` files
+- v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and
+  `Omit` on top of mapped types; `Required`, `Readonly`, `ReturnType`,
+  `Parameters`, `Awaited`, conditional-type-backed utilities, and
+  `Record<string, T>` / index-signature style behavior remain unsupported or
+  synthetic noise reducers
 - program-mode relative module visibility only for loaded `.ts` files

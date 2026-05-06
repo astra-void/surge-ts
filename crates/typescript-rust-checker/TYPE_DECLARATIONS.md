@@ -26,6 +26,7 @@ Resolution model:
 - interfaces use `typescript-rust::type-declaration-cycle`
 - program-mode relative imports and re-exports can expose exported type declarations from loaded `.ts` files
 - imported type declarations keep the defining module's local type scope for private helper references
+- v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` when those aliases are instantiated against concrete object/interface shapes and string-literal key unions; `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers
 
 Current limitations:
 - no interface merging
@@ -44,6 +45,7 @@ Current limitations:
 - full tsconfig path ecosystem features such as rootDirs/projectReferences remain unsupported
 - no full declaration-file semantics, CommonJS semantics, or declaration merging
 - unsupported module syntax such as `export * as Foo from "./foo"` stays parser-safe or pinned
+- `Record<string, T>` / index-signature style utility behavior remains unsupported
 - program-mode module visibility is limited to loaded relative `.ts` files
 
 Design note:
@@ -75,6 +77,6 @@ Current limitations:
 - namespace and class constructor `typeof` semantics
 Loaded `.d.ts` files contribute ambient global types which are accessible everywhere.
 - exact `declare module "pkg"` blocks contribute importable ambient modules in program mode
-- ambient types are loaded from project inputs, not from lib.d.ts or @types discovery. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics, while utility types mostly suppress TS2304 without automatically implementing full utility type semantics despite mapped types support. `noLib: true` disables these synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
+- ambient types are loaded from project inputs, not from lib.d.ts or @types discovery. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics, while v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of mapped types. That lowering is still not the full utility-type ecosystem: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers, and `Record<string, T>` / index-signature style behavior remains unsupported unless a later phase proves it. `noLib: true` disables these synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
 - duplicate ambient globals are first-wins / pinned rather than merged
 - unsupported declaration syntax remains parser-safe and emits the pinned unsupported-declaration diagnostic
