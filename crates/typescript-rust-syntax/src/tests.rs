@@ -219,6 +219,16 @@ fn parse_single_quoted_string_literal_type() {
 }
 
 #[test]
+fn parse_tsx_source_uses_typescript_entry_without_jsx_syntax() {
+    let parsed = parse_source("const value: string = 1;", "example.tsx");
+    assert!(
+        parsed.parser_errors.is_empty(),
+        "tsx source should parse TypeScript syntax without parser errors"
+    );
+    assert_eq!(parsed.statements.len(), 1);
+}
+
+#[test]
 fn parse_number_literal_type() {
     let parsed = parse_source("let value: 1 = 1;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
