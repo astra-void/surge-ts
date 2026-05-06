@@ -107,6 +107,7 @@ const packageManagerCache = process.env.npm_config_cache ?? path.join(os.tmpdir(
 const packageManagerExecutable = process.env.npm_execpath ? process.execPath : 'pnpm';
 const packageManagerArgsPrefix = process.env.npm_execpath ? [process.env.npm_execpath] : [];
 const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
+const subprocessMaxBuffer = 50 * 1024 * 1024;
 
 const fixturePresets: Record<string, string> = {
   'declarations-basic': path.join(workspaceRoot, 'tests/compat-projects/declarations-basic/tsconfig.json'),
@@ -360,6 +361,7 @@ export function runTsc(mode: OracleMode): RunResult {
   const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, ...args], {
     cwd: workspaceRoot,
     encoding: 'utf8',
+    maxBuffer: subprocessMaxBuffer,
     env: {
       ...process.env,
       npm_config_cache: packageManagerCache,
@@ -409,6 +411,7 @@ export function runTypeScriptRust(mode: OracleMode, maxDiagnostics?: number): Ru
     const result = spawnSync('cargo', args, {
       cwd: workspaceRoot,
       encoding: 'utf8',
+      maxBuffer: subprocessMaxBuffer,
     });
 
     if (result.error) {
@@ -429,6 +432,7 @@ export function runTypeScriptRust(mode: OracleMode, maxDiagnostics?: number): Ru
   const result = spawnSync('cargo', args, {
     cwd: workspaceRoot,
     encoding: 'utf8',
+    maxBuffer: subprocessMaxBuffer,
   });
 
   if (result.error) {
