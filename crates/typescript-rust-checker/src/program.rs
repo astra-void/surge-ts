@@ -11,6 +11,7 @@ use typescript_rust_types::FunctionType;
 use crate::checks::{assign, call, expr, function as check_function, var};
 use crate::context::{CheckerContext, CheckerOptions};
 use crate::driver::collect_type_declarations;
+use crate::driver::validate_direct_utility_aliases;
 use crate::modules::{
     ModuleExportTable, ModuleImportBindings, build_module_export_table,
     resolve_module_export_tables, resolve_module_imports,
@@ -390,6 +391,7 @@ fn check_program_files(
 
             ctx.type_declarations = merged_type_declarations;
             ctx.set_symbols(merged_symbols);
+            validate_direct_utility_aliases(&parsed_file.statements, ctx);
             check_program_file_statements(
                 &parsed_file.statements,
                 file_index,
@@ -409,6 +411,7 @@ fn check_program_files(
             }
             ctx.set_symbols(script_sym);
 
+            validate_direct_utility_aliases(&parsed_file.statements, ctx);
             check_program_file_statements(
                 &parsed_file.statements,
                 file_index,

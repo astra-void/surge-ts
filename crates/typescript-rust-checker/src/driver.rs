@@ -1,7 +1,7 @@
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedInterfaceDeclaration,
-    ParsedStatement, ParsedTypeAliasDeclaration, parse_source,
+    ParsedStatement, ParsedType, ParsedTypeAliasDeclaration, parse_source,
 };
 
 use crate::checks::{assign, call, expr, function as check_function, var};
@@ -46,6 +46,7 @@ pub fn check_source_with_options(
     }
 
     collect_type_declarations(&parsed.statements, &mut ctx);
+    validate_direct_utility_aliases(&parsed.statements, &mut ctx);
 
     for statement in parsed.statements {
         check_statement(statement, &mut ctx);
@@ -57,6 +58,15 @@ pub fn check_source_with_options(
 pub(crate) fn collect_type_declarations(statements: &[ParsedStatement], ctx: &mut CheckerContext) {
     for statement in statements {
         collect_type_declarations_from_statement(statement, ctx);
+    }
+}
+
+pub(crate) fn validate_direct_utility_aliases(
+    statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) {
+    for statement in statements {
+        validate_direct_utility_aliases_from_statement(statement, ctx);
     }
 }
 
@@ -286,6 +296,41 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             ctx.push(diagnostic);
         }
     }
+}
+
+fn validate_direct_utility_aliases_from_statement(
+    statement: &ParsedStatement,
+    ctx: &mut CheckerContext,
+) {
+    match statement {
+        ParsedStatement::TypeAliasDeclaration(alias) => {
+            validate_direct_utility_alias(alias, ctx);
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+            declaration,
+            ..
+        }) => validate_direct_utility_aliases_from_statement(declaration.as_ref(), ctx),
+        _ => {}
+    }
+}
+
+fn validate_direct_utility_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut CheckerContext) {
+    let ParsedType::Named(named_type) = &alias.ty else {
+        return;
+    };
+
+    if !matches!(
+        named_type.name.as_str(),
+        "Record" | "Partial" | "Pick" | "Omit"
+    ) {
+        return;
+    }
+
+    let _ = crate::infer::map_parsed_type_with_substitution(
+        alias.ty.clone(),
+        ctx,
+        &crate::infer::TypeParameterSubstitution::new(),
+    );
 }
 
 pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut CheckerContext) {

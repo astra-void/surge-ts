@@ -551,6 +551,7 @@ fn resolve_named_type(
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
             alias,
             named_type.type_arguments,
+            named_type.span,
             ctx,
             resolving,
             substitution,
@@ -568,6 +569,7 @@ fn resolve_named_type(
 fn resolve_type_alias(
     alias: TypeAliasInfo,
     type_arguments: Vec<ParsedType>,
+    reference_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
     substitution: &TypeParameterSubstitution,
@@ -597,6 +599,18 @@ fn resolve_type_alias(
         };
     };
 
+    if alias.file_name == "<built-in>" {
+        if let Some(resolved) = resolve_builtin_utility_alias(
+            &alias.name,
+            &local_substitution,
+            reference_span.or(alias.name_span),
+            ctx,
+        ) {
+            resolving.pop();
+            return resolved;
+        }
+    }
+
     if alias.file_name == "<built-in>" && (alias.name == "Array" || alias.name == "ReadonlyArray") {
         resolving.pop();
         let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
@@ -621,6 +635,195 @@ fn resolve_type_alias(
     }
 
     resolved
+}
+
+fn resolve_builtin_utility_alias(
+    alias_name: &str,
+    substitution: &TypeParameterSubstitution,
+    name_span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+) -> Option<ResolvedType> {
+    match alias_name {
+        "Partial" => Some(resolve_partial_utility_type(substitution)),
+        "Record" => Some(resolve_record_utility_type(substitution)),
+        "Pick" => Some(resolve_pick_utility_type(substitution, name_span, ctx)),
+        "Omit" => Some(resolve_omit_utility_type(substitution)),
+        _ => None,
+    }
+}
+
+fn resolve_partial_utility_type(substitution: &TypeParameterSubstitution) -> ResolvedType {
+    let Some(source_type) = substitution.get("T").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Type::Object(object_type) = source_type else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let mut properties = BTreeMap::new();
+    for (name, property) in object_type.properties {
+        properties.insert(name, ObjectProperty::optional(property.ty));
+    }
+
+    ResolvedType {
+        ty: Type::Object(ObjectType { properties }),
+        had_error: false,
+    }
+}
+
+fn resolve_record_utility_type(substitution: &TypeParameterSubstitution) -> ResolvedType {
+    let Some(key_type) = substitution.get("K").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Some(keys) = string_literal_union_keys(&key_type) else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let value_type = substitution.get("T").cloned().unwrap_or(Type::Unknown);
+    let mut properties = BTreeMap::new();
+
+    for key in keys {
+        properties.insert(key, ObjectProperty::required(value_type.clone()));
+    }
+
+    ResolvedType {
+        ty: Type::Object(ObjectType { properties }),
+        had_error: false,
+    }
+}
+
+fn resolve_pick_utility_type(
+    substitution: &TypeParameterSubstitution,
+    name_span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+) -> ResolvedType {
+    let Some(source_type) = substitution.get("T").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Type::Object(object_type) = source_type else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Some(key_type) = substitution.get("K").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Some(keys) = string_literal_union_keys(&key_type) else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let mut properties = BTreeMap::new();
+    for key in keys {
+        let Some(property) = object_type.properties.get(&key) else {
+            let key_type_name = key_type.name();
+            let constraint_name = format!("keyof {}", Type::Object(object_type.clone()).name());
+            let mut diagnostic =
+                Diagnostic::ts2344(&key_type_name, &constraint_name, ctx.file_name.clone());
+            if let Some(span) = name_span {
+                diagnostic = diagnostic.with_span(convert_span(span));
+            }
+            ctx.push(diagnostic);
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: true,
+            };
+        };
+
+        properties.insert(key, property.clone());
+    }
+
+    ResolvedType {
+        ty: Type::Object(ObjectType { properties }),
+        had_error: false,
+    }
+}
+
+fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution) -> ResolvedType {
+    let Some(source_type) = substitution.get("T").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Type::Object(object_type) = source_type else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Some(key_type) = substitution.get("K").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Some(keys) = string_literal_union_keys(&key_type) else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let mut properties = BTreeMap::new();
+    for (key, property) in object_type.properties {
+        if keys.iter().any(|candidate| candidate == &key) {
+            continue;
+        }
+
+        properties.insert(key, property);
+    }
+
+    ResolvedType {
+        ty: Type::Object(ObjectType { properties }),
+        had_error: false,
+    }
+}
+
+fn string_literal_union_keys(ty: &Type) -> Option<Vec<String>> {
+    match ty {
+        Type::StringLiteral(value) => Some(vec![value.clone()]),
+        Type::Union(union) => {
+            let mut keys = Vec::new();
+            for variant in &union.types {
+                match variant {
+                    Type::StringLiteral(value) => keys.push(value.clone()),
+                    _ => return None,
+                }
+            }
+            Some(keys)
+        }
+        _ => None,
+    }
 }
 
 fn resolve_interface(

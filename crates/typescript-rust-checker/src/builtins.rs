@@ -35,7 +35,7 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
     ];
 
     for name in types {
-        let type_parameters = if name == "Record" || name == "Pick" || name == "Omit" {
+        let type_parameters = if name == "Record" {
             vec![
                 ParsedTypeParameter {
                     name: "K".to_string(),
@@ -46,6 +46,23 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
                 },
                 ParsedTypeParameter {
                     name: "T".to_string(),
+                    name_span: None,
+                    constraint: None,
+                    default_type: None,
+                    span: None,
+                },
+            ]
+        } else if name == "Pick" || name == "Omit" {
+            vec![
+                ParsedTypeParameter {
+                    name: "T".to_string(),
+                    name_span: None,
+                    constraint: None,
+                    default_type: None,
+                    span: None,
+                },
+                ParsedTypeParameter {
+                    name: "K".to_string(),
                     name_span: None,
                     constraint: None,
                     default_type: None,
