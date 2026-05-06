@@ -65,6 +65,7 @@ cargo run -p typescript-rust-cli -- --ignoreConfig examples/basic.ts
 - `--showSpans` is a text-mode affordance; JSON output already carries spans and,
   when available, 1-based line and column numbers.
 - `--maxDiagnostics` limits rendered diagnostics in normal diagnostic mode.
+- `--compatReport` now also includes grouped TS2305, TS2307, TS2304, and node_modules source-prefix buckets so real-project triage can separate export visibility, module-specifier, identifier, and generated-source noise.
 
 The JSON diagnostic shape stays stable across the catalog migration:
 

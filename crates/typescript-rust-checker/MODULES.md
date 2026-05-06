@@ -2,10 +2,10 @@
 
 v0.61 expands the existing relative module-resolution-lite boundary with a
 small, pinned module syntax surface for loaded `.ts` files. v0.65 hardens the
-ambient-module side of that surface, and v0.67 matches TypeScript's TS2882
-priority for unresolved side-effect imports, without adding package resolution,
-`node_modules`, full declaration-file semantics, CommonJS,
-or full TypeScript parity.
+ambient-module side of that surface, v0.67 matches TypeScript's TS2882 priority
+for unresolved side-effect imports, and v0.84 hardens source/declaration export
+visibility for already-loaded modules without adding full package resolution,
+`node_modules` runtime semantics, or full TypeScript parity.
 
 ## What Is Supported
 
@@ -15,12 +15,15 @@ All relative module-syntax forms are limited to already loaded relative `.ts` fi
 - Namespace imports: `import * as user from "./user";`
 - Default exports: `export default function ...`, `export default "Ada"`, `export default 123`, `export default true`, and small expression forms the parser already models
 - Named re-exports: `export { User } from "./user";`
+- Default re-exports: `export { default as DefaultThing } from "./user";`
 - Type-only named re-exports: `export type { User } from "./user";`
+- Mixed named re-exports: `export { type User, value as renamedValue } from "./user";`
 - Star re-exports: `export * from "./user";`
+- Namespace re-exports: `export * as userNs from "./user";`
 - Named export lists and wrapped declarations from the earlier module-resolution-lite phase
 - Side-effect imports and `export {}` module markers
 
-Namespace imports bind a single value symbol whose object type is built from the source module's value exports. Default imports bind only a value symbol. Type-only exports stay in the type namespace. Star re-exports forward named value exports and named type exports, but they do not forward default exports.
+Namespace imports bind a single value symbol whose object type is built from the source module's visible value exports. Default imports bind only a value symbol. Type-only exports stay in the type namespace. Star re-exports forward named value exports and named type exports, but they do not forward default exports. Namespace re-exports bind a conservative namespace object from the target module's visible exports.
 
 ## Current Policy
 
@@ -28,7 +31,7 @@ Namespace imports bind a single value symbol whose object type is built from the
 - Module files keep their own top-level declarations local to the file.
 - Module files do not contribute to the global script namespace.
 - Module files do not see script globals under the isolated-module policy.
-- Relative resolution only covers already loaded `./` and `../` specifiers.
+- Relative resolution only covers already loaded `./`, `../`, `.` and `..` specifiers.
 - Missing ordinary relative modules emit TS2307.
 - Missing side-effect imports emit TS2882, matching TypeScript's priority for
   `import "pkg";` / `import "./missing";`.
@@ -36,10 +39,13 @@ Namespace imports bind a single value symbol whose object type is built from the
 - Unsupported module syntax stays parser-safe and is pinned with `typescript-rust::unsupported-module-syntax`.
 - `export * from` follows a pinned conflict policy: local explicit exports win, and the first star export wins when multiple star exports provide the same name.
 - Unresolved star re-exports are intentionally kept from cascading extra consumer diagnostics.
+- Bare directory specifiers like `.` and `..` can resolve to already loaded `index.*` files in the same directory graph.
+- Relative resolution checks the already-loaded graph in this order: exact target, `.ts`, `.tsx`, `.d.ts`, `.mts`, `.cts`, `.d.mts`, `.d.cts`, then the `index.*` variants in the same order.
+- Explicit `.js` / `.jsx` substitution stays narrow and only uses the oracle-proven source/declaration substitutions for already-loaded files.
 
 ## Non-relative imports and package stubs
 
-v0.70 adds support for package declaration subpath entrypoints. It resolves exact subpath imports (e.g. `pkg/subpath` or `@scope/pkg/subpath`) and exact `exports["types"]`. Resolved package files act as external modules.
+v0.70 adds support for package declaration subpath entrypoints. It resolves exact subpath imports (e.g. `pkg/subpath` or `@scope/pkg/subpath`) and exact `exports["."].types` / `exports["./x"].types` declaration entrypoints. Resolved package files act as external modules.
 
 Default mode for unresolved packages:
 - reports TS2307 for ordinary non-relative module specifiers
@@ -70,7 +76,6 @@ These forms remain intentionally out of scope for v0.70.1:
   - No wildcard ambient module support.
 - `import = require(...)`
 - `export =`
-- `export * as Foo from "./foo"`
 - Mixed default + named imports
 - Default class exports
 - CommonJS semantics

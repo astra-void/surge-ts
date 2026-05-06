@@ -11,17 +11,21 @@ comparisons impossible, especially when `tsc` sees `.tsx`, `.mts`, `.cts`,
 `.d.ts`, and nested `examples/**` inputs that the Rust loader might otherwise
 miss. `.tsx` visibility is not the same as JSX or React type support.
 
-## v0.83.1 Real-Project Audit
+## v0.84 Real-Project Audit
 
 Preflight audit for `.local-projects/trpc/tsconfig.json`:
 
+- `cargo fmt --check`
+- `cargo test`
+- `pnpm run oracle:test`
+- `pnpm run bench:test`
 - `CheckerOptions::default().diagnostic_profile == DiagnosticProfile::Tsc`
 - CLI default profile is `tsc`; `--diagnosticProfile native` is opt-in
 - `DiagnosticProfile` is publicly exported
 - `skipLibCheck: true`
 - `baseUrl` is not present
 - `ignoreDeprecations` is not present
-- `skip-lib-check-dependency-dts`, `skip-lib-check-local-dts`, `relative-js-extension-substitution-basic`, and `module-forms` fixtures exist
+- Raw oracle compare and compat-report JSON diagnostics totals currently agree on the audited run
 - `--maxDiagnostics 200` is a truncation mode and is not used as the baseline measurement for this report
 
 Measured real-project state for `.local-projects/trpc/tsconfig.json`:
@@ -29,38 +33,38 @@ Measured real-project state for `.local-projects/trpc/tsconfig.json`:
 | Metric | Value |
 | --- | ---: |
 | TypeScript diagnostics | 1223 |
-| typescript-rust diagnostics, raw oracle compare | 4921 |
-| typescript-rust diagnostics, compat-report JSON | 4921 |
+| typescript-rust diagnostics, raw oracle compare | 4798 |
+| typescript-rust diagnostics, compat-report JSON | 4798 |
 | Rust diagnostics from `node_modules` dependency declarations | 0 |
-| Rust diagnostics from `node_modules` source files | 39 |
+| Rust diagnostics from `node_modules` source files | 38 |
 | Rust-only `typescript-rust::*` diagnostics in `tsc` profile | 0 |
-| Suppressed declaration diagnostics | 9723 |
-| Suppressed Rust-only diagnostics | 945 |
+| Suppressed declaration diagnostics | 10054 |
+| Suppressed Rust-only diagnostics | 943 |
 
 Loaded file split:
 
-- Files loaded: 1126 total, 1101 source, 12 root declarations, 101 dependency declarations, 96 generated declarations
-- Root source diagnostics: 4921
+- Files loaded: 1126 total, 1101 source, 12 root declarations, 101 dependency declarations, 95 generated declarations
+- Root source diagnostics: 4798
 - Root declaration diagnostics: 0
 - Dependency declaration diagnostics: 0
 - Generated declaration diagnostics: 0
 
-The raw oracle compare and the compat-report JSON now agree on the total diagnostic count. The remaining `node_modules` noise is source-file noise, not dependency-declaration semantic checking, so `skipLibCheck: true` remains effective for the loaded declaration graph.
+The compat-report JSON and raw oracle compare currently agree on the audited run. The report now exposes extra buckets for TS2305 by module/export, TS2307 by module specifier, TS2304 by identifier, and node_modules source diagnostics by package/source prefix so the next phase can be chosen from evidence rather than aggregate counts alone. The `node_modules` noise is source-file noise, not dependency-declaration semantic checking, so `skipLibCheck: true` remains effective for the loaded declaration graph.
 
 Top 10 inflated Rust buckets by code:
 
-- `TS2304` TypeScript 3, typescript-rust 1907, delta +1904
-- `TS2305` TypeScript 0, typescript-rust 867, delta +867
-- `TS2307` TypeScript 170, typescript-rust 912, delta +742
+- `TS2304` TypeScript 3, typescript-rust 1908, delta +1905
+- `TS2305` TypeScript 0, typescript-rust 742, delta +742
+- `TS2307` TypeScript 170, typescript-rust 907, delta +737
 - `TS2339` TypeScript 29, typescript-rust 258, delta +229
 - `TS7006` TypeScript 52, typescript-rust 213, delta +161
 - `TS2353` TypeScript 2, typescript-rust 112, delta +110
-- `TS2693` TypeScript 0, typescript-rust 96, delta +96
+- `TS2693` TypeScript 0, typescript-rust 93, delta +93
 - `TS2314` TypeScript 0, typescript-rust 86, delta +86
 - `TS2454` TypeScript 0, typescript-rust 74, delta +74
 - `TS2315` TypeScript 0, typescript-rust 65, delta +65
 
-The default profile remains `tsc`, and `native` remains opt-in. The default profile now suppresses Rust-only checker diagnostics in ordinary project checking; the remaining real-project deltas are ordinary diagnostic gaps, source-file node_modules noise, and module-graph omissions that still need narrower follow-up in the next phase.
+The default profile remains `tsc`, and `native` remains opt-in. The default profile still suppresses Rust-only checker diagnostics in ordinary project checking; the remaining real-project deltas are ordinary diagnostic gaps, source-file `node_modules` noise, and module-graph omissions that still need narrower follow-up in the next phase.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
@@ -69,7 +73,7 @@ v0.74.1 supports nested optional property/call chains in a conservative way, and
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
 v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-type foundation introduced in v0.80.1. This is still not full utility-type support: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers, and `Record<string, T>` / index-signature style behavior remains unsupported unless a later phase proves it with oracle evidence. Physical `lib.d.ts`, `@types`, DOM, Node, and true lib loading remain unsupported. `noLib: true` disables synthetic built-ins.
-Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exports["types"] condition.
+Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exact `exports["."].types` / `exports["./x"].types` declaration targets.
 Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, physical `lib.d.ts` loading, DOM/Node globals, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
 
 The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
