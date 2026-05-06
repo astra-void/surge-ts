@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
@@ -13,8 +14,7 @@ import {
   parseTypeScriptDiagnostics,
   parseTypeScriptRustDiagnostics,
   compareDiagnostics,
-  NormalizedDiagnostic,
-  ComparisonResult
+  type NormalizedDiagnostic
 } from '../oracle/compare-tsc.js';
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -125,9 +125,9 @@ function main(argv = process.argv.slice(2)): void {
     }
 
     const projectDisplay = path.relative(workspaceRoot, resolvedTsconfig);
-    let projectName = projectInput.split(/[\/\\]/).pop() || projectInput;
+    let projectName = projectInput.split(/[/\\]/).pop() || projectInput;
     if (projectName === 'tsconfig.json') {
-      const parts = projectInput.split(/[\/\\]/);
+      const parts = projectInput.split(/[/\\]/);
       projectName = parts[parts.length - 2] || projectName;
     }
 
@@ -317,18 +317,18 @@ function generateScaleFixture(name: string, numFiles: number, numSymbols: number
 
 function printResults(results: BenchResult[]) {
   console.log('\nPerformance:');
-  console.log(`project`.padEnd(30) + `tool`.padEnd(25) + `median`.padEnd(10) + `min`.padEnd(10) + `max`.padEnd(10) + `runs`);
+  console.log(`${`project`.padEnd(30) + `tool`.padEnd(25) + `median`.padEnd(10) + `min`.padEnd(10) + `max`.padEnd(10)}runs`);
   for (const r of results) {
     for (const tool of ['tsc', 'tsgo', 'tsgo-singleThreaded', 'ts-rust'] as Tool[]) {
       if (r.stats[tool]) {
         const s = r.stats[tool]!;
-        console.log(`${r.project.padEnd(30)}${tool.padEnd(25)}${s.median.toFixed(2)}s`.padEnd(65) + `${s.min.toFixed(2)}s`.padEnd(10) + `${s.max.toFixed(2)}s`.padEnd(10) + `${s.runs}`);
+        console.log(`${`${r.project.padEnd(30)}${tool.padEnd(25)}${s.median.toFixed(2)}s`.padEnd(65) + `${s.min.toFixed(2)}s`.padEnd(10) + `${s.max.toFixed(2)}s`.padEnd(10)}${s.runs}`);
       }
     }
   }
 
   console.log('\nDiagnostic drift:');
-  console.log(`project`.padEnd(30) + `tool`.padEnd(25) + `status`);
+  console.log(`${`project`.padEnd(30) + `tool`.padEnd(25)}status`);
   for (const r of results) {
     for (const tool of ['tsgo', 'tsgo-singleThreaded', 'ts-rust'] as Tool[]) {
       if (r.drift[tool] !== 'skipped') {
