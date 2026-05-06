@@ -100,7 +100,7 @@ arity = 2
 code = "TS2344"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Type '{0}' does not satisfy the constraint '{1}'."
 arity = 2
 

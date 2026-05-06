@@ -101,7 +101,7 @@
     "message": "Type '{0}' does not satisfy the constraint '{1}'.",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2345",

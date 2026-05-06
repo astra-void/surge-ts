@@ -132,7 +132,7 @@ pub const TS2344: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Type '{0}' does not satisfy the constraint '{1}'.",
     argument_count: 2,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2345: DiagnosticDescriptor = DiagnosticDescriptor {

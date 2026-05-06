@@ -124,8 +124,13 @@ span_tests = [
 ]
 
 [TS2344]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/utility-types-basic/src/index.ts",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/generics_spans.rs",
+]
 
 [TS2345]
 status = "emitted"
@@ -481,4 +486,3 @@ status = "emitted"
 fixtures = [
   "tests/smoke/manifest.toml",
 ]
-
