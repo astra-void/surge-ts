@@ -1,3 +1,1 @@
-console.log("ok");
-
-const promise: Promise<string> = null as any;
+let p: Partial<{ name: string }>;

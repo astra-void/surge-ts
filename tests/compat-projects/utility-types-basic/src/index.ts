@@ -26,10 +26,24 @@ const pickExtra: UserName = { id: 1, name: "Ada", active: true };
 const pickMismatch: UserName = { id: "1", name: "Ada" };
 
 type InvalidPick = Pick<User, "id" | "missing">;
+let invalidPickUsage: InvalidPick;
 
 type PublicUser = Omit<User, "active">;
+
+type OmitMissing = Omit<User, "active" | "missing">;
 
 const omitOk: PublicUser = { id: 1, name: "Ada" };
 const omitMissing: PublicUser = { id: 1 };
 const omitExtra: PublicUser = { id: 1, name: "Ada", active: true };
 const omitMismatch: PublicUser = { id: "1", name: "Ada" };
+const omitMissingKeyOk: OmitMissing = { id: 1, name: "Ada" };
+
+type UserAll = Pick<User, keyof User>;
+
+const pickAllOk: UserAll = { id: 1, name: "Ada", active: true };
+const pickAllMissing: UserAll = { id: 1, name: "Ada" };
+
+type UserMap = Record<keyof User, string>;
+
+const recordKeyofOk: UserMap = { id: "1", name: "Ada", active: "yes" };
+const recordKeyofMismatch: UserMap = { id: 1, name: "Ada", active: "yes" };
