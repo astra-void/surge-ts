@@ -7,6 +7,7 @@ This crate tracks compatibility in narrow, oracle-backed phases rather than clai
 - v0.82: project/file visibility hardening, including recursive directory includes and `.tsx` visibility.
 - v0.83: parser-safe binding-pattern parameter support for `TS7031` on object binding elements in function and arrow parameters.
 - v0.84.5: deterministic parallel project-checking foundation. This only changes how per-file work is scheduled in project mode; it does not add new semantic, resolver, lib, or declaration behavior.
+- v0.84.8: real-source syntax/scope reconciliation fixtures for optional typed parameters, async locals, destructuring locals, nested object shorthand, early returns, type import visibility, and a narrow `TextEncoder` builtin.
 
 ## Still out of scope
 

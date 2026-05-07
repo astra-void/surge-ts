@@ -72,6 +72,7 @@ Compare a project while requesting deterministic parallel project checking:
 pnpm run oracle:compare -- --project tests/compat-projects/parallel-ordering-basic/tsconfig.json --rustJobs 4
 ```
 `--rustJobs` only affects the `typescript-rust` command. It does not change the `tsc` baseline or the oracle comparison rules.
+The rendered comparison also prints the exact `typescript-rust` command and the explicit job count so stale-binary and wrong-workspace confusion is easier to spot.
 
 The `package-imports` fixture pins TypeScript 6.0.3 behavior for unresolved
 package imports: ordinary imports and re-exports remain TS2307, while a bare

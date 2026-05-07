@@ -19,7 +19,9 @@ Diagnostics are catalog-driven and rendered through the shared diagnostics crate
 zero source files, the CLI emits a custom
 `typescript-rust::project-has-no-source-files` diagnostic and the report
 includes a visibility warning instead of silently returning an empty
-comparison.
+comparison. The report also includes lightweight build provenance so it is
+clear whether the output came from the current workspace binary: package
+version, build profile, binary path, current directory, and workspace root.
 
 ## External Modules (v0.63)
 
@@ -68,6 +70,7 @@ cargo run -p typescript-rust-cli -- --ignoreConfig examples/basic.ts
   when available, 1-based line and column numbers.
 - `--maxDiagnostics` limits rendered diagnostics in normal diagnostic mode.
 - `--compatReport` now also includes grouped TS2305, TS2307, TS2304, node_modules source-prefix, and dependency-JavaScript-source buckets so real-project triage can separate export visibility, module-specifier, identifier, and generated-source noise. TS2304 buckets are further split into synthetic built-in, ES/lib-lite, Node-like, and local-unresolved categories.
+- The oracle comparison output prints the exact `typescript-rust` command and the explicit job count when `--rustJobs` is provided.
 
 The synthetic builtin surface stays narrow: it covers `Array.from`, `Date.now`, `Number`, `String`, `Boolean`, `Math`, `JSON`, `Object`, `Map`, `Uint8Array`, `globalThis`, and `isNaN` as synthetic globals, not as a physical `lib.d.ts` loader.
 

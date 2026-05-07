@@ -49,16 +49,16 @@ When the audit is rerun, the report should explicitly note whether raw oracle
 compare and compat-report totals differ, and if they do, capture the counting
 path that needs to be fixed later instead of hiding the gap.
 
-The current compat-report and oracle compare surfaces already split dependency
-declarations from dependency JavaScript source noise, and the oracle compare
-classifier now separates missing synthetic built-in candidates from ES/lib-lite
-globals and Node/@types globals. That makes the next phase choice clearer once
-the auth-kit metrics are available.
+The compat-report and oracle compare surfaces are raw measurements, not
+semantic diagnosis. Missing features are fixed in checker, resolver, and
+type-model phases rather than in the report layer. v0.84.8 adds real-source
+syntax/scope reconciliation fixtures to narrow the gap between toy fixtures and
+auth-kit output.
 
 The synthetic builtin pack remains intentionally narrow and synthetic: it covers
 `Array.from`, `Date.now`, `Number`, `String`, `Boolean`, `Math`, `JSON`,
-`Object`, `Map`, `Uint8Array`, `globalThis`, and `isNaN` without pretending to
-load a physical `lib.d.ts`.
+`Object`, `Map`, `Uint8Array`, `globalThis`, `isNaN`, and a narrow
+`TextEncoder` shape without pretending to load a physical `lib.d.ts`.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
@@ -158,7 +158,9 @@ and it is a quick standalone oracle rather than the main compatibility path.
 The next phase should still be chosen from oracle and compat-report output, not
 from a fixed feature wish list. Module syntax expansion, package import
 stubbing, declaration-file ingestion, ambient declaration hardening, and the
-diagnostic catalog/codegen foundation are implemented. Current likely blockers are common expression syntax, ambient `@types`, DOM/Node globals, and true lib semantics.
+diagnostic catalog/codegen foundation are implemented. Current likely blockers
+are common expression syntax, ambient `@types`, DOM/Node globals, React/JSX,
+and true lib semantics.
 
 ## Note on Type Assertions (v0.73)
 Type assertions (`as` expressions) were chosen for v0.73 because they are extremely common in real TypeScript projects, particularly around parsed data, library boundaries, and compatibility shims. By implementing a narrow parsing and inference surface for primitive assertions, aliases, and built-in arrays, we significantly reduce false-positive TS2322 cascades without needing full TypeScript assertion semantics. Dominant blockers remaining after this phase continue to revolve around ambient `@types` package discovery, missing DOM/Node globals, and `lib.d.ts` semantics which often surface as TS2304 errors.
