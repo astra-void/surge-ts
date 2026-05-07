@@ -114,6 +114,7 @@ See [MODULES.md](./MODULES.md) for the import/export syntax surface, module-file
 
 - Diagnostics are grouped in loaded-file order.
 - Diagnostics for files not present in the loaded list are rendered at the end when possible.
+- `--jobs` is deterministic project-checking infrastructure only. Shared loading, graph construction, declaration collection, and module binding remain serial; only the per-file checking phase can run in parallel. Worker results are merged by loaded-file order, not completion order.
 - `--showConfig` still prints the normalized config and exits successfully.
 - `--showSpans` prints the diagnostic code and span metadata before the rendered excerpt.
 - `--compatReport` prints a compatibility summary with loaded-file count,
@@ -156,3 +157,4 @@ The checker supports two diagnostic profiles, controlled via `CheckerOptions.dia
 2. **`Native`**: Uses `typescript-rust`-specific behaviors. For example, it aggressively returns `Unknown` from failed contextual checks (like `satisfies` failures) to suppress noisy downstream cascade errors. This produces a cleaner developer experience but diverges from the TypeScript compiler baseline.
 
 The `compat-projects` oracle testing runs exclusively in `tsc` profile.
+`CheckerOptions::default().diagnostic_profile` is `DiagnosticProfile::Tsc`, and the CLI default stays `tsc` unless `--diagnosticProfile native` is explicitly requested.

@@ -66,6 +66,13 @@ pnpm run oracle:compare -- --project package-imports --stubExternalModules
 ```
 *Note: `--stubExternalModules` is a typescript-rust-only compatibility flag. The oracle does not pass it to TypeScript. In this mode, typescript-rust suppresses non-relative missing-module diagnostics, including TS2307 and the side-effect-import TS2882 form, while TypeScript still reports its normal diagnostics.*
 
+Compare a project while requesting deterministic parallel project checking:
+
+```bash
+pnpm run oracle:compare -- --project tests/compat-projects/parallel-ordering-basic/tsconfig.json --rustJobs 4
+```
+`--rustJobs` only affects the `typescript-rust` command. It does not change the `tsc` baseline or the oracle comparison rules.
+
 The `package-imports` fixture pins TypeScript 6.0.3 behavior for unresolved
 package imports: ordinary imports and re-exports remain TS2307, while a bare
 side-effect import such as `import "reflect-metadata";` is TS2882. This is a
@@ -98,7 +105,7 @@ pnpm run oracle:test
 - Project mode runs:
   ```txt
   pnpm exec tsc --noEmit --pretty false --project <tsconfig>
-  cargo run ... -- --project <tsconfig> --format json
+  cargo run ... -- --project <tsconfig> --format json [--jobs <n>]
   ```
 - File mode without `--ignoreConfig` runs:
   ```txt
@@ -115,6 +122,7 @@ pnpm run oracle:test
 - The oracle never secretly adds `--ignoreConfig`.
 - Normalizes both diagnostic streams to code, file name, line, and column when
   available.
+- Diagnostic fingerprints used in tests can also include message text when needed for deterministic equality checks.
 - Compares code counts first, then `(fileName, code)` counts, then
   `(fileName, code, line)` where both sides have line data.
 

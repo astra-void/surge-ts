@@ -26,6 +26,7 @@ The benchmark compares **no-emit project checking** only:
 - `tsc --noEmit --pretty false --project <tsconfig>`
 - `tsgo --noEmit --pretty false --project <tsconfig>`
 - `typescript-rust-cli --project <tsconfig> --format json --maxDiagnostics 10000`
+- `typescript-rust-cli --project <tsconfig> --format json --maxDiagnostics 10000 --jobs <n>` for deterministic project-checking measurements with explicit Rust worker counts
 
 It does not measure watch mode, incremental builds, project references, emitting, or editor performance.
 
@@ -49,6 +50,12 @@ Change iterations, generate visual reports, and output JSON:
 
 ```bash
 pnpm run bench:compilers -- --preset current --iterations 10 --warmup 2 --json .bench/compiler-bench.json --chart .bench/compiler-bench.svg --html .bench/compiler-bench.html
+```
+
+Measure Rust at a specific worker count:
+
+```bash
+pnpm run bench:compilers -- --project tests/compat-projects/parallel-ordering-basic/tsconfig.json --rustJobs 4
 ```
 
 Generate visual reports from an existing JSON run without re-running compilers:
@@ -85,5 +92,6 @@ pnpm run bench:test
 ## Interpreting Results
 
 - Benchmark results are local-machine-relative. SVG/HTML reports are visualization aids, not cross-machine marketing claims.
+- JSON, SVG, and HTML labels include the Rust job count when one is recorded so mixed serial/parallel runs are not ambiguous.
 - Compare wall-clock timings alongside the diagnostic drift status.
 - This is not yet a claim of full compiler parity. See `REAL_PROJECT_COMPAT.md` for current compatibility limitations.

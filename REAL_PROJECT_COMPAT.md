@@ -13,58 +13,52 @@ miss. `.tsx` visibility is not the same as JSX or React type support.
 
 ## v0.84 Real-Project Audit
 
-Preflight audit for `.local-projects/trpc/tsconfig.json`:
+The old `trpc` baseline is retired as the active real-project target. `auth-kit` is
+the intended finite baseline for this phase, but this workspace does not currently
+contain `.local-projects/auth-kit`, so the measured metrics below are pending in
+this checkout rather than fabricated from another project.
+
+Preflight commands to run once the `auth-kit` checkout is available:
 
 - `cargo fmt --check`
 - `cargo test`
 - `pnpm run oracle:test`
 - `pnpm run bench:test`
-- `CheckerOptions::default().diagnostic_profile == DiagnosticProfile::Tsc`
-- CLI default profile is `tsc`; `--diagnosticProfile native` is opt-in
-- `DiagnosticProfile` is publicly exported
-- `skipLibCheck: true`
-- `baseUrl` is not present
-- `ignoreDeprecations` is not present
-- Raw oracle compare and compat-report JSON diagnostics totals currently agree on the audited run
-- `--maxDiagnostics 200` is a truncation mode and is not used as the baseline measurement for this report
+- `cargo run -q -p typescript-rust-cli -- --project .local-projects/auth-kit/tsconfig.json --showConfig`
+- `cargo run -q -p typescript-rust-cli -- --project .local-projects/auth-kit/tsconfig.json --compatReport --maxDiagnostics 200`
+- `pnpm run oracle:compare -- --project .local-projects/auth-kit/tsconfig.json --maxDiagnostics 200`
 
-Measured real-project state for `.local-projects/trpc/tsconfig.json`:
+Measured real-project state for `.local-projects/auth-kit/tsconfig.json`:
 
 | Metric | Value |
 | --- | ---: |
-| TypeScript diagnostics | 1223 |
-| typescript-rust diagnostics, raw oracle compare | 4798 |
-| typescript-rust diagnostics, compat-report JSON | 4798 |
-| Rust diagnostics from `node_modules` dependency declarations | 0 |
-| Rust diagnostics from `node_modules` source files | 38 |
-| Rust-only `typescript-rust::*` diagnostics in `tsc` profile | 0 |
-| Suppressed declaration diagnostics | 10054 |
-| Suppressed Rust-only diagnostics | 943 |
+| TypeScript diagnostics | pending |
+| typescript-rust diagnostics, raw oracle compare | pending |
+| typescript-rust diagnostics, compat-report JSON | pending |
+| loaded files total | pending |
+| root source files | pending |
+| root declarations | pending |
+| dependency declarations | pending |
+| generated files | pending |
+| dependency JavaScript source files loaded | pending |
+| diagnostics from dependency declarations | pending |
+| diagnostics from dependency JavaScript source files | pending |
+| Rust-only `typescript-rust::*` diagnostics in `tsc` profile | pending |
 
-Loaded file split:
+When the audit is rerun, the report should explicitly note whether raw oracle
+compare and compat-report totals differ, and if they do, capture the counting
+path that needs to be fixed later instead of hiding the gap.
 
-- Files loaded: 1126 total, 1101 source, 12 root declarations, 101 dependency declarations, 95 generated declarations
-- Root source diagnostics: 4798
-- Root declaration diagnostics: 0
-- Dependency declaration diagnostics: 0
-- Generated declaration diagnostics: 0
+The current compat-report and oracle compare surfaces already split dependency
+declarations from dependency JavaScript source noise, and the oracle compare
+classifier now separates missing synthetic built-in candidates from ES/lib-lite
+globals and Node/@types globals. That makes the next phase choice clearer once
+the auth-kit metrics are available.
 
-The compat-report JSON and raw oracle compare currently agree on the audited run. The report now exposes extra buckets for TS2305 by module/export, TS2307 by module specifier, TS2304 by identifier, and node_modules source diagnostics by package/source prefix so the next phase can be chosen from evidence rather than aggregate counts alone. The `node_modules` noise is source-file noise, not dependency-declaration semantic checking, so `skipLibCheck: true` remains effective for the loaded declaration graph.
-
-Top 10 inflated Rust buckets by code:
-
-- `TS2304` TypeScript 3, typescript-rust 1908, delta +1905
-- `TS2305` TypeScript 0, typescript-rust 742, delta +742
-- `TS2307` TypeScript 170, typescript-rust 907, delta +737
-- `TS2339` TypeScript 29, typescript-rust 258, delta +229
-- `TS7006` TypeScript 52, typescript-rust 213, delta +161
-- `TS2353` TypeScript 2, typescript-rust 112, delta +110
-- `TS2693` TypeScript 0, typescript-rust 93, delta +93
-- `TS2314` TypeScript 0, typescript-rust 86, delta +86
-- `TS2454` TypeScript 0, typescript-rust 74, delta +74
-- `TS2315` TypeScript 0, typescript-rust 65, delta +65
-
-The default profile remains `tsc`, and `native` remains opt-in. The default profile still suppresses Rust-only checker diagnostics in ordinary project checking; the remaining real-project deltas are ordinary diagnostic gaps, source-file `node_modules` noise, and module-graph omissions that still need narrower follow-up in the next phase.
+The synthetic builtin pack remains intentionally narrow and synthetic: it covers
+`Array.from`, `Date.now`, `Number`, `String`, `Boolean`, `Math`, `JSON`,
+`Object`, `Map`, `Uint8Array`, `globalThis`, and `isNaN` without pretending to
+load a physical `lib.d.ts`.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 

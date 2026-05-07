@@ -11,6 +11,7 @@ Diagnostics are catalog-driven and rendered through the shared diagnostics crate
 - Single-file mode: `typescript-rust-cli <file.ts>`
 - Single-file mode (standalone): `typescript-rust-cli --ignoreConfig <file.ts>`
 - Project mode: `typescript-rust-cli --project <tsconfig.json>`
+- Project mode with deterministic parallel per-file checking: `typescript-rust-cli --project <tsconfig.json> --jobs 4`
 - Compatibility report: `typescript-rust-cli --project <tsconfig.json> --compatReport`
 - Stub external modules: `typescript-rust-cli --project <tsconfig.json> --stubExternalModules`
 
@@ -62,10 +63,13 @@ cargo run -p typescript-rust-cli -- --ignoreConfig examples/basic.ts
 - `--format json` prints diagnostic JSON in normal project or single-file mode.
 - `--compatReport --format json` prints compatibility-report JSON.
 - `--diagnosticProfile <tsc|native>` sets the diagnostic profile. The `tsc` profile strictly aligns with TypeScript's oracle baseline, while `native` aggressively suppresses noisy cascades at boundaries like `satisfies`. (Default: `tsc`)
+- `--jobs` is project-mode infrastructure for deterministic per-file checking only. It keeps shared prepasses serial and merges diagnostics in loaded-file order. The default is `1`.
 - `--showSpans` is a text-mode affordance; JSON output already carries spans and,
   when available, 1-based line and column numbers.
 - `--maxDiagnostics` limits rendered diagnostics in normal diagnostic mode.
-- `--compatReport` now also includes grouped TS2305, TS2307, TS2304, and node_modules source-prefix buckets so real-project triage can separate export visibility, module-specifier, identifier, and generated-source noise.
+- `--compatReport` now also includes grouped TS2305, TS2307, TS2304, node_modules source-prefix, and dependency-JavaScript-source buckets so real-project triage can separate export visibility, module-specifier, identifier, and generated-source noise. TS2304 buckets are further split into synthetic built-in, ES/lib-lite, Node-like, and local-unresolved categories.
+
+The synthetic builtin surface stays narrow: it covers `Array.from`, `Date.now`, `Number`, `String`, `Boolean`, `Math`, `JSON`, `Object`, `Map`, `Uint8Array`, `globalThis`, and `isNaN` as synthetic globals, not as a physical `lib.d.ts` loader.
 
 The JSON diagnostic shape stays stable across the catalog migration:
 
