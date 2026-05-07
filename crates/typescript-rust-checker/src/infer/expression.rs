@@ -172,6 +172,7 @@ pub(crate) fn infer_expression(
             },
             None => InferredExpression::Unknown,
         },
+        ParsedExpression::New { callee, .. } => infer_new_expression(callee, symbols),
         ParsedExpression::PropertyCall {
             object,
             object_span,
@@ -192,21 +193,21 @@ pub(crate) fn infer_expression(
             let base_type = typescript_rust_types::remove_undefined(&object_type);
 
             match base_type {
-                Type::Object(ref object_type) => {
-                    let property_type = object_type.get_property_access_type(property_name);
-                    if let Some(property_type) = property_type {
+                Type::Any => InferredExpression::Known(Type::Any),
+                _ => match base_type.get_property_access_type(property_name) {
+                    Some(property_type) => {
                         let prop_base = typescript_rust_types::remove_undefined(&property_type);
                         if let Type::Function(function_type) = prop_base {
-                            return InferredExpression::Known(union_type(vec![
+                            InferredExpression::Known(union_type(vec![
                                 *function_type.return_type.clone(),
                                 Type::Undefined,
-                            ]));
+                            ]))
+                        } else {
+                            InferredExpression::Unknown
                         }
                     }
-                    InferredExpression::Unknown
-                }
-                Type::Any => InferredExpression::Known(Type::Any),
-                _ => InferredExpression::Unknown,
+                    None => InferredExpression::Unknown,
+                },
             }
         }
         ParsedExpression::OptionalCall { callee, .. } => {
@@ -283,7 +284,25 @@ fn infer_arrow_function(
         parameters,
         return_type: Box::new(return_type),
         is_variadic: false,
+        required_parameter_count: required_parameter_count(arrow_function.parameters.as_slice()),
     }
+}
+
+fn required_parameter_count(
+    parameters: &[typescript_rust_syntax::ParsedFunctionParameter],
+) -> usize {
+    let mut required = parameters.len();
+
+    while required > 0 {
+        let parameter = &parameters[required - 1];
+        if parameter.optional || parameter.initializer.is_some() {
+            required -= 1;
+        } else {
+            break;
+        }
+    }
+
+    required
 }
 
 fn infer_unary_expression(
@@ -630,16 +649,8 @@ fn infer_property_access(
     };
 
     match &object_type {
-        Type::Object(object_type) => object_type
-            // Reads widen optional properties to include undefined.
-            .get_property_access_type(property_name)
-            .map(InferredExpression::Known)
-            .unwrap_or_else(|| InferredExpression::MissingProperty {
-                property_name: property_name.to_string(),
-                object_type: Type::Object(object_type.clone()),
-                span: *property_span,
-            }),
-        Type::Unknown | Type::Any => InferredExpression::Known(object_type.clone()),
+        Type::Any => InferredExpression::Known(Type::Any),
+        Type::Unknown => InferredExpression::Unknown,
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in &union_type.types {
@@ -647,20 +658,9 @@ fn infer_property_access(
                     result_types.push(ty.clone());
                     continue;
                 }
-                match ty {
-                    Type::Object(object_type) => {
-                        match object_type.get_property_access_type(property_name) {
-                            Some(ty) => result_types.push(ty),
-                            None => {
-                                return InferredExpression::MissingProperty {
-                                    property_name: property_name.to_string(),
-                                    object_type: Type::Object(object_type.clone()),
-                                    span: *property_span,
-                                };
-                            }
-                        }
-                    }
-                    _ => {
+                match ty.get_property_access_type(property_name) {
+                    Some(ty) => result_types.push(ty),
+                    None => {
                         return InferredExpression::MissingProperty {
                             property_name: property_name.to_string(),
                             object_type: ty.clone(),
@@ -671,11 +671,14 @@ fn infer_property_access(
             }
             InferredExpression::Known(typescript_rust_types::union_type(result_types))
         }
-        _ => InferredExpression::MissingProperty {
-            property_name: property_name.to_string(),
-            object_type: object_type.clone(),
-            span: *property_span,
-        },
+        _ => object_type
+            .get_property_access_type(property_name)
+            .map(InferredExpression::Known)
+            .unwrap_or_else(|| InferredExpression::MissingProperty {
+                property_name: property_name.to_string(),
+                object_type: object_type.clone(),
+                span: *property_span,
+            }),
     }
 }
 
@@ -706,40 +709,43 @@ fn infer_property_call(
                     result_types.push(ty.clone());
                     continue;
                 }
-                match ty {
-                    Type::Object(object_type) => {
-                        match object_type.get_property_access_type(property_name) {
-                            Some(Type::Function(function_type)) => {
-                                result_types.push((*function_type.return_type).clone());
-                            }
-                            Some(Type::Any) => result_types.push(Type::Any),
-                            Some(_) | None => return InferredExpression::Unknown,
-                        }
+                match ty.get_property_access_type(property_name) {
+                    Some(Type::Function(function_type)) => {
+                        result_types.push((*function_type.return_type).clone());
                     }
-                    Type::Any => result_types.push(Type::Any),
-                    _ => return InferredExpression::Unknown,
+                    Some(Type::Any) => result_types.push(Type::Any),
+                    Some(_) | None => return InferredExpression::Unknown,
                 }
             }
             InferredExpression::Known(typescript_rust_types::union_type(result_types))
         }
-        Type::Object(object_type) => match object_type.get_property_access_type(property_name) {
+        _ => match object_type.get_property_access_type(property_name) {
             Some(Type::Function(function_type)) => {
                 InferredExpression::Known((*function_type.return_type).clone())
             }
             Some(Type::Any) => InferredExpression::Known(Type::Any),
             Some(_) | None => InferredExpression::Unknown,
         },
-        Type::Function(_)
-        | Type::Array(_)
-        | Type::Tuple(_)
-        | Type::String
-        | Type::Number
-        | Type::Boolean
-        | Type::Void
-        | Type::StringLiteral(_)
-        | Type::NumberLiteral(_)
-        | Type::BooleanLiteral(_)
-        | Type::Undefined => InferredExpression::Unknown,
+    }
+}
+
+fn infer_new_expression(callee: &ParsedExpression, symbols: &SymbolTable) -> InferredExpression {
+    if let ParsedExpression::Identifier { name, .. } = callee
+        && let Some(result_type) =
+            typescript_rust_types::Type::builtin_constructor_result_type(name)
+    {
+        return InferredExpression::Known(result_type);
+    }
+
+    match infer_expression(callee, symbols) {
+        InferredExpression::Known(Type::Function(function_type)) => {
+            InferredExpression::Known((*function_type.return_type).clone())
+        }
+        InferredExpression::Known(Type::Any) => InferredExpression::Known(Type::Any),
+        InferredExpression::UnresolvedIdentifier { name, span } => {
+            InferredExpression::UnresolvedIdentifier { name, span }
+        }
+        _ => InferredExpression::Unknown,
     }
 }
 

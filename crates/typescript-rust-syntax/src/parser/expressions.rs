@@ -1,8 +1,8 @@
 use oxc_ast::ast::{
     Argument, ArrayExpression, ArrowFunctionExpression, BinaryExpression, BinaryOperator,
     ChainElement, ChainExpression, ComputedMemberExpression, ConditionalExpression, Expression,
-    LogicalExpression, LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKey,
-    PropertyKind, StaticMemberExpression, UnaryExpression, UnaryOperator,
+    LogicalExpression, LogicalOperator, NewExpression, ObjectExpression, ObjectPropertyKind,
+    PropertyKey, PropertyKind, StaticMemberExpression, UnaryExpression, UnaryOperator,
 };
 use oxc_span::{GetSpan, Span};
 
@@ -58,12 +58,18 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ParenthesizedExpression(parenthesized_expression) => {
             return parse_expression(&parenthesized_expression.expression);
         }
+        Expression::AwaitExpression(await_expression) => {
+            return parse_expression(&await_expression.argument);
+        }
         Expression::ConditionalExpression(conditional_expression) => {
             parse_conditional_expression(conditional_expression)
                 .unwrap_or(ParsedExpression::Unknown)
         }
         Expression::CallExpression(call_expression) => {
             parse_call_expression_expression(call_expression).unwrap_or(ParsedExpression::Unknown)
+        }
+        Expression::NewExpression(new_expression) => {
+            parse_new_expression(new_expression).unwrap_or(ParsedExpression::Unknown)
         }
         Expression::TSInstantiationExpression(instantiation_expression) => {
             parse_instantiation_expression(instantiation_expression)
@@ -262,6 +268,26 @@ fn parse_call_type_arguments(
     }
 }
 
+fn parse_new_expression(new_expression: &NewExpression<'_>) -> Option<ParsedExpression> {
+    let arguments = new_expression
+        .arguments
+        .iter()
+        .map(parse_call_argument)
+        .collect::<Vec<_>>();
+    let type_arguments = match new_expression.type_arguments.as_deref() {
+        Some(type_arguments) => parse_type_arguments(type_arguments)?,
+        None => Vec::new(),
+    };
+    let (callee, callee_span) = parse_expression(&new_expression.callee);
+
+    Some(ParsedExpression::New {
+        callee: Box::new(callee),
+        callee_span: Some(text_span_from_oxc_span(callee_span)),
+        type_arguments,
+        arguments,
+    })
+}
+
 fn parse_instantiation_expression(
     instantiation_expression: &oxc_ast::ast::TSInstantiationExpression<'_>,
 ) -> Option<ParsedExpression> {
@@ -412,6 +438,10 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
         ),
         Argument::ParenthesizedExpression(parenthesized_expression) => (
             parse_expression(&parenthesized_expression.expression).0,
+            argument.span(),
+        ),
+        Argument::AwaitExpression(await_expression) => (
+            parse_expression(&await_expression.argument).0,
             argument.span(),
         ),
         Argument::ConditionalExpression(conditional_expression) => (

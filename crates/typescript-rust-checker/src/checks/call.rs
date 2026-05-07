@@ -69,6 +69,53 @@ pub(crate) fn check_call_like(
     )
 }
 
+pub(crate) fn check_new_like(
+    callee: &ParsedExpression,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if let ParsedExpression::Identifier { name, .. } = callee
+        && let Some(result_type) =
+            typescript_rust_types::Type::builtin_constructor_result_type(name)
+    {
+        for argument in arguments {
+            let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+        }
+        return Some(result_type);
+    }
+
+    let callee_result = evaluate_expression(callee, callee_span, symbols, ctx);
+    let callee_type = match callee_result {
+        InferredExpression::Known(ty) => ty,
+        _ => return None,
+    };
+
+    match callee_type {
+        Type::Function(function_type) => check_function_type_call(
+            &function_type,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ),
+        Type::Any => Some(Type::Any),
+        Type::Unknown => None,
+        _ => {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2351(ctx.file_name.clone()),
+                callee_span,
+            ));
+            None
+        }
+    }
+}
+
 pub(crate) fn check_property_call_like(
     object: &ParsedExpression,
     object_span: Option<SyntaxTextSpan>,
@@ -91,8 +138,90 @@ pub(crate) fn check_property_call_like(
     match object_ty {
         Type::Any => Some(Type::Any),
         Type::Unknown => None,
-        Type::Object(object_type) => {
-            let Some(property_type) = object_type.get_property_access_type(property_name) else {
+        Type::Array(element_type) if property_name == "map" => check_array_map_call(
+            element_type.as_ref(),
+            property_span,
+            call_span,
+            arguments,
+            symbols,
+            ctx,
+        ),
+        Type::Union(union_type) => {
+            let mut result_types = vec![];
+            for ty in &union_type.types {
+                if *ty == Type::Undefined {
+                    result_types.push(Type::Undefined);
+                    continue;
+                }
+
+                if property_name == "map"
+                    && let Type::Array(element_type) = ty
+                {
+                    let mapped = check_array_map_call(
+                        element_type.as_ref(),
+                        property_span,
+                        call_span,
+                        arguments,
+                        symbols,
+                        ctx,
+                    )?;
+                    result_types.push(mapped);
+                    continue;
+                }
+
+                let Some(property_type) = ty.get_property_access_type(property_name) else {
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone()),
+                        crate::spans::choose_span(property_span, object_span),
+                    ));
+                    return None;
+                };
+
+                match property_type {
+                    Type::Function(function_type) => {
+                        let return_type = check_function_type_call(
+                            &function_type,
+                            property_span,
+                            call_span,
+                            type_arguments,
+                            arguments,
+                            symbols,
+                            ctx,
+                        )?;
+                        result_types.push(return_type);
+                    }
+                    Type::Any => result_types.push(Type::Any),
+                    Type::Unknown => return None,
+                    _ => {
+                        ctx.push(diagnostic_with_syntax_span(
+                            Diagnostic::ts2349(ctx.file_name.clone()),
+                            crate::spans::choose_span(
+                                call_span,
+                                crate::spans::choose_span(property_span, object_span),
+                            ),
+                        ));
+                        return None;
+                    }
+                }
+            }
+
+            Some(typescript_rust_types::union_type(result_types))
+        }
+        _ => {
+            if property_name == "map"
+                && let Type::Array(element_type) = &object_ty
+            {
+                return check_array_map_call(
+                    element_type.as_ref(),
+                    property_span,
+                    call_span,
+                    arguments,
+                    symbols,
+                    ctx,
+                );
+            }
+
+            let Some(property_type) = object_ty.get_property_access_type(property_name) else {
                 let diagnostic =
                     Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone());
                 ctx.push(diagnostic_with_syntax_span(
@@ -114,16 +243,6 @@ pub(crate) fn check_property_call_like(
                 ),
                 Type::Any => Some(Type::Any),
                 Type::Unknown => None,
-                Type::Union(_) => {
-                    ctx.push(diagnostic_with_syntax_span(
-                        Diagnostic::ts2349(ctx.file_name.clone()),
-                        crate::spans::choose_span(
-                            call_span,
-                            crate::spans::choose_span(property_span, object_span),
-                        ),
-                    ));
-                    None
-                }
                 _ => {
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2349(ctx.file_name.clone()),
@@ -135,15 +254,6 @@ pub(crate) fn check_property_call_like(
                     None
                 }
             }
-        }
-        _ => {
-            let diagnostic =
-                Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone());
-            ctx.push(diagnostic_with_syntax_span(
-                diagnostic,
-                crate::spans::choose_span(property_span, object_span),
-            ));
-            None
         }
     }
 }
@@ -176,8 +286,99 @@ pub(crate) fn check_optional_property_call(
     match base_type {
         Type::Any => Some(Type::Any),
         Type::Unknown => None,
-        Type::Object(object_type) => {
-            let Some(property_type) = object_type.get_property_access_type(property_name) else {
+        Type::Array(element_type) if property_name == "map" => check_array_map_call(
+            element_type.as_ref(),
+            property_span,
+            call_span,
+            arguments,
+            symbols,
+            ctx,
+        )
+        .map(|ret| union_type(vec![ret, Type::Undefined])),
+        Type::Union(union_type) => {
+            let mut result_types = vec![];
+            for ty in &union_type.types {
+                if *ty == Type::Undefined {
+                    result_types.push(Type::Undefined);
+                    continue;
+                }
+
+                if property_name == "map"
+                    && let Type::Array(element_type) = ty
+                {
+                    let mapped = check_array_map_call(
+                        element_type.as_ref(),
+                        property_span,
+                        call_span,
+                        arguments,
+                        symbols,
+                        ctx,
+                    )?;
+                    result_types.push(mapped);
+                    continue;
+                }
+
+                let Some(property_type) = ty.get_property_access_type(property_name) else {
+                    let diagnostic =
+                        Diagnostic::ts2339(property_name, &base_type_name, ctx.file_name.clone());
+                    ctx.push(diagnostic_with_syntax_span(
+                        diagnostic,
+                        crate::spans::choose_span(property_span, object_span),
+                    ));
+                    return None;
+                };
+
+                let property_type_base = typescript_rust_types::remove_undefined(&property_type);
+
+                match property_type_base {
+                    Type::Function(function_type) => {
+                        let return_type = check_function_type_call(
+                            &function_type,
+                            property_span,
+                            call_span,
+                            type_arguments,
+                            arguments,
+                            symbols,
+                            ctx,
+                        )?;
+                        result_types.push(return_type);
+                    }
+                    Type::Any => result_types.push(Type::Any),
+                    Type::Unknown => return None,
+                    _ => {
+                        ctx.push(diagnostic_with_syntax_span(
+                            Diagnostic::ts2349(ctx.file_name.clone()),
+                            crate::spans::choose_span(
+                                call_span,
+                                crate::spans::choose_span(property_span, object_span),
+                            ),
+                        ));
+                        return None;
+                    }
+                }
+            }
+
+            Some(typescript_rust_types::union_type(vec![
+                typescript_rust_types::union_type(result_types),
+                Type::Undefined,
+            ]))
+        }
+        _ => {
+            if property_name == "map"
+                && let Type::Array(element_type) = &base_type
+            {
+                return check_array_map_call(
+                    element_type.as_ref(),
+                    property_span,
+                    call_span,
+                    arguments,
+                    symbols,
+                    ctx,
+                )
+                .map(|ret| typescript_rust_types::union_type(vec![ret, Type::Undefined]));
+            }
+
+            let Some(property_type) = base_type.get_property_access_type(property_name) else {
                 let diagnostic =
                     Diagnostic::ts2339(property_name, &base_type_name, ctx.file_name.clone());
                 ctx.push(diagnostic_with_syntax_span(
@@ -203,10 +404,6 @@ pub(crate) fn check_optional_property_call(
                 Type::Any => Some(Type::Any),
                 Type::Unknown => None,
                 _ => {
-                    println!(
-                        "TS2349 because property_type_base is: {:?}",
-                        property_type_base
-                    );
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2349(ctx.file_name.clone()),
                         crate::spans::choose_span(
@@ -218,15 +415,51 @@ pub(crate) fn check_optional_property_call(
                 }
             }
         }
-        _ => {
-            let diagnostic =
-                Diagnostic::ts2339(property_name, &base_type_name, ctx.file_name.clone());
-            ctx.push(diagnostic_with_syntax_span(
-                diagnostic,
-                crate::spans::choose_span(property_span, object_span),
-            ));
-            None
+    }
+}
+
+fn check_array_map_call(
+    element_type: &Type,
+    property_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if arguments.is_empty() {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2554(1, 0, ctx.file_name.clone()),
+            call_span.or(property_span),
+        ));
+        return None;
+    }
+
+    let callback_type = Type::Function(FunctionType {
+        parameters: vec![element_type.clone()],
+        return_type: Box::new(Type::Any),
+        is_variadic: false,
+        required_parameter_count: 1,
+    });
+
+    let inferred_callback = evaluate_expression_with_expected_type(
+        &arguments[0].expression,
+        arguments[0].span,
+        Some(&callback_type),
+        ExpectedTypeDiagnostic::ArgumentNotAssignable,
+        symbols,
+        ctx,
+    );
+
+    match inferred_callback {
+        InferredExpression::Known(Type::Function(function_type)) => {
+            Some(Type::Array(Box::new((*function_type.return_type).clone())))
         }
+        InferredExpression::Known(Type::Any) => Some(Type::Array(Box::new(Type::Any))),
+        InferredExpression::Known(Type::Unknown) => None,
+        InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. }
+        | InferredExpression::Unknown => None,
+        InferredExpression::Known(other) => Some(Type::Array(Box::new(other))),
     }
 }
 
@@ -284,13 +517,19 @@ pub(crate) fn check_function_type_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let required = function_type.required_parameter_count;
     let expected = function_type.parameters.len();
     let actual = arguments.len();
     let mut has_unresolved_argument = false;
 
-    if expected != actual && !function_type.is_variadic {
+    if actual < required || (!function_type.is_variadic && actual > expected) {
+        let expected_count = if actual < required {
+            required
+        } else {
+            expected
+        };
         ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2554(expected, actual, ctx.file_name.clone()),
+            Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone()),
             call_span.or(callee_span),
         ));
         return None;

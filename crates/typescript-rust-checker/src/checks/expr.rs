@@ -3,7 +3,7 @@ use typescript_rust_syntax::{ParsedExpression, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::{NumberLiteralType, Type, is_assignable_to, union_type};
 
 use super::call::{
-    check_call_like, check_optional_call_like, check_optional_property_call,
+    check_call_like, check_new_like, check_optional_call_like, check_optional_property_call,
     check_property_call_like,
 };
 use super::emit_type_only_as_value_diagnostic;
@@ -138,6 +138,23 @@ pub(crate) fn evaluate_expression(
             *callee_span,
             None,
             &[],
+            arguments,
+            symbols,
+            ctx,
+        ) {
+            Some(return_type) => InferredExpression::Known(return_type),
+            None => InferredExpression::Unknown,
+        },
+        ParsedExpression::New {
+            callee,
+            callee_span,
+            type_arguments,
+            arguments,
+        } => match check_new_like(
+            callee,
+            *callee_span,
+            None,
+            type_arguments,
             arguments,
             symbols,
             ctx,

@@ -1308,8 +1308,9 @@ fn parse_interface_method_unsupported_no_panic() {
         panic!("expected an interface declaration");
     };
 
-    assert_eq!(interface.members.len(), 1);
-    assert_eq!(interface.members[0].name, "name");
+    assert_eq!(interface.members.len(), 2);
+    assert_eq!(interface.members[0].name, "greet");
+    assert_eq!(interface.members[1].name, "name");
 }
 
 #[test]

@@ -157,6 +157,40 @@ pub(crate) fn check_expression_flow(
 
             FlowCheck::Clear
         }
+        ParsedExpression::New {
+            callee,
+            callee_span,
+            arguments,
+            ..
+        } => {
+            if check_expression_flow(
+                callee,
+                callee_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+            .is_blocked()
+            {
+                return FlowCheck::Blocked;
+            }
+
+            for argument in arguments {
+                if check_expression_flow(
+                    &argument.expression,
+                    argument.span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
+                .is_blocked()
+                {
+                    return FlowCheck::Blocked;
+                }
+            }
+
+            FlowCheck::Clear
+        }
         ParsedExpression::PropertyCall {
             object,
             object_span: _,
@@ -637,6 +671,7 @@ fn function_statement_contains_value_return(statement: &ParsedFunctionBodyStatem
         ParsedFunctionBodyStatement::Return(return_statement) => {
             return_statement.expression.is_some()
         }
+        ParsedFunctionBodyStatement::Throw(_) => false,
         ParsedFunctionBodyStatement::Block(block_body) => {
             function_body_contains_value_return(block_body)
         }
@@ -646,6 +681,18 @@ fn function_statement_contains_value_return(statement: &ParsedFunctionBodyStatem
         }
         ParsedFunctionBodyStatement::While(while_statement) => {
             function_body_contains_value_return(&while_statement.body)
+        }
+        ParsedFunctionBodyStatement::Switch(switch_statement) => switch_statement
+            .cases
+            .iter()
+            .any(|case| function_body_contains_value_return(&case.consequent)),
+        ParsedFunctionBodyStatement::Try(try_statement) => {
+            function_body_contains_value_return(&try_statement.block)
+                || try_statement
+                    .handler
+                    .as_ref()
+                    .is_some_and(|body| function_body_contains_value_return(body))
+                || function_body_contains_value_return(&try_statement.finalizer)
         }
         ParsedFunctionBodyStatement::VariableDeclaration(_)
         | ParsedFunctionBodyStatement::Assignment(_)
@@ -662,6 +709,7 @@ fn function_statement_guarantees_value_return(statement: &ParsedFunctionBodyStat
         ParsedFunctionBodyStatement::Return(return_statement) => {
             return_statement.expression.is_some()
         }
+        ParsedFunctionBodyStatement::Throw(_) => false,
         ParsedFunctionBodyStatement::Block(block_body) => {
             function_body_guarantees_value_return(block_body)
         }
@@ -671,6 +719,22 @@ fn function_statement_guarantees_value_return(statement: &ParsedFunctionBodyStat
                 && function_body_guarantees_value_return(&if_statement.else_body)
         }
         ParsedFunctionBodyStatement::While(_) => false,
+        ParsedFunctionBodyStatement::Switch(switch_statement) => {
+            !switch_statement.cases.is_empty()
+                && switch_statement
+                    .cases
+                    .iter()
+                    .all(|case| function_body_guarantees_value_return(&case.consequent))
+        }
+        ParsedFunctionBodyStatement::Try(try_statement) => {
+            let try_guarantees = function_body_guarantees_value_return(&try_statement.block);
+            let handler_guarantees = try_statement
+                .handler
+                .as_ref()
+                .is_none_or(|body| function_body_guarantees_value_return(body));
+
+            try_guarantees && handler_guarantees
+        }
         ParsedFunctionBodyStatement::VariableDeclaration(_)
         | ParsedFunctionBodyStatement::Assignment(_)
         | ParsedFunctionBodyStatement::Expression(_) => false,

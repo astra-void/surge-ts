@@ -1,13 +1,15 @@
 use oxc_ast::ast::{
     BindingPattern, BindingProperty, BlockStatement, Declaration, Expression, ExpressionStatement,
-    FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey, Statement,
-    VariableDeclaration, WhileStatement,
+    FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey, Statement, SwitchCase,
+    SwitchStatement, ThrowStatement, TryStatement, VariableDeclaration, WhileStatement,
 };
+use oxc_span::GetSpan;
 
 use crate::{
     ParsedBindingName, ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
     ParsedFunctionParameter, ParsedIfStatement, ParsedObjectBindingElement,
-    ParsedObjectBindingPattern, ParsedReturnStatement, ParsedWhileStatement,
+    ParsedObjectBindingPattern, ParsedReturnStatement, ParsedSwitchCase, ParsedSwitchStatement,
+    ParsedThrowStatement, ParsedTryStatement, ParsedWhileStatement,
 };
 
 use super::expressions::parse_expression;
@@ -74,6 +76,12 @@ fn parse_function_body_statement(
             .map(|if_statement| vec![ParsedFunctionBodyStatement::If(if_statement)]),
         Statement::WhileStatement(while_statement) => parse_while_statement(while_statement)
             .map(|while_statement| vec![ParsedFunctionBodyStatement::While(while_statement)]),
+        Statement::SwitchStatement(switch_statement) => parse_switch_statement(switch_statement)
+            .map(|switch_statement| vec![ParsedFunctionBodyStatement::Switch(switch_statement)]),
+        Statement::ThrowStatement(throw_statement) => parse_throw_statement(throw_statement)
+            .map(|throw_statement| vec![ParsedFunctionBodyStatement::Throw(throw_statement)]),
+        Statement::TryStatement(try_statement) => parse_try_statement(try_statement)
+            .map(|try_statement| vec![ParsedFunctionBodyStatement::Try(try_statement)]),
         Statement::ReturnStatement(_) => parse_return_statement(statement)
             .map(|return_statement| vec![ParsedFunctionBodyStatement::Return(return_statement)]),
         Statement::ExpressionStatement(expression_statement) => {
@@ -176,6 +184,70 @@ fn parse_while_statement(while_statement: &WhileStatement<'_>) -> Option<ParsedW
     })
 }
 
+fn parse_switch_statement(switch_statement: &SwitchStatement<'_>) -> Option<ParsedSwitchStatement> {
+    let (discriminant, discriminant_span) = parse_expression(&switch_statement.discriminant);
+    let cases = switch_statement
+        .cases
+        .iter()
+        .map(parse_switch_case)
+        .collect::<Option<Vec<_>>>()?;
+
+    Some(ParsedSwitchStatement {
+        discriminant,
+        discriminant_span: Some(text_span_from_oxc_span(discriminant_span)),
+        cases,
+        span: Some(text_span_from_oxc_span(switch_statement.span)),
+    })
+}
+
+fn parse_switch_case(switch_case: &SwitchCase<'_>) -> Option<ParsedSwitchCase> {
+    let test = switch_case
+        .test
+        .as_ref()
+        .map(|expression| parse_expression(expression).0);
+    let test_span = switch_case
+        .test
+        .as_ref()
+        .map(|expression| text_span_from_oxc_span(expression.span()));
+
+    Some(ParsedSwitchCase {
+        test,
+        test_span,
+        consequent: parse_statement_list_as_function_body(&switch_case.consequent),
+        span: Some(text_span_from_oxc_span(switch_case.span)),
+    })
+}
+
+fn parse_throw_statement(throw_statement: &ThrowStatement<'_>) -> Option<ParsedThrowStatement> {
+    let (expression, expression_span) = parse_expression(&throw_statement.argument);
+
+    Some(ParsedThrowStatement {
+        expression,
+        expression_span: Some(text_span_from_oxc_span(expression_span)),
+        span: Some(text_span_from_oxc_span(throw_statement.span)),
+    })
+}
+
+fn parse_try_statement(try_statement: &TryStatement<'_>) -> Option<ParsedTryStatement> {
+    let block = parse_block_statement_as_function_body(&try_statement.block);
+    let handler = try_statement
+        .handler
+        .as_ref()
+        .map(|handler| parse_block_statement_as_function_body(&handler.body));
+    let finalizer = try_statement
+        .finalizer
+        .as_ref()
+        .map(|finalizer| parse_block_statement_as_function_body(finalizer))
+        .unwrap_or_default();
+
+    Some(ParsedTryStatement {
+        block,
+        handler,
+        finalizer,
+        span: Some(text_span_from_oxc_span(try_statement.span)),
+    })
+}
+
 fn parse_branch_body(statement: &Statement<'_>) -> Vec<ParsedFunctionBodyStatement> {
     match statement {
         Statement::BlockStatement(block) => parse_block_statement_as_function_body(block),
@@ -190,10 +262,21 @@ pub(crate) fn parse_function_parameter(
         .type_annotation
         .as_ref()
         .and_then(|annotation| parse_type_annotation(annotation));
+    let initializer = parameter.initializer.as_ref().map(|expression| {
+        let (parsed_expression, _) = parse_expression(expression);
+        parsed_expression
+    });
+    let initializer_span = parameter
+        .initializer
+        .as_ref()
+        .map(|initializer| text_span_from_oxc_span(initializer.span()));
 
     Some(ParsedFunctionParameter {
         binding_name: parse_binding_name(&parameter.pattern),
         declared_type,
+        initializer,
+        initializer_span,
+        optional: parameter.optional || parameter.initializer.is_some(),
     })
 }
 

@@ -116,12 +116,12 @@ pub(crate) fn check_variable_declaration_with_symbols(
                     inferred_initializer_type,
                 ))
             } else {
-                None
+                declared_type.clone().or(Some(Type::Unknown))
             }
         }
-        InferredExpression::UnresolvedIdentifier { .. } => None,
-        InferredExpression::MissingProperty { .. } => None,
-        InferredExpression::Unknown => None,
+        InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. }
+        | InferredExpression::Unknown => declared_type.clone().or(Some(Type::Unknown)),
     };
 
     if declared_type.is_none()
@@ -153,7 +153,7 @@ pub(crate) fn check_variable_declaration_with_symbols(
     })
 }
 
-fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, ty: &Type) -> Type {
+pub(crate) fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, ty: &Type) -> Type {
     if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var) {
         ty.base_primitive().unwrap_or_else(|| ty.clone())
     } else {

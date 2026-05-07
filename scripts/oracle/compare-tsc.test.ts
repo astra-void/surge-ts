@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   classifyTs2305ModuleExport,
   classifyTs2304Identifier,
+  classifyTs2304IdentifierWithSource,
   classifyTs2307ModuleSpecifier,
   buildTypeScriptCommand,
   buildTypeScriptRustCommand,
@@ -55,6 +56,13 @@ function run() {
   oracle_args_accepts_project_preset();
   oracle_args_accepts_diagnostics_pack_project_preset();
   oracle_args_accepts_package_declarations_project_preset();
+  oracle_args_accepts_builtin_visibility_project_graph_basic_project_preset();
+  oracle_args_accepts_builtin_visibility_import_graph_basic_project_preset();
+  oracle_args_accepts_builtin_visibility_function_body_basic_project_preset();
+  oracle_args_accepts_module_local_functions_basic_project_preset();
+  oracle_args_accepts_function_body_local_visibility_basic_project_preset();
+  oracle_args_accepts_import_graph_dependency_js_not_source_project_preset();
+  oracle_args_accepts_parallel_ordering_basic_project_preset();
   oracle_args_accepts_declarations_basic_project_preset();
   oracle_args_accepts_declarations_hardening_project_preset();
   oracle_args_accepts_module_export_visibility_hardening_project_preset();
@@ -92,6 +100,7 @@ function run() {
   oracle_builds_rust_file_command_without_project();
   oracle_output_includes_mode_project();
   oracle_output_includes_mode_file();
+  oracle_output_includes_rust_jobs();
   oracle_output_highlights_project_visibility_failure();
   oracle_json_output_includes_mode();
   oracle_args_accepts_stub_external_modules();
@@ -106,6 +115,9 @@ function run() {
   oracle_default_does_not_use_stub_external_modules();
   oracle_normalize_diagnostics_is_deterministic();
   oracle_output_includes_comparison_warnings();
+  oracle_classify_ts2304_identifier_with_source_local_variable();
+  oracle_classify_ts2304_identifier_with_source_module_helper();
+  oracle_classify_ts2304_identifier_with_source_destructuring();
 }
 
 function oracle_parse_tsc_single_line() {
@@ -293,6 +305,52 @@ function oracle_classify_ts2304_identifier() {
   assert.equal(classifyTs2304Identifier('Maybe'), 'package-derived-incomplete-declaration');
 }
 
+function oracle_classify_ts2304_identifier_with_source_module_helper() {
+  const sourceText = [
+    'function helper(value: string): string {',
+    '  return value;',
+    '}',
+    '',
+    'export function exportedCaller(value: string): string {',
+    '  return helper(value);',
+    '}',
+  ].join('\n');
+
+  assert.equal(
+    classifyTs2304IdentifierWithSource('helper', sourceText),
+    'module-local-helper-unresolved',
+  );
+}
+
+function oracle_classify_ts2304_identifier_with_source_local_variable() {
+  const sourceText = [
+    'export function localFlow(input: string): string {',
+    '  const parts = input.split(":");',
+    '  const first = parts[0];',
+    '  return first;',
+    '}',
+  ].join('\n');
+
+  assert.equal(
+    classifyTs2304IdentifierWithSource('parts', sourceText),
+    'function-body-local-variable-unresolved',
+  );
+}
+
+function oracle_classify_ts2304_identifier_with_source_destructuring() {
+  const sourceText = [
+    'export function localFlow(input: string): string {',
+    '  const { parts } = JSON.parse(input) as { parts: string[] };',
+    '  return parts[0];',
+    '}',
+  ].join('\n');
+
+  assert.equal(
+    classifyTs2304IdentifierWithSource('parts', sourceText),
+    'unsupported-destructuring-local-binding-pattern',
+  );
+}
+
 function oracle_classify_ts2305_module_export() {
   const projectRoot = path.resolve('tests/compat-projects/dependency-incomplete-declaration-export-fallback');
   assert.equal(
@@ -471,6 +529,83 @@ function oracle_args_accepts_package_declarations_project_preset() {
   assert.equal(
     mode.resolvedTsconfig,
     path.resolve('tests/compat-projects/package-declarations/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_builtin_visibility_project_graph_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'builtin-visibility-project-graph-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/builtin-visibility-project-graph-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_builtin_visibility_import_graph_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'builtin-visibility-import-graph-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/builtin-visibility-import-graph-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_builtin_visibility_function_body_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'builtin-visibility-function-body-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/builtin-visibility-function-body-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_module_local_functions_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'module-local-functions-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/module-local-functions-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_function_body_local_visibility_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'function-body-local-visibility-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/function-body-local-visibility-basic/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_import_graph_dependency_js_not_source_project_preset() {
+  const parsed = parseArgs(['--project', 'import-graph-dependency-js-not-source']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/import-graph-dependency-js-not-source/tsconfig.json'),
+  );
+}
+
+function oracle_args_accepts_parallel_ordering_basic_project_preset() {
+  const parsed = parseArgs(['--project', 'parallel-ordering-basic']);
+  const mode = resolveOracleMode(parsed);
+
+  assert.equal(mode.kind, 'project');
+  assert.equal(
+    mode.resolvedTsconfig,
+    path.resolve('tests/compat-projects/parallel-ordering-basic/tsconfig.json'),
   );
 }
 
@@ -770,6 +905,24 @@ function oracle_output_includes_mode_file() {
   const rendered = renderComparisonText(comparison);
   assert.ok(rendered.includes('Mode: file'));
   assert.ok(rendered.includes('File: examples/basic.ts'));
+}
+
+function oracle_output_includes_rust_jobs() {
+  const comparison = compareDiagnostics(
+    'project',
+    'tests/compat-projects/parallel-ordering-basic/tsconfig.json',
+    [],
+    [],
+    false,
+    false,
+    'tests/compat-projects/parallel-ordering-basic',
+    [],
+    4,
+  );
+
+  const rendered = renderComparisonText(comparison);
+  assert.ok(rendered.includes('typescript-rust jobs: 4'));
+  assert.equal(comparison.tooling.typescriptRustJobs, 4);
 }
 
 function oracle_output_highlights_project_visibility_failure() {

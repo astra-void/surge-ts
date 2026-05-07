@@ -1,12 +1,13 @@
 use oxc_ast::ast::{
-    AssignmentOperator, AssignmentTarget, Declaration, Expression, ExpressionStatement,
-    ModuleDeclaration, Statement, TSModuleDeclaration, TSModuleDeclarationBody,
-    TSModuleDeclarationName, VariableDeclaration, VariableDeclarationKind,
+    ArrayPattern, AssignmentOperator, AssignmentTarget, BindingPattern, BindingProperty,
+    Declaration, Expression, ExpressionStatement, ModuleDeclaration, ObjectPattern, PropertyKey,
+    Statement, TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName,
+    VariableDeclaration, VariableDeclarationKind,
 };
 
 use crate::{
-    ParsedAssignment, ParsedDeclareModuleDeclaration, ParsedExportDeclaration, ParsedStatement,
-    ParsedVariableDeclaration, ParsedVariableKind,
+    ParsedAssignment, ParsedDeclareModuleDeclaration, ParsedExportDeclaration, ParsedExpression,
+    ParsedStatement, ParsedVariableDeclaration, ParsedVariableKind,
 };
 
 mod entry;
@@ -112,35 +113,33 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
     declaration
         .declarations
         .iter()
-        .filter_map(|declarator| {
-            let Some(binding_identifier) = declarator.id.get_binding_identifier() else {
-                return None;
-            };
-
-            let name = binding_identifier.name.to_string();
-            let name_span = Some(text_span_from_oxc_span(binding_identifier.span));
+        .flat_map(|declarator| {
             let declared_type = declarator
                 .type_annotation
                 .as_ref()
                 .and_then(|annotation| parse_type_annotation(annotation));
-            let (initializer, initializer_span) = declarator
-                .init
-                .as_ref()
-                .map(parse_expression)
-                .map(|(initializer, span)| (Some(initializer), Some(text_span_from_oxc_span(span))))
-                .unwrap_or((None, None));
-
-            Some(ParsedStatement::VariableDeclaration(
-                ParsedVariableDeclaration {
-                    is_declare: declaration.declare,
+            let Some(init) = declarator.init.as_ref() else {
+                return parse_binding_pattern_declarations(
+                    &declarator.id,
+                    None,
+                    None,
+                    declaration.declare,
                     kind,
-                    name,
-                    name_span,
                     declared_type,
-                    initializer,
-                    initializer_span,
-                },
-            ))
+                );
+            };
+
+            let (initializer, initializer_span) = parse_expression(init);
+            let initializer_span = Some(text_span_from_oxc_span(initializer_span));
+
+            parse_binding_pattern_declarations(
+                &declarator.id,
+                Some(initializer),
+                initializer_span,
+                declaration.declare,
+                kind,
+                declared_type,
+            )
         })
         .collect()
 }
@@ -198,6 +197,150 @@ fn parse_assignment_expression(
         value,
         value_span: Some(text_span_from_oxc_span(value_span)),
     })
+}
+
+fn parse_binding_pattern_declarations(
+    binding: &BindingPattern<'_>,
+    initializer: Option<ParsedExpression>,
+    initializer_span: Option<crate::TextSpan>,
+    is_declare: bool,
+    kind: ParsedVariableKind,
+    declared_type: Option<crate::ParsedType>,
+) -> Vec<ParsedStatement> {
+    match binding {
+        BindingPattern::BindingIdentifier(binding_identifier) => {
+            vec![ParsedStatement::VariableDeclaration(
+                ParsedVariableDeclaration {
+                    is_declare,
+                    kind,
+                    name: binding_identifier.name.to_string(),
+                    name_span: Some(text_span_from_oxc_span(binding_identifier.span)),
+                    declared_type,
+                    initializer,
+                    initializer_span,
+                },
+            )]
+        }
+        BindingPattern::AssignmentPattern(assignment_pattern) => {
+            parse_binding_pattern_declarations(
+                &assignment_pattern.left,
+                initializer,
+                initializer_span,
+                is_declare,
+                kind,
+                declared_type,
+            )
+        }
+        BindingPattern::ObjectPattern(object_pattern) => parse_object_pattern_declarations(
+            object_pattern,
+            initializer,
+            initializer_span,
+            is_declare,
+            kind,
+        ),
+        BindingPattern::ArrayPattern(array_pattern) => parse_array_pattern_declarations(
+            array_pattern,
+            initializer,
+            initializer_span,
+            is_declare,
+            kind,
+        ),
+    }
+}
+
+fn parse_object_pattern_declarations(
+    object_pattern: &ObjectPattern<'_>,
+    initializer: Option<ParsedExpression>,
+    initializer_span: Option<crate::TextSpan>,
+    is_declare: bool,
+    kind: ParsedVariableKind,
+) -> Vec<ParsedStatement> {
+    let Some(initializer) = initializer else {
+        return Vec::new();
+    };
+
+    let mut declarations = Vec::new();
+
+    for property in &object_pattern.properties {
+        declarations.extend(parse_object_binding_property_declarations(
+            property,
+            initializer.clone(),
+            initializer_span,
+            is_declare,
+            kind,
+        ));
+    }
+
+    declarations
+}
+
+fn parse_object_binding_property_declarations(
+    property: &BindingProperty<'_>,
+    source_initializer: ParsedExpression,
+    source_initializer_span: Option<crate::TextSpan>,
+    is_declare: bool,
+    kind: ParsedVariableKind,
+) -> Vec<ParsedStatement> {
+    let PropertyKey::StaticIdentifier(identifier) = &property.key else {
+        return Vec::new();
+    };
+
+    let property_initializer = ParsedExpression::PropertyAccess {
+        object: Box::new(source_initializer),
+        object_span: source_initializer_span,
+        property_name: identifier.name.to_string(),
+        property_span: Some(text_span_from_oxc_span(identifier.span)),
+    };
+
+    parse_binding_pattern_declarations(
+        &property.value,
+        Some(property_initializer),
+        Some(text_span_from_oxc_span(identifier.span)),
+        is_declare,
+        kind,
+        None,
+    )
+}
+
+fn parse_array_pattern_declarations(
+    array_pattern: &ArrayPattern<'_>,
+    initializer: Option<ParsedExpression>,
+    initializer_span: Option<crate::TextSpan>,
+    is_declare: bool,
+    kind: ParsedVariableKind,
+) -> Vec<ParsedStatement> {
+    let Some(initializer) = initializer else {
+        return Vec::new();
+    };
+
+    let mut declarations = Vec::new();
+
+    for (index, element) in array_pattern.elements.iter().enumerate() {
+        let Some(element) = element else {
+            continue;
+        };
+
+        let element_initializer = match &initializer {
+            ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
+                object_name: name.clone(),
+                object_span: initializer_span,
+                index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
+                index_span: initializer_span,
+            },
+            _ => initializer.clone(),
+        };
+
+        declarations.extend(parse_binding_pattern_declarations(
+            element,
+            Some(element_initializer),
+            initializer_span,
+            is_declare,
+            kind,
+            None,
+        ));
+    }
+
+    declarations
 }
 
 fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedStatement> {

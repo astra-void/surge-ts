@@ -39,6 +39,17 @@ impl ScopeStack {
             .insert(name, symbol)
     }
 
+    pub(crate) fn update_visible(&mut self, name: &str, symbol: SymbolInfo) -> bool {
+        for frame in self.frames.iter_mut().rev() {
+            if frame.symbols.get(name).is_some() {
+                frame.symbols.insert(name.to_string(), symbol);
+                return true;
+            }
+        }
+
+        false
+    }
+
     pub(crate) fn current_contains_let_or_const(&self, name: &str) -> bool {
         self.frames
             .last()

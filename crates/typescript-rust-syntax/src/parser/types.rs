@@ -28,6 +28,8 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSNumberKeyword(_) => Some(ParsedType::Number),
         TSType::TSBooleanKeyword(_) => Some(ParsedType::Boolean),
         TSType::TSUndefinedKeyword(_) => Some(ParsedType::Undefined),
+        TSType::TSNullKeyword(_) => Some(ParsedType::Unknown),
+        TSType::TSObjectKeyword(_) => Some(ParsedType::Unknown),
         TSType::TSVoidKeyword(_) => Some(ParsedType::Void),
         TSType::TSAnyKeyword(_) => Some(ParsedType::Any),
         TSType::TSUnknownKeyword(_) => Some(ParsedType::Unknown),

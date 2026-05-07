@@ -157,23 +157,44 @@ fn evaluate_add_binary(
         return InferredExpression::Known(Type::Any);
     }
 
-    let left_base = left_type.base_primitive();
-    let right_base = right_type.base_primitive();
+    if is_string_like_for_add(&left_type) && is_string_like_for_add(&right_type) {
+        return InferredExpression::Known(Type::String);
+    }
 
-    match (left_base.as_ref(), right_base.as_ref()) {
-        (Some(Type::String), Some(Type::String))
-        | (Some(Type::String), Some(Type::Number))
-        | (Some(Type::Number), Some(Type::String)) => InferredExpression::Known(Type::String),
-        (Some(Type::Number), Some(Type::Number)) => InferredExpression::Known(Type::Number),
-        _ => {
-            let file_name = ctx.file_name.clone();
-            push_diagnostic(
-                ctx,
-                Diagnostic::ts2365("+", &left_type.name(), &right_type.name(), file_name),
-                fallback_span,
-            );
-            InferredExpression::Unknown
-        }
+    if is_string_like_for_add(&left_type) && is_number_like_for_add(&right_type) {
+        return InferredExpression::Known(Type::String);
+    }
+
+    if is_number_like_for_add(&left_type) && is_string_like_for_add(&right_type) {
+        return InferredExpression::Known(Type::String);
+    }
+
+    if is_number_like_for_add(&left_type) && is_number_like_for_add(&right_type) {
+        return InferredExpression::Known(Type::Number);
+    }
+
+    let file_name = ctx.file_name.clone();
+    push_diagnostic(
+        ctx,
+        Diagnostic::ts2365("+", &left_type.name(), &right_type.name(), file_name),
+        fallback_span,
+    );
+    InferredExpression::Unknown
+}
+
+fn is_string_like_for_add(ty: &Type) -> bool {
+    match ty {
+        Type::String | Type::StringLiteral(_) => true,
+        Type::Union(union) => union.types.iter().all(is_string_like_for_add),
+        _ => false,
+    }
+}
+
+fn is_number_like_for_add(ty: &Type) -> bool {
+    match ty {
+        Type::Number | Type::NumberLiteral(_) => true,
+        Type::Union(union) => union.types.iter().all(is_number_like_for_add),
+        _ => false,
     }
 }
 

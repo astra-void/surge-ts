@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    env,
     path::{Path, PathBuf},
 };
 
@@ -30,18 +31,19 @@ pub struct CompatReportParserErrorEntry {
 }
 
 #[derive(Debug, Clone)]
-pub struct CompatReportCategorizedCountEntry {
-    pub key: String,
-    pub category: String,
+pub struct CompatReportModuleExportCountEntry {
+    pub module_specifier: String,
+    pub export_name: String,
     pub count: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct CompatReportModuleExportCountEntry {
-    pub module_specifier: String,
-    pub export_name: String,
-    pub category: String,
-    pub count: usize,
+pub struct CompatReportBuildInfo {
+    pub package_version: String,
+    pub build_profile: String,
+    pub binary_path: Option<String>,
+    pub current_dir: Option<String>,
+    pub workspace_root: String,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +51,7 @@ pub struct ProjectCompatibilityReport {
     pub root_dir: String,
     pub files_loaded: usize,
     pub visibility_warning: Option<String>,
+    pub build_info: CompatReportBuildInfo,
     pub diagnostics_total: usize,
     pub loaded_source_files: usize,
     pub loaded_root_declaration_files: usize,
@@ -66,8 +69,8 @@ pub struct ProjectCompatibilityReport {
     pub by_code: Vec<CompatReportCountEntry>,
     pub by_file: Vec<CompatReportCountEntry>,
     pub ts2305_by_module_and_export: Vec<CompatReportModuleExportCountEntry>,
-    pub ts2307_by_module_specifier: Vec<CompatReportCategorizedCountEntry>,
-    pub ts2304_by_identifier: Vec<CompatReportCategorizedCountEntry>,
+    pub ts2307_by_module_specifier: Vec<CompatReportCountEntry>,
+    pub ts2304_by_identifier: Vec<CompatReportCountEntry>,
     pub node_modules_source_diagnostics_total: usize,
     pub node_modules_source_diagnostics_by_prefix: Vec<CompatReportCountEntry>,
     pub diagnostics_dependency_javascript_source_by_prefix: Vec<CompatReportCountEntry>,
@@ -97,9 +100,9 @@ pub fn build_project_compatibility_report(
     let mut by_code = HashMap::<String, usize>::new();
     let mut by_file = HashMap::<String, usize>::new();
     let mut parser_errors = HashMap::<(String, String), usize>::new();
-    let mut ts2305_by_module_and_export = HashMap::<(String, String, String), usize>::new();
-    let mut ts2307_by_module_specifier = HashMap::<(String, String), usize>::new();
-    let mut ts2304_by_identifier = HashMap::<(String, String), usize>::new();
+    let mut ts2305_by_module_and_export = HashMap::<(String, String), usize>::new();
+    let mut ts2307_by_module_specifier = HashMap::<String, usize>::new();
+    let mut ts2304_by_identifier = HashMap::<String, usize>::new();
     let mut node_modules_source_diagnostics_by_prefix = HashMap::<String, usize>::new();
     let mut external_module_stubs = HashMap::<String, usize>::new();
     let mut external_module_stubs_total = 0;
@@ -223,37 +226,19 @@ pub fn build_project_compatibility_report(
                 if let Some((module_specifier, export_name)) =
                     extract_ts2305_module_export(&diagnostic.message)
                 {
-                    let category = classify_ts2305_module_export(
-                        &module_specifier,
-                        &diagnostic.file_name,
-                        loaded,
-                        sources,
-                        &ambient_external_modules_set,
-                    );
                     *ts2305_by_module_and_export
-                        .entry((module_specifier, export_name, category))
+                        .entry((module_specifier, export_name))
                         .or_default() += 1;
                 }
             }
             "TS2307" => {
                 if let Some(specifier) = extract_ts2307_module_specifier(&diagnostic.message) {
-                    let category = classify_ts2307_module_specifier(
-                        &specifier,
-                        &diagnostic.file_name,
-                        loaded,
-                        sources,
-                    );
-                    *ts2307_by_module_specifier
-                        .entry((specifier, category.to_string()))
-                        .or_default() += 1;
+                    *ts2307_by_module_specifier.entry(specifier).or_default() += 1;
                 }
             }
             "TS2304" => {
                 if let Some(identifier) = extract_ts2304_identifier(&diagnostic.message) {
-                    let category = classify_ts2304_identifier(&identifier);
-                    *ts2304_by_identifier
-                        .entry((identifier, category.to_string()))
-                        .or_default() += 1;
+                    *ts2304_by_identifier.entry(identifier).or_default() += 1;
                 }
             }
             _ => {}
@@ -268,6 +253,7 @@ pub fn build_project_compatibility_report(
         } else {
             None
         },
+        build_info: build_report_build_info(),
         diagnostics_total: diagnostics.len(),
         loaded_source_files,
         loaded_root_declaration_files,
@@ -285,8 +271,8 @@ pub fn build_project_compatibility_report(
         by_code: sort_counts(by_code),
         by_file: sort_counts(by_file),
         ts2305_by_module_and_export: sort_module_export_counts(ts2305_by_module_and_export),
-        ts2307_by_module_specifier: sort_categorized_counts(ts2307_by_module_specifier),
-        ts2304_by_identifier: sort_categorized_counts(ts2304_by_identifier),
+        ts2307_by_module_specifier: sort_counts(ts2307_by_module_specifier),
+        ts2304_by_identifier: sort_counts(ts2304_by_identifier),
         node_modules_source_diagnostics_total,
         node_modules_source_diagnostics_by_prefix: sort_counts(
             node_modules_source_diagnostics_by_prefix,
@@ -331,6 +317,35 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     lines.push("Compatibility report".to_string());
     lines.push(format!("Root dir: {}", report.root_dir));
     lines.push(format!("Files loaded: {}", report.files_loaded));
+    lines.push("Build info:".to_string());
+    lines.push(format!(
+        "  package version: {}",
+        report.build_info.package_version
+    ));
+    lines.push(format!(
+        "  build profile: {}",
+        report.build_info.build_profile
+    ));
+    lines.push(format!(
+        "  binary path: {}",
+        report
+            .build_info
+            .binary_path
+            .as_deref()
+            .unwrap_or("(unavailable)")
+    ));
+    lines.push(format!(
+        "  current dir: {}",
+        report
+            .build_info
+            .current_dir
+            .as_deref()
+            .unwrap_or("(unavailable)")
+    ));
+    lines.push(format!(
+        "  workspace root: {}",
+        report.build_info.workspace_root
+    ));
     lines.push(format!(
         "Loaded source files: {}",
         report.loaded_source_files
@@ -435,41 +450,35 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     }
 
     lines.push(String::new());
-    lines.push("TS2305 by module/export:".to_string());
+    lines.push("Top TS2305 missing exports:".to_string());
     if report.ts2305_by_module_and_export.is_empty() {
         lines.push("  (none)".to_string());
     } else {
         for entry in &report.ts2305_by_module_and_export {
             lines.push(format!(
-                "{} :: {} [{}]  {}",
-                entry.module_specifier, entry.export_name, entry.category, entry.count
+                "{} :: {}  {}",
+                entry.module_specifier, entry.export_name, entry.count
             ));
         }
     }
 
     lines.push(String::new());
-    lines.push("TS2307 by module specifier:".to_string());
+    lines.push("Top TS2307 module specifiers:".to_string());
     if report.ts2307_by_module_specifier.is_empty() {
         lines.push("  (none)".to_string());
     } else {
         for entry in &report.ts2307_by_module_specifier {
-            lines.push(format!(
-                "{} [{}]  {}",
-                entry.key, entry.category, entry.count
-            ));
+            lines.push(format!("{}  {}", entry.key, entry.count));
         }
     }
 
     lines.push(String::new());
-    lines.push("TS2304 by identifier:".to_string());
+    lines.push("Top TS2304 identifiers:".to_string());
     if report.ts2304_by_identifier.is_empty() {
         lines.push("  (none)".to_string());
     } else {
         for entry in &report.ts2304_by_identifier {
-            lines.push(format!(
-                "{} [{}]  {}",
-                entry.key, entry.category, entry.count
-            ));
+            lines.push(format!("{}  {}", entry.key, entry.count));
         }
     }
 
@@ -559,6 +568,28 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
         "filesLoaded".to_string(),
         Value::from(report.files_loaded as u64),
     );
+    root.insert("buildInfo".to_string(), {
+        let mut item = Map::new();
+        item.insert(
+            "packageVersion".to_string(),
+            Value::String(report.build_info.package_version.clone()),
+        );
+        item.insert(
+            "buildProfile".to_string(),
+            Value::String(report.build_info.build_profile.clone()),
+        );
+        if let Some(binary_path) = &report.build_info.binary_path {
+            item.insert("binaryPath".to_string(), Value::String(binary_path.clone()));
+        }
+        if let Some(current_dir) = &report.build_info.current_dir {
+            item.insert("currentDir".to_string(), Value::String(current_dir.clone()));
+        }
+        item.insert(
+            "workspaceRoot".to_string(),
+            Value::String(report.build_info.workspace_root.clone()),
+        );
+        Value::Object(item)
+    });
     if let Some(warning) = &report.visibility_warning {
         root.insert(
             "visibilityWarning".to_string(),
@@ -705,10 +736,6 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
                         "exportName".to_string(),
                         Value::String(entry.export_name.clone()),
                     );
-                    item.insert(
-                        "category".to_string(),
-                        Value::String(entry.category.clone()),
-                    );
                     item.insert("count".to_string(), Value::from(entry.count as u64));
                     Value::Object(item)
                 })
@@ -724,10 +751,6 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
                 .map(|entry| {
                     let mut item = Map::new();
                     item.insert("specifier".to_string(), Value::String(entry.key.clone()));
-                    item.insert(
-                        "category".to_string(),
-                        Value::String(entry.category.clone()),
-                    );
                     item.insert("count".to_string(), Value::from(entry.count as u64));
                     Value::Object(item)
                 })
@@ -743,10 +766,6 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
                 .map(|entry| {
                     let mut item = Map::new();
                     item.insert("identifier".to_string(), Value::String(entry.key.clone()));
-                    item.insert(
-                        "category".to_string(),
-                        Value::String(entry.category.clone()),
-                    );
                     item.insert("count".to_string(), Value::from(entry.count as u64));
                     Value::Object(item)
                 })
@@ -861,6 +880,30 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
     }
 
     Value::Object(root)
+}
+
+fn build_report_build_info() -> CompatReportBuildInfo {
+    let package_version = env!("CARGO_PKG_VERSION").to_string();
+    let build_profile = option_env!("PROFILE").unwrap_or("unknown").to_string();
+    let binary_path = env::current_exe()
+        .ok()
+        .map(|path| path.display().to_string());
+    let current_dir = env::current_dir()
+        .ok()
+        .map(|path| path.display().to_string());
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .display()
+        .to_string();
+
+    CompatReportBuildInfo {
+        package_version,
+        build_profile,
+        binary_path,
+        current_dir,
+        workspace_root,
+    }
 }
 
 pub fn render_project_diagnostics_preview(
@@ -1087,18 +1130,17 @@ fn sort_counts(counts: HashMap<String, usize>) -> Vec<CompatReportCountEntry> {
 }
 
 fn sort_module_export_counts(
-    counts: HashMap<(String, String, String), usize>,
+    counts: HashMap<(String, String), usize>,
 ) -> Vec<CompatReportModuleExportCountEntry> {
     let mut entries = counts
         .into_iter()
-        .map(|((module_specifier, export_name, category), count)| {
-            CompatReportModuleExportCountEntry {
+        .map(
+            |((module_specifier, export_name), count)| CompatReportModuleExportCountEntry {
                 module_specifier,
                 export_name,
-                category,
                 count,
-            }
-        })
+            },
+        )
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         right
@@ -1106,7 +1148,6 @@ fn sort_module_export_counts(
             .cmp(&left.count)
             .then_with(|| left.module_specifier.cmp(&right.module_specifier))
             .then_with(|| left.export_name.cmp(&right.export_name))
-            .then_with(|| left.category.cmp(&right.category))
     });
     entries
 }
@@ -1136,29 +1177,6 @@ fn sort_parser_errors(
 
 fn parser_error_total(report: &ProjectCompatibilityReport) -> usize {
     report.parser_errors.iter().map(|entry| entry.count).sum()
-}
-
-fn sort_categorized_counts(
-    counts: HashMap<(String, String), usize>,
-) -> Vec<CompatReportCategorizedCountEntry> {
-    let mut entries = counts
-        .into_iter()
-        .map(
-            |((key, category), count)| CompatReportCategorizedCountEntry {
-                key,
-                category,
-                count,
-            },
-        )
-        .collect::<Vec<_>>();
-    entries.sort_by(|left, right| {
-        right
-            .count
-            .cmp(&left.count)
-            .then_with(|| left.key.cmp(&right.key))
-            .then_with(|| left.category.cmp(&right.category))
-    });
-    entries
 }
 
 fn report_path_label(root_dir: &Path, file_name: &str) -> String {
@@ -1317,737 +1335,31 @@ fn extract_ts2304_identifier(message: &str) -> Option<String> {
     None
 }
 
-// These are triage categories for reporting, not semantic claims about the
-// underlying compiler behavior.
-fn classify_ts2305_module_export(
-    module_specifier: &str,
-    diagnostic_file_name: &str,
-    loaded: &LoadedTsConfig,
-    sources: &[(PathBuf, String, String)],
-    ambient_modules: &std::collections::HashSet<String>,
-) -> String {
-    if ambient_modules.contains(module_specifier) {
-        return "ambient-module".to_string();
-    }
-
-    if is_relative_specifier(module_specifier) {
-        if let Some(resolved_path) = resolve_relative_candidate_for_reporting(
-            diagnostic_file_name,
-            module_specifier,
-            &loaded.root_dir,
-        ) {
-            return classify_loaded_module_path(&resolved_path, sources);
-        }
-
-        return "unknown".to_string();
-    }
-
-    if let Some(package_name) = package_name_from_specifier(module_specifier) {
-        if let Some((resolved_path, incomplete)) =
-            find_loaded_package_declaration_file(&package_name, sources)
-        {
-            if incomplete {
-                return "package-derived-incomplete-declaration".to_string();
-            }
-
-            return classify_loaded_module_path(&resolved_path, sources);
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn report_source_has_no_classifier_terms() {
+        let report_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/report.rs");
+        let source = std::fs::read_to_string(report_path).expect("report source");
+        for needle in [
+            ["missing", "-synthetic"].concat(),
+            ["missing", "Synthetic"].concat(),
+            ["lib", "-lite"].concat(),
+            ["node", "-like"].concat(),
+            ["dom", "-like"].concat(),
+            ["jsx", "-like"].concat(),
+            ["Buf", "fer"].concat(),
+            ["pro", "cess"].concat(),
+            ["re", "quire"].concat(),
+            ["Re", "act"].concat(),
+            ["uu", "id"].concat(),
+            ["simple", "web", "authn"].concat(),
+            ["no", "ble"].concat(),
+        ] {
+            assert!(
+                !source.contains(&needle),
+                "report.rs still contains banned classifier text: {needle}"
+            );
         }
     }
-
-    "unknown".to_string()
-}
-
-fn classify_ts2307_module_specifier(
-    specifier: &str,
-    diagnostic_file_name: &str,
-    loaded: &LoadedTsConfig,
-    sources: &[(PathBuf, String, String)],
-) -> String {
-    if is_node_builtin_module_specifier(specifier) {
-        return "node-builtin".to_string();
-    }
-
-    if is_package_json_module_specifier(specifier) {
-        return "package-json".to_string();
-    }
-
-    if is_relative_specifier(specifier) {
-        if let Some(resolved_path) = resolve_relative_candidate_for_reporting(
-            diagnostic_file_name,
-            specifier,
-            &loaded.root_dir,
-        ) {
-            return if is_generated_module_specifier(specifier) {
-                if resolved_path.exists() {
-                    "relative-generated-existing-not-loaded".to_string()
-                } else {
-                    "relative-generated-missing".to_string()
-                }
-            } else if resolved_path.exists() {
-                "relative-existing-not-loaded".to_string()
-            } else {
-                "relative-missing".to_string()
-            };
-        }
-
-        return if is_generated_module_specifier(specifier) {
-            "relative-generated-missing".to_string()
-        } else {
-            "relative-missing".to_string()
-        };
-    }
-
-    if let Some(category) = classify_paths_alias_module_specifier(specifier, loaded) {
-        return category;
-    }
-
-    if is_package_subpath_specifier(specifier) {
-        return "package-subpath".to_string();
-    }
-
-    if is_package_specifier(specifier) {
-        return "package".to_string();
-    }
-
-    if !sources.is_empty() {
-        return "unknown".to_string();
-    }
-
-    "unknown".to_string()
-}
-
-fn classify_ts2304_identifier(identifier: &str) -> String {
-    if is_jsx_like_identifier(identifier) {
-        return "jsx-like".to_string();
-    }
-    if is_dom_like_identifier(identifier) {
-        return "dom-like".to_string();
-    }
-    if is_node_like_identifier(identifier) {
-        return "missing-node-like-global".to_string();
-    }
-    if is_generic_or_type_parameter_scope_identifier(identifier) {
-        return "generic-or-type-parameter-scope".to_string();
-    }
-    if is_missing_synthetic_lib_global_identifier(identifier) {
-        return "missing-synthetic-built-in".to_string();
-    }
-    if is_missing_es_lib_lite_global_identifier(identifier) {
-        return "missing-es-lib-lite-global".to_string();
-    }
-    if is_local_unresolved_identifier(identifier) {
-        return "local-unresolved".to_string();
-    }
-    if is_package_derived_incomplete_declaration_identifier(identifier) {
-        return "package-derived-incomplete-declaration".to_string();
-    }
-
-    "unknown".to_string()
-}
-
-fn classify_paths_alias_module_specifier(
-    specifier: &str,
-    loaded: &LoadedTsConfig,
-) -> Option<String> {
-    for mapping in &loaded.compiler_options.paths {
-        if mapping.pattern.matches('*').count() > 1 {
-            continue;
-        }
-
-        let matches = if mapping.pattern.contains('*') {
-            let parts: Vec<&str> = mapping.pattern.split('*').collect();
-            if parts.len() != 2 {
-                continue;
-            }
-
-            let prefix = parts[0];
-            let suffix = parts[1];
-            specifier.starts_with(prefix)
-                && specifier.ends_with(suffix)
-                && specifier.len() >= prefix.len() + suffix.len()
-        } else {
-            specifier == mapping.pattern
-        };
-
-        if !matches {
-            continue;
-        }
-
-        if mapping.substitutions.iter().any(|substitution| {
-            let target = if mapping.pattern.contains('*') {
-                substitution.replace('*', "placeholder")
-            } else {
-                substitution.clone()
-            };
-            is_explicit_relative_target(&target)
-        }) {
-            return Some("paths-alias-explicit-relative-target".to_string());
-        }
-
-        return Some("paths-alias-unsupported-baseUrl-dependent-target".to_string());
-    }
-
-    None
-}
-
-fn classify_loaded_module_path(
-    resolved_path: &Path,
-    sources: &[(PathBuf, String, String)],
-) -> String {
-    if is_declaration_path(resolved_path) {
-        if is_dependency_declaration_path(resolved_path) {
-            if module_has_incomplete_declaration_surface(resolved_path, sources) {
-                return "package-derived-incomplete-declaration".to_string();
-            }
-
-            return "dependency-declaration-module".to_string();
-        }
-
-        return "local-declaration-module".to_string();
-    }
-
-    "source-module".to_string()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RelativeSpecifierKind {
-    ExplicitTs,
-    ExplicitJs,
-    ExplicitMjs,
-    ExplicitCjs,
-    Extensionless,
-    Unsupported,
-}
-
-fn resolve_relative_candidate_for_reporting(
-    importer_file_name: &str,
-    specifier: &str,
-    root_dir: &Path,
-) -> Option<PathBuf> {
-    let importer_dir = Path::new(importer_file_name)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| root_dir.to_path_buf());
-    let normalized_specifier = normalize_path_string(specifier);
-    let joined = normalize_path_string(&importer_dir.join(&normalized_specifier).to_string_lossy());
-
-    let candidate_paths = match relative_specifier_kind(&normalized_specifier) {
-        RelativeSpecifierKind::ExplicitTs => vec![joined],
-        RelativeSpecifierKind::ExplicitJs => {
-            let mut candidates = vec![joined.clone()];
-            candidates.extend(relative_resolution_candidates_with_js_substitution(
-                &strip_extension(&joined),
-                &[".ts", ".tsx"],
-                &[".d.ts"],
-            ));
-            candidates
-        }
-        RelativeSpecifierKind::ExplicitMjs => {
-            let mut candidates = vec![joined.clone()];
-            candidates.extend(relative_resolution_candidates_with_js_substitution(
-                &strip_extension(&joined),
-                &[".mts"],
-                &[".d.mts"],
-            ));
-            candidates
-        }
-        RelativeSpecifierKind::ExplicitCjs => {
-            let mut candidates = vec![joined.clone()];
-            candidates.extend(relative_resolution_candidates_with_js_substitution(
-                &strip_extension(&joined),
-                &[".cts"],
-                &[".d.cts"],
-            ));
-            candidates
-        }
-        RelativeSpecifierKind::Extensionless => relative_resolution_candidates(&joined),
-        RelativeSpecifierKind::Unsupported => return None,
-    };
-
-    candidate_paths
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|candidate| candidate.exists() && candidate.is_file())
-}
-
-fn find_loaded_package_declaration_file(
-    package_name: &str,
-    sources: &[(PathBuf, String, String)],
-) -> Option<(PathBuf, bool)> {
-    for (file_path, file_name, source_text) in sources {
-        let normalized = normalize_path_string(file_name);
-        if !is_dependency_declaration_path(Path::new(file_path)) {
-            continue;
-        }
-
-        if !package_path_matches_specifier(&normalized, package_name) {
-            continue;
-        }
-
-        let incomplete = module_has_incomplete_declaration_surface_text(source_text, file_name);
-        return Some((file_path.clone(), incomplete));
-    }
-
-    None
-}
-
-fn package_name_from_specifier(specifier: &str) -> Option<String> {
-    if specifier.starts_with('@') {
-        let parts: Vec<&str> = specifier.splitn(3, '/').collect();
-        if parts.len() >= 2 {
-            return Some(format!("{}/{}", parts[0], parts[1]));
-        }
-        return None;
-    }
-
-    specifier.split('/').next().map(|name| name.to_string())
-}
-
-fn package_path_matches_specifier(normalized_path: &str, package_name: &str) -> bool {
-    let needle = format!("/node_modules/{package_name}/");
-    if normalized_path.contains(&needle) {
-        return true;
-    }
-
-    normalized_path.contains("/node_modules/.pnpm/")
-        && normalized_path.contains(&format!("/{package_name}/"))
-}
-
-fn is_package_specifier(specifier: &str) -> bool {
-    !specifier.starts_with("./")
-        && !specifier.starts_with("../")
-        && !specifier.starts_with(".\\")
-        && !specifier.starts_with("..\\")
-        && !specifier.starts_with("node:")
-        && !specifier.starts_with("bun:")
-}
-
-fn is_package_json_module_specifier(specifier: &str) -> bool {
-    specifier.to_ascii_lowercase().ends_with(".json")
-}
-
-fn is_node_builtin_module_specifier(specifier: &str) -> bool {
-    matches!(
-        specifier,
-        "assert"
-            | "buffer"
-            | "child_process"
-            | "cluster"
-            | "console"
-            | "constants"
-            | "crypto"
-            | "dgram"
-            | "diagnostics_channel"
-            | "dns"
-            | "domain"
-            | "events"
-            | "fs"
-            | "http"
-            | "http2"
-            | "https"
-            | "inspector"
-            | "module"
-            | "net"
-            | "os"
-            | "path"
-            | "perf_hooks"
-            | "process"
-            | "punycode"
-            | "querystring"
-            | "readline"
-            | "repl"
-            | "stream"
-            | "string_decoder"
-            | "sys"
-            | "timers"
-            | "tls"
-            | "trace_events"
-            | "tty"
-            | "url"
-            | "util"
-            | "v8"
-            | "vm"
-            | "worker_threads"
-            | "zlib"
-            | "node:assert"
-            | "node:buffer"
-            | "node:child_process"
-            | "node:cluster"
-            | "node:console"
-            | "node:constants"
-            | "node:crypto"
-            | "node:dgram"
-            | "node:diagnostics_channel"
-            | "node:dns"
-            | "node:domain"
-            | "node:events"
-            | "node:fs"
-            | "node:http"
-            | "node:http2"
-            | "node:https"
-            | "node:inspector"
-            | "node:module"
-            | "node:net"
-            | "node:os"
-            | "node:path"
-            | "node:perf_hooks"
-            | "node:process"
-            | "node:punycode"
-            | "node:querystring"
-            | "node:readline"
-            | "node:repl"
-            | "node:stream"
-            | "node:string_decoder"
-            | "node:sys"
-            | "node:timers"
-            | "node:tls"
-            | "node:trace_events"
-            | "node:tty"
-            | "node:url"
-            | "node:util"
-            | "node:v8"
-            | "node:vm"
-            | "node:worker_threads"
-            | "node:zlib"
-    )
-}
-
-fn is_generated_module_specifier(specifier: &str) -> bool {
-    let lower = specifier.to_ascii_lowercase();
-    lower.contains(".gen") || lower.contains("/generated/")
-}
-
-fn is_explicit_relative_target(target: &str) -> bool {
-    target.starts_with("./")
-        || target.starts_with("../")
-        || target.starts_with(".\\")
-        || target.starts_with("..\\")
-}
-
-fn module_has_incomplete_declaration_surface_text(source_text: &str, file_name: &str) -> bool {
-    let parsed = typescript_rust_syntax::parse_source(source_text, file_name);
-    parsed
-        .statements
-        .iter()
-        .any(statement_has_unsupported_declaration_surface)
-}
-
-fn module_has_incomplete_declaration_surface(
-    resolved_path: &Path,
-    sources: &[(PathBuf, String, String)],
-) -> bool {
-    if let Some((_, _, source_text)) = sources
-        .iter()
-        .find(|(file_path, _, _)| file_path == resolved_path)
-    {
-        return module_has_incomplete_declaration_surface_text(
-            source_text,
-            &resolved_path.to_string_lossy(),
-        );
-    }
-
-    if let Ok(source_text) = std::fs::read_to_string(resolved_path) {
-        return module_has_incomplete_declaration_surface_text(
-            &source_text,
-            &resolved_path.to_string_lossy(),
-        );
-    }
-
-    false
-}
-
-fn statement_has_unsupported_declaration_surface(
-    statement: &typescript_rust_syntax::ParsedStatement,
-) -> bool {
-    match statement {
-        typescript_rust_syntax::ParsedStatement::UnsupportedDeclaration { .. } => true,
-        typescript_rust_syntax::ParsedStatement::ImportDeclaration(import) => {
-            matches!(
-                import.kind,
-                typescript_rust_syntax::ParsedImportKind::Unsupported
-            )
-        }
-        typescript_rust_syntax::ParsedStatement::ExportDeclaration(
-            typescript_rust_syntax::ParsedExportDeclaration::Unsupported { .. },
-        ) => true,
-        typescript_rust_syntax::ParsedStatement::ExportDeclaration(
-            typescript_rust_syntax::ParsedExportDeclaration::Default {
-                declaration:
-                    typescript_rust_syntax::ParsedDefaultExportDeclaration::Unsupported { .. },
-                ..
-            },
-        ) => true,
-        typescript_rust_syntax::ParsedStatement::DeclareModuleDeclaration(module) => module
-            .statements
-            .iter()
-            .any(statement_has_unsupported_declaration_surface),
-        _ => false,
-    }
-}
-
-fn relative_specifier_kind(specifier: &str) -> RelativeSpecifierKind {
-    let last_segment = specifier.rsplit('/').next().unwrap_or(specifier);
-
-    if last_segment == "." || last_segment == ".." {
-        return RelativeSpecifierKind::Extensionless;
-    }
-
-    if last_segment.ends_with(".tsx")
-        || last_segment.ends_with(".jsx")
-        || last_segment.ends_with(".mts")
-        || last_segment.ends_with(".cts")
-        || last_segment.ends_with(".d.ts")
-        || last_segment.ends_with(".d.mts")
-        || last_segment.ends_with(".d.cts")
-        || last_segment.ends_with(".json")
-    {
-        return RelativeSpecifierKind::Unsupported;
-    }
-
-    if last_segment.ends_with(".ts") {
-        return RelativeSpecifierKind::ExplicitTs;
-    }
-
-    if last_segment.ends_with(".js") {
-        return RelativeSpecifierKind::ExplicitJs;
-    }
-
-    if last_segment.ends_with(".mjs") {
-        return RelativeSpecifierKind::ExplicitMjs;
-    }
-
-    if last_segment.ends_with(".cjs") {
-        return RelativeSpecifierKind::ExplicitCjs;
-    }
-
-    RelativeSpecifierKind::Extensionless
-}
-
-fn relative_resolution_candidates(base: &str) -> Vec<String> {
-    vec![
-        base.to_string(),
-        format!("{base}.ts"),
-        format!("{base}.tsx"),
-        format!("{base}.d.ts"),
-        format!("{base}.mts"),
-        format!("{base}.cts"),
-        format!("{base}.d.mts"),
-        format!("{base}.d.cts"),
-        format!("{base}/index.ts"),
-        format!("{base}/index.tsx"),
-        format!("{base}/index.d.ts"),
-        format!("{base}/index.mts"),
-        format!("{base}/index.cts"),
-        format!("{base}/index.d.mts"),
-        format!("{base}/index.d.cts"),
-    ]
-}
-
-fn relative_resolution_candidates_with_js_substitution(
-    base: &str,
-    source_extensions: &[&str],
-    declaration_extensions: &[&str],
-) -> Vec<String> {
-    let mut candidates = Vec::new();
-
-    for extension in source_extensions {
-        candidates.push(format!("{base}{extension}"));
-    }
-    for extension in declaration_extensions {
-        candidates.push(format!("{base}{extension}"));
-    }
-
-    candidates.push(format!("{base}/index.ts"));
-    candidates.push(format!("{base}/index.tsx"));
-    candidates.push(format!("{base}/index.d.ts"));
-    candidates.push(format!("{base}/index.mts"));
-    candidates.push(format!("{base}/index.cts"));
-    candidates.push(format!("{base}/index.d.mts"));
-    candidates.push(format!("{base}/index.d.cts"));
-
-    candidates
-}
-
-fn strip_extension(path: &str) -> String {
-    match path.rsplit_once('.') {
-        Some((head, _)) => head.to_string(),
-        None => path.to_string(),
-    }
-}
-
-fn normalize_path_string(path: &str) -> String {
-    let path = path.replace('\\', "/");
-    let is_absolute = path.starts_with('/');
-    let mut segments = Vec::new();
-
-    for segment in path.split('/') {
-        if segment.is_empty() || segment == "." {
-            continue;
-        }
-
-        if segment == ".." {
-            if let Some(last) = segments.last() {
-                if last != ".." {
-                    segments.pop();
-                    continue;
-                }
-            }
-
-            if !is_absolute {
-                segments.push(segment.to_string());
-            }
-
-            continue;
-        }
-
-        segments.push(segment.to_string());
-    }
-
-    let mut result = String::new();
-    if is_absolute {
-        result.push('/');
-    }
-    result.push_str(&segments.join("/"));
-
-    if result.is_empty() {
-        if is_absolute {
-            "/".to_string()
-        } else {
-            ".".to_string()
-        }
-    } else {
-        result
-    }
-}
-
-fn is_declaration_path(file_name: &Path) -> bool {
-    let lower = file_name.to_string_lossy().to_ascii_lowercase();
-    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
-}
-
-fn is_dependency_declaration_path(file_name: &Path) -> bool {
-    let lower = file_name.to_string_lossy().to_ascii_lowercase();
-    is_declaration_path(file_name)
-        && (lower.contains("/node_modules/") || lower.contains("\\node_modules\\"))
-}
-
-fn is_jsx_like_identifier(identifier: &str) -> bool {
-    matches!(
-        identifier,
-        "JSX" | "IntrinsicElements" | "Fragment" | "React"
-    )
-}
-
-fn is_dom_like_identifier(identifier: &str) -> bool {
-    matches!(
-        identifier,
-        "document"
-            | "window"
-            | "navigator"
-            | "Headers"
-            | "FormData"
-            | "URLSearchParams"
-            | "Blob"
-            | "File"
-            | "Response"
-            | "Request"
-            | "ReadableStream"
-            | "WritableStream"
-            | "TransformStream"
-            | "Event"
-            | "MessageEvent"
-            | "HTMLElement"
-            | "Element"
-            | "Node"
-            | "Text"
-            | "Document"
-    )
-}
-
-fn is_node_like_identifier(identifier: &str) -> bool {
-    matches!(
-        identifier,
-        "process" | "Buffer" | "require" | "module" | "exports" | "__dirname" | "__filename"
-    )
-}
-
-fn is_generic_or_type_parameter_scope_identifier(identifier: &str) -> bool {
-    matches!(
-        identifier,
-        "T" | "K" | "V" | "U" | "P" | "R" | "S" | "E" | "A" | "B" | "C" | "D" | "M" | "N" | "O"
-    )
-}
-
-fn is_missing_synthetic_lib_global_identifier(identifier: &str) -> bool {
-    matches!(
-        identifier,
-        "Array"
-            | "String"
-            | "Number"
-            | "Boolean"
-            | "Symbol"
-            | "Promise"
-            | "Date"
-            | "RegExp"
-            | "Error"
-            | "Math"
-            | "JSON"
-            | "Intl"
-            | "Console"
-            | "console"
-            | "Record"
-            | "ReadonlyArray"
-    )
-}
-
-fn is_missing_es_lib_lite_global_identifier(identifier: &str) -> bool {
-    matches!(
-        identifier,
-        "Object"
-            | "Map"
-            | "Set"
-            | "WeakMap"
-            | "WeakSet"
-            | "Uint8Array"
-            | "Uint16Array"
-            | "Uint32Array"
-            | "Int8Array"
-            | "Int16Array"
-            | "Int32Array"
-            | "Float32Array"
-            | "Float64Array"
-            | "BigInt64Array"
-            | "BigUint64Array"
-            | "globalThis"
-            | "isNaN"
-    )
-}
-
-fn is_local_unresolved_identifier(identifier: &str) -> bool {
-    identifier
-        .chars()
-        .next()
-        .map(|first| first.is_ascii_lowercase() || first == '_')
-        .unwrap_or(false)
-}
-
-fn is_package_derived_incomplete_declaration_identifier(identifier: &str) -> bool {
-    identifier.len() > 1
-        && identifier
-            .chars()
-            .next()
-            .map(|first| first.is_ascii_uppercase())
-            .unwrap_or(false)
-}
-
-fn is_package_subpath_specifier(specifier: &str) -> bool {
-    if !specifier.contains('/') {
-        return false;
-    }
-
-    if !specifier.starts_with('@') {
-        return true;
-    }
-
-    specifier.split('/').count() > 2
 }

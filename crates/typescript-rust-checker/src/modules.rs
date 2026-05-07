@@ -620,7 +620,7 @@ pub(crate) fn resolve_module_export_table(
     Some(resolved_export_table)
 }
 
-fn collect_exportable_value_symbols(
+pub(crate) fn collect_exportable_value_symbols(
     statements: &[ParsedStatement],
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
@@ -631,11 +631,8 @@ fn collect_exportable_value_symbols(
     let mut shadow_ctx =
         CheckerContext::new(ctx.file_name.clone(), ctx.options.clone(), file_kinds);
 
-    let mut shadow_type_declarations = ctx.ambient_global_type_declarations.clone();
-    for (name, declaration) in local_type_declarations.iter() {
-        let _ = shadow_type_declarations.insert(name.clone(), declaration.clone());
-    }
-    shadow_ctx.type_declarations = shadow_type_declarations;
+    let _ = local_type_declarations;
+    shadow_ctx.type_declarations = ctx.type_declarations.clone();
 
     let mut exportable_values = ctx.ambient_global_symbols.clone();
     for (name, symbol) in local_symbols.iter() {

@@ -104,6 +104,7 @@ pub struct ParsedFunctionTypeParameter {
     pub name: Option<String>,
     pub name_span: Option<TextSpan>,
     pub ty: ParsedType,
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -339,6 +340,12 @@ pub enum ParsedExpression {
         type_arguments: Vec<ParsedType>,
         arguments: Vec<ParsedCallArgument>,
     },
+    New {
+        callee: Box<ParsedExpression>,
+        callee_span: Option<TextSpan>,
+        type_arguments: Vec<ParsedType>,
+        arguments: Vec<ParsedCallArgument>,
+    },
     PropertyCall {
         object: Box<ParsedExpression>,
         object_span: Option<TextSpan>,
@@ -487,11 +494,45 @@ pub struct ParsedFunctionDeclaration {
 pub enum ParsedFunctionBodyStatement {
     VariableDeclaration(ParsedVariableDeclaration),
     Return(ParsedReturnStatement),
+    Throw(ParsedThrowStatement),
     Assignment(ParsedAssignment),
     Expression(ParsedExpression),
     Block(Vec<ParsedFunctionBodyStatement>),
     If(ParsedIfStatement),
     While(ParsedWhileStatement),
+    Switch(ParsedSwitchStatement),
+    Try(ParsedTryStatement),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedThrowStatement {
+    pub expression: ParsedExpression,
+    pub expression_span: Option<TextSpan>,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedSwitchCase {
+    pub test: Option<ParsedExpression>,
+    pub test_span: Option<TextSpan>,
+    pub consequent: Vec<ParsedFunctionBodyStatement>,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedSwitchStatement {
+    pub discriminant: ParsedExpression,
+    pub discriminant_span: Option<TextSpan>,
+    pub cases: Vec<ParsedSwitchCase>,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedTryStatement {
+    pub block: Vec<ParsedFunctionBodyStatement>,
+    pub handler: Option<Vec<ParsedFunctionBodyStatement>>,
+    pub finalizer: Vec<ParsedFunctionBodyStatement>,
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -519,6 +560,9 @@ pub struct ParsedWhileStatement {
 pub struct ParsedFunctionParameter {
     pub binding_name: ParsedBindingName,
     pub declared_type: Option<ParsedType>,
+    pub initializer: Option<ParsedExpression>,
+    pub initializer_span: Option<TextSpan>,
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

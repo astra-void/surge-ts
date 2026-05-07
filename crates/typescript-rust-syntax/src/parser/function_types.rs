@@ -30,10 +30,6 @@ pub(crate) fn parse_function_type(
 fn parse_function_type_parameter(
     parameter: &FormalParameter<'_>,
 ) -> Option<ParsedFunctionTypeParameter> {
-    if parameter.optional || parameter.initializer.is_some() {
-        return None;
-    }
-
     let BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
         return None;
     };
@@ -47,5 +43,6 @@ fn parse_function_type_parameter(
         name: Some(binding.name.to_string()),
         name_span: Some(text_span_from_oxc_span(binding.span)),
         ty,
+        optional: parameter.optional || parameter.initializer.is_some(),
     })
 }

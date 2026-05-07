@@ -56,6 +56,62 @@ pub(crate) fn map_parsed_type_with_substitution(
     resolve_parsed_type(parsed_type, ctx, &mut resolving, substitution).ty
 }
 
+pub(crate) fn validate_local_type_declaration(
+    declaration: &TypeDeclarationInfo,
+    ctx: &mut CheckerContext,
+) {
+    match declaration {
+        TypeDeclarationInfo::Alias(alias) => {
+            let mut substitution = TypeParameterSubstitution::new();
+            for type_parameter in &alias.type_parameters {
+                substitution.insert(type_parameter.name.clone(), Type::Unknown);
+            }
+
+            let mut resolving = Vec::new();
+            let resolved = with_type_declarations(&alias.resolution_scope, ctx, |ctx| {
+                with_file_name(ctx, &alias.file_name, |ctx| {
+                    resolve_parsed_type_with_substitution(
+                        alias.ty.clone(),
+                        ctx,
+                        &mut resolving,
+                        &substitution,
+                    )
+                })
+            });
+            if alias.type_parameters.is_empty() {
+                ctx.resolved_named_types
+                    .lock()
+                    .unwrap()
+                    .insert(type_declaration_cache_key(declaration), resolved.ty);
+            }
+        }
+        TypeDeclarationInfo::Interface(interface) => {
+            let mut substitution = TypeParameterSubstitution::new();
+            for type_parameter in &interface.type_parameters {
+                substitution.insert(type_parameter.name.clone(), Type::Unknown);
+            }
+
+            let mut resolving = Vec::new();
+            let resolved = with_type_declarations(&interface.resolution_scope, ctx, |ctx| {
+                with_file_name(ctx, &interface.file_name, |ctx| {
+                    resolve_interface_members(
+                        &interface.members,
+                        ctx,
+                        &mut resolving,
+                        &substitution,
+                    )
+                })
+            });
+            if interface.type_parameters.is_empty() {
+                ctx.resolved_named_types
+                    .lock()
+                    .unwrap()
+                    .insert(type_declaration_cache_key(declaration), resolved.ty);
+            }
+        }
+    }
+}
+
 fn get_parsed_type_name(parsed: &ParsedType) -> String {
     match parsed {
         ParsedType::Named(named) => named.name.clone(),
@@ -415,6 +471,7 @@ fn resolve_function_type(
         resolving,
     );
 
+    let required_parameter_count = required_parameter_count(&function_type.parameters);
     let mut parameters = Vec::new();
 
     for parameter in function_type.parameters {
@@ -448,9 +505,27 @@ fn resolve_function_type(
             parameters,
             return_type: Box::new(return_type.ty),
             is_variadic: false,
+            required_parameter_count,
         }),
         had_error: false,
     }
+}
+
+fn required_parameter_count(
+    parameters: &[typescript_rust_syntax::ParsedFunctionTypeParameter],
+) -> usize {
+    let mut required = parameters.len();
+
+    while required > 0 {
+        let parameter = &parameters[required - 1];
+        if parameter.optional {
+            required -= 1;
+        } else {
+            break;
+        }
+    }
+
+    required
 }
 
 fn resolve_function_type_parameter(
@@ -552,6 +627,7 @@ fn resolve_named_type(
         .or_else(|| {
             ctx.ambient_global_type_declarations
                 .get(&named_type.name)
+                .filter(|declaration| is_ambient_type_declaration(declaration))
                 .cloned()
         });
 
@@ -563,7 +639,47 @@ fn resolve_named_type(
         };
     };
 
-    match declaration {
+    let has_type_arguments = !named_type.type_arguments.is_empty();
+    let is_generic_declaration = match &declaration {
+        TypeDeclarationInfo::Alias(alias) => !alias.type_parameters.is_empty(),
+        TypeDeclarationInfo::Interface(interface) => !interface.type_parameters.is_empty(),
+    };
+
+    if has_type_arguments && !is_generic_declaration {
+        match declaration {
+            TypeDeclarationInfo::Alias(alias) => {
+                emit_type_is_not_generic(&alias.name, alias.name_span, ctx);
+            }
+            TypeDeclarationInfo::Interface(interface) => {
+                emit_type_is_not_generic(&interface.name, interface.name_span, ctx);
+            }
+        }
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
+    let cache_key = type_declaration_cache_key(&declaration);
+    if let Some(cached) = ctx
+        .resolved_named_types
+        .lock()
+        .unwrap()
+        .get(&cache_key)
+        .cloned()
+    {
+        return ResolvedType {
+            ty: cached,
+            had_error: false,
+        };
+    }
+
+    let should_cache = match &declaration {
+        TypeDeclarationInfo::Alias(alias) => alias.type_parameters.is_empty(),
+        TypeDeclarationInfo::Interface(interface) => interface.type_parameters.is_empty(),
+    };
+
+    let resolved = match declaration {
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
             alias,
             named_type.type_arguments,
@@ -579,7 +695,46 @@ fn resolve_named_type(
             resolving,
             substitution,
         ),
+    };
+
+    if should_cache {
+        ctx.resolved_named_types
+            .lock()
+            .unwrap()
+            .insert(cache_key, resolved.ty.clone());
     }
+    resolved
+}
+
+fn type_declaration_cache_key(declaration: &TypeDeclarationInfo) -> (String, String, usize) {
+    match declaration {
+        TypeDeclarationInfo::Alias(alias) => (
+            alias.file_name.clone(),
+            alias.name.clone(),
+            type_declaration_scope_id(alias.resolution_scope.as_ref()),
+        ),
+        TypeDeclarationInfo::Interface(interface) => (
+            interface.file_name.clone(),
+            interface.name.clone(),
+            type_declaration_scope_id(interface.resolution_scope.as_ref()),
+        ),
+    }
+}
+
+fn type_declaration_scope_id(scope: Option<&Arc<crate::symbols::TypeDeclarationTable>>) -> usize {
+    scope.map_or(0, |scope| Arc::as_ptr(scope) as usize)
+}
+
+fn is_ambient_type_declaration(declaration: &TypeDeclarationInfo) -> bool {
+    let file_name = match declaration {
+        TypeDeclarationInfo::Alias(alias) => &alias.file_name,
+        TypeDeclarationInfo::Interface(interface) => &interface.file_name,
+    };
+
+    file_name == "<built-in>"
+        || file_name.ends_with(".d.ts")
+        || file_name.ends_with(".d.mts")
+        || file_name.ends_with(".d.cts")
 }
 
 fn resolve_type_alias(
@@ -898,14 +1053,13 @@ fn resolve_interface_members(
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     let mut properties = BTreeMap::new();
+    let mut had_error = false;
 
     for member in members {
         let property_type = resolve_parsed_type(member.ty.clone(), ctx, resolving, substitution);
         if property_type.had_error {
-            return ResolvedType {
-                ty: Type::Unknown,
-                had_error: true,
-            };
+            had_error = true;
+            continue;
         }
 
         let object_property = if member.optional {
@@ -918,8 +1072,12 @@ fn resolve_interface_members(
     }
 
     ResolvedType {
-        ty: Type::Object(ObjectType { properties }),
-        had_error: false,
+        ty: if had_error {
+            Type::Unknown
+        } else {
+            Type::Object(ObjectType { properties })
+        },
+        had_error,
     }
 }
 

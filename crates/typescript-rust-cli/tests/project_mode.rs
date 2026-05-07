@@ -1500,6 +1500,31 @@ fn cli_compat_report_includes_files_loaded() {
 }
 
 #[test]
+fn cli_compat_report_includes_build_info() {
+    let project = compat_project_root("package-imports").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(
+        parsed["buildInfo"]["packageVersion"],
+        Value::String(env!("CARGO_PKG_VERSION").to_string())
+    );
+    assert_eq!(
+        parsed["buildInfo"]["buildProfile"],
+        Value::String(option_env!("PROFILE").unwrap_or("unknown").to_string())
+    );
+    assert!(parsed["buildInfo"]["binaryPath"].is_string());
+    assert!(parsed["buildInfo"]["currentDir"].is_string());
+    assert!(parsed["buildInfo"]["workspaceRoot"].is_string());
+}
+
+#[test]
 fn cli_project_reports_zero_source_files_explicitly() {
     let root = temp_dir("project-no-source-files");
     write_file(&root, "tsconfig.json", r#"{ "include": ["src"] }"#);
@@ -1915,6 +1940,193 @@ fn cli_builtin_visibility_import_graph_basic_fixture_compat_report_tracks_loaded
         Value::from(0)
     );
     assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
+}
+
+#[test]
+fn cli_builtin_visibility_function_body_basic_fixture_keeps_synthetic_builtins_visible() {
+    let project =
+        compat_project_root("builtin-visibility-function-body-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_builtin_visibility_function_body_basic_fixture_is_stable_across_jobs() {
+    let project =
+        compat_project_root("builtin-visibility-function-body-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let jobs1 = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--jobs",
+        "1",
+    ]);
+    let jobs4 = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--jobs",
+        "4",
+    ]);
+
+    assert_eq!(
+        json_diagnostic_fingerprints(&jobs1),
+        json_diagnostic_fingerprints(&jobs4)
+    );
+}
+
+#[test]
+fn cli_module_local_functions_basic_fixture_keeps_same_file_helpers_visible() {
+    let project = compat_project_root("module-local-functions-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_default_parameter_inference_basic_fixture_keeps_defaults_typed() {
+    let project = compat_project_root("default-parameter-inference-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert_eq!(codes.iter().filter(|code| *code == "TS7006").count(), 1);
+}
+
+#[test]
+fn cli_function_body_scope_hardening_fixture_keeps_locals_visible() {
+    let project = compat_project_root("function-body-scope-hardening").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_function_body_scope_hardening_fixture_is_stable_across_jobs() {
+    let project = compat_project_root("function-body-scope-hardening").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let jobs1 = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--jobs",
+        "1",
+    ]);
+    let jobs4 = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--jobs",
+        "4",
+    ]);
+
+    assert_eq!(
+        json_diagnostic_fingerprints(&jobs1),
+        json_diagnostic_fingerprints(&jobs4)
+    );
+}
+
+#[test]
+fn cli_module_local_helper_functions_hardening_fixture_keeps_helpers_visible() {
+    let project =
+        compat_project_root("module-local-helper-functions-hardening").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_module_local_helper_functions_hardening_fixture_is_stable_across_jobs() {
+    let project =
+        compat_project_root("module-local-helper-functions-hardening").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let jobs1 = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--jobs",
+        "1",
+    ]);
+    let jobs4 = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--jobs",
+        "4",
+    ]);
+
+    assert_eq!(
+        json_diagnostic_fingerprints(&jobs1),
+        json_diagnostic_fingerprints(&jobs4)
+    );
+}
+
+#[test]
+fn cli_primitive_methods_basic_fixture_supports_string_number_and_array_methods() {
+    let project = compat_project_root("primitive-methods-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_new_expression_builtins_basic_fixture_supports_builtin_constructors() {
+    let project = compat_project_root("new-expression-builtins-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_object_shorthand_scope_basic_fixture_keeps_shorthand_locals_visible() {
+    let project = compat_project_root("object-shorthand-scope-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_function_body_local_visibility_basic_fixture_keeps_locals_visible() {
+    let project = compat_project_root("function-body-local-visibility-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
 }
 
 #[test]

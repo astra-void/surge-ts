@@ -75,6 +75,7 @@ export type ComparisonResult = {
     typescriptVersion: string;
     typescriptCommand: string;
     typescriptRustCommand: string;
+    typescriptRustJobs?: number;
   };
   typescript: DiagnosticTotals;
   typescriptRust: DiagnosticTotals;
@@ -147,6 +148,7 @@ const packageManagerExecutable = process.env.npm_execpath ? process.execPath : '
 const packageManagerArgsPrefix = process.env.npm_execpath ? [process.env.npm_execpath] : [];
 const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
 const subprocessMaxBuffer = 50 * 1024 * 1024;
+const sourceTextCache = new Map<string, string | null>();
 
 const fixturePresets: Record<string, string> = {
   'declarations-basic': path.join(workspaceRoot, 'tests/compat-projects/declarations-basic/tsconfig.json'),
@@ -168,6 +170,13 @@ const fixturePresets: Record<string, string> = {
   'relative-deep': path.join(workspaceRoot, 'tests/compat-projects/relative-deep/tsconfig.json'),
   'private-types': path.join(workspaceRoot, 'tests/compat-projects/private-types/tsconfig.json'),
   'package-declarations': path.join(workspaceRoot, 'tests/compat-projects/package-declarations/tsconfig.json'),
+  'builtin-visibility-project-graph-basic': path.join(workspaceRoot, 'tests/compat-projects/builtin-visibility-project-graph-basic/tsconfig.json'),
+  'builtin-visibility-import-graph-basic': path.join(workspaceRoot, 'tests/compat-projects/builtin-visibility-import-graph-basic/tsconfig.json'),
+  'builtin-visibility-function-body-basic': path.join(workspaceRoot, 'tests/compat-projects/builtin-visibility-function-body-basic/tsconfig.json'),
+  'module-local-functions-basic': path.join(workspaceRoot, 'tests/compat-projects/module-local-functions-basic/tsconfig.json'),
+  'function-body-local-visibility-basic': path.join(workspaceRoot, 'tests/compat-projects/function-body-local-visibility-basic/tsconfig.json'),
+  'import-graph-dependency-js-not-source': path.join(workspaceRoot, 'tests/compat-projects/import-graph-dependency-js-not-source/tsconfig.json'),
+  'parallel-ordering-basic': path.join(workspaceRoot, 'tests/compat-projects/parallel-ordering-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
@@ -726,6 +735,7 @@ export function compareDiagnostics(
         stubExternalModules,
         rustJobs,
       ),
+      typescriptRustJobs: rustJobs,
     },
     typescript: summarizeDiagnostics(typescript),
     typescriptRust: summarizeDiagnostics(typescriptRust),
@@ -793,7 +803,10 @@ export function compareDiagnostics(
             return identifier
               ? {
                   key: identifier,
-                  category: classifyTs2304Identifier(identifier),
+                  category: classifyTs2304IdentifierWithSource(
+                    identifier,
+                    getSourceTextForDiagnostic(projectRoot, diagnostic.fileName),
+                  ),
                 }
               : null;
           },
@@ -1357,6 +1370,105 @@ export function classifyTs2304Identifier(identifier: string): string {
   return 'unknown';
 }
 
+export function classifyTs2304IdentifierWithSource(
+  identifier: string,
+  sourceText?: string | null,
+): string {
+  const baseCategory = classifyTs2304Identifier(identifier);
+  if (baseCategory !== 'local-unresolved' || !sourceText) {
+    return baseCategory;
+  }
+
+  const sourceCategory = classifyLocalUnresolvedIdentifierSource(sourceText, identifier);
+  return sourceCategory ?? baseCategory;
+}
+
+function classifyLocalUnresolvedIdentifierSource(sourceText: string, identifier: string): string | null {
+  if (hasUnsupportedDestructuringLocalBindingPattern(sourceText, identifier)) {
+    return 'unsupported-destructuring-local-binding-pattern';
+  }
+
+  if (hasIndentedLocalBindingDeclaration(sourceText, identifier)) {
+    return 'function-body-local-variable-unresolved';
+  }
+
+  if (hasTopLevelBindingDeclaration(sourceText, identifier)) {
+    return 'module-local-helper-unresolved';
+  }
+
+  return null;
+}
+
+function hasTopLevelBindingDeclaration(sourceText: string, identifier: string): boolean {
+  for (const line of sourceText.split(/\r?\n/)) {
+    if (line.trimStart().length !== line.length) {
+      continue;
+    }
+
+    if (lineHasBindingDeclaration(line, identifier)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasIndentedLocalBindingDeclaration(sourceText: string, identifier: string): boolean {
+  for (const line of sourceText.split(/\r?\n/)) {
+    if (line.trimStart().length === line.length) {
+      continue;
+    }
+
+    if (lineHasBindingDeclaration(line, identifier)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasUnsupportedDestructuringLocalBindingPattern(sourceText: string, identifier: string): boolean {
+  for (const line of sourceText.split(/\r?\n/)) {
+    const trimmed = line.trimStart();
+    if (!/^(?:export\s+)?(?:const|let|var)\s+[\[{]/.test(trimmed)) {
+      continue;
+    }
+
+    if (trimmed.includes(identifier)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function lineHasBindingDeclaration(line: string, identifier: string): boolean {
+  const trimmed = line.trimStart();
+  const declarationPatterns = [
+    `function ${identifier}`,
+    `const ${identifier}`,
+    `let ${identifier}`,
+    `var ${identifier}`,
+    `export function ${identifier}`,
+    `export const ${identifier}`,
+    `export let ${identifier}`,
+    `export var ${identifier}`,
+    `async function ${identifier}`,
+    `export async function ${identifier}`,
+  ];
+
+  return declarationPatterns.some((pattern) => hasWordBoundaryPrefix(trimmed, pattern));
+}
+
+function hasWordBoundaryPrefix(line: string, pattern: string): boolean {
+  if (!line.startsWith(pattern)) {
+    return false;
+  }
+
+  const next = line[pattern.length];
+  return next === undefined || !/[A-Za-z0-9_$]/.test(next);
+}
+
 function classifyPathsAliasModuleSpecifier(
   specifier: string,
   projectRoot: string | undefined,
@@ -1856,6 +1968,9 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   lines.push(`TypeScript version: ${comparison.tooling.typescriptVersion}`);
   lines.push(`TypeScript command: ${comparison.tooling.typescriptCommand}`);
   lines.push(`typescript-rust command: ${comparison.tooling.typescriptRustCommand}`);
+  if (comparison.tooling.typescriptRustJobs !== undefined) {
+    lines.push(`typescript-rust jobs: ${comparison.tooling.typescriptRustJobs}`);
+  }
   lines.push('');
   lines.push('Totals:');
   lines.push(`TypeScript diagnostics: ${comparison.typescript.total}`);
@@ -2241,6 +2356,39 @@ export function readTsconfigPathsMappings(tsconfigPath: string): TsconfigPathMap
   }
 
   return mappings;
+}
+
+function getSourceTextForDiagnostic(projectRoot: string | undefined, fileName: string): string | null {
+  if (!projectRoot || !fileName) {
+    return null;
+  }
+
+  const resolvedFileName = resolveDiagnosticFilePath(projectRoot, fileName);
+  if (!resolvedFileName) {
+    return null;
+  }
+
+  if (sourceTextCache.has(resolvedFileName)) {
+    return sourceTextCache.get(resolvedFileName) ?? null;
+  }
+
+  try {
+    const sourceText = readFileSync(resolvedFileName, 'utf8');
+    sourceTextCache.set(resolvedFileName, sourceText);
+    return sourceText;
+  } catch {
+    sourceTextCache.set(resolvedFileName, null);
+    return null;
+  }
+}
+
+function resolveDiagnosticFilePath(projectRoot: string, fileName: string): string | null {
+  const normalizedFileName = normalizePathForDisplay(fileName);
+  if (isAbsolutePathLike(normalizedFileName)) {
+    return normalizedFileName;
+  }
+
+  return normalizePathForDisplay(path.resolve(projectRoot, normalizedFileName));
 }
 
 function looksLikePath(value: string): boolean {

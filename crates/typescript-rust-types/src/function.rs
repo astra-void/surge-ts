@@ -5,6 +5,7 @@ pub struct FunctionType {
     pub parameters: Vec<Type>,
     pub return_type: Box<Type>,
     pub is_variadic: bool,
+    pub required_parameter_count: usize,
 }
 
 impl FunctionType {
@@ -31,6 +32,7 @@ mod tests {
             parameters: vec![],
             return_type: Box::new(Type::String),
             is_variadic: false,
+            required_parameter_count: 0,
         };
 
         assert_eq!(ty.name(), "() => string");
@@ -42,6 +44,7 @@ mod tests {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 1,
         };
 
         assert_eq!(ty.name(), "(string) => number");
@@ -53,6 +56,7 @@ mod tests {
             parameters: vec![Type::String, Type::Number, Type::Boolean],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 3,
         };
 
         assert_eq!(ty.name(), "(string, number, boolean) => void");
@@ -65,9 +69,11 @@ mod tests {
                 parameters: vec![Type::String],
                 return_type: Box::new(Type::Number),
                 is_variadic: false,
+                required_parameter_count: 1,
             })],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 1,
         };
 
         assert_eq!(ty.name(), "((string) => number) => void");
@@ -81,8 +87,10 @@ mod tests {
                 parameters: vec![Type::Number],
                 return_type: Box::new(Type::Boolean),
                 is_variadic: false,
+                required_parameter_count: 1,
             })),
             is_variadic: false,
+            required_parameter_count: 1,
         };
 
         assert_eq!(ty.name(), "(string) => (number) => boolean");

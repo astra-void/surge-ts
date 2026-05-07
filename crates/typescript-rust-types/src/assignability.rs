@@ -279,11 +279,13 @@ mod tests {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 1,
         });
 
         assert!(is_assignable_to(&source, &target));
@@ -295,11 +297,13 @@ mod tests {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![Type::String, Type::Number],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 2,
         });
 
         assert!(!is_assignable_to(&source, &target));
@@ -311,11 +315,13 @@ mod tests {
             parameters: vec![Type::Number],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 1,
         });
 
         assert!(!is_assignable_to(&source, &target));
@@ -327,11 +333,13 @@ mod tests {
             parameters: vec![Type::String],
             return_type: Box::new(Type::String),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 1,
         });
 
         assert!(!is_assignable_to(&source, &target));
@@ -343,11 +351,13 @@ mod tests {
             parameters: vec![Type::String],
             return_type: Box::new(Type::StringLiteral("ok".to_string())),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::String),
             is_variadic: false,
+            required_parameter_count: 1,
         });
 
         assert!(is_assignable_to(&source, &target));
@@ -359,11 +369,13 @@ mod tests {
             parameters: vec![Type::StringLiteral("ok".to_string())],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 1,
         });
 
         assert!(!is_assignable_to(&source, &target));
@@ -375,11 +387,13 @@ mod tests {
             parameters: vec![union_type(vec![Type::String, Type::Number])],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![union_type(vec![Type::String, Type::Number])],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 1,
         });
 
         assert!(is_assignable_to(&source, &target));
@@ -391,11 +405,13 @@ mod tests {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 1,
         });
 
         assert!(is_assignable_to(&source, &target));
@@ -407,11 +423,13 @@ mod tests {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Void),
             is_variadic: false,
+            required_parameter_count: 1,
         });
         let target = Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::String),
             is_variadic: false,
+            required_parameter_count: 1,
         });
 
         assert!(!is_assignable_to(&source, &target));
@@ -449,7 +467,8 @@ mod tests {
             Type::Array(Box::new(Type::Function(FunctionType {
                 parameters: vec![],
                 return_type: Box::new(Type::String),
-                is_variadic: false
+                is_variadic: false,
+                required_parameter_count: 0
             })))
             .name(),
             "(() => string)[]"
@@ -538,12 +557,14 @@ mod tests {
             &Type::Array(Box::new(Type::Function(FunctionType {
                 parameters: vec![],
                 return_type: Box::new(Type::Void),
-                is_variadic: false
+                is_variadic: false,
+                required_parameter_count: 0
             }))),
             &Type::Array(Box::new(Type::Function(FunctionType {
                 parameters: vec![],
                 return_type: Box::new(Type::Void),
-                is_variadic: false
+                is_variadic: false,
+                required_parameter_count: 0
             })))
         ));
     }
@@ -554,12 +575,14 @@ mod tests {
             &Type::Array(Box::new(Type::Function(FunctionType {
                 parameters: vec![Type::String],
                 return_type: Box::new(Type::Void),
-                is_variadic: false
+                is_variadic: false,
+                required_parameter_count: 1
             }))),
             &Type::Array(Box::new(Type::Function(FunctionType {
                 parameters: vec![],
                 return_type: Box::new(Type::Void),
-                is_variadic: false
+                is_variadic: false,
+                required_parameter_count: 0
             })))
         ));
     }
@@ -609,7 +632,8 @@ mod tests {
                 Type::Function(FunctionType {
                     parameters: vec![],
                     return_type: Box::new(Type::Void),
-                    is_variadic: false
+                    is_variadic: false,
+                    required_parameter_count: 0
                 }),
                 Type::String,
             ])

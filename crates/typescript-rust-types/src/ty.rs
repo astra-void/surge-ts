@@ -1,4 +1,4 @@
-use crate::{FunctionType, ObjectType, UnionType};
+use crate::{FunctionType, ObjectProperty, ObjectType, UnionType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NumberLiteralType {
@@ -30,6 +30,27 @@ impl Type {
             Type::String | Type::StringLiteral(_) => Some(Type::String),
             Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
             Type::Boolean | Type::BooleanLiteral(_) => Some(Type::Boolean),
+            _ => None,
+        }
+    }
+
+    pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
+        match self {
+            Type::Object(object) => object.get_property_access_type(name),
+            Type::Array(element) => array_property_access_type(name, element.as_ref()),
+            Type::String | Type::StringLiteral(_) => string_property_access_type(name),
+            Type::Number | Type::NumberLiteral(_) => number_property_access_type(name),
+            _ => None,
+        }
+    }
+
+    pub fn builtin_constructor_result_type(name: &str) -> Option<Type> {
+        match name {
+            "Array" => Some(Type::Array(Box::new(Type::Any))),
+            "Uint8Array" => Some(Type::Array(Box::new(Type::Number))),
+            "Map" => Some(Type::Object(map_instance_type())),
+            "Date" => Some(Type::Any),
+            "TextEncoder" => Some(text_encoder_instance_type()),
             _ => None,
         }
     }
@@ -90,6 +111,180 @@ impl Type {
             }
         }
     }
+}
+
+fn string_property_access_type(name: &str) -> Option<Type> {
+    match name {
+        "length" => Some(Type::Number),
+        "replace" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::String, Type::String],
+            return_type: Box::new(Type::String),
+            is_variadic: false,
+            required_parameter_count: 2,
+        })),
+        "split" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::String],
+            return_type: Box::new(Type::Array(Box::new(Type::String))),
+            is_variadic: true,
+            required_parameter_count: 1,
+        })),
+        "slice" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::Number],
+            return_type: Box::new(Type::String),
+            is_variadic: true,
+            required_parameter_count: 1,
+        })),
+        "toLowerCase" | "toUpperCase" => Some(Type::Function(FunctionType {
+            parameters: vec![],
+            return_type: Box::new(Type::String),
+            is_variadic: false,
+            required_parameter_count: 0,
+        })),
+        "toString" => Some(Type::Function(FunctionType {
+            parameters: vec![],
+            return_type: Box::new(Type::String),
+            is_variadic: false,
+            required_parameter_count: 0,
+        })),
+        "padStart" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::Number, Type::String],
+            return_type: Box::new(Type::String),
+            is_variadic: true,
+            required_parameter_count: 1,
+        })),
+        "charCodeAt" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::Number],
+            return_type: Box::new(Type::Number),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+        _ => None,
+    }
+}
+
+fn number_property_access_type(name: &str) -> Option<Type> {
+    match name {
+        "toString" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::Number],
+            return_type: Box::new(Type::String),
+            is_variadic: true,
+            required_parameter_count: 0,
+        })),
+        _ => None,
+    }
+}
+
+fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
+    match name {
+        "length" => Some(Type::Number),
+        "map" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::Function(FunctionType {
+                parameters: vec![element.clone()],
+                return_type: Box::new(Type::Any),
+                is_variadic: false,
+                required_parameter_count: 1,
+            })],
+            return_type: Box::new(Type::Array(Box::new(Type::Any))),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+        "filter" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::Function(FunctionType {
+                parameters: vec![element.clone()],
+                return_type: Box::new(Type::Boolean),
+                is_variadic: false,
+                required_parameter_count: 1,
+            })],
+            return_type: Box::new(Type::Array(Box::new(element.clone()))),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+        "join" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::String],
+            return_type: Box::new(Type::String),
+            is_variadic: true,
+            required_parameter_count: 0,
+        })),
+        "push" => Some(Type::Function(FunctionType {
+            parameters: vec![element.clone()],
+            return_type: Box::new(Type::Number),
+            is_variadic: true,
+            required_parameter_count: 1,
+        })),
+        "includes" => Some(Type::Function(FunctionType {
+            parameters: vec![element.clone()],
+            return_type: Box::new(Type::Boolean),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+        _ => None,
+    }
+}
+
+fn map_instance_type() -> ObjectType {
+    let mut properties = std::collections::BTreeMap::new();
+    properties.insert(
+        "get".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Any),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+    );
+    properties.insert(
+        "set".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any, Type::Any],
+            return_type: Box::new(Type::Any),
+            is_variadic: false,
+            required_parameter_count: 2,
+        })),
+    );
+    properties.insert(
+        "has".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Boolean),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+    );
+    properties.insert(
+        "delete".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Boolean),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+    );
+    properties.insert(
+        "clear".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![],
+            return_type: Box::new(Type::Void),
+            is_variadic: false,
+            required_parameter_count: 0,
+        })),
+    );
+    properties.insert("size".to_string(), ObjectProperty::required(Type::Number));
+    ObjectType { properties }
+}
+
+fn text_encoder_instance_type() -> Type {
+    let mut properties = std::collections::BTreeMap::new();
+    properties.insert(
+        "encode".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::String],
+            return_type: Box::new(Type::Array(Box::new(Type::Number))),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+    );
+
+    Type::Object(ObjectType { properties })
 }
 
 fn array_element_name(element: &Type) -> String {
@@ -181,7 +376,8 @@ mod tests {
             Type::Array(Box::new(Type::Function(FunctionType {
                 parameters: vec![],
                 return_type: Box::new(Type::String),
-                is_variadic: false
+                is_variadic: false,
+                required_parameter_count: 0
             })))
             .name(),
             "(() => string)[]"
@@ -254,7 +450,8 @@ mod tests {
                 Type::Function(FunctionType {
                     parameters: vec![],
                     return_type: Box::new(Type::Void),
-                    is_variadic: false
+                    is_variadic: false,
+                    required_parameter_count: 0
                 }),
                 Type::String,
             ])

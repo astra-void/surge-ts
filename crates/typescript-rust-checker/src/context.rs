@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use typescript_rust_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
 use typescript_rust_syntax::TextSpan as SyntaxTextSpan;
@@ -73,6 +74,8 @@ pub(crate) struct CheckerContext {
     pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
+    pub(crate) resolved_named_types:
+        Arc<Mutex<HashMap<(String, String, usize), typescript_rust_types::Type>>>,
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
@@ -99,6 +102,7 @@ impl CheckerContext {
             utility_diagnostic_keys: HashSet::new(),
             symbols: SymbolTable::new(),
             type_declarations: TypeDeclarationTable::new(),
+            resolved_named_types: Arc::new(Mutex::new(HashMap::new())),
             ambient_modules: std::collections::HashMap::new(),
             ambient_global_symbols: SymbolTable::new(),
             ambient_global_type_declarations: TypeDeclarationTable::new(),

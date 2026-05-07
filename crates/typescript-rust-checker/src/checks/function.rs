@@ -2,16 +2,20 @@ use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedArrowFunction, ParsedArrowFunctionBody, ParsedAssignment, ParsedBindingName,
     ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
-    ParsedFunctionParameter, ParsedIfStatement, ParsedObjectBindingElement,
-    ParsedObjectBindingPattern, ParsedReturnStatement, ParsedType, ParsedVariableDeclaration,
-    ParsedVariableKind, ParsedWhileStatement,
+    ParsedFunctionParameter, ParsedIfStatement, ParsedLogicalOperator, ParsedObjectBindingElement,
+    ParsedObjectBindingPattern, ParsedReturnStatement, ParsedSwitchStatement, ParsedTryStatement,
+    ParsedType, ParsedUnaryOperator, ParsedVariableDeclaration, ParsedVariableKind,
+    ParsedWhileStatement,
 };
 use typescript_rust_types::{FunctionType, Type, is_assignable_to};
 
 use super::assign::check_assignment_with_symbols;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use super::expr::evaluate_expression;
-use super::var::{VariableCheckOptions, check_variable_declaration_with_symbols};
+use super::var::{
+    VariableCheckOptions, check_variable_declaration_with_symbols,
+    widen_implicit_variable_initializer_type,
+};
 use crate::context::CheckerContext;
 use crate::context::convert_span;
 use crate::flow::{
@@ -31,7 +35,10 @@ fn emit_parameter_diagnostics(
     contextual_type: Option<&Type>,
     ctx: &mut CheckerContext,
 ) {
-    if !ctx.options.no_implicit_any || parameter.declared_type.is_some() {
+    if !ctx.options.no_implicit_any
+        || parameter.declared_type.is_some()
+        || parameter.initializer.is_some()
+    {
         return;
     }
 
@@ -84,6 +91,13 @@ fn emit_object_binding_element_diagnostic(
             emit_object_binding_pattern_diagnostics(pattern, ctx);
         }
         ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
+fn parameter_identifier_name(parameter: &ParsedFunctionParameter) -> Option<&str> {
+    match &parameter.binding_name {
+        ParsedBindingName::Identifier { name, .. } => Some(name.as_str()),
+        _ => None,
     }
 }
 
@@ -162,22 +176,49 @@ fn map_function_signature(
     report_duplicate_type_parameters(type_parameters, ctx);
 
     let type_parameter_substitution = build_type_parameter_substitution(type_parameters);
+    let mut parameter_symbols = ctx.symbols.clone();
+    let mut parameter_types = Vec::with_capacity(parameters.len());
 
-    let parameter_types = parameters
-        .iter()
-        .map(|parameter| {
-            parameter
-                .declared_type
-                .clone()
-                .map_or(Type::Any, |declared_type| {
-                    map_parsed_type_with_substitution(
-                        declared_type,
-                        ctx,
-                        &type_parameter_substitution,
-                    )
-                })
-        })
-        .collect::<Vec<_>>();
+    for (index, parameter) in parameters.iter().enumerate() {
+        let inferred_parameter_type = if let Some(declared_type) = parameter.declared_type.clone() {
+            map_parsed_type_with_substitution(declared_type, ctx, &type_parameter_substitution)
+        } else if let Some(initializer) = parameter.initializer.as_ref() {
+            let inferred_initializer = evaluate_expression(
+                initializer,
+                parameter.initializer_span,
+                &parameter_symbols,
+                ctx,
+            );
+
+            match inferred_initializer {
+                InferredExpression::Known(ty) => {
+                    widen_implicit_variable_initializer_type(SymbolKind::Let, &ty)
+                }
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. }
+                | InferredExpression::Unknown => Type::Unknown,
+            }
+        } else {
+            Type::Any
+        };
+
+        if let Some(name) = parameter_identifier_name(parameter) {
+            let _ = parameter_symbols.insert(
+                name.to_string(),
+                SymbolInfo {
+                    ty: inferred_parameter_type.clone(),
+                    kind: SymbolKind::Parameter,
+                },
+            );
+        }
+
+        parameter_types.push(inferred_parameter_type);
+
+        if ctx.options.no_implicit_any {
+            let contextual_type = contextual_parameter_types.and_then(|types| types.get(index));
+            emit_parameter_diagnostics(parameter, contextual_type, ctx);
+        }
+    }
 
     let function_return_type = return_type
         .map(|return_type| {
@@ -189,18 +230,27 @@ fn map_function_signature(
         })
         .unwrap_or(Type::Unknown);
 
-    if ctx.options.no_implicit_any {
-        for (index, parameter) in parameters.iter().enumerate() {
-            let contextual_type = contextual_parameter_types.and_then(|types| types.get(index));
-            emit_parameter_diagnostics(parameter, contextual_type, ctx);
-        }
-    }
-
     FunctionType {
         parameters: parameter_types,
         return_type: Box::new(function_return_type),
         is_variadic: false,
+        required_parameter_count: required_parameter_count(parameters),
     }
+}
+
+fn required_parameter_count(parameters: &[ParsedFunctionParameter]) -> usize {
+    let mut required = parameters.len();
+
+    while required > 0 {
+        let parameter = &parameters[required - 1];
+        if parameter.optional || parameter.initializer.is_some() {
+            required -= 1;
+        } else {
+            break;
+        }
+    }
+
+    required
 }
 
 fn has_contextual_unknown_object_binding_pattern(
@@ -271,7 +321,7 @@ fn check_function_body_with_signature(
 ) {
     let body_flow = analyze_function_body_flow(&body);
 
-    let mut scopes = ScopeStack::from_root(ctx.symbols.clone());
+    let mut scopes = ScopeStack::from_root(merged_function_body_root_symbols(ctx));
     scopes.insert_current(
         name,
         SymbolInfo {
@@ -302,6 +352,15 @@ fn check_function_body_with_signature(
     }
 }
 
+fn merged_function_body_root_symbols(ctx: &CheckerContext) -> SymbolTable {
+    let mut root = ctx.ambient_global_symbols.clone();
+    for (name, symbol) in ctx.symbols.iter() {
+        root.insert(name.clone(), symbol.clone());
+    }
+
+    root
+}
+
 pub(crate) fn collect_function_declaration_signature(
     function: &ParsedFunctionDeclaration,
     symbols: &mut SymbolTable,
@@ -313,6 +372,7 @@ pub(crate) fn collect_function_declaration_signature(
     let FunctionType {
         parameters,
         return_type,
+        required_parameter_count,
         is_variadic: _,
     } = map_function_signature(
         &function.parameters,
@@ -328,6 +388,7 @@ pub(crate) fn collect_function_declaration_signature(
         parameters,
         return_type,
         is_variadic: false,
+        required_parameter_count,
     };
 
     let duplicate =
@@ -502,6 +563,13 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
         }
     }
 
+    if expected_type
+        .is_some_and(|expected_type| matches!(expected_type.return_type.as_ref(), Type::Void))
+        && !has_explicit_return_type
+    {
+        function_type.return_type = Box::new(Type::Void);
+    }
+
     function_type
 }
 
@@ -575,6 +643,15 @@ fn check_function_body_statement(
                 ctx,
             );
         }
+        ParsedFunctionBodyStatement::Throw(throw_statement) => {
+            check_function_throw_statement(
+                throw_statement,
+                statement_index,
+                scopes,
+                flow_state,
+                ctx,
+            );
+        }
         ParsedFunctionBodyStatement::Assignment(assignment) => {
             check_function_assignment(assignment, statement_index, scopes, flow_state, ctx);
         }
@@ -600,6 +677,26 @@ fn check_function_body_statement(
         ParsedFunctionBodyStatement::While(while_statement) => {
             check_function_while_statement(
                 while_statement,
+                statement_index,
+                return_type,
+                scopes,
+                flow_state,
+                ctx,
+            );
+        }
+        ParsedFunctionBodyStatement::Switch(switch_statement) => {
+            check_function_switch_statement(
+                switch_statement,
+                statement_index,
+                return_type,
+                scopes,
+                flow_state,
+                ctx,
+            );
+        }
+        ParsedFunctionBodyStatement::Try(try_statement) => {
+            check_function_try_statement(
+                try_statement,
                 statement_index,
                 return_type,
                 scopes,
@@ -681,6 +778,10 @@ fn check_function_if_statement(
 ) {
     check_obvious_truthiness_condition(&if_statement.condition, if_statement.condition_span, ctx);
 
+    let then_guarantees_value_return =
+        analyze_function_body_flow(&if_statement.then_body).guarantees_value_return;
+    let has_else_body = !if_statement.else_body.is_empty();
+
     let condition_blocked = check_expression_flow(
         &if_statement.condition,
         if_statement.condition_span,
@@ -714,7 +815,7 @@ fn check_function_if_statement(
 
     let mut branch_states = vec![then_flow_state];
 
-    if !if_statement.else_body.is_empty() {
+    if has_else_body {
         let mut else_flow_state = base_flow_state.clone();
         scopes.push_child();
         check_function_body(
@@ -728,7 +829,66 @@ fn check_function_if_statement(
         branch_states.push(else_flow_state);
     }
 
+    if !has_else_body && then_guarantees_value_return {
+        narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
+    }
+
     *flow_state = merge_branch_states(&base_flow_state, &branch_states);
+}
+
+fn narrow_truthy_guarded_identifiers(condition: &ParsedExpression, scopes: &mut ScopeStack) {
+    let mut names = Vec::new();
+    if !collect_truthy_guarded_identifiers(condition, &mut names) {
+        return;
+    }
+
+    for name in names {
+        let Some(symbol) = scopes.resolve(&name).cloned() else {
+            continue;
+        };
+
+        let narrowed = typescript_rust_types::remove_undefined(&symbol.ty);
+        if narrowed == symbol.ty {
+            continue;
+        }
+
+        let _ = scopes.update_visible(
+            &name,
+            SymbolInfo {
+                ty: narrowed,
+                kind: symbol.kind,
+            },
+        );
+    }
+}
+
+fn collect_truthy_guarded_identifiers(
+    condition: &ParsedExpression,
+    names: &mut Vec<String>,
+) -> bool {
+    match condition {
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or,
+            right,
+            ..
+        } => {
+            collect_truthy_guarded_identifiers(left, names)
+                && collect_truthy_guarded_identifiers(right, names)
+        }
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => match operand.as_ref() {
+            ParsedExpression::Identifier { name, .. } => {
+                names.push(name.clone());
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 fn check_function_while_statement(
@@ -773,6 +933,138 @@ fn check_function_while_statement(
         ctx,
     );
     scopes.pop_child();
+}
+
+fn check_function_switch_statement(
+    switch_statement: ParsedSwitchStatement,
+    statement_index: usize,
+    return_type: Option<Type>,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let condition_blocked = check_expression_flow(
+        &switch_statement.discriminant,
+        switch_statement.discriminant_span,
+        flow_state,
+        statement_index,
+        ctx,
+    );
+
+    if !condition_blocked.is_blocked() {
+        let visible_symbols = visible_symbols(scopes);
+        let _ = evaluate_expression(
+            &switch_statement.discriminant,
+            switch_statement.discriminant_span,
+            &visible_symbols,
+            ctx,
+        );
+    }
+
+    let base_flow_state = flow_state.clone();
+    let mut branch_states = Vec::new();
+
+    for switch_case in switch_statement.cases {
+        let mut case_flow_state = base_flow_state.clone();
+
+        if let Some(test) = switch_case.test.as_ref() {
+            let _ = check_expression_flow(
+                test,
+                switch_case.test_span,
+                &case_flow_state,
+                statement_index,
+                ctx,
+            );
+        }
+
+        scopes.push_child();
+        check_function_body(
+            switch_case.consequent,
+            return_type.clone(),
+            scopes,
+            &mut case_flow_state,
+            ctx,
+        );
+        scopes.pop_child();
+        branch_states.push(case_flow_state);
+    }
+
+    *flow_state = merge_branch_states(&base_flow_state, &branch_states);
+}
+
+fn check_function_try_statement(
+    try_statement: ParsedTryStatement,
+    _statement_index: usize,
+    return_type: Option<Type>,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let base_flow_state = flow_state.clone();
+
+    let mut try_flow_state = base_flow_state.clone();
+    scopes.push_child();
+    check_function_body(
+        try_statement.block,
+        return_type.clone(),
+        scopes,
+        &mut try_flow_state,
+        ctx,
+    );
+    scopes.pop_child();
+
+    let mut branch_states = vec![try_flow_state];
+
+    if let Some(handler_body) = try_statement.handler {
+        let mut catch_flow_state = base_flow_state.clone();
+        scopes.push_child();
+        check_function_body(
+            handler_body,
+            return_type.clone(),
+            scopes,
+            &mut catch_flow_state,
+            ctx,
+        );
+        scopes.pop_child();
+        branch_states.push(catch_flow_state);
+    }
+
+    let mut merged_flow_state = merge_branch_states(&base_flow_state, &branch_states);
+    scopes.push_child();
+    check_function_body(
+        try_statement.finalizer,
+        return_type,
+        scopes,
+        &mut merged_flow_state,
+        ctx,
+    );
+    scopes.pop_child();
+
+    *flow_state = merged_flow_state;
+}
+
+fn check_function_throw_statement(
+    throw_statement: typescript_rust_syntax::ParsedThrowStatement,
+    statement_index: usize,
+    scopes: &ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let _ = check_expression_flow(
+        &throw_statement.expression,
+        throw_statement.expression_span,
+        flow_state,
+        statement_index,
+        ctx,
+    );
+
+    let visible_symbols = visible_symbols(scopes);
+    let _ = evaluate_expression(
+        &throw_statement.expression,
+        throw_statement.expression_span,
+        &visible_symbols,
+        ctx,
+    );
 }
 
 fn check_function_assignment(

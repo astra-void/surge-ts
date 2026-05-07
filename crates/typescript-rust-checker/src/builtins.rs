@@ -117,6 +117,13 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
             ty: match name {
                 "Map" => map_builtin_type(),
                 "Uint8Array" => ParsedType::Array(Box::new(ParsedType::Number)),
+                "Promise" | "PromiseLike" => {
+                    ParsedType::Named(typescript_rust_syntax::ParsedNamedType {
+                        name: "T".to_string(),
+                        span: None,
+                        type_arguments: vec![],
+                    })
+                }
                 "Object" => ParsedType::Unknown,
                 _ => ParsedType::Unknown,
             },
@@ -140,6 +147,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::Void),
             is_variadic: true,
+            required_parameter_count: 1,
         })),
     );
     console_props.insert(
@@ -148,6 +156,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::Void),
             is_variadic: true,
+            required_parameter_count: 1,
         })),
     );
     console_props.insert(
@@ -156,6 +165,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::Void),
             is_variadic: true,
+            required_parameter_count: 1,
         })),
     );
 
@@ -167,6 +177,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Number, Type::Number],
             return_type: Box::new(Type::Number),
             is_variadic: true,
+            required_parameter_count: 2,
         })),
     );
     math_props.insert(
@@ -175,6 +186,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Number, Type::Number],
             return_type: Box::new(Type::Number),
             is_variadic: true,
+            required_parameter_count: 2,
         })),
     );
     math_props.insert(
@@ -183,6 +195,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Number],
             return_type: Box::new(Type::Number),
             is_variadic: true,
+            required_parameter_count: 1,
         })),
     );
     math_props.insert(
@@ -191,6 +204,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Number],
             return_type: Box::new(Type::Number),
             is_variadic: true,
+            required_parameter_count: 1,
         })),
     );
 
@@ -202,6 +216,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Any),
             is_variadic: false,
+            required_parameter_count: 1,
         })),
     );
     json_props.insert(
@@ -210,6 +225,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::String),
             is_variadic: false,
+            required_parameter_count: 1,
         })),
     );
 
@@ -221,6 +237,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![Type::Any],
             return_type: Box::new(Type::Array(Box::new(Type::Any))),
             is_variadic: true,
+            required_parameter_count: 1,
         })),
     );
 
@@ -232,6 +249,18 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             parameters: vec![],
             return_type: Box::new(Type::Number),
             is_variadic: false,
+            required_parameter_count: 0,
+        })),
+    );
+
+    let mut promise_props = BTreeMap::new();
+    promise_props.insert(
+        "resolve".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Any),
+            is_variadic: true,
+            required_parameter_count: 1,
         })),
     );
 
@@ -266,6 +295,12 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 properties: date_props,
             }),
         ),
+        (
+            "Promise",
+            Type::Object(ObjectType {
+                properties: promise_props,
+            }),
+        ),
         ("Error", Type::Any),
         ("RegExp", Type::Any),
         ("Object", Type::Any),
@@ -278,6 +313,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 parameters: vec![Type::Any],
                 return_type: Box::new(Type::Boolean),
                 is_variadic: false,
+                required_parameter_count: 1,
             }),
         ),
         (
@@ -288,11 +324,13 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                         parameters: vec![],
                         return_type: Box::new(Type::Void),
                         is_variadic: false,
+                        required_parameter_count: 0,
                     }),
                     Type::Number,
                 ],
                 return_type: Box::new(Type::Number),
                 is_variadic: true,
+                required_parameter_count: 2,
             }),
         ),
         (
@@ -301,6 +339,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 parameters: vec![Type::Number],
                 return_type: Box::new(Type::Void),
                 is_variadic: false,
+                required_parameter_count: 1,
             }),
         ),
         (
@@ -309,6 +348,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 parameters: vec![Type::String],
                 return_type: Box::new(Type::Number),
                 is_variadic: true,
+                required_parameter_count: 1,
             }),
         ),
         (
@@ -317,6 +357,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 parameters: vec![Type::String],
                 return_type: Box::new(Type::Number),
                 is_variadic: false,
+                required_parameter_count: 1,
             }),
         ),
         (
@@ -325,6 +366,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 parameters: vec![Type::Any],
                 return_type: Box::new(Type::Number),
                 is_variadic: true,
+                required_parameter_count: 1,
             }),
         ),
         (
@@ -333,6 +375,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 parameters: vec![Type::Any],
                 return_type: Box::new(Type::String),
                 is_variadic: true,
+                required_parameter_count: 1,
             }),
         ),
         (
@@ -341,6 +384,16 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 parameters: vec![Type::Any],
                 return_type: Box::new(Type::Boolean),
                 is_variadic: true,
+                required_parameter_count: 1,
+            }),
+        ),
+        (
+            "TextEncoder",
+            Type::Function(FunctionType {
+                parameters: vec![],
+                return_type: Box::new(text_encoder_instance_type()),
+                is_variadic: false,
+                required_parameter_count: 0,
             }),
         ),
     ];
@@ -371,6 +424,7 @@ fn map_builtin_type() -> ParsedType {
                             span: None,
                             type_arguments: vec![],
                         }),
+                        optional: false,
                     }],
                     return_type: Box::new(ParsedType::Named(ParsedNamedType {
                         name: "V".to_string(),
@@ -394,6 +448,7 @@ fn map_builtin_type() -> ParsedType {
                                 span: None,
                                 type_arguments: vec![],
                             }),
+                            optional: false,
                         },
                         ParsedFunctionTypeParameter {
                             name: Some("value".to_string()),
@@ -403,6 +458,7 @@ fn map_builtin_type() -> ParsedType {
                                 span: None,
                                 type_arguments: vec![],
                             }),
+                            optional: false,
                         },
                     ],
                     return_type: Box::new(ParsedType::Any),
@@ -422,6 +478,7 @@ fn map_builtin_type() -> ParsedType {
                             span: None,
                             type_arguments: vec![],
                         }),
+                        optional: false,
                     }],
                     return_type: Box::new(ParsedType::Boolean),
                     type_parameters: vec![],
@@ -440,6 +497,7 @@ fn map_builtin_type() -> ParsedType {
                             span: None,
                             type_arguments: vec![],
                         }),
+                        optional: false,
                     }],
                     return_type: Box::new(ParsedType::Boolean),
                     type_parameters: vec![],
@@ -458,4 +516,19 @@ fn map_builtin_type() -> ParsedType {
             },
         ],
     })
+}
+
+fn text_encoder_instance_type() -> Type {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "encode".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::String],
+            return_type: Box::new(Type::Array(Box::new(Type::Number))),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+    );
+
+    Type::Object(ObjectType { properties })
 }
