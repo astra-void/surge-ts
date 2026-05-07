@@ -63,6 +63,7 @@ impl Default for CheckerOptions {
 
 use crate::modules::ModuleExportTable;
 
+#[derive(Debug, Clone)]
 pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
     pub(crate) current_file_kind: FileKind,

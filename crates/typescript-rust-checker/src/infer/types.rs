@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
@@ -144,7 +144,13 @@ fn resolve_parsed_type(
             resolve_named_type(named_type, ctx, resolving, substitution)
         }
         ParsedType::TypeOf(type_of) => {
-            let Some(symbol) = ctx.symbols.get(&type_of.name) else {
+            let symbol = ctx
+                .symbols
+                .get(&type_of.name)
+                .cloned()
+                .or_else(|| ctx.ambient_global_symbols.get(&type_of.name).cloned());
+
+            let Some(symbol) = symbol else {
                 let mut diagnostic = Diagnostic::ts2304(&type_of.name, ctx.file_name.clone());
                 if let Some(span) = type_of.name_span {
                     diagnostic = diagnostic.with_span(convert_span(span));
@@ -158,7 +164,7 @@ fn resolve_parsed_type(
             };
 
             ResolvedType {
-                ty: symbol.ty.clone(),
+                ty: symbol.ty,
                 had_error: false,
             }
         }
@@ -539,7 +545,17 @@ fn resolve_named_type(
         };
     }
 
-    let Some(declaration) = ctx.type_declarations.get(&named_type.name).cloned() else {
+    let declaration = ctx
+        .type_declarations
+        .get(&named_type.name)
+        .cloned()
+        .or_else(|| {
+            ctx.ambient_global_type_declarations
+                .get(&named_type.name)
+                .cloned()
+        });
+
+    let Some(declaration) = declaration else {
         emit_unknown_type_name(&named_type, ctx);
         return ResolvedType {
             ty: Type::Unknown,
@@ -1141,7 +1157,7 @@ fn with_file_name<R>(
 }
 
 fn with_type_declarations<R>(
-    type_declarations: &Option<Rc<crate::symbols::TypeDeclarationTable>>,
+    type_declarations: &Option<Arc<crate::symbols::TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
     f: impl FnOnce(&mut CheckerContext) -> R,
 ) -> R {

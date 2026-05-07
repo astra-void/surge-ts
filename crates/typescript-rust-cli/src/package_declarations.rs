@@ -51,11 +51,13 @@ fn resolve_exports_types(exports: &serde_json::Value, subpath_key: &str) -> Opti
         serde_json::Value::Object(map) => {
             if let Some(val) = map.get(subpath_key) {
                 match val {
-                    serde_json::Value::String(s) if is_declaration_file_path(s) => Some(s.clone()),
+                    serde_json::Value::String(s) if is_declaration_file_path_str(s) => {
+                        Some(s.clone())
+                    }
                     serde_json::Value::Object(obj) => obj
                         .get("types")
                         .and_then(|types_val| types_val.as_str())
-                        .filter(|s| is_declaration_file_path(s))
+                        .filter(|s| is_declaration_file_path_str(s))
                         .map(|s| s.to_string()),
                     _ => None,
                 }
@@ -105,6 +107,7 @@ pub fn resolve_package_declaration_entrypoints(
 
         let mut current_dir = req.importer_dir.clone();
         let mut resolved_path = None;
+        let mut runtime_only_path = None;
 
         loop {
             let pkg_dir = current_dir.join("node_modules").join(&req.package_name);
@@ -159,28 +162,48 @@ pub fn resolve_package_declaration_entrypoints(
                         }
                     }
                 }
+            }
 
-                // Fallbacks
-                if let Some(subpath) = &req.subpath {
-                    for candidate in declaration_candidates(pkg_dir.join(subpath)) {
-                        if candidate.exists() && candidate.is_file() {
-                            resolved_path = Some(candidate);
-                            break;
-                        }
-                    }
-                    if resolved_path.is_some() {
+            // Fallbacks still apply when there is no package.json.
+            if let Some(subpath) = &req.subpath {
+                for candidate in declaration_candidates(pkg_dir.join(subpath)) {
+                    if candidate.exists() && candidate.is_file() {
+                        resolved_path = Some(candidate);
                         break;
                     }
-                } else {
-                    for candidate in declaration_candidates(pkg_dir.join("index")) {
-                        if candidate.exists() && candidate.is_file() {
-                            resolved_path = Some(candidate);
-                            break;
-                        }
-                    }
-                    if resolved_path.is_some() {
+                }
+                if resolved_path.is_some() {
+                    break;
+                }
+
+                for candidate in runtime_javascript_candidates(pkg_dir.join(subpath)) {
+                    if candidate.exists() && candidate.is_file() {
+                        runtime_only_path = Some(candidate);
                         break;
                     }
+                }
+                if runtime_only_path.is_some() {
+                    break;
+                }
+            } else {
+                for candidate in declaration_candidates(pkg_dir.join("index")) {
+                    if candidate.exists() && candidate.is_file() {
+                        resolved_path = Some(candidate);
+                        break;
+                    }
+                }
+                if resolved_path.is_some() {
+                    break;
+                }
+
+                for candidate in runtime_javascript_candidates(pkg_dir.join("index")) {
+                    if candidate.exists() && candidate.is_file() {
+                        runtime_only_path = Some(candidate);
+                        break;
+                    }
+                }
+                if runtime_only_path.is_some() {
+                    break;
                 }
             }
 
@@ -217,6 +240,11 @@ pub fn resolve_package_declaration_entrypoints(
                     }
                 }
             }
+        } else if let Some(path) = runtime_only_path {
+            if let Ok(path) = path.canonicalize() {
+                let file_name = path.to_string_lossy().into_owned();
+                resolved_packages.insert(req.specifier.clone(), file_name);
+            }
         }
     }
 
@@ -224,15 +252,13 @@ pub fn resolve_package_declaration_entrypoints(
 }
 
 fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
-    if path.exists() && path.is_file() {
+    if is_declaration_file_path(path) && path.exists() && path.is_file() {
         return Some(path.to_path_buf());
     }
 
-    if path.extension().is_none() {
-        for candidate in declaration_candidates(path.to_path_buf()) {
-            if candidate.exists() && candidate.is_file() {
-                return Some(candidate);
-            }
+    for candidate in declaration_candidates(path.to_path_buf()) {
+        if candidate.exists() && candidate.is_file() {
+            return Some(candidate);
         }
     }
 
@@ -240,21 +266,57 @@ fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
 }
 
 fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if path.extension().is_some() {
-        candidates.push(path);
-        return candidates;
+    if is_declaration_file_path(&path) {
+        return vec![path];
     }
 
-    candidates.push(path.with_extension("d.ts"));
-    candidates.push(path.with_extension("d.mts"));
-    candidates.push(path.with_extension("d.cts"));
-    candidates
+    let declaration_stem = if is_runtime_javascript_file(&path) {
+        path.with_extension("")
+    } else if path.extension().is_none() {
+        path
+    } else {
+        return Vec::new();
+    };
+
+    vec![
+        declaration_stem.with_extension("d.ts"),
+        declaration_stem.with_extension("d.mts"),
+        declaration_stem.with_extension("d.cts"),
+    ]
 }
 
-fn is_declaration_file_path(path: &str) -> bool {
+fn is_declaration_file_path_str(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+}
+
+fn is_declaration_file_path(path: &Path) -> bool {
+    is_declaration_file_path_str(&path.to_string_lossy())
+}
+
+fn is_runtime_javascript_file(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    lower.ends_with(".js")
+        || lower.ends_with(".jsx")
+        || lower.ends_with(".mjs")
+        || lower.ends_with(".cjs")
+}
+
+fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
+    if is_runtime_javascript_file(&path) {
+        return vec![path];
+    }
+
+    if path.extension().is_none() {
+        return vec![
+            path.with_extension("js"),
+            path.with_extension("jsx"),
+            path.with_extension("mjs"),
+            path.with_extension("cjs"),
+        ];
+    }
+
+    Vec::new()
 }
 
 fn extract_packages_from_source(
@@ -379,5 +441,24 @@ mod tests {
         assert_eq!(resolve_exports_types(&exports, "./wild/*"), None);
         assert_eq!(resolve_exports_types(&exports, "./wild/feature"), None);
         assert_eq!(resolve_exports_types(&exports, "./missing"), None);
+    }
+
+    #[test]
+    fn test_declaration_candidates_skip_runtime_js() {
+        let candidates = declaration_candidates(PathBuf::from("pkg/subpath.js"));
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("pkg/subpath.d.ts"),
+                PathBuf::from("pkg/subpath.d.mts"),
+                PathBuf::from("pkg/subpath.d.cts"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_declaration_candidates_keep_declaration_files() {
+        let candidates = declaration_candidates(PathBuf::from("pkg/subpath.d.ts"));
+        assert_eq!(candidates, vec![PathBuf::from("pkg/subpath.d.ts")]);
     }
 }

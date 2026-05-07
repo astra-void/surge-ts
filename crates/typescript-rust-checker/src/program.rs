@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::thread;
 
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
@@ -48,6 +49,22 @@ pub struct ProgramCheckResult {
 }
 
 #[derive(Debug, Clone)]
+struct ProgramCheckSharedState {
+    global_type_declarations: TypeDeclarationTable,
+    global_symbols: SymbolTable,
+    function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
+    module_analyses: Vec<Option<ModuleAnalysis>>,
+    module_import_bindings: Vec<Option<ModuleImportBindings>>,
+}
+
+#[derive(Debug)]
+struct FileCheckResult {
+    file_index: usize,
+    diagnostics: Vec<Diagnostic>,
+    stats: CompatibilityStats,
+}
+
+#[derive(Debug, Clone)]
 struct ModuleAnalysis {
     local_type_declarations: TypeDeclarationTable,
     local_symbols: SymbolTable,
@@ -76,6 +93,14 @@ pub fn check_program_with_options(
 pub fn check_program_with_stats(
     files: Vec<SourceFileInput>,
     options: CheckerOptions,
+) -> ProgramCheckResult {
+    check_program_with_stats_and_jobs(files, options, 1)
+}
+
+pub fn check_program_with_stats_and_jobs(
+    files: Vec<SourceFileInput>,
+    options: CheckerOptions,
+    jobs: usize,
 ) -> ProgramCheckResult {
     if files.is_empty() {
         return ProgramCheckResult {
@@ -139,7 +164,7 @@ pub fn check_program_with_stats(
         .map(|analysis| {
             analysis
                 .as_ref()
-                .map(|analysis| Rc::new(analysis.local_type_declarations.clone()))
+                .map(|analysis| Arc::new(analysis.local_type_declarations.clone()))
         })
         .collect::<Vec<_>>();
     let module_import_bindings = collect_module_import_bindings(
@@ -149,15 +174,28 @@ pub fn check_program_with_stats(
         &module_resolution_scopes,
         &mut ctx,
     );
-    check_program_files(
-        &parsed_files,
-        &global_type_declarations,
-        &global_symbols,
-        &function_signatures,
-        &module_analyses,
-        &module_import_bindings,
-        &mut ctx,
-    );
+    let shared_state = ProgramCheckSharedState {
+        global_type_declarations,
+        global_symbols,
+        function_signatures,
+        module_analyses,
+        module_import_bindings,
+    };
+
+    let file_results = if jobs <= 1 || parsed_files.len() <= 1 {
+        check_program_files_serial(&parsed_files, &shared_state, &ctx)
+    } else {
+        check_program_files_parallel(&parsed_files, &shared_state, &ctx, jobs)
+    };
+
+    for result in file_results {
+        ctx.diagnostics.extend(result.diagnostics);
+        ctx.stats.suppressed_diagnostics_total += result.stats.suppressed_diagnostics_total;
+        ctx.stats.suppressed_declaration_diagnostics_total +=
+            result.stats.suppressed_declaration_diagnostics_total;
+        ctx.stats.suppressed_rust_only_diagnostics_total +=
+            result.stats.suppressed_rust_only_diagnostics_total;
+    }
 
     let (diagnostics, stats) = ctx.finish_with_stats();
 
@@ -211,7 +249,7 @@ fn collect_preliminary_module_type_bindings(
 
     let module_resolution_scopes = local_type_declarations_by_module
         .iter()
-        .map(|td| td.as_ref().map(|td| Rc::new(td.clone())))
+        .map(|td| td.as_ref().map(|td| Arc::new(td.clone())))
         .collect::<Vec<_>>();
 
     let mut preliminary_module_import_bindings = Vec::with_capacity(parsed_files.len());
@@ -399,84 +437,178 @@ fn collect_global_function_signatures(
     }
 }
 
-fn check_program_files(
+fn check_program_files_serial(
     parsed_files: &[ParsedProgramFile],
-    global_type_declarations: &TypeDeclarationTable,
-    global_symbols: &SymbolTable,
-    function_signatures: &HashMap<FunctionDeclarationLocation, FunctionType>,
-    module_analyses: &[Option<ModuleAnalysis>],
-    module_import_bindings: &[Option<ModuleImportBindings>],
-    ctx: &mut CheckerContext,
-) {
+    shared_state: &ProgramCheckSharedState,
+    ctx: &CheckerContext,
+) -> Vec<FileCheckResult> {
+    let mut results = Vec::with_capacity(parsed_files.len());
+
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-        ctx.set_file_name(parsed_file.file_name.clone());
+        let mut local_ctx = ctx.clone();
+        local_ctx.diagnostics.clear();
+        local_ctx.stats = CompatibilityStats::default();
+        let result = check_program_file(file_index, parsed_file, shared_state, &mut local_ctx);
+        results.push(result);
+    }
 
-        if ctx.options.skip_lib_check && parsed_file.file_kind.is_declaration() {
-            continue;
-        }
+    results
+}
 
-        if parsed_file.file_kind.is_declaration() {
-            emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
-            continue;
-        }
+fn check_program_files_parallel(
+    parsed_files: &[ParsedProgramFile],
+    shared_state: &ProgramCheckSharedState,
+    ctx: &CheckerContext,
+    jobs: usize,
+) -> Vec<FileCheckResult> {
+    let worker_count = jobs.max(1).min(parsed_files.len());
+    if worker_count <= 1 {
+        return check_program_files_serial(parsed_files, shared_state, ctx);
+    }
 
-        if parsed_file.is_module {
-            let Some(module_analysis) = module_analyses[file_index].as_ref() else {
-                continue;
-            };
+    let chunk_size = (parsed_files.len() + worker_count - 1) / worker_count;
+    let worker_base = ctx.clone();
 
-            let imported_bindings = module_import_bindings[file_index]
-                .clone()
-                .unwrap_or_default();
+    let results = thread::scope(|scope| {
+        let mut handles = Vec::new();
 
-            let mut merged_type_declarations = ctx.ambient_global_type_declarations.clone();
-            for (name, declaration) in module_analysis.local_type_declarations.iter() {
-                let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
-            }
-            for (name, declaration) in imported_bindings.type_declarations.iter() {
-                let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
-            }
+        for (chunk_index, chunk) in parsed_files.chunks(chunk_size).enumerate() {
+            let shared_state = shared_state;
+            let worker_ctx = worker_base.clone();
+            let start_index = chunk_index * chunk_size;
 
-            let mut merged_symbols = ctx.ambient_global_symbols.clone();
-            for (name, symbol) in module_analysis.local_symbols.iter() {
-                let _ = merged_symbols.insert(name.clone(), symbol.clone());
-            }
-            for (name, symbol) in imported_bindings.symbols.iter() {
-                if merged_symbols.get(name).is_none() {
-                    merged_symbols.insert(name.clone(), symbol.clone());
+            handles.push(scope.spawn(move || {
+                let mut local_ctx = worker_ctx;
+                local_ctx.diagnostics.clear();
+                local_ctx.stats = CompatibilityStats::default();
+
+                let mut chunk_results = Vec::with_capacity(chunk.len());
+                for (offset, parsed_file) in chunk.iter().enumerate() {
+                    let file_index = start_index + offset;
+                    chunk_results.push(check_program_file(
+                        file_index,
+                        parsed_file,
+                        shared_state,
+                        &mut local_ctx,
+                    ));
                 }
-            }
 
-            ctx.type_declarations = merged_type_declarations;
-            ctx.set_symbols(merged_symbols);
-            validate_direct_utility_aliases(&parsed_file.statements, ctx);
-            check_program_file_statements(
-                &parsed_file.statements,
-                file_index,
-                &module_analysis.local_function_signatures,
-                ctx,
-            );
-        } else {
-            let mut script_td = global_type_declarations.clone();
-            for (name, declaration) in ctx.ambient_global_type_declarations.iter() {
-                let _ = script_td.insert(name.clone(), declaration.clone());
-            }
-            ctx.type_declarations = script_td;
+                chunk_results
+            }));
+        }
 
-            let mut script_sym = global_symbols.clone();
-            for (name, symbol) in ctx.ambient_global_symbols.iter() {
-                let _ = script_sym.insert(name.clone(), symbol.clone());
-            }
-            ctx.set_symbols(script_sym);
-
-            validate_direct_utility_aliases(&parsed_file.statements, ctx);
-            check_program_file_statements(
-                &parsed_file.statements,
-                file_index,
-                function_signatures,
-                ctx,
+        let mut outputs = Vec::with_capacity(handles.len());
+        for handle in handles {
+            outputs.push(
+                handle
+                    .join()
+                    .expect("parallel project checking worker panicked"),
             );
         }
+        outputs
+    });
+
+    let mut flattened = results.into_iter().flatten().collect::<Vec<_>>();
+    flattened.sort_by_key(|result| result.file_index);
+    flattened
+}
+
+fn check_program_file(
+    file_index: usize,
+    parsed_file: &ParsedProgramFile,
+    shared_state: &ProgramCheckSharedState,
+    ctx: &mut CheckerContext,
+) -> FileCheckResult {
+    ctx.set_file_name(parsed_file.file_name.clone());
+
+    if ctx.options.skip_lib_check && parsed_file.file_kind.is_declaration() {
+        return FileCheckResult {
+            file_index,
+            diagnostics: Vec::new(),
+            stats: CompatibilityStats::default(),
+        };
+    }
+
+    if parsed_file.file_kind.is_declaration() {
+        emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
+        let diagnostics = std::mem::take(&mut ctx.diagnostics);
+        let stats = std::mem::take(&mut ctx.stats);
+        return FileCheckResult {
+            file_index,
+            diagnostics,
+            stats,
+        };
+    }
+
+    if parsed_file.is_module {
+        let Some(module_analysis) = shared_state.module_analyses[file_index].as_ref() else {
+            return FileCheckResult {
+                file_index,
+                diagnostics: Vec::new(),
+                stats: CompatibilityStats::default(),
+            };
+        };
+
+        let imported_bindings = shared_state.module_import_bindings[file_index]
+            .clone()
+            .unwrap_or_default();
+
+        let mut merged_type_declarations = ctx.ambient_global_type_declarations.clone();
+        for (name, declaration) in module_analysis.local_type_declarations.iter() {
+            let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+        }
+        for (name, declaration) in imported_bindings.type_declarations.iter() {
+            let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+        }
+
+        let mut merged_symbols = ctx.ambient_global_symbols.clone();
+        for (name, symbol) in module_analysis.local_symbols.iter() {
+            let _ = merged_symbols.insert(name.clone(), symbol.clone());
+        }
+        for (name, symbol) in imported_bindings.symbols.iter() {
+            if merged_symbols.get(name).is_none() {
+                merged_symbols.insert(name.clone(), symbol.clone());
+            }
+        }
+
+        ctx.type_declarations = merged_type_declarations;
+        ctx.set_symbols(merged_symbols);
+        validate_direct_utility_aliases(&parsed_file.statements, ctx);
+        check_program_file_statements(
+            &parsed_file.statements,
+            file_index,
+            &module_analysis.local_function_signatures,
+            ctx,
+        );
+    } else {
+        let mut script_td = shared_state.global_type_declarations.clone();
+        for (name, declaration) in ctx.ambient_global_type_declarations.iter() {
+            let _ = script_td.insert(name.clone(), declaration.clone());
+        }
+        ctx.type_declarations = script_td;
+
+        let mut script_sym = shared_state.global_symbols.clone();
+        for (name, symbol) in ctx.ambient_global_symbols.iter() {
+            let _ = script_sym.insert(name.clone(), symbol.clone());
+        }
+        ctx.set_symbols(script_sym);
+
+        validate_direct_utility_aliases(&parsed_file.statements, ctx);
+        check_program_file_statements(
+            &parsed_file.statements,
+            file_index,
+            &shared_state.function_signatures,
+            ctx,
+        );
+    }
+
+    let diagnostics = std::mem::take(&mut ctx.diagnostics);
+    let stats = std::mem::take(&mut ctx.stats);
+
+    FileCheckResult {
+        file_index,
+        diagnostics,
+        stats,
     }
 }
 
@@ -484,7 +616,7 @@ fn collect_module_import_bindings(
     parsed_files: &[ParsedProgramFile],
     module_analyses: &[Option<ModuleAnalysis>],
     module_export_tables: &[Option<ModuleExportTable>],
-    module_resolution_scopes: &[Option<Rc<TypeDeclarationTable>>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
     ctx: &mut CheckerContext,
 ) -> Vec<Option<ModuleImportBindings>> {
     let mut module_import_bindings = Vec::with_capacity(parsed_files.len());

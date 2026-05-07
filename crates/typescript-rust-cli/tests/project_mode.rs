@@ -93,6 +93,26 @@ fn json_diagnostic_lines(parsed: &Value, code: &str) -> Vec<Option<u64>> {
         .collect()
 }
 
+fn json_diagnostic_fingerprints(parsed: &Value) -> Vec<String> {
+    json_diagnostics(parsed)
+        .iter()
+        .map(|diagnostic| {
+            let file_name = diagnostic["fileName"].as_str().unwrap_or("");
+            let code = diagnostic["code"].as_str().unwrap_or("");
+            let line = diagnostic["line"]
+                .as_u64()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            let column = diagnostic["column"]
+                .as_u64()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            let message = diagnostic["message"].as_str().unwrap_or("");
+            format!("{file_name}|{code}|{line}|{column}|{message}")
+        })
+        .collect()
+}
+
 #[test]
 fn project_mode_maps_strict_to_no_implicit_any() {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1579,6 +1599,101 @@ fn cli_project_tsc_profile_suppresses_custom_checker_diagnostics() {
 }
 
 #[test]
+fn cli_project_jobs_accept_one_two_and_four() {
+    let project = compat_project_root("parallel-ordering-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    for jobs in ["1", "2", "4"] {
+        let json = run_cli_json(&[
+            "--project",
+            project.as_str(),
+            "--format",
+            "json",
+            "--jobs",
+            jobs,
+        ]);
+        assert!(!json_diagnostics(&json).is_empty());
+    }
+}
+
+#[test]
+fn cli_project_jobs_reject_zero_and_non_numeric() {
+    let project = compat_project_root("parallel-ordering-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let zero = run_cli_raw(&["--project", project.as_str(), "--jobs", "0"]);
+    assert!(!zero.status.success());
+    let zero_stderr = String::from_utf8(zero.stderr).unwrap();
+    assert!(zero_stderr.contains("--jobs must be greater than 0"));
+
+    let invalid = run_cli_raw(&["--project", project.as_str(), "--jobs", "not-a-number"]);
+    assert!(!invalid.status.success());
+    let invalid_stderr = String::from_utf8(invalid.stderr).unwrap();
+    assert!(invalid_stderr.contains("invalid value for --jobs"));
+}
+
+#[test]
+fn cli_project_jobs_match_serial_json_diagnostics() {
+    let project = compat_project_root("parallel-ordering-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let serial = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let jobs1 = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--jobs",
+        "1",
+    ]);
+    let jobs4 = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--jobs",
+        "4",
+    ]);
+
+    let serial_fingerprints = json_diagnostic_fingerprints(&serial);
+    let jobs1_fingerprints = json_diagnostic_fingerprints(&jobs1);
+    let jobs4_fingerprints = json_diagnostic_fingerprints(&jobs4);
+
+    assert_eq!(serial_fingerprints, jobs1_fingerprints);
+    assert_eq!(jobs1_fingerprints, jobs4_fingerprints);
+}
+
+#[test]
+fn cli_project_jobs_keep_native_profile_opt_in() {
+    let root = temp_dir("project-jobs-native-profile");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(&root, "src/a.ts", "import { User from \"./user\";");
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let native = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--diagnosticProfile",
+        "native",
+        "--jobs",
+        "4",
+    ]);
+
+    assert!(
+        json_diagnostic_codes(&native)
+            .iter()
+            .any(|code| code.starts_with("typescript-rust::"))
+    );
+}
+
+#[test]
 fn cli_compat_report_with_max_diagnostics_counts_all() {
     let root = temp_dir("project-compat-max-diagnostics");
     write_file(
@@ -1690,6 +1805,116 @@ fn cli_paths_wildcard_import_graph_basic_fixture_compat_report_loads_files() {
 
     assert_eq!(parsed["loadedSourceFiles"], Value::from(2));
     assert_eq!(parsed["diagnosticsTotal"], Value::from(1));
+}
+
+#[test]
+fn cli_import_graph_dependency_js_not_source_fixture_uses_declaration_not_js() {
+    let project =
+        compat_project_root("import-graph-dependency-js-not-source").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_import_graph_dependency_js_not_source_fixture_compat_report_tracks_dependency_js_zero() {
+    let project =
+        compat_project_root("import-graph-dependency-js-not-source").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["filesLoaded"], Value::from(1));
+    assert_eq!(parsed["loadedSourceFiles"], Value::from(1));
+    assert_eq!(parsed["loadedDependencyDeclarationFiles"], Value::from(1));
+    assert_eq!(
+        parsed["loadedDependencyJavaScriptSourceFiles"],
+        Value::from(0)
+    );
+    assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
+    assert_eq!(
+        parsed["diagnosticsDependencyJavaScriptSourceTotal"],
+        Value::from(0)
+    );
+}
+
+#[test]
+fn cli_builtin_visibility_project_graph_basic_fixture_keeps_synthetic_builtins_visible() {
+    let project =
+        compat_project_root("builtin-visibility-project-graph-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_builtin_visibility_project_graph_basic_fixture_compat_report_tracks_loaded_imported_file() {
+    let project =
+        compat_project_root("builtin-visibility-project-graph-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["filesLoaded"], Value::from(2));
+    assert_eq!(parsed["loadedSourceFiles"], Value::from(2));
+    assert_eq!(
+        parsed["loadedDependencyJavaScriptSourceFiles"],
+        Value::from(0)
+    );
+    assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
+}
+
+#[test]
+fn cli_builtin_visibility_import_graph_basic_fixture_keeps_synthetic_builtins_visible() {
+    let project =
+        compat_project_root("builtin-visibility-import-graph-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    let codes = json_diagnostic_codes(&parsed);
+
+    assert!(codes.is_empty());
+}
+
+#[test]
+fn cli_builtin_visibility_import_graph_basic_fixture_compat_report_tracks_loaded_imported_file() {
+    let project =
+        compat_project_root("builtin-visibility-import-graph-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--compatReport",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(parsed["filesLoaded"], Value::from(2));
+    assert_eq!(parsed["loadedSourceFiles"], Value::from(2));
+    assert_eq!(
+        parsed["loadedDependencyJavaScriptSourceFiles"],
+        Value::from(0)
+    );
+    assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
 }
 
 #[test]

@@ -13,7 +13,7 @@ use report::{
 };
 use serde_json::{Map, Value};
 use typescript_rust_checker::{
-    CheckerOptions, SourceFileInput, check_program_with_stats, check_source_with_options,
+    CheckerOptions, SourceFileInput, check_program_with_stats_and_jobs, check_source_with_options,
 };
 use typescript_rust_config::{TsConfigLoadOptions, load_tsconfig};
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode, render_diagnostics};
@@ -63,6 +63,9 @@ struct Cli {
     #[arg(long = "maxDiagnostics")]
     max_diagnostics: Option<usize>,
 
+    #[arg(long, value_parser = parse_jobs)]
+    jobs: Option<usize>,
+
     #[arg(long = "stubExternalModules")]
     stub_external_modules: bool,
 
@@ -107,6 +110,7 @@ fn main() -> ExitCode {
             cli.compat_report,
             cli.format.unwrap_or(ReportFormat::Text),
             cli.max_diagnostics,
+            cli.jobs.unwrap_or(1),
             cli.stub_external_modules,
             cli.diagnostic_profile
                 .unwrap_or(CliDiagnosticProfile::Tsc)
@@ -118,6 +122,14 @@ fn main() -> ExitCode {
         Error::raw(
             ErrorKind::MissingRequiredArgument,
             "--showConfig requires --project",
+        )
+        .exit();
+    }
+
+    if cli.jobs.is_some() {
+        Error::raw(
+            ErrorKind::ArgumentConflict,
+            "--jobs is only supported with --project",
         )
         .exit();
     }
@@ -238,6 +250,7 @@ fn run_project_mode(
     compat_report: bool,
     format: ReportFormat,
     max_diagnostics: Option<usize>,
+    jobs: usize,
     stub_external_modules: bool,
     diagnostic_profile: typescript_rust_checker::DiagnosticProfile,
 ) -> ExitCode {
@@ -332,10 +345,15 @@ fn run_project_mode(
         diagnostic_profile,
     };
 
-    let result = check_program_with_stats(inputs, checker_options);
+    let result = check_program_with_stats_and_jobs(inputs, checker_options, jobs);
+    let diagnostics = apply_project_no_lib_compatibility_diagnostics(
+        result.diagnostics,
+        loaded.compiler_options.no_lib,
+        diagnostic_profile,
+    );
     render_project_mode_output(
         &loaded,
-        &result.diagnostics,
+        &diagnostics,
         &sources,
         &result.stats,
         show_spans,
@@ -343,6 +361,17 @@ fn run_project_mode(
         format,
         max_diagnostics,
     )
+}
+
+fn parse_jobs(value: &str) -> Result<usize, String> {
+    let jobs = value
+        .parse::<usize>()
+        .map_err(|_| format!("invalid value for --jobs: {value}"))?;
+    if jobs == 0 {
+        return Err("--jobs must be greater than 0".to_string());
+    }
+
+    Ok(jobs)
 }
 
 fn render_project_mode_output(
@@ -411,6 +440,50 @@ fn render_project_mode_output(
     }
 
     ExitCode::SUCCESS
+}
+
+fn apply_project_no_lib_compatibility_diagnostics(
+    diagnostics: Vec<Diagnostic>,
+    no_lib: bool,
+    diagnostic_profile: typescript_rust_checker::DiagnosticProfile,
+) -> Vec<Diagnostic> {
+    if !no_lib || diagnostic_profile != typescript_rust_checker::DiagnosticProfile::Tsc {
+        return diagnostics;
+    }
+
+    let mut filtered = diagnostics
+        .into_iter()
+        .filter(|diagnostic| !matches!(diagnostic.code, DiagnosticCode::TypeScript(2304)))
+        .collect::<Vec<_>>();
+
+    filtered.extend(project_no_lib_missing_global_type_diagnostics());
+    filtered
+}
+
+fn project_no_lib_missing_global_type_diagnostics() -> Vec<Diagnostic> {
+    let file_name = String::new();
+
+    [
+        "Array",
+        "Boolean",
+        "CallableFunction",
+        "Function",
+        "IArguments",
+        "NewableFunction",
+        "Number",
+        "Object",
+        "RegExp",
+        "String",
+    ]
+    .into_iter()
+    .map(|global_type| {
+        Diagnostic::new(
+            DiagnosticCode::TypeScript(2318),
+            format!("Cannot find global type '{global_type}'."),
+            file_name.clone(),
+        )
+    })
+    .collect()
 }
 
 fn render_single_file_diagnostics(

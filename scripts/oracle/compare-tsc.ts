@@ -17,6 +17,14 @@ export type NormalizedDiagnostic = {
   message?: string;
 };
 
+export type DiagnosticFingerprint = {
+  fileName: string;
+  code: string;
+  line: number | null;
+  column: number | null;
+  message: string | null;
+};
+
 export type CountBucket = {
   key: string;
   typescript: number;
@@ -60,6 +68,7 @@ export type ComparisonResult = {
   ignoreConfig?: boolean;
   typescriptRustOptions?: {
     stubExternalModules?: boolean;
+    rustJobs?: number;
   };
   warnings?: string[];
   tooling: {
@@ -91,6 +100,7 @@ export type ComparisonResult = {
       ts2307ByModuleSpecifier?: CategorizedCountEntry[];
       ts2304ByIdentifier?: CategorizedCountEntry[];
       nodeModulesSourceDiagnosticsByPrefix?: CountEntry[];
+      nodeModulesJavaScriptSourceDiagnosticsByPrefix?: CountEntry[];
     };
   };
 };
@@ -103,6 +113,7 @@ export type ParsedArgs = {
   maxDiagnostics?: number;
   ignoreConfig?: boolean;
   stubExternalModules?: boolean;
+  rustJobs?: number;
 };
 
 export type OracleMode =
@@ -112,6 +123,7 @@ export type OracleMode =
       resolvedTsconfig: string;
       ignoreConfig?: boolean;
       stubExternalModules?: boolean;
+      rustJobs?: number;
     }
   | {
       kind: 'file';
@@ -163,7 +175,13 @@ export function main(argv = process.argv.slice(2)): void {
   const mode = resolveOracleMode(args);
   const comparison =
     mode.kind === 'project'
-      ? compareProject(mode.resolvedTsconfig, displayComparisonTargetPath(mode.resolvedTsconfig), args.maxDiagnostics, mode.stubExternalModules)
+      ? compareProject(
+          mode.resolvedTsconfig,
+          displayComparisonTargetPath(mode.resolvedTsconfig),
+          args.maxDiagnostics,
+          mode.stubExternalModules,
+          mode.rustJobs,
+        )
       : compareFile(mode.resolvedFile, displayComparisonTargetPath(mode.resolvedFile), args.maxDiagnostics, mode.ignoreConfig, mode.stubExternalModules);
 
   if (args.json) {
@@ -209,6 +227,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
       parsed.ignoreConfig = true;
     } else if (arg === '--stubExternalModules') {
       parsed.stubExternalModules = true;
+    } else if (arg === '--rustJobs') {
+      const value = argv[++index];
+      if (!value) {
+        throw new Error('--rustJobs requires a value');
+      }
+      const parsedValue = Number(value);
+      if (!Number.isInteger(parsedValue) || parsedValue <= 0) {
+        throw new Error('--rustJobs must be greater than 0');
+      }
+      parsed.rustJobs = parsedValue;
     } else if (arg === '--failOnMismatch' || arg === '--strictCodes') {
       parsed.failOnMismatch = true;
     } else if (arg === '--maxDiagnostics') {
@@ -251,7 +279,12 @@ export function resolveOracleMode(args: ParsedArgs): OracleMode {
       project: projectInput,
       resolvedTsconfig,
       stubExternalModules: args.stubExternalModules,
+      rustJobs: args.rustJobs,
     };
+  }
+
+  if (args.rustJobs !== undefined) {
+    throw new Error('--rustJobs is only supported with --project.');
   }
 
   const fileInput = args.fileInput as string;
@@ -356,6 +389,7 @@ export function compareProject(
   projectDisplay: string,
   maxDiagnostics?: number,
   stubExternalModules?: boolean,
+  rustJobs?: number,
 ): ComparisonResult {
   return executeComparison(
     {
@@ -363,6 +397,7 @@ export function compareProject(
       project: projectDisplay,
       resolvedTsconfig: tsconfigPath,
       stubExternalModules,
+      rustJobs,
     },
     maxDiagnostics,
   );
@@ -416,7 +451,11 @@ export function runTsc(mode: OracleMode): RunResult {
   };
 }
 
-export function runTypeScriptRust(mode: OracleMode, maxDiagnostics?: number): RunResult {
+export function runTypeScriptRust(
+  mode: OracleMode,
+  maxDiagnostics?: number,
+  rustJobs?: number,
+): RunResult {
   const args = [
     'run',
     '-q',
@@ -432,6 +471,9 @@ export function runTypeScriptRust(mode: OracleMode, maxDiagnostics?: number): Ru
     args.push('--format', 'json');
     if (mode.stubExternalModules) {
       args.push('--stubExternalModules');
+    }
+    if (rustJobs !== undefined) {
+      args.push('--jobs', String(rustJobs));
     }
   } else {
     args.push('--format', 'json');
@@ -625,6 +667,20 @@ export function limitDiagnostics(
   return diagnostics.slice(0, maxDiagnostics);
 }
 
+export function normalizeDiagnostic(diagnostic: NormalizedDiagnostic): DiagnosticFingerprint {
+  return {
+    fileName: diagnostic.fileName,
+    code: diagnostic.code,
+    line: diagnostic.line ?? null,
+    column: diagnostic.column ?? null,
+    message: diagnostic.message ?? null,
+  };
+}
+
+export function normalizeDiagnostics(diagnostics: NormalizedDiagnostic[]): DiagnosticFingerprint[] {
+  return diagnostics.map(normalizeDiagnostic);
+}
+
 export function compareDiagnostics(
   mode: 'project' | 'file',
   targetDisplay: string,
@@ -634,6 +690,7 @@ export function compareDiagnostics(
   stubExternalModules?: boolean,
   projectRoot?: string,
   pathsMappings: TsconfigPathMapping[] = [],
+  rustJobs?: number,
 ): ComparisonResult {
   const byCode = compareBuckets(typescript, typescriptRust, keyByCode);
   const byFileCode = compareBuckets(typescript, typescriptRust, keyByFileCode);
@@ -656,12 +713,19 @@ export function compareDiagnostics(
     ignoreConfig: ignoreConfig ?? false,
     typescriptRustOptions: {
       stubExternalModules: stubExternalModules ?? false,
+      rustJobs,
     },
     warnings: buildComparisonWarnings(typescript, typescriptRust),
     tooling: {
       typescriptVersion: pinnedTypeScriptVersion,
       typescriptCommand: buildTypeScriptCommand(mode, targetDisplay, ignoreConfig),
-      typescriptRustCommand: buildTypeScriptRustCommand(mode, targetDisplay, ignoreConfig, stubExternalModules),
+      typescriptRustCommand: buildTypeScriptRustCommand(
+        mode,
+        targetDisplay,
+        ignoreConfig,
+        stubExternalModules,
+        rustJobs,
+      ),
     },
     typescript: summarizeDiagnostics(typescript),
     typescriptRust: summarizeDiagnostics(typescriptRust),
@@ -738,6 +802,12 @@ export function compareDiagnostics(
           onlyTypeScriptRustDiagnostics.filter((diagnostic) => isNodeModulesSourceDiagnostic(diagnostic)),
           (diagnostic) => nodeModulesSourcePrefix(diagnostic.fileName) ?? diagnostic.fileName,
         ),
+        nodeModulesJavaScriptSourceDiagnosticsByPrefix: groupDiagnosticsByKey(
+          onlyTypeScriptRustDiagnostics.filter((diagnostic) =>
+            isNodeModulesJavaScriptSourceDiagnostic(diagnostic),
+          ),
+          (diagnostic) => nodeModulesSourcePrefix(diagnostic.fileName) ?? diagnostic.fileName,
+        ),
       },
     },
   };
@@ -751,7 +821,13 @@ export function buildTypeScriptCommand(mode: 'project' | 'file', targetDisplay: 
   return ignoreConfig ? `pnpm exec tsc --noEmit --pretty false --ignoreConfig ${targetDisplay}` : `pnpm exec tsc --noEmit --pretty false ${targetDisplay}`;
 }
 
-export function buildTypeScriptRustCommand(mode: 'project' | 'file', targetDisplay: string, ignoreConfig?: boolean, stubExternalModules?: boolean): string {
+export function buildTypeScriptRustCommand(
+  mode: 'project' | 'file',
+  targetDisplay: string,
+  ignoreConfig?: boolean,
+  stubExternalModules?: boolean,
+  rustJobs?: number,
+): string {
   const cargoToml = normalizePathForDisplay(path.join(workspaceRoot, 'Cargo.toml'));
   let args = `cargo run -q --manifest-path ${cargoToml} -p typescript-rust-cli --`;
 
@@ -759,6 +835,9 @@ export function buildTypeScriptRustCommand(mode: 'project' | 'file', targetDispl
     args += ` --project ${targetDisplay} --format json`;
     if (stubExternalModules) {
       args += ` --stubExternalModules`;
+    }
+    if (rustJobs !== undefined) {
+      args += ` --jobs ${rustJobs}`;
     }
     return args;
   }
@@ -1131,7 +1210,6 @@ function isDomLikeIdentifier(identifier: string): boolean {
     'Node',
     'Text',
     'Document',
-    'console',
   ]).has(identifier);
 }
 
@@ -1145,17 +1223,12 @@ function isGenericOrTypeParameterScopeIdentifier(identifier: string): boolean {
 
 function isMissingSyntheticLibGlobalIdentifier(identifier: string): boolean {
   return [
-    'Object',
     'Array',
     'String',
     'Number',
     'Boolean',
     'Symbol',
     'Promise',
-    'Map',
-    'Set',
-    'WeakMap',
-    'WeakSet',
     'Date',
     'RegExp',
     'Error',
@@ -1163,7 +1236,31 @@ function isMissingSyntheticLibGlobalIdentifier(identifier: string): boolean {
     'JSON',
     'Intl',
     'Console',
+    'console',
+    'Record',
     'ReadonlyArray',
+  ].includes(identifier);
+}
+
+function isMissingEsLibLiteGlobalIdentifier(identifier: string): boolean {
+  return [
+    'Object',
+    'Map',
+    'Set',
+    'WeakMap',
+    'WeakSet',
+    'Uint8Array',
+    'Uint16Array',
+    'Uint32Array',
+    'Int8Array',
+    'Int16Array',
+    'Int32Array',
+    'Float32Array',
+    'Float64Array',
+    'BigInt64Array',
+    'BigUint64Array',
+    'globalThis',
+    'isNaN',
   ].includes(identifier);
 }
 
@@ -1246,7 +1343,10 @@ export function classifyTs2304Identifier(identifier: string): string {
     return 'generic-or-type-parameter-scope';
   }
   if (isMissingSyntheticLibGlobalIdentifier(identifier)) {
-    return 'missing-synthetic-lib-global';
+    return 'missing-synthetic-built-in';
+  }
+  if (isMissingEsLibLiteGlobalIdentifier(identifier)) {
+    return 'missing-es-lib-lite-global';
   }
   if (isPackageDerivedIdentifier(identifier)) {
     return 'package-derived-incomplete-declaration';
@@ -1667,6 +1767,19 @@ export function isNodeModulesSourceDiagnostic(diagnostic: NormalizedDiagnostic):
   return diagnostic.fileName.includes('/node_modules/') && !isDeclarationFileName(diagnostic.fileName);
 }
 
+export function isNodeModulesJavaScriptSourceDiagnostic(diagnostic: NormalizedDiagnostic): boolean {
+  if (!isNodeModulesSourceDiagnostic(diagnostic)) {
+    return false;
+  }
+
+  return (
+    diagnostic.fileName.endsWith('.js') ||
+    diagnostic.fileName.endsWith('.jsx') ||
+    diagnostic.fileName.endsWith('.mjs') ||
+    diagnostic.fileName.endsWith('.cjs')
+  );
+}
+
 export function nodeModulesSourcePrefix(fileName: string): string | null {
   const normalized = fileName.replace(/\\/g, '/');
   const needle = '/node_modules/';
@@ -1785,6 +1898,13 @@ export function renderComparisonText(comparison: ComparisonResult): string {
     }
     lines.push('');
   }
+  if (comparison.details?.onlyTypeScriptRust?.nodeModulesJavaScriptSourceDiagnosticsByPrefix?.length) {
+    lines.push('Top ONLY_RUST node_modules JavaScript source diagnostics by prefix:');
+    for (const entry of comparison.details.onlyTypeScriptRust.nodeModulesJavaScriptSourceDiagnosticsByPrefix.slice(0, 10)) {
+      lines.push(`  ${entry.key}  ${entry.count}`);
+    }
+    lines.push('');
+  }
   lines.push('By code:');
   appendBucketSection(
     lines,
@@ -1877,6 +1997,20 @@ function buildComparisonWarnings(
       !diagnostic.fileName.endsWith('.d.mts') &&
       !diagnostic.fileName.endsWith('.d.cts'),
   );
+  const rustDiagnosticsInNodeModulesJavaScriptSourceFiles = rustDiagnosticsInNodeModulesSourceFiles.filter(
+    (diagnostic) =>
+      diagnostic.fileName.endsWith('.js') ||
+      diagnostic.fileName.endsWith('.jsx') ||
+      diagnostic.fileName.endsWith('.mjs') ||
+      diagnostic.fileName.endsWith('.cjs'),
+  );
+  const rustDiagnosticsInNodeModulesOtherSourceFiles = rustDiagnosticsInNodeModulesSourceFiles.filter(
+    (diagnostic) =>
+      !diagnostic.fileName.endsWith('.js') &&
+      !diagnostic.fileName.endsWith('.jsx') &&
+      !diagnostic.fileName.endsWith('.mjs') &&
+      !diagnostic.fileName.endsWith('.cjs'),
+  );
   const rustOnlyDiagnostics = typescriptRust.filter((diagnostic) =>
     diagnostic.code.startsWith('typescript-rust::'),
   );
@@ -1890,6 +2024,18 @@ function buildComparisonWarnings(
   if (rustDiagnosticsInNodeModulesSourceFiles.length > 0) {
     warnings.push(
       `Rust diagnostics from node_modules source files: ${rustDiagnosticsInNodeModulesSourceFiles.length}`,
+    );
+  }
+
+  if (rustDiagnosticsInNodeModulesJavaScriptSourceFiles.length > 0) {
+    warnings.push(
+      `Rust diagnostics from node_modules JavaScript source files: ${rustDiagnosticsInNodeModulesJavaScriptSourceFiles.length}`,
+    );
+  }
+
+  if (rustDiagnosticsInNodeModulesOtherSourceFiles.length > 0) {
+    warnings.push(
+      `Rust diagnostics from node_modules non-JavaScript source files: ${rustDiagnosticsInNodeModulesOtherSourceFiles.length}`,
     );
   }
 
@@ -2025,6 +2171,7 @@ function printHelpAndExit(): never {
       '  --json                    Emit machine-readable comparison output.',
       '  --failOnMismatch          Exit with code 1 when code/file mismatches exist.',
       '  --strictCodes             Alias for --failOnMismatch.',
+      '  --rustJobs <n>            Pass a deterministic project-checking job count to typescript-rust.',
       '',
       'Known presets:',
       `  ${Object.keys(fixturePresets).join(', ')}`,
@@ -2132,7 +2279,7 @@ function executeComparison(
   const projectDir = path.dirname(comparisonPath);
   const pathsMappings = mode.kind === 'project' ? readTsconfigPathsMappings(mode.resolvedTsconfig) : [];
   const tsc = runTsc(mode);
-  const rust = runTypeScriptRust(mode, maxDiagnostics);
+  const rust = runTypeScriptRust(mode, maxDiagnostics, mode.kind === 'project' ? mode.rustJobs : undefined);
   const rustOutput = rust.stdout.trim() ? rust.stdout : rust.stderr;
 
   const tscDiagnostics = limitDiagnostics(
@@ -2150,6 +2297,7 @@ function executeComparison(
     mode.stubExternalModules,
     projectDir,
     pathsMappings,
+    mode.kind === 'project' ? mode.rustJobs : undefined,
   );
 }
 

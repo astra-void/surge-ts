@@ -34,6 +34,7 @@ type RunStats = {
 
 type BenchResult = {
   project: string;
+  rustJobs: number;
   stats: Record<Tool, RunStats | null>;
   drift: Record<Tool, string>;
 };
@@ -50,6 +51,7 @@ type ParsedArgs = {
   generate: string | null;
   files: number;
   symbols: number;
+  rustJobs: number;
 };
 
 const presets: Record<string, string[]> = {
@@ -131,6 +133,7 @@ function main(argv = process.argv.slice(2)): void {
 
     const benchRes: BenchResult = {
       project: projectName,
+      rustJobs: args.rustJobs,
       stats: { tsc: null, tsgo: null, 'tsgo-singleThreaded': null, 'ts-rust': null },
       drift: { tsc: 'baseline', tsgo: 'skipped', 'tsgo-singleThreaded': 'skipped', 'ts-rust': 'not compared' },
     };
@@ -139,27 +142,27 @@ function main(argv = process.argv.slice(2)): void {
 
     // 1. Get TSC baseline and diagnostics
     console.log(`  Running tsc baseline...`);
-    const tscOutput = runTool('tsc', resolvedTsconfig, 1, 0); // single run for diagnostics
+    const tscOutput = runTool('tsc', resolvedTsconfig, 1, 0, args.rustJobs); // single run for diagnostics
     const tscDiagnostics = parseTypeScriptDiagnostics(`${tscOutput.stdout}${tscOutput.stderr}`, path.dirname(resolvedTsconfig));
     
     // Benchmark TSC
-    benchRes.stats.tsc = runBenchmark('tsc', resolvedTsconfig, args.iterations, args.warmup);
+    benchRes.stats.tsc = runBenchmark('tsc', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
 
     // 2. tsgo (if available)
     if (args.includeTsgo && tsgoAvailable) {
       console.log(`  Running tsgo baseline...`);
-      const tsgoOutput = runTool('tsgo', resolvedTsconfig, 1, 0);
+      const tsgoOutput = runTool('tsgo', resolvedTsconfig, 1, 0, args.rustJobs);
       const tsgoDiagnostics = parseTypeScriptDiagnostics(`${tsgoOutput.stdout}${tsgoOutput.stderr}`, path.dirname(resolvedTsconfig));
       const tsgoDrift = compareDrift(tscDiagnostics, tsgoDiagnostics, 'tsgo');
       benchRes.drift.tsgo = tsgoDrift;
-      benchRes.stats.tsgo = runBenchmark('tsgo', resolvedTsconfig, args.iterations, args.warmup);
+      benchRes.stats.tsgo = runBenchmark('tsgo', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
 
       // singleThreaded tsgo (optional)
-      const tsgoStOutput = runTool('tsgo-singleThreaded', resolvedTsconfig, 1, 0);
+      const tsgoStOutput = runTool('tsgo-singleThreaded', resolvedTsconfig, 1, 0, args.rustJobs);
       if (tsgoStOutput.exitCode !== null && !tsgoStOutput.stderr.includes('Unknown option')) {
         const tsgoStDiagnostics = parseTypeScriptDiagnostics(`${tsgoStOutput.stdout}${tsgoStOutput.stderr}`, path.dirname(resolvedTsconfig));
         benchRes.drift['tsgo-singleThreaded'] = compareDrift(tscDiagnostics, tsgoStDiagnostics, 'tsgo-singleThreaded');
-        benchRes.stats['tsgo-singleThreaded'] = runBenchmark('tsgo-singleThreaded', resolvedTsconfig, args.iterations, args.warmup);
+        benchRes.stats['tsgo-singleThreaded'] = runBenchmark('tsgo-singleThreaded', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
       } else {
          benchRes.drift['tsgo-singleThreaded'] = 'skipped';
       }
@@ -169,7 +172,7 @@ function main(argv = process.argv.slice(2)): void {
 
     // 3. ts-rust
     console.log(`  Running ts-rust baseline...`);
-    const rustOutput = runTool('ts-rust', resolvedTsconfig, 1, 0);
+    const rustOutput = runTool('ts-rust', resolvedTsconfig, 1, 0, args.rustJobs);
     const rustDiagnosticsOutput = rustOutput.stdout.trim() ? rustOutput.stdout : rustOutput.stderr;
     try {
       const rustDiagnostics = parseTypeScriptRustDiagnostics(rustDiagnosticsOutput, path.dirname(resolvedTsconfig));
@@ -183,7 +186,7 @@ function main(argv = process.argv.slice(2)): void {
       benchRes.drift['ts-rust'] = 'parse failed';
     }
     
-    benchRes.stats['ts-rust'] = runBenchmark('ts-rust', resolvedTsconfig, args.iterations, args.warmup);
+    benchRes.stats['ts-rust'] = runBenchmark('ts-rust', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
 
     results.push(benchRes);
   }
@@ -223,7 +226,7 @@ function checkTsgo(): boolean {
   }
 }
 
-function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number): { exitCode: number | null, stdout: string, stderr: string, times: number[] } {
+function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rustJobs: number): { exitCode: number | null, stdout: string, stderr: string, times: number[] } {
   const times: number[] = [];
   let lastOutput = { exitCode: 0 as number | null, stdout: '', stderr: '' };
   
@@ -245,7 +248,7 @@ function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number): { 
         console.error(`Run: cargo build --release -p typescript-rust-cli`);
         process.exit(1);
       }
-      res = spawnSync(exePath, ['--project', tsconfig, '--format', 'json', '--maxDiagnostics', '10000'], { cwd: workspaceRoot, encoding: 'utf8' });
+      res = spawnSync(exePath, ['--project', tsconfig, '--format', 'json', '--maxDiagnostics', '10000', '--jobs', String(rustJobs)], { cwd: workspaceRoot, encoding: 'utf8' });
     } else {
       throw new Error(`Unknown tool ${tool}`);
     }
@@ -261,8 +264,8 @@ function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number): { 
   return { ...lastOutput, times };
 }
 
-function runBenchmark(tool: Tool, tsconfig: string, iterations: number, warmup: number): RunStats {
-  const { times } = runTool(tool, tsconfig, iterations, warmup);
+function runBenchmark(tool: Tool, tsconfig: string, iterations: number, warmup: number, rustJobs: number): RunStats {
+  const { times } = runTool(tool, tsconfig, iterations, warmup, rustJobs);
   times.sort((a, b) => a - b);
   const median = times[Math.floor(times.length / 2)] / 1000;
   const min = times[0] / 1000;
@@ -320,7 +323,8 @@ function printResults(results: BenchResult[]) {
     for (const tool of ['tsc', 'tsgo', 'tsgo-singleThreaded', 'ts-rust'] as Tool[]) {
       if (r.stats[tool]) {
         const s = r.stats[tool]!;
-        console.log(`${`${r.project.padEnd(30)}${tool.padEnd(25)}${s.median.toFixed(2)}s`.padEnd(65) + `${s.min.toFixed(2)}s`.padEnd(10) + `${s.max.toFixed(2)}s`.padEnd(10)}${s.runs}`);
+        const toolLabel = tool === 'ts-rust' ? `${tool} (jobs=${r.rustJobs})` : tool;
+        console.log(`${`${r.project.padEnd(30)}${toolLabel.padEnd(25)}${s.median.toFixed(2)}s`.padEnd(65) + `${s.min.toFixed(2)}s`.padEnd(10) + `${s.max.toFixed(2)}s`.padEnd(10)}${s.runs}`);
       }
     }
   }
@@ -349,6 +353,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     generate: null,
     files: 10,
     symbols: 50,
+    rustJobs: 1,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -383,7 +388,13 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.files = parseInt(argv[++i], 10);
     } else if (arg === '--symbols') {
       parsed.symbols = parseInt(argv[++i], 10);
+    } else if (arg === '--rustJobs') {
+      parsed.rustJobs = parseInt(argv[++i], 10);
     }
+  }
+
+  if (!Number.isInteger(parsed.rustJobs) || parsed.rustJobs <= 0) {
+    throw new Error('--rustJobs must be greater than 0');
   }
 
   return parsed;

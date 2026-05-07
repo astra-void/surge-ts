@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use typescript_rust_syntax::{ParsedInterfaceMember, ParsedType, ParsedTypeParameter, TextSpan};
 
@@ -10,7 +10,7 @@ pub(crate) struct TypeAliasInfo {
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) type_parameters: Vec<ParsedTypeParameter>,
     pub(crate) ty: ParsedType,
-    pub(crate) resolution_scope: Option<Rc<TypeDeclarationTable>>,
+    pub(crate) resolution_scope: Option<Arc<TypeDeclarationTable>>,
 }
 
 #[derive(Debug, Clone)]
@@ -20,7 +20,7 @@ pub(crate) struct InterfaceInfo {
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) type_parameters: Vec<ParsedTypeParameter>,
     pub(crate) members: Vec<ParsedInterfaceMember>,
-    pub(crate) resolution_scope: Option<Rc<TypeDeclarationTable>>,
+    pub(crate) resolution_scope: Option<Arc<TypeDeclarationTable>>,
 }
 
 #[derive(Debug, Clone)]

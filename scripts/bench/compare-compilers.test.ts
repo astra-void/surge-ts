@@ -14,7 +14,7 @@ const packageManagerExecutable = process.platform === 'win32' ? 'pnpm.cmd' : 'pn
 const packageManagerArgsPrefix = ['exec', 'tsx'];
 
 test('bench script parsing and basic run', () => {
-  const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, benchScript, '--preset', 'current', '--iterations', '1', '--warmup', '0'], {
+  const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, benchScript, '--preset', 'current', '--iterations', '1', '--warmup', '0', '--rustJobs', '1'], {
     cwd: workspaceRoot,
     encoding: 'utf8',
     shell: process.platform === 'win32',
@@ -59,7 +59,7 @@ test('bench script generates scale fixture correctly', () => {
 test('bench script generates json output', () => {
   const tempJson = path.join(workspaceRoot, '.bench', 'test-output.json');
   
-  const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, benchScript, '--preset', 'current', '--iterations', '1', '--warmup', '0', '--json', tempJson], {
+  const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, benchScript, '--preset', 'current', '--iterations', '1', '--warmup', '0', '--json', tempJson, '--rustJobs', '4'], {
     cwd: workspaceRoot,
     encoding: 'utf8',
     shell: process.platform === 'win32',
@@ -70,6 +70,7 @@ test('bench script generates json output', () => {
   assert.ok(existsSync(tempJson), 'Should create JSON file');
   const data = JSON.parse(readFileSync(tempJson, 'utf8'));
   assert.ok(Array.isArray(data), 'JSON should be an array of results');
+  assert.ok(data.some((entry: { rustJobs?: number }) => entry.rustJobs === 4), 'JSON should include the Rust job count');
 });
 
 test('bench script fromJson generates chart and html', () => {
@@ -79,7 +80,15 @@ test('bench script fromJson generates chart and html', () => {
   
   // Create dummy JSON if not exists from previous test
   if (!existsSync(tempJson)) {
-    writeFileSync(tempJson, JSON.stringify([{ project: "dummy", stats: { tsc: { median: 1, min: 1, max: 1, runs: 1 } }, drift: { tsc: "baseline" } }]));
+    writeFileSync(tempJson, JSON.stringify([{
+      project: "dummy",
+      rustJobs: 4,
+      stats: {
+        tsc: { median: 1, min: 1, max: 1, runs: 1 },
+        'ts-rust': { median: 1, min: 1, max: 1, runs: 1 }
+      },
+      drift: { tsc: "baseline", 'ts-rust': "exact vs tsc" }
+    }]));
   }
 
   const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, benchScript, '--fromJson', tempJson, '--chart', tempChart, '--html', tempHtml], {
@@ -94,10 +103,11 @@ test('bench script fromJson generates chart and html', () => {
   assert.ok(existsSync(tempChart), 'Should create SVG chart');
   const chartContent = readFileSync(tempChart, 'utf8');
   assert.ok(chartContent.includes('<svg'), 'Chart should contain SVG tag');
+  assert.ok(chartContent.includes('jobs=4'), 'Chart should label the Rust job count');
   
   assert.ok(existsSync(tempHtml), 'Should create HTML file');
   const htmlContent = readFileSync(tempHtml, 'utf8');
   assert.ok(htmlContent.includes('<svg'), 'HTML should embed SVG tag');
+  assert.ok(htmlContent.includes('jobs=4'), 'HTML should label the Rust job count');
   assert.ok(htmlContent.includes('local-machine-relative'), 'HTML should contain disclaimer');
 });
-

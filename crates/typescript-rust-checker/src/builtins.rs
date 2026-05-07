@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::context::CheckerContext;
 use crate::symbols::{SymbolInfo, SymbolKind, TypeAliasInfo, TypeDeclarationInfo};
-use typescript_rust_syntax::{ParsedType, ParsedTypeParameter};
+use typescript_rust_syntax::{
+    ParsedFunctionType, ParsedFunctionTypeParameter, ParsedNamedType, ParsedObjectType,
+    ParsedObjectTypeProperty, ParsedType, ParsedTypeParameter,
+};
 use typescript_rust_types::{FunctionType, ObjectProperty, ObjectType, Type};
 
 pub(crate) fn inject_builtins(ctx: &mut CheckerContext) {
@@ -29,6 +32,9 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
         "Awaited",
         "ReturnType",
         "Parameters",
+        "Object",
+        "Map",
+        "Uint8Array",
         "Date",
         "Error",
         "RegExp",
@@ -52,6 +58,23 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
                     span: None,
                 },
             ]
+        } else if name == "Map" {
+            vec![
+                ParsedTypeParameter {
+                    name: "K".to_string(),
+                    name_span: None,
+                    constraint: None,
+                    default_type: None,
+                    span: None,
+                },
+                ParsedTypeParameter {
+                    name: "V".to_string(),
+                    name_span: None,
+                    constraint: None,
+                    default_type: None,
+                    span: None,
+                },
+            ]
         } else if name == "Pick" || name == "Omit" {
             vec![
                 ParsedTypeParameter {
@@ -69,7 +92,14 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
                     span: None,
                 },
             ]
-        } else if name != "Date" && name != "Error" && name != "RegExp" {
+        } else if name == "Object"
+            || name == "Uint8Array"
+            || name == "Date"
+            || name == "Error"
+            || name == "RegExp"
+        {
+            vec![]
+        } else {
             vec![ParsedTypeParameter {
                 name: "T".to_string(),
                 name_span: None,
@@ -77,8 +107,6 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
                 default_type: None,
                 span: None,
             }]
-        } else {
-            vec![]
         };
 
         let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
@@ -86,7 +114,12 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
             file_name: "<built-in>".to_string(),
             name_span: None,
             type_parameters,
-            ty: ParsedType::Unknown,
+            ty: match name {
+                "Map" => map_builtin_type(),
+                "Uint8Array" => ParsedType::Array(Box::new(ParsedType::Number)),
+                "Object" => ParsedType::Unknown,
+                _ => ParsedType::Unknown,
+            },
             resolution_scope: None,
         });
 
@@ -180,11 +213,39 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
         })),
     );
 
+    // Array
+    let mut array_props = BTreeMap::new();
+    array_props.insert(
+        "from".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Array(Box::new(Type::Any))),
+            is_variadic: true,
+        })),
+    );
+
+    // Date
+    let mut date_props = BTreeMap::new();
+    date_props.insert(
+        "now".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![],
+            return_type: Box::new(Type::Number),
+            is_variadic: false,
+        })),
+    );
+
     let builtins = vec![
         (
             "console",
             Type::Object(ObjectType {
                 properties: console_props,
+            }),
+        ),
+        (
+            "Array",
+            Type::Object(ObjectType {
+                properties: array_props,
             }),
         ),
         (
@@ -199,9 +260,26 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 properties: json_props,
             }),
         ),
-        ("Date", Type::Any),
+        (
+            "Date",
+            Type::Object(ObjectType {
+                properties: date_props,
+            }),
+        ),
         ("Error", Type::Any),
         ("RegExp", Type::Any),
+        ("Object", Type::Any),
+        ("globalThis", Type::Any),
+        ("Map", Type::Any),
+        ("Uint8Array", Type::Any),
+        (
+            "isNaN",
+            Type::Function(FunctionType {
+                parameters: vec![Type::Any],
+                return_type: Box::new(Type::Boolean),
+                is_variadic: false,
+            }),
+        ),
         (
             "setTimeout",
             Type::Function(FunctionType {
@@ -241,9 +319,30 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 is_variadic: false,
             }),
         ),
-        ("Number", Type::Any),
-        ("String", Type::Any),
-        ("Boolean", Type::Any),
+        (
+            "Number",
+            Type::Function(FunctionType {
+                parameters: vec![Type::Any],
+                return_type: Box::new(Type::Number),
+                is_variadic: true,
+            }),
+        ),
+        (
+            "String",
+            Type::Function(FunctionType {
+                parameters: vec![Type::Any],
+                return_type: Box::new(Type::String),
+                is_variadic: true,
+            }),
+        ),
+        (
+            "Boolean",
+            Type::Function(FunctionType {
+                parameters: vec![Type::Any],
+                return_type: Box::new(Type::Boolean),
+                is_variadic: true,
+            }),
+        ),
     ];
 
     for (name, ty) in builtins {
@@ -255,4 +354,108 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             let _ = ctx.ambient_global_symbols.insert(name.to_string(), symbol);
         }
     }
+}
+
+fn map_builtin_type() -> ParsedType {
+    ParsedType::Object(ParsedObjectType {
+        properties: vec![
+            ParsedObjectTypeProperty {
+                name: "get".to_string(),
+                name_span: None,
+                ty: ParsedType::Function(ParsedFunctionType {
+                    parameters: vec![ParsedFunctionTypeParameter {
+                        name: Some("key".to_string()),
+                        name_span: None,
+                        ty: ParsedType::Named(ParsedNamedType {
+                            name: "K".to_string(),
+                            span: None,
+                            type_arguments: vec![],
+                        }),
+                    }],
+                    return_type: Box::new(ParsedType::Named(ParsedNamedType {
+                        name: "V".to_string(),
+                        span: None,
+                        type_arguments: vec![],
+                    })),
+                    type_parameters: vec![],
+                }),
+                optional: false,
+            },
+            ParsedObjectTypeProperty {
+                name: "set".to_string(),
+                name_span: None,
+                ty: ParsedType::Function(ParsedFunctionType {
+                    parameters: vec![
+                        ParsedFunctionTypeParameter {
+                            name: Some("key".to_string()),
+                            name_span: None,
+                            ty: ParsedType::Named(ParsedNamedType {
+                                name: "K".to_string(),
+                                span: None,
+                                type_arguments: vec![],
+                            }),
+                        },
+                        ParsedFunctionTypeParameter {
+                            name: Some("value".to_string()),
+                            name_span: None,
+                            ty: ParsedType::Named(ParsedNamedType {
+                                name: "V".to_string(),
+                                span: None,
+                                type_arguments: vec![],
+                            }),
+                        },
+                    ],
+                    return_type: Box::new(ParsedType::Any),
+                    type_parameters: vec![],
+                }),
+                optional: false,
+            },
+            ParsedObjectTypeProperty {
+                name: "delete".to_string(),
+                name_span: None,
+                ty: ParsedType::Function(ParsedFunctionType {
+                    parameters: vec![ParsedFunctionTypeParameter {
+                        name: Some("key".to_string()),
+                        name_span: None,
+                        ty: ParsedType::Named(ParsedNamedType {
+                            name: "K".to_string(),
+                            span: None,
+                            type_arguments: vec![],
+                        }),
+                    }],
+                    return_type: Box::new(ParsedType::Boolean),
+                    type_parameters: vec![],
+                }),
+                optional: false,
+            },
+            ParsedObjectTypeProperty {
+                name: "has".to_string(),
+                name_span: None,
+                ty: ParsedType::Function(ParsedFunctionType {
+                    parameters: vec![ParsedFunctionTypeParameter {
+                        name: Some("key".to_string()),
+                        name_span: None,
+                        ty: ParsedType::Named(ParsedNamedType {
+                            name: "K".to_string(),
+                            span: None,
+                            type_arguments: vec![],
+                        }),
+                    }],
+                    return_type: Box::new(ParsedType::Boolean),
+                    type_parameters: vec![],
+                }),
+                optional: false,
+            },
+            ParsedObjectTypeProperty {
+                name: "clear".to_string(),
+                name_span: None,
+                ty: ParsedType::Function(ParsedFunctionType {
+                    parameters: vec![],
+                    return_type: Box::new(ParsedType::Void),
+                    type_parameters: vec![],
+                }),
+                optional: false,
+            },
+        ],
+    })
 }

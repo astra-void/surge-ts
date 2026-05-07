@@ -43,7 +43,9 @@ pub fn expand_project_inputs(
                 continue;
             };
 
-            if !is_loadable_graph_file(&candidate) {
+            if is_dependency_javascript_source_file(&candidate)
+                || !is_loadable_graph_file(&candidate)
+            {
                 continue;
             }
 
@@ -219,6 +221,17 @@ fn is_loadable_graph_file(path: &Path) -> bool {
         || lower.ends_with(".tsx")
         || lower.ends_with(".mts")
         || lower.ends_with(".cts")
+}
+
+fn is_dependency_javascript_source_file(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    let is_node_modules = lower.contains("/node_modules/") || lower.contains("\\node_modules\\");
+    let is_javascript_source = lower.ends_with(".js")
+        || lower.ends_with(".jsx")
+        || lower.ends_with(".mjs")
+        || lower.ends_with(".cjs");
+
+    is_node_modules && is_javascript_source
 }
 
 fn is_relative_specifier(specifier: &str) -> bool {

@@ -3,6 +3,7 @@ import path from 'node:path';
 
 export type BenchReportResult = {
   project: string;
+  rustJobs?: number;
   stats: Record<string, { median: number; min: number; max: number; runs: number } | null>;
   drift: Record<string, string>;
 };
@@ -58,15 +59,16 @@ export function renderBenchmarkSvg(results: BenchReportResult[]): string {
       const drift = tool !== 'tsc' ? r.drift[tool] : '';
       const driftColor = drift === 'exact vs tsc' ? 'green' : 'red';
       const driftText = drift ? ` [${escapeHtml(drift)}]` : '';
+      const toolLabel = tool === 'ts-rust' && r.rustJobs !== undefined ? `${tool} (jobs=${r.rustJobs})` : tool;
 
       const width = (stats.median / maxTime) * plotWidth;
       const color = toolColors[tool] || '#ccc';
 
-      const tooltip = `${escapeHtml(tool)}: median ${stats.median.toFixed(2)}s, min ${stats.min.toFixed(2)}s, max ${stats.max.toFixed(2)}s, runs ${stats.runs}`;
+      const tooltip = `${escapeHtml(toolLabel)}: median ${stats.median.toFixed(2)}s, min ${stats.min.toFixed(2)}s, max ${stats.max.toFixed(2)}s, runs ${stats.runs}`;
 
       svgContent += `<g>
         <title>${tooltip}</title>
-        <text x="${labelWidth - 10}" y="${yOffset + 16}" font-family="sans-serif" font-size="12" fill="#555" text-anchor="end">${escapeHtml(tool)}</text>
+        <text x="${labelWidth - 10}" y="${yOffset + 16}" font-family="sans-serif" font-size="12" fill="#555" text-anchor="end">${escapeHtml(toolLabel)}</text>
         <rect x="${labelWidth}" y="${yOffset}" width="${width}" height="${barHeight}" fill="${color}" />
         <text x="${labelWidth + width + 5}" y="${yOffset + 16}" font-family="sans-serif" font-size="12" fill="#333">${stats.median.toFixed(2)}s</text>`;
         

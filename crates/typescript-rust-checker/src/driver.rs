@@ -109,7 +109,13 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         ParsedStatement::InterfaceDeclaration(_) => {}
         ParsedStatement::ImportDeclaration(import) => {
             if crate::modules::is_external_specifier(&import.module_specifier) {
-                if !ctx.options.stub_external_modules {
+                let suppress_unresolved_diagnostic =
+                    matches!(
+                        &import.kind,
+                        typescript_rust_syntax::ParsedImportKind::SideEffect
+                    ) && is_runtime_js_only_module(&import.module_specifier, ctx);
+
+                if !ctx.options.stub_external_modules && !suppress_unresolved_diagnostic {
                     let mut diagnostic = match &import.kind {
                         typescript_rust_syntax::ParsedImportKind::SideEffect => {
                             Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
@@ -389,6 +395,18 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             ctx.push(diagnostic);
         }
     }
+}
+
+fn is_runtime_js_only_module(module_specifier: &str, ctx: &CheckerContext) -> bool {
+    let Some(resolved_path) = ctx.options.resolved_modules.get(module_specifier) else {
+        return false;
+    };
+
+    let lower = resolved_path.to_ascii_lowercase();
+    lower.ends_with(".js")
+        || lower.ends_with(".jsx")
+        || lower.ends_with(".mjs")
+        || lower.ends_with(".cjs")
 }
 
 fn validate_direct_utility_aliases_from_statement(

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
@@ -188,7 +188,7 @@ pub(crate) fn resolve_module_imports(
     parsed_file: &ParsedProgramFile,
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
-    module_resolution_scopes: &[Option<Rc<TypeDeclarationTable>>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
     local_symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> ModuleImportBindings {
@@ -223,16 +223,16 @@ fn try_resolve_module(
     ctx: &CheckerContext,
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
-    module_resolution_scopes: &[Option<Rc<TypeDeclarationTable>>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
 ) -> Option<(
     ModuleExportTable,
-    Option<Rc<TypeDeclarationTable>>,
+    Option<Arc<TypeDeclarationTable>>,
     Option<usize>,
 )> {
     if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
         return Some((
             export_table.clone(),
-            Some(Rc::new(ctx.type_declarations.clone())),
+            Some(Arc::new(ctx.type_declarations.clone())),
             None,
         ));
     }
@@ -630,9 +630,17 @@ fn collect_exportable_value_symbols(
     file_kinds.insert(ctx.file_name.clone(), FileKind::RootSource);
     let mut shadow_ctx =
         CheckerContext::new(ctx.file_name.clone(), ctx.options.clone(), file_kinds);
-    shadow_ctx.type_declarations = local_type_declarations.clone();
 
-    let mut exportable_values = local_symbols.clone();
+    let mut shadow_type_declarations = ctx.ambient_global_type_declarations.clone();
+    for (name, declaration) in local_type_declarations.iter() {
+        let _ = shadow_type_declarations.insert(name.clone(), declaration.clone());
+    }
+    shadow_ctx.type_declarations = shadow_type_declarations;
+
+    let mut exportable_values = ctx.ambient_global_symbols.clone();
+    for (name, symbol) in local_symbols.iter() {
+        let _ = exportable_values.insert(name.clone(), symbol.clone());
+    }
 
     for statement in statements {
         collect_exportable_value_symbols_from_statement(
@@ -845,7 +853,7 @@ fn resolve_import_declaration(
     import: &ParsedImportDeclaration,
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
-    module_resolution_scopes: &[Option<Rc<TypeDeclarationTable>>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
     local_symbols: &SymbolTable,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
@@ -1681,7 +1689,7 @@ fn push_unresolved_export_diagnostic(
 
 fn attach_type_resolution_scope(
     declaration: TypeDeclarationInfo,
-    resolution_scope: Rc<TypeDeclarationTable>,
+    resolution_scope: Arc<TypeDeclarationTable>,
 ) -> TypeDeclarationInfo {
     match declaration {
         TypeDeclarationInfo::Alias(mut alias) => {

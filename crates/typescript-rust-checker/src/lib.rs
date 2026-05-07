@@ -13,7 +13,7 @@ pub use context::{CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKin
 pub use driver::{check_source, check_source_with_options};
 pub use program::{
     ProgramCheckResult, SourceFileInput, check_program, check_program_with_options,
-    check_program_with_stats,
+    check_program_with_stats, check_program_with_stats_and_jobs,
 };
 
 #[cfg(test)]

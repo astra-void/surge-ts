@@ -54,12 +54,14 @@ pub struct ProjectCompatibilityReport {
     pub loaded_root_declaration_files: usize,
     pub loaded_dependency_declaration_files: usize,
     pub loaded_generated_declaration_files: usize,
+    pub loaded_dependency_javascript_source_files: usize,
     pub suppressed_declaration_diagnostics_total: usize,
     pub suppressed_rust_only_diagnostics_total: usize,
     pub diagnostics_root_source_total: usize,
     pub diagnostics_root_declaration_total: usize,
     pub diagnostics_dependency_declaration_total: usize,
     pub diagnostics_generated_declaration_total: usize,
+    pub diagnostics_dependency_javascript_source_total: usize,
     pub diagnostics_by_file_kind: Vec<CompatReportCountEntry>,
     pub by_code: Vec<CompatReportCountEntry>,
     pub by_file: Vec<CompatReportCountEntry>,
@@ -68,6 +70,7 @@ pub struct ProjectCompatibilityReport {
     pub ts2304_by_identifier: Vec<CompatReportCategorizedCountEntry>,
     pub node_modules_source_diagnostics_total: usize,
     pub node_modules_source_diagnostics_by_prefix: Vec<CompatReportCountEntry>,
+    pub diagnostics_dependency_javascript_source_by_prefix: Vec<CompatReportCountEntry>,
     pub parser_errors: Vec<CompatReportParserErrorEntry>,
     pub external_module_stubs_total: usize,
     pub external_module_stubs: Vec<CompatReportCountEntry>,
@@ -105,13 +108,16 @@ pub fn build_project_compatibility_report(
     let mut loaded_root_declaration_files = 0;
     let mut loaded_dependency_declaration_files = 0;
     let mut loaded_generated_declaration_files = 0;
+    let mut loaded_dependency_javascript_source_files = 0;
     let mut diagnostics_root_source_total = 0;
     let mut diagnostics_root_declaration_total = 0;
     let mut diagnostics_dependency_declaration_total = 0;
     let mut diagnostics_generated_declaration_total = 0;
+    let mut diagnostics_dependency_javascript_source_total = 0;
     let mut node_modules_source_diagnostics_total = 0;
     let mut diagnostics_by_file_kind = HashMap::<String, usize>::new();
     let mut ambient_external_modules_set = std::collections::HashSet::new();
+    let mut diagnostics_dependency_javascript_source_by_prefix = HashMap::<String, usize>::new();
 
     for (_, file_name, source_text) in sources {
         match classify_file_kind(file_name) {
@@ -119,6 +125,10 @@ pub fn build_project_compatibility_report(
             FileKindLabel::RootDeclaration => loaded_root_declaration_files += 1,
             FileKindLabel::DependencyDeclaration => loaded_dependency_declaration_files += 1,
             FileKindLabel::GeneratedDeclaration => loaded_generated_declaration_files += 1,
+        }
+
+        if is_dependency_javascript_source_file(file_name) {
+            loaded_dependency_javascript_source_files += 1;
         }
 
         if is_declaration_file_name(file_name) {
@@ -193,6 +203,15 @@ pub fn build_project_compatibility_report(
             }
         }
 
+        if is_dependency_javascript_source_file(&diagnostic.file_name) {
+            diagnostics_dependency_javascript_source_total += 1;
+            if let Some(prefix) = node_modules_source_prefix(&diagnostic.file_name) {
+                *diagnostics_dependency_javascript_source_by_prefix
+                    .entry(prefix)
+                    .or_default() += 1;
+            }
+        }
+
         if code == "typescript-rust::parser-error" {
             *parser_errors
                 .entry((file_label, diagnostic.message.clone()))
@@ -254,12 +273,14 @@ pub fn build_project_compatibility_report(
         loaded_root_declaration_files,
         loaded_dependency_declaration_files,
         loaded_generated_declaration_files,
+        loaded_dependency_javascript_source_files,
         suppressed_declaration_diagnostics_total: stats.suppressed_declaration_diagnostics_total,
         suppressed_rust_only_diagnostics_total: stats.suppressed_rust_only_diagnostics_total,
         diagnostics_root_source_total,
         diagnostics_root_declaration_total,
         diagnostics_dependency_declaration_total,
         diagnostics_generated_declaration_total,
+        diagnostics_dependency_javascript_source_total,
         diagnostics_by_file_kind: sort_counts(diagnostics_by_file_kind),
         by_code: sort_counts(by_code),
         by_file: sort_counts(by_file),
@@ -269,6 +290,9 @@ pub fn build_project_compatibility_report(
         node_modules_source_diagnostics_total,
         node_modules_source_diagnostics_by_prefix: sort_counts(
             node_modules_source_diagnostics_by_prefix,
+        ),
+        diagnostics_dependency_javascript_source_by_prefix: sort_counts(
+            diagnostics_dependency_javascript_source_by_prefix,
         ),
         parser_errors: sort_parser_errors(parser_errors),
         external_module_stubs_total,
@@ -323,6 +347,10 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
         "Loaded generated declarations: {}",
         report.loaded_generated_declaration_files
     ));
+    lines.push(format!(
+        "Loaded dependency JavaScript source files: {}",
+        report.loaded_dependency_javascript_source_files
+    ));
     if let Some(warning) = &report.visibility_warning {
         lines.push(format!("Visibility warning: {warning}"));
     }
@@ -360,6 +388,10 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     lines.push(format!(
         "Diagnostics from generated declarations: {}",
         report.diagnostics_generated_declaration_total
+    ));
+    lines.push(format!(
+        "Diagnostics from dependency JavaScript source files: {}",
+        report.diagnostics_dependency_javascript_source_total
     ));
     lines.push(String::new());
     lines.push("Diagnostic coverage:".to_string());
@@ -456,6 +488,23 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     }
 
     lines.push(String::new());
+    lines.push(format!(
+        "Dependency JavaScript source diagnostics: {}",
+        report.diagnostics_dependency_javascript_source_total
+    ));
+    lines.push("Dependency JavaScript source diagnostics by package/source prefix:".to_string());
+    if report
+        .diagnostics_dependency_javascript_source_by_prefix
+        .is_empty()
+    {
+        lines.push("  (none)".to_string());
+    } else {
+        for entry in &report.diagnostics_dependency_javascript_source_by_prefix {
+            lines.push(format!("{}  {}", entry.key, entry.count));
+        }
+    }
+
+    lines.push(String::new());
     lines.push(format!("Parser errors: {}", parser_error_total(report)));
     lines.push("Top parser errors:".to_string());
     if report.parser_errors.is_empty() {
@@ -537,6 +586,10 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
         Value::from(report.loaded_generated_declaration_files as u64),
     );
     root.insert(
+        "loadedDependencyJavaScriptSourceFiles".to_string(),
+        Value::from(report.loaded_dependency_javascript_source_files as u64),
+    );
+    root.insert(
         "suppressedDeclarationDiagnosticsTotal".to_string(),
         Value::from(report.suppressed_declaration_diagnostics_total as u64),
     );
@@ -559,6 +612,10 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
     root.insert(
         "diagnosticsGeneratedDeclarationTotal".to_string(),
         Value::from(report.diagnostics_generated_declaration_total as u64),
+    );
+    root.insert(
+        "diagnosticsDependencyJavaScriptSourceTotal".to_string(),
+        Value::from(report.diagnostics_dependency_javascript_source_total as u64),
     );
     root.insert(
         "diagnosticsByFileKind".to_string(),
@@ -719,6 +776,30 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
     root.insert(
         "nodeModulesSourceDiagnostics".to_string(),
         Value::Object(node_modules_source_json),
+    );
+    let mut dependency_js_source_json = Map::new();
+    dependency_js_source_json.insert(
+        "total".to_string(),
+        Value::from(report.diagnostics_dependency_javascript_source_total as u64),
+    );
+    dependency_js_source_json.insert(
+        "byPrefix".to_string(),
+        Value::Array(
+            report
+                .diagnostics_dependency_javascript_source_by_prefix
+                .iter()
+                .map(|entry| {
+                    let mut item = Map::new();
+                    item.insert("prefix".to_string(), Value::String(entry.key.clone()));
+                    item.insert("count".to_string(), Value::from(entry.count as u64));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "dependencyJavaScriptSourceDiagnostics".to_string(),
+        Value::Object(dependency_js_source_json),
     );
     root.insert(
         "parserErrors".to_string(),
@@ -1139,6 +1220,17 @@ fn is_node_modules_source_file(file_name: &str) -> bool {
     lower.contains("/node_modules/") && !is_declaration_file_name(file_name)
 }
 
+fn is_dependency_javascript_source_file(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    let is_node_modules = lower.contains("/node_modules/") || lower.contains("\\node_modules\\");
+    let is_javascript_source = lower.ends_with(".js")
+        || lower.ends_with(".jsx")
+        || lower.ends_with(".mjs")
+        || lower.ends_with(".cjs");
+
+    is_node_modules && is_javascript_source
+}
+
 fn node_modules_source_prefix(file_name: &str) -> Option<String> {
     let normalized = file_name.replace('\\', "/");
     let needle = "/node_modules/";
@@ -1338,7 +1430,10 @@ fn classify_ts2304_identifier(identifier: &str) -> String {
         return "generic-or-type-parameter-scope".to_string();
     }
     if is_missing_synthetic_lib_global_identifier(identifier) {
-        return "missing-synthetic-lib-global".to_string();
+        return "missing-synthetic-built-in".to_string();
+    }
+    if is_missing_es_lib_lite_global_identifier(identifier) {
+        return "missing-es-lib-lite-global".to_string();
     }
     if is_local_unresolved_identifier(identifier) {
         return "local-unresolved".to_string();
@@ -1866,7 +1961,6 @@ fn is_dom_like_identifier(identifier: &str) -> bool {
             | "Node"
             | "Text"
             | "Document"
-            | "console"
     )
 }
 
@@ -1887,17 +1981,12 @@ fn is_generic_or_type_parameter_scope_identifier(identifier: &str) -> bool {
 fn is_missing_synthetic_lib_global_identifier(identifier: &str) -> bool {
     matches!(
         identifier,
-        "Object"
-            | "Array"
+        "Array"
             | "String"
             | "Number"
             | "Boolean"
             | "Symbol"
             | "Promise"
-            | "Map"
-            | "Set"
-            | "WeakMap"
-            | "WeakSet"
             | "Date"
             | "RegExp"
             | "Error"
@@ -1905,7 +1994,32 @@ fn is_missing_synthetic_lib_global_identifier(identifier: &str) -> bool {
             | "JSON"
             | "Intl"
             | "Console"
+            | "console"
+            | "Record"
             | "ReadonlyArray"
+    )
+}
+
+fn is_missing_es_lib_lite_global_identifier(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "Object"
+            | "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "Uint8Array"
+            | "Uint16Array"
+            | "Uint32Array"
+            | "Int8Array"
+            | "Int16Array"
+            | "Int32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+            | "globalThis"
+            | "isNaN"
     )
 }
 

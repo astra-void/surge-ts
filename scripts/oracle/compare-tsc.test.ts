@@ -11,6 +11,8 @@ import {
   countDiagnostics,
   extractTs2305ModuleExport,
   parseArgs,
+  normalizeDiagnostic,
+  normalizeDiagnostics,
   parseTypeScriptDiagnostics,
   parseTypeScriptRustDiagnostics,
   nodeModulesSourcePrefix,
@@ -93,12 +95,16 @@ function run() {
   oracle_output_highlights_project_visibility_failure();
   oracle_json_output_includes_mode();
   oracle_args_accepts_stub_external_modules();
+  oracle_args_accepts_rust_jobs();
+  oracle_args_rejects_rust_jobs_in_file_mode();
   oracle_builds_rust_project_command_with_stub_external_modules();
   oracle_builds_rust_file_command_with_stub_external_modules();
+  oracle_builds_rust_project_command_with_jobs();
   oracle_does_not_pass_stub_external_modules_to_tsc();
   oracle_output_mentions_stub_external_modules_as_rust_only();
   oracle_json_output_includes_stub_external_modules_flag();
   oracle_default_does_not_use_stub_external_modules();
+  oracle_normalize_diagnostics_is_deterministic();
   oracle_output_includes_comparison_warnings();
 }
 
@@ -277,7 +283,12 @@ function oracle_classify_ts2304_identifier() {
   assert.equal(classifyTs2304Identifier('process'), 'missing-node-like-global');
   assert.equal(classifyTs2304Identifier('JSX'), 'jsx-like');
   assert.equal(classifyTs2304Identifier('T'), 'generic-or-type-parameter-scope');
-  assert.equal(classifyTs2304Identifier('Object'), 'missing-synthetic-lib-global');
+  assert.equal(classifyTs2304Identifier('Object'), 'missing-es-lib-lite-global');
+  assert.equal(classifyTs2304Identifier('Map'), 'missing-es-lib-lite-global');
+  assert.equal(classifyTs2304Identifier('Uint8Array'), 'missing-es-lib-lite-global');
+  assert.equal(classifyTs2304Identifier('globalThis'), 'missing-es-lib-lite-global');
+  assert.equal(classifyTs2304Identifier('isNaN'), 'missing-es-lib-lite-global');
+  assert.equal(classifyTs2304Identifier('Promise'), 'missing-synthetic-built-in');
   assert.equal(classifyTs2304Identifier('queryClient'), 'local-unresolved');
   assert.equal(classifyTs2304Identifier('Maybe'), 'package-derived-incomplete-declaration');
 }
@@ -942,6 +953,53 @@ function oracle_default_does_not_use_stub_external_modules() {
   if (mode.kind === 'project') {
     assert.equal(mode.stubExternalModules, undefined);
   }
+}
+
+function oracle_args_accepts_rust_jobs() {
+  const args = parseArgs(['--project', 'tests/compat-projects/generics-basic/tsconfig.json', '--rustJobs', '4']);
+  assert.equal(args.rustJobs, 4);
+  const mode = resolveOracleMode(args);
+  if (mode.kind === 'project') {
+    assert.equal(mode.rustJobs, 4);
+  }
+}
+
+function oracle_args_rejects_rust_jobs_in_file_mode() {
+  assert.throws(
+    () => resolveOracleMode(parseArgs(['--file', 'examples/basic.ts', '--rustJobs', '4'])),
+    /--rustJobs is only supported with --project/,
+  );
+}
+
+function oracle_builds_rust_project_command_with_jobs() {
+  const actual = buildTypeScriptRustCommand(
+    'project',
+    'tests/compat-projects/generics-basic/tsconfig.json',
+    false,
+    false,
+    4,
+  ).replace(/\\/g, '/');
+  const expected = `cargo run -q --manifest-path ${path.resolve('Cargo.toml')} -p typescript-rust-cli -- --project tests/compat-projects/generics-basic/tsconfig.json --format json --jobs 4`.replace(/\\/g, '/');
+  assert.equal(actual, expected);
+}
+
+function oracle_normalize_diagnostics_is_deterministic() {
+  const diagnostics = [
+    { source: 'typescript', code: 'TS2322', fileName: 'src/a.ts', line: 3, column: 12, message: 'mismatch' },
+    { source: 'typescript-rust', code: 'TS2307', fileName: 'src/b.ts', line: 1, column: 1, message: 'missing module' },
+  ];
+
+  assert.deepEqual(normalizeDiagnostics(diagnostics), [
+    { fileName: 'src/a.ts', code: 'TS2322', line: 3, column: 12, message: 'mismatch' },
+    { fileName: 'src/b.ts', code: 'TS2307', line: 1, column: 1, message: 'missing module' },
+  ]);
+  assert.deepEqual(normalizeDiagnostic(diagnostics[0]), {
+    fileName: 'src/a.ts',
+    code: 'TS2322',
+    line: 3,
+    column: 12,
+    message: 'mismatch',
+  });
 }
 
 function oracle_output_includes_comparison_warnings() {
