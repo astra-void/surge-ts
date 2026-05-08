@@ -264,6 +264,14 @@
     "support": "catalog-only"
   },
   {
+    "code": "TS2552",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Did you mean '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2554",
     "category": "Error",
     "message": "Expected {0} arguments, but got {1}.",
@@ -275,6 +283,14 @@
     "code": "TS2588",
     "category": "Error",
     "message": "Cannot assign to '{0}' because it is a constant.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2591",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
     "source": "typescript",
     "arity": 1,
     "support": "emitted"

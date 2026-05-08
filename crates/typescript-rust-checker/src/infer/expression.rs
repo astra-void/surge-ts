@@ -8,13 +8,16 @@ use typescript_rust_types::{
     NumberLiteralType, ObjectProperty, ObjectType, Type, is_assignable_to, union_type,
 };
 
-use crate::symbols::SymbolTable;
+use crate::context::CheckerContext;
+use crate::infer::{TypeParameterSubstitution, map_parsed_type_with_substitution};
+use crate::symbols::{FunctionSignatureInfo, SymbolTable};
 
 use super::InferredExpression;
 
 pub(crate) fn infer_expression(
     parsed_expression: &ParsedExpression,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
     match parsed_expression {
         ParsedExpression::StringLiteral(value) => {
@@ -37,39 +40,48 @@ pub(crate) fn infer_expression(
                 span: *span,
             }),
         ParsedExpression::ObjectLiteral { properties, .. } => {
-            InferredExpression::Known(infer_object_literal(properties, symbols))
+            InferredExpression::Known(infer_object_literal(properties, symbols, ctx))
         }
-        ParsedExpression::ArrayLiteral { elements, .. } => infer_array_literal(elements, symbols),
+        ParsedExpression::ArrayLiteral { elements, .. } => {
+            infer_array_literal(elements, symbols, ctx)
+        }
         ParsedExpression::Unary {
             operator, operand, ..
-        } => infer_unary_expression(*operator, operand, symbols),
+        } => infer_unary_expression(*operator, operand, symbols, ctx),
         ParsedExpression::Binary {
             operator,
             left,
             right,
             ..
-        } => infer_binary_expression(*operator, left, right, symbols),
+        } => infer_binary_expression(*operator, left, right, symbols, ctx),
         ParsedExpression::Logical { left, right, .. } => {
-            infer_logical_expression(left, right, symbols)
+            infer_logical_expression(left, right, symbols, ctx)
         }
         ParsedExpression::Conditional {
             condition,
             when_true,
             when_false,
             ..
-        } => infer_conditional_expression(condition, when_true, when_false, symbols),
+        } => infer_conditional_expression(condition, when_true, when_false, symbols, ctx),
         ParsedExpression::PropertyAccess {
             object,
             object_span,
             property_name,
             property_span,
-        } => infer_property_access(object, object_span, property_name, property_span, symbols),
+        } => infer_property_access(
+            object,
+            object_span,
+            property_name,
+            property_span,
+            symbols,
+            ctx,
+        ),
         ParsedExpression::IndexAccess {
             object_name,
             object_span,
             index,
             index_span,
-        } => infer_index_access(object_name, object_span, index, index_span, symbols),
+        } => infer_index_access(object_name, object_span, index, index_span, symbols, ctx),
         ParsedExpression::OptionalPropertyAccess {
             object,
             object_span,
@@ -81,10 +93,11 @@ pub(crate) fn infer_expression(
             property_name,
             property_span,
             symbols,
+            ctx,
         ),
         ParsedExpression::NullishCoalescing { left, right, .. } => {
-            let left_type = infer_expression(left, symbols);
-            let right_type = infer_expression(right, symbols);
+            let left_type = infer_expression(left, symbols, ctx);
+            let right_type = infer_expression(right, symbols, ctx);
 
             match (left_type, right_type) {
                 (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty)) => {
@@ -101,14 +114,14 @@ pub(crate) fn infer_expression(
             }
         }
         ParsedExpression::SatisfiesExpression { expression, .. } => {
-            infer_expression(expression, symbols)
+            infer_expression(expression, symbols, ctx)
         }
         ParsedExpression::NonNullAssertion {
             expression,
             in_optional_chain,
             ..
         } => {
-            let inferred = infer_expression(expression, symbols);
+            let inferred = infer_expression(expression, symbols, ctx);
             match inferred {
                 InferredExpression::Known(ty) => {
                     let filtered = typescript_rust_types::remove_undefined(&ty);
@@ -132,10 +145,10 @@ pub(crate) fn infer_expression(
             }
         }
         ParsedExpression::ConstAssertion { expression, .. } => {
-            infer_expression(expression, symbols)
+            infer_expression(expression, symbols, ctx)
         }
         ParsedExpression::ArrowFunction(arrow_function) => InferredExpression::Known(
-            Type::Function(infer_arrow_function(arrow_function.as_ref(), symbols)),
+            Type::Function(infer_arrow_function(arrow_function.as_ref(), symbols, ctx)),
         ),
         ParsedExpression::TypeAssertion {
             expression: _, ty, ..
@@ -162,30 +175,47 @@ pub(crate) fn infer_expression(
                 _ => InferredExpression::Unknown,
             }
         }
-        ParsedExpression::Call { callee_name, .. } => match symbols.get(callee_name) {
+        ParsedExpression::Call {
+            callee_name,
+            type_arguments,
+            ..
+        } => match symbols.get(callee_name) {
             Some(symbol) => match &symbol.ty {
                 Type::Function(function_type) => {
-                    InferredExpression::Known((*function_type.return_type).clone())
+                    let return_type = instantiate_function_return_type(
+                        symbol.function_signature.as_ref(),
+                        function_type,
+                        type_arguments,
+                        ctx,
+                    );
+                    InferredExpression::Known(return_type)
                 }
                 Type::Unknown | Type::Any => InferredExpression::Unknown,
                 _ => InferredExpression::Unknown,
             },
             None => InferredExpression::Unknown,
         },
-        ParsedExpression::New { callee, .. } => infer_new_expression(callee, symbols),
+        ParsedExpression::New { callee, .. } => infer_new_expression(callee, symbols, ctx),
         ParsedExpression::PropertyCall {
             object,
             object_span,
             property_name,
             property_span,
             ..
-        } => infer_property_call(object, object_span, property_name, property_span, symbols),
+        } => infer_property_call(
+            object,
+            object_span,
+            property_name,
+            property_span,
+            symbols,
+            ctx,
+        ),
         ParsedExpression::OptionalPropertyCall {
             object,
             property_name,
             ..
         } => {
-            let object_type = match infer_expression(object, symbols) {
+            let object_type = match infer_expression(object, symbols, ctx) {
                 InferredExpression::Known(ty) => ty,
                 _ => return InferredExpression::Unknown,
             };
@@ -211,7 +241,7 @@ pub(crate) fn infer_expression(
             }
         }
         ParsedExpression::OptionalCall { callee, .. } => {
-            let callee_type = match infer_expression(callee, symbols) {
+            let callee_type = match infer_expression(callee, symbols, ctx) {
                 InferredExpression::Known(ty) => ty,
                 _ => return InferredExpression::Unknown,
             };
@@ -232,7 +262,7 @@ pub(crate) fn infer_expression(
             object_span,
             index,
             index_span,
-        } => infer_optional_index_access(object, object_span, index, index_span, symbols),
+        } => infer_optional_index_access(object, object_span, index, index_span, symbols, ctx),
         ParsedExpression::Unknown => InferredExpression::Unknown,
     }
 }
@@ -240,6 +270,7 @@ pub(crate) fn infer_expression(
 fn infer_arrow_function(
     arrow_function: &ParsedArrowFunction,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> typescript_rust_types::FunctionType {
     let parameters = arrow_function
         .parameters
@@ -259,7 +290,7 @@ fn infer_arrow_function(
 
     let return_type = match &arrow_function.body {
         ParsedArrowFunctionBody::Expression(expression) => {
-            match infer_expression(expression, symbols) {
+            match infer_expression(expression, symbols, ctx) {
                 InferredExpression::Known(ty) => ty,
                 _ => Type::Unknown,
             }
@@ -309,8 +340,9 @@ fn infer_unary_expression(
     operator: ParsedUnaryOperator,
     operand: &ParsedExpression,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let operand_type = infer_expression(operand, symbols);
+    let operand_type = infer_expression(operand, symbols, ctx);
 
     match operator {
         ParsedUnaryOperator::Not => {
@@ -349,13 +381,18 @@ fn infer_unary_expression(
 pub(crate) fn infer_object_literal(
     properties: &[ParsedObjectProperty],
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> Type {
     let properties = properties
         .iter()
         .map(|property| {
             (
                 property.name.clone(),
-                ObjectProperty::required(infer_object_property_value(&property.value, symbols)),
+                ObjectProperty::required(infer_object_property_value(
+                    &property.value,
+                    symbols,
+                    ctx,
+                )),
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -366,6 +403,7 @@ pub(crate) fn infer_object_literal(
 fn infer_array_literal(
     elements: &[ParsedArrayElement],
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
     if elements.is_empty() {
         return InferredExpression::Known(Type::Array(Box::new(Type::Any)));
@@ -374,7 +412,7 @@ fn infer_array_literal(
     let mut element_types = Vec::new();
 
     for element in elements {
-        match infer_expression(&element.expression, symbols) {
+        match infer_expression(&element.expression, symbols, ctx) {
             InferredExpression::Known(Type::Any) => {
                 return InferredExpression::Known(Type::Array(Box::new(Type::Any)));
             }
@@ -397,6 +435,7 @@ fn infer_index_access(
     index: &ParsedExpression,
     index_span: &Option<TextSpan>,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let Some(symbol) = symbols.get(object_name) else {
         return InferredExpression::UnresolvedIdentifier {
@@ -417,7 +456,8 @@ fn infer_index_access(
                 }
                 match ty {
                     Type::Tuple(elements) => {
-                        let res = infer_tuple_index_access(elements, index, index_span, symbols);
+                        let res =
+                            infer_tuple_index_access(elements, index, index_span, symbols, ctx);
                         if let InferredExpression::Known(ty) = res {
                             result_types.push(ty);
                         } else {
@@ -430,7 +470,7 @@ fn infer_index_access(
                             return InferredExpression::Unknown;
                         }
 
-                        let index_type = match infer_expression(index, symbols) {
+                        let index_type = match infer_expression(index, symbols, ctx) {
                             InferredExpression::Known(ty) => ty,
                             _ => return InferredExpression::Unknown,
                         };
@@ -445,14 +485,16 @@ fn infer_index_access(
             }
             InferredExpression::Known(typescript_rust_types::union_type(result_types))
         }
-        Type::Tuple(elements) => infer_tuple_index_access(elements, index, index_span, symbols),
+        Type::Tuple(elements) => {
+            infer_tuple_index_access(elements, index, index_span, symbols, ctx)
+        }
         Type::Array(element_type) => {
             let element_type = element_type.as_ref();
             if matches!(element_type, Type::Unknown) {
                 return InferredExpression::Unknown;
             }
 
-            let index_type = match infer_expression(index, symbols) {
+            let index_type = match infer_expression(index, symbols, ctx) {
                 InferredExpression::Known(ty) => ty,
                 InferredExpression::UnresolvedIdentifier { .. }
                 | InferredExpression::MissingProperty { .. }
@@ -484,8 +526,9 @@ fn infer_tuple_index_access(
     index: &ParsedExpression,
     index_span: &Option<TextSpan>,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let index_type = match infer_expression(index, symbols) {
+    let index_type = match infer_expression(index, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { .. }
         | InferredExpression::MissingProperty { .. }
@@ -519,8 +562,9 @@ pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {
 fn infer_object_property_value(
     parsed_expression: &ParsedExpression,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> Type {
-    match infer_expression(parsed_expression, symbols) {
+    match infer_expression(parsed_expression, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         _ => Type::Unknown,
     }
@@ -530,9 +574,10 @@ fn infer_logical_expression(
     left: &ParsedExpression,
     right: &ParsedExpression,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let left_type = infer_expression(left, symbols);
-    let right_type = infer_expression(right, symbols);
+    let left_type = infer_expression(left, symbols, ctx);
+    let right_type = infer_expression(right, symbols, ctx);
 
     match (left_type, right_type) {
         (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
@@ -549,14 +594,15 @@ fn infer_conditional_expression(
     when_true: &ParsedExpression,
     when_false: &ParsedExpression,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let condition_type = infer_expression(condition, symbols);
+    let condition_type = infer_expression(condition, symbols, ctx);
     if !is_known_non_unknown(&condition_type) {
         return InferredExpression::Unknown;
     }
 
-    let true_type = infer_expression(when_true, symbols);
-    let false_type = infer_expression(when_false, symbols);
+    let true_type = infer_expression(when_true, symbols, ctx);
+    let false_type = infer_expression(when_false, symbols, ctx);
 
     match (true_type, false_type) {
         (InferredExpression::Known(Type::Any), _) | (_, InferredExpression::Known(Type::Any)) => {
@@ -580,6 +626,7 @@ fn infer_binary_expression(
     left: &ParsedExpression,
     right: &ParsedExpression,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
     match operator {
         ParsedBinaryOperator::StrictEquals
@@ -591,8 +638,8 @@ fn infer_binary_expression(
         | ParsedBinaryOperator::GreaterThan
         | ParsedBinaryOperator::GreaterThanEquals => InferredExpression::Known(Type::Boolean),
         ParsedBinaryOperator::Add => {
-            let left_type = infer_expression(left, symbols);
-            let right_type = infer_expression(right, symbols);
+            let left_type = infer_expression(left, symbols, ctx);
+            let right_type = infer_expression(right, symbols, ctx);
 
             match (left_type, right_type) {
                 (InferredExpression::Known(Type::Any), _)
@@ -637,8 +684,9 @@ fn infer_property_access(
     property_name: &str,
     property_span: &Option<TextSpan>,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let object_type = match infer_expression(object, symbols) {
+    let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
@@ -688,8 +736,9 @@ fn infer_property_call(
     property_name: &str,
     _property_span: &Option<TextSpan>,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let object_type = match infer_expression(object, symbols) {
+    let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
@@ -729,7 +778,11 @@ fn infer_property_call(
     }
 }
 
-fn infer_new_expression(callee: &ParsedExpression, symbols: &SymbolTable) -> InferredExpression {
+fn infer_new_expression(
+    callee: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     if let ParsedExpression::Identifier { name, .. } = callee
         && let Some(result_type) =
             typescript_rust_types::Type::builtin_constructor_result_type(name)
@@ -737,7 +790,7 @@ fn infer_new_expression(callee: &ParsedExpression, symbols: &SymbolTable) -> Inf
         return InferredExpression::Known(result_type);
     }
 
-    match infer_expression(callee, symbols) {
+    match infer_expression(callee, symbols, ctx) {
         InferredExpression::Known(Type::Function(function_type)) => {
             InferredExpression::Known((*function_type.return_type).clone())
         }
@@ -755,8 +808,9 @@ fn infer_optional_index_access(
     index: &ParsedExpression,
     index_span: &Option<TextSpan>,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let object_type = match infer_expression(object, symbols) {
+    let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
@@ -772,7 +826,7 @@ fn infer_optional_index_access(
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown => InferredExpression::Unknown,
         Type::Tuple(elements) => {
-            let result = infer_tuple_index_access(elements, index, index_span, symbols);
+            let result = infer_tuple_index_access(elements, index, index_span, symbols, ctx);
             match result {
                 InferredExpression::Known(ty) => {
                     InferredExpression::Known(union_type(vec![ty, Type::Undefined]))
@@ -786,7 +840,7 @@ fn infer_optional_index_access(
                 return InferredExpression::Unknown;
             }
 
-            let index_type = match infer_expression(index, symbols) {
+            let index_type = match infer_expression(index, symbols, ctx) {
                 InferredExpression::Known(ty) => ty,
                 InferredExpression::UnresolvedIdentifier { .. }
                 | InferredExpression::MissingProperty { .. }
@@ -809,8 +863,9 @@ fn infer_optional_property_access(
     property_name: &str,
     property_span: &Option<TextSpan>,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let object_type = match infer_expression(object, symbols) {
+    let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
@@ -834,6 +889,37 @@ fn infer_optional_property_access(
             }
         }
         Type::Unknown | Type::Any => InferredExpression::Known(base_type.clone()),
+        Type::Union(ref union_type) => {
+            let mut result_types = Vec::new();
+            let mut saw_known = false;
+
+            for ty in &union_type.types {
+                if *ty == Type::Undefined || *ty == Type::Unknown {
+                    continue;
+                }
+
+                saw_known = true;
+                match ty.get_property_access_type(property_name) {
+                    Some(property_type) => result_types.push(property_type),
+                    None => {
+                        return InferredExpression::MissingProperty {
+                            property_name: property_name.to_string(),
+                            object_type: base_type.clone(),
+                            span: *property_span,
+                        };
+                    }
+                }
+            }
+
+            if !saw_known || result_types.is_empty() {
+                InferredExpression::Unknown
+            } else {
+                InferredExpression::Known(typescript_rust_types::union_type(vec![
+                    typescript_rust_types::union_type(result_types),
+                    Type::Undefined,
+                ]))
+            }
+        }
         Type::Function(_)
         | Type::Array(_)
         | Type::Tuple(_)
@@ -845,7 +931,6 @@ fn infer_optional_property_access(
         | Type::BooleanLiteral(_)
         | Type::Void
         | Type::Undefined => InferredExpression::Known(Type::Unknown),
-        Type::Union(_) => InferredExpression::Known(Type::Unknown),
     };
 
     match result_type {
@@ -854,6 +939,48 @@ fn infer_optional_property_access(
         }
         other => other,
     }
+}
+
+fn instantiate_function_return_type(
+    function_signature: Option<&FunctionSignatureInfo>,
+    function_type: &typescript_rust_types::FunctionType,
+    type_arguments: &[typescript_rust_syntax::ParsedType],
+    ctx: &mut CheckerContext,
+) -> Type {
+    let Some(function_signature) = function_signature else {
+        return (*function_type.return_type).clone();
+    };
+
+    let Some(return_type) = function_signature.return_type.as_ref() else {
+        return (*function_type.return_type).clone();
+    };
+
+    if function_signature.type_parameters.is_empty() || type_arguments.is_empty() {
+        return map_parsed_type_with_substitution(
+            return_type.clone(),
+            ctx,
+            &TypeParameterSubstitution::new(),
+        );
+    }
+
+    let mut substitution = TypeParameterSubstitution::new();
+    for (type_parameter, type_argument) in function_signature
+        .type_parameters
+        .iter()
+        .zip(type_arguments.iter())
+    {
+        let type_argument = type_argument.clone();
+        substitution.insert(
+            type_parameter.name.clone(),
+            map_parsed_type_with_substitution(
+                type_argument,
+                ctx,
+                &TypeParameterSubstitution::new(),
+            ),
+        );
+    }
+
+    map_parsed_type_with_substitution(return_type.clone(), ctx, &substitution)
 }
 
 fn is_known_non_unknown(result: &InferredExpression) -> bool {

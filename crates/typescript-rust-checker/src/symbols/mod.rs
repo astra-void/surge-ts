@@ -6,4 +6,6 @@ pub(crate) use scopes::ScopeStack;
 pub(crate) use type_declarations::{
     InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo, TypeDeclarationTable,
 };
-pub(crate) use values::{SymbolInfo, SymbolKind, SymbolTable, map_symbol_kind};
+pub(crate) use values::{
+    FunctionSignatureInfo, SymbolInfo, SymbolKind, SymbolTable, map_symbol_kind,
+};

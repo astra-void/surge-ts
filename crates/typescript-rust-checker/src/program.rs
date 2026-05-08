@@ -898,7 +898,13 @@ fn check_program_function_declaration(
         return;
     };
 
-    check_function::check_function_declaration_body(function, &function_type, ctx);
+    let type_parameters = function.type_parameters.clone();
+    check_function::check_function_declaration_body(
+        function,
+        &function_type,
+        &type_parameters,
+        ctx,
+    );
     ctx.symbols = saved_symbols;
 }
 
@@ -968,6 +974,7 @@ fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                             } else {
                                 crate::symbols::SymbolKind::Let
                             },
+                            function_signature: None,
                         },
                     );
                 }
@@ -1004,6 +1011,7 @@ fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                     crate::symbols::SymbolInfo {
                         ty: typescript_rust_types::Type::Function(fun_ty),
                         kind: crate::symbols::SymbolKind::Function,
+                        function_signature: None,
                     },
                 );
             }
@@ -1061,6 +1069,7 @@ fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                                         crate::symbols::SymbolKind::Let
                                     },
                                     ty,
+                                    function_signature: None,
                                 },
                             );
                         }
@@ -1090,6 +1099,7 @@ fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                                             crate::symbols::SymbolKind::Let
                                         },
                                         ty,
+                                        function_signature: None,
                                     },
                                 );
                             }
@@ -1247,6 +1257,7 @@ fn collect_global_variables(
                                     crate::symbols::SymbolKind::Let
                                 },
                                 ty: ty,
+                                function_signature: None,
                             },
                         );
                     }

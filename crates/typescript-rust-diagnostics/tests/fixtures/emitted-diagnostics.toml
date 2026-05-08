@@ -282,6 +282,12 @@ fixtures = [
 status = "catalog-only"
 reason = "Cataloged for future coverage"
 
+[TS2552]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/catch-binding-scope-basic/src/index.ts",
+]
+
 [TS2554]
 status = "emitted"
 fixtures = [
@@ -300,6 +306,12 @@ fixtures = [
 span_tests = [
   "crates/typescript-rust-checker/tests/program.rs",
   "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2591]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/no-node-types-buffer-process-basic/src/index.ts",
 ]
 
 [TS2693]

@@ -214,6 +214,7 @@ fn run_single_file_mode(
             skip_lib_check: false,
             stub_external_modules,
             resolved_modules: std::collections::HashMap::new(),
+            types: Vec::new(),
             diagnostic_profile,
         },
     );
@@ -342,6 +343,7 @@ fn run_project_mode(
         skip_lib_check: loaded.compiler_options.skip_lib_check,
         stub_external_modules,
         resolved_modules,
+        types: loaded.compiler_options.types.clone(),
         diagnostic_profile,
     };
 

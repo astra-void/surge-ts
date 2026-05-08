@@ -146,6 +146,7 @@ pub(crate) fn check_variable_declaration_with_symbols(
         let symbol = SymbolInfo {
             ty,
             kind: symbol_kind,
+            function_signature: None,
         };
 
         symbols.insert(variable.name, symbol.clone());

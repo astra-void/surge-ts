@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typescript_rust_syntax::{ParsedInterfaceMember, ParsedType, ParsedTypeParameter, TextSpan};
+use typescript_rust_syntax::{
+    ParsedInterfaceMember, ParsedNamedType, ParsedType, ParsedTypeParameter, TextSpan,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TypeAliasInfo {
@@ -19,6 +21,7 @@ pub(crate) struct InterfaceInfo {
     pub(crate) file_name: String,
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) type_parameters: Vec<ParsedTypeParameter>,
+    pub(crate) extends: Vec<ParsedNamedType>,
     pub(crate) members: Vec<ParsedInterfaceMember>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationTable>>,
 }
@@ -87,6 +90,7 @@ mod tests {
             file_name: "b.ts".to_string(),
             name_span: None,
             type_parameters: vec![],
+            extends: vec![],
             members: vec![],
             resolution_scope: None,
         });

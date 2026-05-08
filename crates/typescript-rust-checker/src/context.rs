@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use typescript_rust_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
-use typescript_rust_syntax::TextSpan as SyntaxTextSpan;
+use typescript_rust_syntax::{ParsedTypeParameter, TextSpan as SyntaxTextSpan};
+use typescript_rust_types::Type;
 
 use crate::symbols::{SymbolTable, TypeDeclarationTable};
 
@@ -44,6 +45,7 @@ pub struct CheckerOptions {
     pub no_implicit_any: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
+    pub types: Vec<String>,
     pub no_lib: bool,
     pub skip_lib_check: bool,
     pub diagnostic_profile: DiagnosticProfile,
@@ -55,6 +57,7 @@ impl Default for CheckerOptions {
             no_implicit_any: false,
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
+            types: Vec::new(),
             no_lib: false,
             skip_lib_check: false,
             diagnostic_profile: DiagnosticProfile::default(),
@@ -79,6 +82,7 @@ pub(crate) struct CheckerContext {
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
+    pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     file_kinds: HashMap<String, FileKind>,
 }
 
@@ -106,8 +110,29 @@ impl CheckerContext {
             ambient_modules: std::collections::HashMap::new(),
             ambient_global_symbols: SymbolTable::new(),
             ambient_global_type_declarations: TypeDeclarationTable::new(),
+            type_parameter_scopes: Vec::new(),
             file_kinds,
         }
+    }
+
+    pub(crate) fn push_type_parameter_scope(
+        &mut self,
+        type_parameters: &[ParsedTypeParameter],
+        substitution: Option<HashMap<String, Type>>,
+    ) {
+        let mut scope = substitution.unwrap_or_default();
+        for type_parameter in type_parameters {
+            scope
+                .entry(type_parameter.name.clone())
+                .or_insert(Type::Unknown);
+        }
+        self.type_parameter_scopes.push(scope);
+    }
+
+    pub(crate) fn pop_type_parameter_scope(&mut self) {
+        self.type_parameter_scopes
+            .pop()
+            .expect("type parameter scope stack must not underflow");
     }
 
     pub(crate) fn set_file_name(&mut self, file_name: String) {

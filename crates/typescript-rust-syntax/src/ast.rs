@@ -157,6 +157,7 @@ pub struct ParsedInterfaceDeclaration {
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub type_parameters: Vec<ParsedTypeParameter>,
+    pub extends: Vec<ParsedNamedType>,
     pub members: Vec<ParsedInterfaceMember>,
 }
 
@@ -530,8 +531,15 @@ pub struct ParsedSwitchStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedTryStatement {
     pub block: Vec<ParsedFunctionBodyStatement>,
-    pub handler: Option<Vec<ParsedFunctionBodyStatement>>,
+    pub handler: Option<ParsedCatchClause>,
     pub finalizer: Vec<ParsedFunctionBodyStatement>,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedCatchClause {
+    pub binding_name: Option<ParsedBindingName>,
+    pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,
 }
 

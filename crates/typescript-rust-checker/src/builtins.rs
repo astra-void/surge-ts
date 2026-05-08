@@ -15,6 +15,8 @@ pub(crate) fn inject_builtins(ctx: &mut CheckerContext) {
 
     inject_builtin_types(ctx);
     inject_builtin_values(ctx);
+    inject_configured_types(ctx);
+    inject_configured_values(ctx);
 }
 
 fn inject_builtin_types(ctx: &mut CheckerContext) {
@@ -38,6 +40,8 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
         "Date",
         "Error",
         "RegExp",
+        "ArrayBuffer",
+        "AuthenticatorTransport",
     ];
 
     for name in types {
@@ -97,6 +101,8 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
             || name == "Date"
             || name == "Error"
             || name == "RegExp"
+            || name == "ArrayBuffer"
+            || name == "AuthenticatorTransport"
         {
             vec![]
         } else {
@@ -104,7 +110,11 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
                 name: "T".to_string(),
                 name_span: None,
                 constraint: None,
-                default_type: None,
+                default_type: if name == "Buffer" {
+                    Some(ParsedType::Unknown)
+                } else {
+                    None
+                },
                 span: None,
             }]
         };
@@ -124,6 +134,15 @@ fn inject_builtin_types(ctx: &mut CheckerContext) {
                         type_arguments: vec![],
                     })
                 }
+                "ArrayBuffer" => ParsedType::Object(ParsedObjectType {
+                    properties: vec![ParsedObjectTypeProperty {
+                        name: "byteLength".to_string(),
+                        name_span: None,
+                        ty: ParsedType::Number,
+                        optional: false,
+                    }],
+                }),
+                "AuthenticatorTransport" => ParsedType::String,
                 "Object" => ParsedType::Unknown,
                 _ => ParsedType::Unknown,
             },
@@ -263,6 +282,15 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             required_parameter_count: 1,
         })),
     );
+    promise_props.insert(
+        "all".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Any),
+            is_variadic: true,
+            required_parameter_count: 1,
+        })),
+    );
 
     let builtins = vec![
         (
@@ -301,7 +329,15 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 properties: promise_props,
             }),
         ),
-        ("Error", Type::Any),
+        (
+            "Error",
+            Type::Function(FunctionType {
+                parameters: vec![Type::Any],
+                return_type: Box::new(Type::Any),
+                is_variadic: true,
+                required_parameter_count: 1,
+            }),
+        ),
         ("RegExp", Type::Any),
         ("Object", Type::Any),
         ("globalThis", Type::Any),
@@ -396,6 +432,15 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 required_parameter_count: 0,
             }),
         ),
+        (
+            "fetch",
+            Type::Function(FunctionType {
+                parameters: vec![Type::Any],
+                return_type: Box::new(Type::Any),
+                is_variadic: true,
+                required_parameter_count: 1,
+            }),
+        ),
     ];
 
     for (name, ty) in builtins {
@@ -403,9 +448,100 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             let symbol = SymbolInfo {
                 ty,
                 kind: SymbolKind::Const,
+                function_signature: None,
             };
             let _ = ctx.ambient_global_symbols.insert(name.to_string(), symbol);
         }
+    }
+}
+
+fn inject_configured_types(ctx: &mut CheckerContext) {
+    if !ctx.options.types.iter().any(|ty| ty == "node") {
+        return;
+    }
+
+    if ctx.ambient_global_type_declarations.get("Buffer").is_none() {
+        let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+            name: "Buffer".to_string(),
+            file_name: "<built-in>".to_string(),
+            name_span: None,
+            type_parameters: vec![ParsedTypeParameter {
+                name: "T".to_string(),
+                name_span: None,
+                constraint: None,
+                default_type: Some(ParsedType::Any),
+                span: None,
+            }],
+            ty: ParsedType::Object(ParsedObjectType {
+                properties: vec![ParsedObjectTypeProperty {
+                    name: "toString".to_string(),
+                    name_span: None,
+                    ty: ParsedType::Function(ParsedFunctionType {
+                        parameters: vec![],
+                        return_type: Box::new(ParsedType::String),
+                        type_parameters: vec![],
+                    }),
+                    optional: false,
+                }],
+            }),
+            resolution_scope: None,
+        });
+        ctx.ambient_global_type_declarations
+            .insert("Buffer".to_string(), declaration);
+    }
+}
+
+fn inject_configured_values(ctx: &mut CheckerContext) {
+    if !ctx.options.types.iter().any(|ty| ty == "node") {
+        return;
+    }
+
+    if ctx.ambient_global_symbols.get("Buffer").is_none() {
+        let mut props = BTreeMap::new();
+        props.insert(
+            "from".to_string(),
+            ObjectProperty::required(Type::Function(FunctionType {
+                parameters: vec![Type::Any, Type::Any],
+                return_type: Box::new(Type::Any),
+                is_variadic: true,
+                required_parameter_count: 1,
+            })),
+        );
+
+        ctx.ambient_global_symbols.insert(
+            "Buffer".to_string(),
+            SymbolInfo {
+                ty: Type::Object(ObjectType { properties: props }),
+                kind: SymbolKind::Const,
+                function_signature: None,
+            },
+        );
+    }
+
+    if ctx.ambient_global_symbols.get("process").is_none() {
+        let mut env_props = BTreeMap::new();
+        env_props.insert(
+            "AUTHKIT_SECRET".to_string(),
+            ObjectProperty::required(Type::Any),
+        );
+        let mut process_props = BTreeMap::new();
+        process_props.insert(
+            "env".to_string(),
+            ObjectProperty::required(Type::Object(ObjectType {
+                properties: env_props,
+            })),
+        );
+
+        ctx.ambient_global_symbols.insert(
+            "process".to_string(),
+            SymbolInfo {
+                ty: Type::Object(ObjectType {
+                    properties: process_props,
+                }),
+                kind: SymbolKind::Const,
+                function_signature: None,
+            },
+        );
     }
 }
 

@@ -138,6 +138,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             resolved_modules: std::collections::HashMap::new(),
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
         },

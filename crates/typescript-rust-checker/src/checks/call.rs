@@ -9,8 +9,9 @@ use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_
 use crate::checks::expr::evaluate_expression;
 use crate::context::CheckerContext;
 use crate::infer::InferredExpression;
+use crate::infer::{TypeParameterSubstitution, map_parsed_type_with_substitution};
 use crate::spans::diagnostic_with_syntax_span;
-use crate::symbols::SymbolTable;
+use crate::symbols::{FunctionSignatureInfo, SymbolTable};
 
 pub(crate) fn check_call(call: ParsedCall, ctx: &mut CheckerContext) {
     let symbols = ctx.symbols.clone();
@@ -57,6 +58,13 @@ pub(crate) fn check_call_like(
         ));
         return None;
     };
+
+    let function_type = instantiate_function_type(
+        &function_type,
+        symbol.function_signature.as_ref(),
+        type_arguments,
+        ctx,
+    );
 
     check_function_type_call(
         &function_type,
@@ -134,6 +142,10 @@ pub(crate) fn check_property_call_like(
         };
 
     let object_type_name = object_ty.name();
+
+    if property_name == "all" && is_promise_all_receiver(&object_ty) {
+        return check_promise_all_call(arguments, call_span.or(property_span), symbols, ctx);
+    }
 
     match object_ty {
         Type::Any => Some(Type::Any),
@@ -463,6 +475,57 @@ fn check_array_map_call(
     }
 }
 
+fn is_promise_all_receiver(object_type: &Type) -> bool {
+    match object_type {
+        Type::Object(object) => {
+            object.contains_property("resolve") && object.contains_property("all")
+        }
+        _ => false,
+    }
+}
+
+fn check_promise_all_call(
+    arguments: &[ParsedCallArgument],
+    call_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if arguments.is_empty() {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2554(1, 0, ctx.file_name.clone()),
+            call_span,
+        ));
+        return None;
+    }
+
+    let inferred = evaluate_expression_with_expected_type(
+        &arguments[0].expression,
+        arguments[0].span,
+        None,
+        ExpectedTypeDiagnostic::ArgumentNotAssignable,
+        symbols,
+        ctx,
+    );
+
+    match inferred {
+        InferredExpression::Known(Type::Array(element_type)) => {
+            Some(Type::Array(Box::new((*element_type).clone())))
+        }
+        InferredExpression::Known(Type::Tuple(elements)) => {
+            Some(Type::Array(Box::new(if elements.is_empty() {
+                Type::Any
+            } else {
+                typescript_rust_types::union_type(elements)
+            })))
+        }
+        InferredExpression::Known(Type::Any) => Some(Type::Array(Box::new(Type::Any))),
+        InferredExpression::Known(ty) => Some(Type::Array(Box::new(ty))),
+        InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. }
+        | InferredExpression::Unknown => Some(Type::Array(Box::new(Type::Any))),
+    }
+}
+
 pub(crate) fn check_optional_call_like(
     callee: &typescript_rust_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,
@@ -505,6 +568,72 @@ pub(crate) fn check_optional_call_like(
             ));
             None
         }
+    }
+}
+
+fn instantiate_function_type(
+    function_type: &FunctionType,
+    function_signature: Option<&FunctionSignatureInfo>,
+    type_arguments: &[ParsedType],
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    let Some(function_signature) = function_signature else {
+        return function_type.clone();
+    };
+
+    if function_signature.type_parameters.is_empty() || type_arguments.is_empty() {
+        return function_type.clone();
+    }
+
+    let mut substitution = TypeParameterSubstitution::new();
+    for (type_parameter, type_argument) in function_signature
+        .type_parameters
+        .iter()
+        .zip(type_arguments.iter())
+    {
+        let type_argument = type_argument.clone();
+        substitution.insert(
+            type_parameter.name.clone(),
+            map_parsed_type_with_substitution(
+                type_argument,
+                ctx,
+                &TypeParameterSubstitution::new(),
+            ),
+        );
+    }
+
+    let mut instantiated_parameters = Vec::with_capacity(function_type.parameters.len());
+    for (index, parameter) in function_type.parameters.iter().enumerate() {
+        let Some(parsed_parameter) = function_signature
+            .parameter_types
+            .get(index)
+            .and_then(|ty| ty.clone())
+        else {
+            instantiated_parameters.push(parameter.clone());
+            continue;
+        };
+
+        instantiated_parameters.push(map_parsed_type_with_substitution(
+            parsed_parameter,
+            ctx,
+            &substitution,
+        ));
+    }
+
+    let instantiated_return_type = function_signature
+        .return_type
+        .as_ref()
+        .map(|return_type| {
+            let return_type = return_type.clone();
+            map_parsed_type_with_substitution(return_type, ctx, &substitution)
+        })
+        .unwrap_or_else(|| (*function_type.return_type).clone());
+
+    FunctionType {
+        parameters: instantiated_parameters,
+        return_type: Box::new(instantiated_return_type),
+        is_variadic: function_type.is_variadic,
+        required_parameter_count: function_type.required_parameter_count,
     }
 }
 

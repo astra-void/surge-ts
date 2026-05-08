@@ -60,6 +60,7 @@ fn native_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     )
 }
@@ -77,6 +78,7 @@ fn span_ts2304_identifier_expression() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "missing"));
@@ -95,6 +97,7 @@ fn span_ts2304_unknown_type_annotation_points_to_type_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));
@@ -113,6 +116,7 @@ fn span_ts2304_unknown_type_alias_target() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));
@@ -131,6 +135,7 @@ fn span_ts2304_unknown_interface_property_type() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));
@@ -149,6 +154,7 @@ fn span_ts2304_unknown_function_parameter_type() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));
@@ -167,6 +173,7 @@ fn span_ts2304_unknown_function_return_type() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));
@@ -185,6 +192,7 @@ fn span_ts2304_unknown_tuple_element_type() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));
@@ -203,6 +211,7 @@ fn span_ts2304_unknown_array_element_type() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));
@@ -221,6 +230,7 @@ fn span_ts7006_points_to_parameter_name() {
             no_implicit_any: true,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS7006", span(source, "value"));
@@ -239,6 +249,7 @@ fn span_ts7031_points_to_binding_element_name() {
             no_implicit_any: true,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS7031", span(source, "userId"));
@@ -257,6 +268,7 @@ fn span_ts7005_points_to_variable_name() {
             no_implicit_any: true,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS7005", span(source, "value"));
@@ -275,6 +287,7 @@ fn span_ts2451_points_to_duplicate_variable_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2451", span_nth(source, "value", 1));
@@ -293,6 +306,7 @@ fn span_ts2393_points_to_duplicate_function_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2393", span_nth(source, "greet", 1));
@@ -311,6 +325,7 @@ fn span_ts2300_points_to_duplicate_type_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2300", span_nth(source, "Name", 1));
@@ -329,6 +344,7 @@ fn span_ts2588_points_to_assignment_target() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2588", span_nth(source, "value", 1));
@@ -347,6 +363,7 @@ fn span_ts2322_variable_initializer() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
@@ -365,6 +382,7 @@ fn span_ts2322_assignment_rhs() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
@@ -383,6 +401,7 @@ fn span_ts2322_return_expression() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
@@ -401,6 +420,7 @@ fn span_ts2322_object_property_value() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "1"));
@@ -419,6 +439,7 @@ fn span_ts2322_array_element() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
@@ -437,6 +458,7 @@ fn span_ts2322_tuple_element() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "2"));
@@ -455,6 +477,7 @@ fn span_tuple_length_too_few_points_to_array_literal() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "[1]"));
@@ -473,6 +496,7 @@ fn span_tuple_length_too_many_points_to_extra_element() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "2"));
@@ -491,6 +515,7 @@ fn span_ts2322_conditional_true_branch() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
@@ -509,6 +534,7 @@ fn span_ts2322_conditional_false_branch() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
@@ -527,6 +553,7 @@ fn span_ts2322_property_call_return_initializer() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(
@@ -550,6 +577,7 @@ fn span_ts2322_index_access_initializer() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "values[0]"));
@@ -568,6 +596,7 @@ fn span_ts2345_identifier_call_argument() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2345", span(source, "\"a\""));
@@ -586,6 +615,7 @@ fn span_ts2304_call_argument() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "missing"));
@@ -604,6 +634,7 @@ fn span_ts2304_call_callee() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "missing"));
@@ -622,6 +653,7 @@ fn span_ts2304_property_call_receiver() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "missing"));
@@ -640,6 +672,7 @@ fn span_ts2304_index_receiver() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "missing"));
@@ -658,6 +691,7 @@ fn span_ts2304_index_expression() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "missing"));
@@ -676,6 +710,7 @@ fn span_ts2345_contextual_object_argument_property_value() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "1"));
@@ -694,6 +729,7 @@ fn span_ts2345_contextual_array_argument_element() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
@@ -712,6 +748,7 @@ fn span_ts2345_contextual_tuple_argument_element() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2322", span(source, "2"));
@@ -730,6 +767,7 @@ fn span_ts2554_identifier_call_arity_points_to_callee() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2554", span(source, "greet()"));
@@ -748,6 +786,7 @@ fn span_ts2554_property_call_arity_points_to_property_or_call() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(
@@ -771,6 +810,7 @@ fn span_ts2349_identifier_non_callable_points_to_callee() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2349", span_nth(source, "value", 1));
@@ -789,6 +829,7 @@ fn span_ts2349_property_non_callable_points_to_property() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2349", span(source, "store.value()"));
@@ -807,6 +848,7 @@ fn span_ts2339_property_access_missing_points_to_property_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2339", span(source, "age"));
@@ -825,6 +867,7 @@ fn span_ts2339_property_call_missing_points_to_property_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2339", span(source, "age"));
@@ -843,6 +886,7 @@ fn span_ts2339_primitive_receiver_property_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2339", span(source, "foo"));
@@ -861,6 +905,7 @@ fn span_ts2339_tuple_out_of_range_index() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2339", span(source, "1"));
@@ -879,6 +924,7 @@ fn span_ts2339_index_non_array_receiver() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2339", span_nth(source, "value", 1));
@@ -897,6 +943,7 @@ fn span_ts2353_excess_property_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2353", span(source, "age"));
@@ -915,6 +962,7 @@ fn span_ts2741_missing_required_object_literal() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2741", span(source, "{}"));
@@ -933,6 +981,7 @@ fn span_object_literal_unresolved_property_value() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "missing"));
@@ -951,6 +1000,7 @@ fn span_ts2362_left_operand() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2362", span(source, "\"a\""));
@@ -969,6 +1019,7 @@ fn span_ts2363_right_operand() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2363", span(source, "\"a\""));
@@ -987,6 +1038,7 @@ fn span_ts2365_operator() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2365", span(source, "\"a\" + true"));
@@ -1005,6 +1057,7 @@ fn span_ts2367_equality_operator() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2367", span(source, "\"a\" === 1"));
@@ -1023,6 +1076,7 @@ fn span_ts2356_unary_operand() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2356", span(source, "\"a\""));
@@ -1041,6 +1095,7 @@ fn span_ts2872_truthy_literal() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2872", span(source, "\"a\""));
@@ -1059,6 +1114,7 @@ fn span_ts2873_falsy_literal() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2873", span(source, "0"));
@@ -1714,6 +1770,7 @@ fn span_module_exported_unknown_type_points_to_type_name() {
             no_implicit_any: false,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
     assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));

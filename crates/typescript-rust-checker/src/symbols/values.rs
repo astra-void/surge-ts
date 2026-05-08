@@ -1,11 +1,20 @@
 use std::collections::HashMap;
 
+use typescript_rust_syntax::{ParsedType, ParsedTypeParameter};
 use typescript_rust_types::Type;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SymbolInfo {
     pub(crate) ty: Type,
     pub(crate) kind: SymbolKind,
+    pub(crate) function_signature: Option<FunctionSignatureInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FunctionSignatureInfo {
+    pub(crate) type_parameters: Vec<ParsedTypeParameter>,
+    pub(crate) parameter_types: Vec<Option<ParsedType>>,
+    pub(crate) return_type: Option<ParsedType>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -114,7 +114,7 @@ pub(crate) fn evaluate_expression(
 ) -> InferredExpression {
     match expression {
         ParsedExpression::ArrayLiteral { elements, .. } => {
-            let inferred_expression = infer_expression(expression, symbols);
+            let inferred_expression = infer_expression(expression, symbols, ctx);
 
             for element in elements {
                 let _ = evaluate_expression(
@@ -328,7 +328,7 @@ pub(crate) fn evaluate_expression(
             property_span: _,
         } => {
             let _ = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
-            let inferred_expression = infer_expression(expression, symbols);
+            let inferred_expression = infer_expression(expression, symbols, ctx);
             if let InferredExpression::MissingProperty {
                 property_name,
                 object_type,
@@ -399,7 +399,8 @@ pub(crate) fn evaluate_expression(
             // contextually (e.g. primitives, identifiers). However, if contextual checking already
             // failed and returned Unknown, we might get false cascades. Let's do a clean check
             // against the original inferred type.
-            let original_inferred = crate::infer::infer_expression(satisfied_expression, symbols);
+            let original_inferred =
+                crate::infer::infer_expression(satisfied_expression, symbols, ctx);
 
             // Check if contextual check already failed (meaning it returned Unknown when actual wasn't Unknown).
             let contextual_failed = matches!(
@@ -546,7 +547,7 @@ pub(crate) fn evaluate_expression(
             }
         }
         _ => {
-            let inferred_expression = infer_expression(expression, symbols);
+            let inferred_expression = infer_expression(expression, symbols, ctx);
             report_inferred_expression(inferred_expression.clone(), fallback_span, ctx);
             inferred_expression
         }
@@ -569,6 +570,22 @@ pub(crate) fn report_inferred_expression(
                 return;
             }
 
+            if is_missing_node_like_global(&name, ctx) {
+                ctx.push(diagnostic_with_syntax_span(
+                    Diagnostic::ts2591(&name, ctx.file_name.clone()),
+                    choose_span(span, fallback_span),
+                ));
+                return;
+            }
+
+            if let Some(suggestion) = suggested_unresolved_name(&name, ctx) {
+                ctx.push(diagnostic_with_syntax_span(
+                    Diagnostic::ts2552(&name, suggestion, ctx.file_name.clone()),
+                    choose_span(span, fallback_span),
+                ));
+                return;
+            }
+
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2304(&name, ctx.file_name.clone()),
                 choose_span(span, fallback_span),
@@ -587,6 +604,25 @@ pub(crate) fn report_inferred_expression(
         }
         InferredExpression::Unknown => {}
     }
+}
+
+fn suggested_unresolved_name(name: &str, ctx: &CheckerContext) -> Option<String> {
+    let mut candidates = ctx
+        .symbols
+        .iter()
+        .chain(ctx.ambient_global_symbols.iter())
+        .map(|(candidate, _)| candidate.as_str())
+        .filter(|candidate| candidate.eq_ignore_ascii_case(name) && *candidate != name);
+
+    candidates.next().map(|candidate| candidate.to_string())
+}
+
+fn is_missing_node_like_global(name: &str, ctx: &CheckerContext) -> bool {
+    if ctx.options.types.iter().any(|ty| ty == "node") {
+        return false;
+    }
+
+    matches!(name, "Buffer" | "process")
 }
 
 fn evaluate_optional_index_access(

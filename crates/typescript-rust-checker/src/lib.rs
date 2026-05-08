@@ -24,6 +24,7 @@ mod tests {
     fn diagnostic_profile_is_public_api() {
         let options = CheckerOptions {
             diagnostic_profile: DiagnosticProfile::Native,
+            types: Vec::new(),
             ..CheckerOptions::default()
         };
         assert_eq!(options.diagnostic_profile, DiagnosticProfile::Native);

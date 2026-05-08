@@ -265,6 +265,14 @@ message = "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?"
 arity = 3
 
 [[diagnostic]]
+code = "TS2552"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Did you mean '{1}'?"
+arity = 2
+
+[[diagnostic]]
 code = "TS2554"
 category = "Error"
 source = "typescript"
@@ -278,6 +286,14 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Cannot assign to '{0}' because it is a constant."
+arity = 1
+
+[[diagnostic]]
+code = "TS2591"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig."
 arity = 1
 
 [[diagnostic]]

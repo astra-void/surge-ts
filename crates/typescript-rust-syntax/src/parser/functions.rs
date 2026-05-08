@@ -1,7 +1,8 @@
 use oxc_ast::ast::{
-    BindingPattern, BindingProperty, BlockStatement, Declaration, Expression, ExpressionStatement,
-    FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey, Statement, SwitchCase,
-    SwitchStatement, ThrowStatement, TryStatement, VariableDeclaration, WhileStatement,
+    BindingPattern, BindingProperty, BlockStatement, CatchClause, Declaration, Expression,
+    ExpressionStatement, FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey,
+    Statement, SwitchCase, SwitchStatement, ThrowStatement, TryStatement, VariableDeclaration,
+    WhileStatement,
 };
 use oxc_span::GetSpan;
 
@@ -233,7 +234,7 @@ fn parse_try_statement(try_statement: &TryStatement<'_>) -> Option<ParsedTryStat
     let handler = try_statement
         .handler
         .as_ref()
-        .map(|handler| parse_block_statement_as_function_body(&handler.body));
+        .map(|catch_clause| parse_catch_clause(catch_clause.as_ref()));
     let finalizer = try_statement
         .finalizer
         .as_ref()
@@ -246,6 +247,19 @@ fn parse_try_statement(try_statement: &TryStatement<'_>) -> Option<ParsedTryStat
         finalizer,
         span: Some(text_span_from_oxc_span(try_statement.span)),
     })
+}
+
+fn parse_catch_clause(catch_clause: &CatchClause<'_>) -> crate::ParsedCatchClause {
+    let binding_name = catch_clause
+        .param
+        .as_ref()
+        .map(|param| parse_binding_name(&param.pattern));
+
+    crate::ParsedCatchClause {
+        binding_name,
+        body: parse_block_statement_as_function_body(&catch_clause.body),
+        span: Some(text_span_from_oxc_span(catch_clause.span)),
+    }
 }
 
 fn parse_branch_body(statement: &Statement<'_>) -> Vec<ParsedFunctionBodyStatement> {

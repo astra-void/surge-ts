@@ -782,6 +782,7 @@ fn collect_exports_from_statement(
                     *default_symbol = Some(SymbolInfo {
                         ty: Type::Unknown,
                         kind: SymbolKind::Const,
+                        function_signature: None,
                     });
                 }
             }
@@ -791,7 +792,7 @@ fn collect_exports_from_statement(
                     return;
                 }
 
-                let ty = crate::infer::infer_expression(expression, exportable_values);
+                let ty = crate::infer::infer_expression(expression, exportable_values, ctx);
                 let ty = match ty {
                     crate::infer::InferredExpression::Known(ty) => ty,
                     crate::infer::InferredExpression::Unknown
@@ -802,6 +803,7 @@ fn collect_exports_from_statement(
                 *default_symbol = Some(SymbolInfo {
                     ty,
                     kind: SymbolKind::Const,
+                    function_signature: None,
                 });
             }
             ParsedDefaultExportDeclaration::Unsupported { .. } => {}
@@ -1190,6 +1192,7 @@ fn resolve_import_declaration(
                     SymbolInfo {
                         ty: namespace_type,
                         kind: SymbolKind::Const,
+                        function_signature: None,
                     },
                 );
             }
@@ -1481,6 +1484,7 @@ fn insert_unknown_value_import(local_name: &str, symbols: &mut SymbolTable) {
         SymbolInfo {
             ty: Type::Unknown,
             kind: SymbolKind::Var,
+            function_signature: None,
         },
     );
 }
@@ -1510,6 +1514,7 @@ fn insert_namespace_export(
         SymbolInfo {
             ty: namespace_export_object_type(export_table),
             kind: SymbolKind::Const,
+            function_signature: None,
         },
     );
 }

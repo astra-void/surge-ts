@@ -1120,6 +1120,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             no_implicit_any: true,
             no_lib: false,
             skip_lib_check: false,
+            types: Vec::new(),
         },
     );
 

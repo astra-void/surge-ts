@@ -335,6 +335,16 @@ pub const TS2551: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::CatalogOnly,
 };
 
+pub const TS2552: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2552",
+    number: Some(2552),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot find name '{0}'. Did you mean '{1}'?",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2554: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2554",
     number: Some(2554),
@@ -351,6 +361,16 @@ pub const TS2588: DiagnosticDescriptor = DiagnosticDescriptor {
     source: DiagnosticSource::TypeScript,
     category: DiagnosticCategory::Error,
     message_template: "Cannot assign to '{0}' because it is a constant.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2591: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2591",
+    number: Some(2591),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
     argument_count: 1,
     support: DiagnosticSupport::Emitted,
 };
@@ -679,8 +699,10 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2493,
     TS2538,
     TS2551,
+    TS2552,
     TS2554,
     TS2588,
+    TS2591,
     TS2693,
     TS2741,
     TS2749,
@@ -1028,6 +1050,18 @@ impl Diagnostic {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2552(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2552,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     pub fn ts2554(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2554,
@@ -1043,6 +1077,15 @@ impl Diagnostic {
     pub fn ts2588(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2588,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2591(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2591,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

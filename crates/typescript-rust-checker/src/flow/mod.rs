@@ -666,6 +666,10 @@ fn function_body_contains_value_return(body: &[ParsedFunctionBodyStatement]) -> 
     body.iter().any(function_statement_contains_value_return)
 }
 
+fn function_body_contains_throw(body: &[ParsedFunctionBodyStatement]) -> bool {
+    body.iter().any(function_statement_contains_throw)
+}
+
 fn function_statement_contains_value_return(statement: &ParsedFunctionBodyStatement) -> bool {
     match statement {
         ParsedFunctionBodyStatement::Return(return_statement) => {
@@ -691,10 +695,40 @@ fn function_statement_contains_value_return(statement: &ParsedFunctionBodyStatem
                 || try_statement
                     .handler
                     .as_ref()
-                    .is_some_and(|body| function_body_contains_value_return(body))
+                    .is_some_and(|handler| function_body_contains_value_return(&handler.body))
                 || function_body_contains_value_return(&try_statement.finalizer)
         }
         ParsedFunctionBodyStatement::VariableDeclaration(_)
+        | ParsedFunctionBodyStatement::Assignment(_)
+        | ParsedFunctionBodyStatement::Expression(_) => false,
+    }
+}
+
+fn function_statement_contains_throw(statement: &ParsedFunctionBodyStatement) -> bool {
+    match statement {
+        ParsedFunctionBodyStatement::Throw(_) => true,
+        ParsedFunctionBodyStatement::Block(block_body) => function_body_contains_throw(block_body),
+        ParsedFunctionBodyStatement::If(if_statement) => {
+            function_body_contains_throw(&if_statement.then_body)
+                || function_body_contains_throw(&if_statement.else_body)
+        }
+        ParsedFunctionBodyStatement::While(while_statement) => {
+            function_body_contains_throw(&while_statement.body)
+        }
+        ParsedFunctionBodyStatement::Switch(switch_statement) => switch_statement
+            .cases
+            .iter()
+            .any(|case| function_body_contains_throw(&case.consequent)),
+        ParsedFunctionBodyStatement::Try(try_statement) => {
+            function_body_contains_throw(&try_statement.block)
+                || try_statement
+                    .handler
+                    .as_ref()
+                    .is_some_and(|handler| function_body_contains_throw(&handler.body))
+                || function_body_contains_throw(&try_statement.finalizer)
+        }
+        ParsedFunctionBodyStatement::Return(_)
+        | ParsedFunctionBodyStatement::VariableDeclaration(_)
         | ParsedFunctionBodyStatement::Assignment(_)
         | ParsedFunctionBodyStatement::Expression(_) => false,
     }
@@ -731,9 +765,10 @@ fn function_statement_guarantees_value_return(statement: &ParsedFunctionBodyStat
             let handler_guarantees = try_statement
                 .handler
                 .as_ref()
-                .is_none_or(|body| function_body_guarantees_value_return(body));
+                .is_none_or(|handler| function_body_guarantees_value_return(&handler.body));
+            let try_throws = function_body_contains_throw(&try_statement.block);
 
-            try_guarantees && handler_guarantees
+            handler_guarantees && (try_guarantees || try_throws)
         }
         ParsedFunctionBodyStatement::VariableDeclaration(_)
         | ParsedFunctionBodyStatement::Assignment(_)

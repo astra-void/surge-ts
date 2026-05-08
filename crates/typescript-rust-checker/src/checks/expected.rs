@@ -318,7 +318,7 @@ fn evaluate_object_literal_with_expected_type(
                     .any(|property| property.name == property_name.as_str())
             })
     {
-        let source_type_name = object_literal_source_type_name(properties, symbols).name();
+        let source_type_name = object_literal_source_type_name(properties, symbols, ctx).name();
         let target_type_name = Type::Object(expected_object_type.clone()).name();
 
         let diagnostic = match expected_diagnostic {
@@ -343,13 +343,14 @@ fn evaluate_object_literal_with_expected_type(
 fn object_literal_source_type_name(
     properties: &[ParsedObjectProperty],
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> Type {
     let properties = properties
         .iter()
         .map(|property| {
             (
                 property.name.clone(),
-                match infer_expression(&property.value, symbols) {
+                match infer_expression(&property.value, symbols, ctx) {
                     InferredExpression::Known(ty) => ObjectProperty::required(ty),
                     _ => ObjectProperty::required(Type::Unknown),
                 },

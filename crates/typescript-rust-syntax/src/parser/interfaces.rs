@@ -1,6 +1,6 @@
 use oxc_ast::ast::{
-    BindingPattern, FormalParameter, PropertyKey, TSInterfaceDeclaration, TSMethodSignature,
-    TSMethodSignatureKind, TSSignature,
+    BindingPattern, FormalParameter, PropertyKey, TSInterfaceDeclaration, TSInterfaceHeritage,
+    TSMethodSignature, TSMethodSignatureKind, TSSignature,
 };
 
 use crate::{
@@ -27,7 +27,30 @@ pub(crate) fn parse_interface_declaration(
         name: declaration.id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(declaration.id.span)),
         type_parameters: parse_type_parameters(declaration.type_parameters.as_deref()),
+        extends: declaration
+            .extends
+            .iter()
+            .filter_map(parse_interface_heritage)
+            .collect(),
         members,
+    })
+}
+
+fn parse_interface_heritage(heritage: &TSInterfaceHeritage<'_>) -> Option<crate::ParsedNamedType> {
+    let oxc_ast::ast::Expression::Identifier(identifier) = &heritage.expression else {
+        return None;
+    };
+
+    let type_arguments = heritage
+        .type_arguments
+        .as_deref()
+        .and_then(super::types::parse_type_arguments)
+        .unwrap_or_default();
+
+    Some(crate::ParsedNamedType {
+        name: identifier.name.to_string(),
+        span: Some(text_span_from_oxc_span(identifier.span)),
+        type_arguments,
     })
 }
 

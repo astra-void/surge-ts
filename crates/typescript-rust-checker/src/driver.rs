@@ -87,10 +87,9 @@ pub(crate) fn validate_local_type_declarations(file_name: &str, ctx: &mut Checke
             _ => None,
         })
         .collect::<Vec<_>>();
-
     let referenced_names = local_declarations
         .iter()
-        .flat_map(|declaration| referenced_type_names(declaration))
+        .flat_map(referenced_type_names)
         .collect::<std::collections::HashSet<_>>();
 
     for declaration in local_declarations {
@@ -102,7 +101,6 @@ pub(crate) fn validate_local_type_declarations(file_name: &str, ctx: &mut Checke
         if referenced_names.contains(declaration_name) {
             continue;
         }
-
         validate_local_type_declaration(&declaration, ctx);
     }
 }
@@ -115,6 +113,9 @@ fn referenced_type_names(declaration: &TypeDeclarationInfo) -> Vec<String> {
             collect_referenced_type_names_from_type(&alias.ty, &mut names);
         }
         TypeDeclarationInfo::Interface(interface) => {
+            for base in &interface.extends {
+                names.push(base.name.clone());
+            }
             for member in &interface.members {
                 collect_referenced_type_names_from_type(&member.ty, &mut names);
             }
@@ -268,6 +269,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                     crate::symbols::SymbolInfo {
                                         ty: typescript_rust_types::Type::Unknown,
                                         kind: crate::symbols::SymbolKind::Var,
+                                        function_signature: None,
                                     },
                                 );
                             }
@@ -299,6 +301,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                 crate::symbols::SymbolInfo {
                                     ty: typescript_rust_types::Type::Unknown,
                                     kind: crate::symbols::SymbolKind::Var,
+                                    function_signature: None,
                                 },
                             );
                         }
@@ -337,6 +340,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                     crate::symbols::SymbolInfo {
                                         ty: typescript_rust_types::Type::Unknown,
                                         kind: crate::symbols::SymbolKind::Var,
+                                        function_signature: None,
                                     },
                                 );
                             }
@@ -348,6 +352,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                             crate::symbols::SymbolInfo {
                                 ty: typescript_rust_types::Type::Unknown,
                                 kind: crate::symbols::SymbolKind::Var,
+                                function_signature: None,
                             },
                         );
                     }
@@ -376,6 +381,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                 crate::symbols::SymbolInfo {
                                     ty: typescript_rust_types::Type::Unknown,
                                     kind: crate::symbols::SymbolKind::Const,
+                                    function_signature: None,
                                 },
                             );
                         }
@@ -588,6 +594,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         file_name: ctx.file_name.clone(),
         name_span: interface.name_span,
         type_parameters: interface.type_parameters.clone(),
+        extends: interface.extends.clone(),
         members: interface.members.clone(),
         resolution_scope: None,
     };

@@ -53,7 +53,32 @@ pub(crate) fn map_parsed_type_with_substitution(
     substitution: &TypeParameterSubstitution,
 ) -> Type {
     let mut resolving = Vec::new();
-    resolve_parsed_type(parsed_type, ctx, &mut resolving, substitution).ty
+    resolve_parsed_type(
+        parsed_type,
+        ctx,
+        &mut resolving,
+        &merged_type_parameter_substitution(ctx, substitution),
+    )
+    .ty
+}
+
+fn merged_type_parameter_substitution(
+    ctx: &CheckerContext,
+    substitution: &TypeParameterSubstitution,
+) -> TypeParameterSubstitution {
+    let mut merged = TypeParameterSubstitution::new();
+
+    for scope in &ctx.type_parameter_scopes {
+        for (name, ty) in scope {
+            merged.insert(name.clone(), ty.clone());
+        }
+    }
+
+    for (name, ty) in substitution {
+        merged.insert(name.clone(), ty.clone());
+    }
+
+    merged
 }
 
 pub(crate) fn validate_local_type_declaration(
@@ -94,7 +119,8 @@ pub(crate) fn validate_local_type_declaration(
             let mut resolving = Vec::new();
             let resolved = with_type_declarations(&interface.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &interface.file_name, |ctx| {
-                    resolve_interface_members(
+                    resolve_interface_declaration(
+                        &interface.extends,
                         &interface.members,
                         ctx,
                         &mut resolving,
@@ -1031,7 +1057,13 @@ fn resolve_interface(
 
     let resolved = with_type_declarations(&interface.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &interface.file_name, |ctx| {
-            resolve_interface_members(&interface.members, ctx, resolving, &local_substitution)
+            resolve_interface_declaration(
+                &interface.extends,
+                &interface.members,
+                ctx,
+                resolving,
+                &local_substitution,
+            )
         })
     });
     resolving.pop();
@@ -1046,7 +1078,8 @@ fn resolve_interface(
     resolved
 }
 
-fn resolve_interface_members(
+fn resolve_interface_declaration(
+    extends: &[ParsedNamedType],
     members: &[ParsedInterfaceMember],
     ctx: &mut CheckerContext,
     resolving: &mut Vec<String>,
@@ -1054,6 +1087,26 @@ fn resolve_interface_members(
 ) -> ResolvedType {
     let mut properties = BTreeMap::new();
     let mut had_error = false;
+
+    for base in extends {
+        let resolved_base = resolve_named_type(base.clone(), ctx, resolving, substitution);
+        if resolved_base.had_error {
+            had_error = true;
+            continue;
+        }
+
+        match resolved_base.ty {
+            Type::Object(object_type) => {
+                for (name, property) in object_type.properties {
+                    properties.entry(name).or_insert(property);
+                }
+            }
+            Type::Any => {}
+            _ => {
+                had_error = true;
+            }
+        }
+    }
 
     for member in members {
         let property_type = resolve_parsed_type(member.ty.clone(), ctx, resolving, substitution);
@@ -1253,7 +1306,13 @@ fn resolve_parsed_type_with_substitution(
 }
 
 fn emit_unknown_type_name(named_type: &ParsedNamedType, ctx: &mut CheckerContext) {
-    let mut diagnostic = Diagnostic::ts2304(&named_type.name, ctx.file_name.clone());
+    let diagnostic =
+        if named_type.name == "Buffer" && !ctx.options.types.iter().any(|ty| ty == "node") {
+            Diagnostic::ts2591(&named_type.name, ctx.file_name.clone())
+        } else {
+            Diagnostic::ts2304(&named_type.name, ctx.file_name.clone())
+        };
+    let mut diagnostic = diagnostic;
     if let Some(span) = named_type.span {
         diagnostic = diagnostic.with_span(convert_span(span));
     }
