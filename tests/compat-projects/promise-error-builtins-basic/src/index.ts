@@ -1,0 +1,11 @@
+export async function allValues(values: Promise<string>[]): Promise<string[]> {
+  return await Promise.all(values);
+}
+
+export function throwNew(): never {
+  throw new Error("bad");
+}
+
+export function throwCall(): never {
+  throw Error("bad");
+}
