@@ -9,3 +9,6 @@ export function throwNew(): never {
 export function throwCall(): never {
   throw Error("bad");
 }
+
+export const e1 = new Error("bad");
+export const e2 = Error("bad");
