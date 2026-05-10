@@ -5,6 +5,7 @@ use crate::{Type, union_type};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectType {
     pub properties: BTreeMap<String, ObjectProperty>,
+    pub string_index_type: Option<Box<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,17 +45,23 @@ impl ObjectType {
     }
 
     pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
-        let property = self.properties.get(name)?;
+        if let Some(property) = self.properties.get(name) {
+            if property.is_optional() {
+                return Some(union_type(vec![property.ty.clone(), Type::Undefined]));
+            }
 
-        if property.is_optional() {
-            Some(union_type(vec![property.ty.clone(), Type::Undefined]))
-        } else {
-            Some(property.ty.clone())
+            return Some(property.ty.clone());
         }
+
+        self.string_index_type.as_deref().cloned()
     }
 
     pub fn contains_property(&self, name: &str) -> bool {
-        self.properties.contains_key(name)
+        self.properties.contains_key(name) || self.string_index_type.is_some()
+    }
+
+    pub fn allows_string_index_access(&self) -> bool {
+        self.string_index_type.is_some()
     }
 
     pub fn required_properties(&self) -> impl Iterator<Item = (&String, &ObjectProperty)> + '_ {

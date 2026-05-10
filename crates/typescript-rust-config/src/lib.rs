@@ -13,6 +13,10 @@ pub use diagnostics::*;
 pub use model::*;
 pub use options::*;
 pub use parse::load_tsconfig;
+pub use paths::{
+    absolutize, canonicalize_if_exists, cycle_key, normalize_path_buf, normalize_path_string,
+    resolve_path, resolve_project_path,
+};
 
 #[cfg(test)]
 mod tests;

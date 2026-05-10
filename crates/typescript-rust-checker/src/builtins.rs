@@ -6,7 +6,7 @@ use typescript_rust_syntax::{
     ParsedFunctionType, ParsedFunctionTypeParameter, ParsedNamedType, ParsedObjectType,
     ParsedObjectTypeProperty, ParsedType, ParsedTypeParameter,
 };
-use typescript_rust_types::{FunctionType, ObjectProperty, ObjectType, Type};
+use typescript_rust_types::{FunctionType, ObjectProperty, ObjectType, Type, union_type};
 
 pub(crate) fn inject_builtins(ctx: &mut CheckerContext) {
     if ctx.options.no_lib {
@@ -297,36 +297,42 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             "console",
             Type::Object(ObjectType {
                 properties: console_props,
+                string_index_type: None,
             }),
         ),
         (
             "Array",
             Type::Object(ObjectType {
                 properties: array_props,
+                string_index_type: None,
             }),
         ),
         (
             "Math",
             Type::Object(ObjectType {
                 properties: math_props,
+                string_index_type: None,
             }),
         ),
         (
             "JSON",
             Type::Object(ObjectType {
                 properties: json_props,
+                string_index_type: None,
             }),
         ),
         (
             "Date",
             Type::Object(ObjectType {
                 properties: date_props,
+                string_index_type: None,
             }),
         ),
         (
             "Promise",
             Type::Object(ObjectType {
                 properties: promise_props,
+                string_index_type: None,
             }),
         ),
         (
@@ -511,7 +517,10 @@ fn inject_configured_values(ctx: &mut CheckerContext) {
         ctx.ambient_global_symbols.insert(
             "Buffer".to_string(),
             SymbolInfo {
-                ty: Type::Object(ObjectType { properties: props }),
+                ty: Type::Object(ObjectType {
+                    properties: props,
+                    string_index_type: None,
+                }),
                 kind: SymbolKind::Const,
                 function_signature: None,
             },
@@ -519,16 +528,12 @@ fn inject_configured_values(ctx: &mut CheckerContext) {
     }
 
     if ctx.ambient_global_symbols.get("process").is_none() {
-        let mut env_props = BTreeMap::new();
-        env_props.insert(
-            "AUTHKIT_SECRET".to_string(),
-            ObjectProperty::required(Type::Any),
-        );
         let mut process_props = BTreeMap::new();
         process_props.insert(
             "env".to_string(),
             ObjectProperty::required(Type::Object(ObjectType {
-                properties: env_props,
+                properties: BTreeMap::new(),
+                string_index_type: Some(Box::new(union_type(vec![Type::String, Type::Undefined]))),
             })),
         );
 
@@ -537,6 +542,7 @@ fn inject_configured_values(ctx: &mut CheckerContext) {
             SymbolInfo {
                 ty: Type::Object(ObjectType {
                     properties: process_props,
+                    string_index_type: None,
                 }),
                 kind: SymbolKind::Const,
                 function_signature: None,
@@ -666,5 +672,8 @@ fn text_encoder_instance_type() -> Type {
         })),
     );
 
-    Type::Object(ObjectType { properties })
+    Type::Object(ObjectType {
+        properties,
+        string_index_type: None,
+    })
 }

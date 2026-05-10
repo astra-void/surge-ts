@@ -32,6 +32,7 @@ fn widen_type(ty: &Type) -> Type {
             }
             Type::Object(typescript_rust_types::ObjectType {
                 properties: new_props,
+                string_index_type: None,
             })
         }
         Type::Array(inner) => Type::Array(Box::new(widen_type(inner))),
@@ -97,6 +98,7 @@ pub(crate) fn evaluate_const_expression(
             let result =
                 InferredExpression::Known(Type::Object(typescript_rust_types::ObjectType {
                     properties: props,
+                    string_index_type: None,
                 }));
             report_inferred_expression(result.clone(), fallback_span, ctx);
             result
@@ -131,13 +133,14 @@ pub(crate) fn evaluate_expression(
         ParsedExpression::Call {
             callee_name,
             callee_span,
+            type_arguments,
             arguments,
             ..
         } => match check_call_like(
             callee_name,
             *callee_span,
             None,
-            &[],
+            type_arguments,
             arguments,
             symbols,
             ctx,
@@ -168,6 +171,7 @@ pub(crate) fn evaluate_expression(
             property_name,
             property_span,
             call_span,
+            type_arguments,
             arguments,
             ..
         } => match check_property_call_like(
@@ -176,7 +180,7 @@ pub(crate) fn evaluate_expression(
             property_name,
             *property_span,
             *call_span,
-            &[],
+            type_arguments,
             arguments,
             symbols,
             ctx,

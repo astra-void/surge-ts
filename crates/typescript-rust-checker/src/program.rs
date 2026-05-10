@@ -159,12 +159,25 @@ pub fn check_program_with_stats_and_jobs(
         .collect::<Vec<_>>();
     let module_export_tables =
         resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
-    let module_resolution_scopes = module_analyses
+    let module_resolution_scopes = local_type_declarations_by_module
         .iter()
-        .map(|analysis| {
-            analysis
-                .as_ref()
-                .map(|analysis| Arc::new(analysis.local_type_declarations.clone()))
+        .enumerate()
+        .map(|(file_index, local_type_declarations)| {
+            let Some(local_type_declarations) = local_type_declarations else {
+                return None;
+            };
+
+            let mut merged_type_declarations = local_type_declarations.clone();
+            if let Some(imported) = preliminary_module_import_bindings
+                .get(file_index)
+                .and_then(|bindings| bindings.as_ref())
+            {
+                for (name, declaration) in imported.type_declarations.iter() {
+                    let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+                }
+            }
+
+            Some(Arc::new(merged_type_declarations))
         })
         .collect::<Vec<_>>();
     let module_import_bindings = collect_module_import_bindings(
@@ -520,6 +533,7 @@ fn check_program_file(
     ctx: &mut CheckerContext,
 ) -> FileCheckResult {
     ctx.set_file_name(parsed_file.file_name.clone());
+    ctx.resolved_named_types = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
 
     if ctx.options.skip_lib_check && parsed_file.file_kind.is_declaration() {
         return FileCheckResult {

@@ -26,16 +26,16 @@ Resolution model:
 - interfaces use `typescript-rust::type-declaration-cycle`
 - program-mode relative imports and re-exports can expose exported type declarations from loaded `.ts` files
 - imported type declarations keep the defining module's local type scope for private helper references
-- v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` when those aliases are instantiated against concrete object/interface shapes and string-literal key unions; `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers
+- v0.84.11 extends that lowering narrowly for imported interface bases, same-file forward references, and string-index fallback objects, so `Record<string, T>`-style aliases and `interface extends` over already-loaded relative modules can resolve without package discovery; `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers
 
 Current limitations:
 - no interface merging
-- no `interface A extends B`
+- narrow interface `extends` over imported object/interface types is supported; full declaration merging is still unsupported
 - no generic inference
 - no methods
 - no call signatures
 - no construct signatures
-- no index signatures
+- no full index signatures; the checker only models a narrow string-index fallback for `Record<string, T>`-style objects and synthetic `process.env`
 - no readonly properties
 - no computed properties
 - no alias/interface-preserving diagnostic display

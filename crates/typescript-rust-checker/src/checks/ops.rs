@@ -27,7 +27,14 @@ pub(crate) fn evaluate_binary_expression(
         ParsedBinaryOperator::Subtract
         | ParsedBinaryOperator::Multiply
         | ParsedBinaryOperator::Divide
-        | ParsedBinaryOperator::Remainder => evaluate_arithmetic_binary(
+        | ParsedBinaryOperator::Remainder
+        | ParsedBinaryOperator::Exponential
+        | ParsedBinaryOperator::ShiftLeft
+        | ParsedBinaryOperator::ShiftRight
+        | ParsedBinaryOperator::ShiftRightZeroFill
+        | ParsedBinaryOperator::BitwiseAnd
+        | ParsedBinaryOperator::BitwiseOR
+        | ParsedBinaryOperator::BitwiseXOR => evaluate_arithmetic_binary(
             left_result,
             right_result,
             left_span.or(fallback_span),
@@ -419,6 +426,13 @@ fn binary_operator_text(operator: ParsedBinaryOperator) -> &'static str {
         ParsedBinaryOperator::Multiply => "*",
         ParsedBinaryOperator::Divide => "/",
         ParsedBinaryOperator::Remainder => "%",
+        ParsedBinaryOperator::Exponential => "**",
+        ParsedBinaryOperator::ShiftLeft => "<<",
+        ParsedBinaryOperator::ShiftRight => ">>",
+        ParsedBinaryOperator::ShiftRightZeroFill => ">>>",
+        ParsedBinaryOperator::BitwiseAnd => "&",
+        ParsedBinaryOperator::BitwiseOR => "|",
+        ParsedBinaryOperator::BitwiseXOR => "^",
         ParsedBinaryOperator::StrictEquals
         | ParsedBinaryOperator::StrictNotEquals
         | ParsedBinaryOperator::Equals

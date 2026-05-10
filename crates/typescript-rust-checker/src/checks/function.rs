@@ -681,7 +681,31 @@ fn should_check_missing_return(return_type: &Type) -> bool {
     !matches!(
         return_type,
         Type::Any | Type::Unknown | Type::Undefined | Type::Void
-    )
+    ) && !type_contains_unknown(return_type)
+}
+
+fn type_contains_unknown(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown => true,
+        Type::Array(element) => type_contains_unknown(element),
+        Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
+        Type::Function(function) => {
+            function.parameters.iter().any(type_contains_unknown)
+                || type_contains_unknown(&function.return_type)
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .any(|property| type_contains_unknown(&property.ty))
+                || object
+                    .string_index_type
+                    .as_deref()
+                    .is_some_and(type_contains_unknown)
+        }
+        Type::Union(union) => union.types.iter().any(type_contains_unknown),
+        _ => false,
+    }
 }
 
 fn emit_missing_return_diagnostic(

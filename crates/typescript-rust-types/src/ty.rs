@@ -69,7 +69,7 @@ impl Type {
             Type::BooleanLiteral(value) => value.to_string(),
             Type::Function(function) => function.name(),
             Type::Object(object) => {
-                let properties = object
+                let mut parts = object
                     .properties
                     .iter()
                     .map(|(name, property)| {
@@ -79,8 +79,13 @@ impl Type {
                             format!("{name}: {}", property.ty.name())
                         }
                     })
-                    .collect::<Vec<_>>()
-                    .join("; ");
+                    .collect::<Vec<_>>();
+
+                if let Some(index_type) = &object.string_index_type {
+                    parts.push(format!("[key: string]: {}", index_type.name()));
+                }
+
+                let properties = parts.join("; ");
 
                 if properties.is_empty() {
                     "{}".to_string()
@@ -269,7 +274,10 @@ fn map_instance_type() -> ObjectType {
         })),
     );
     properties.insert("size".to_string(), ObjectProperty::required(Type::Number));
-    ObjectType { properties }
+    ObjectType {
+        properties,
+        string_index_type: None,
+    }
 }
 
 fn text_encoder_instance_type() -> Type {
@@ -284,7 +292,10 @@ fn text_encoder_instance_type() -> Type {
         })),
     );
 
-    Type::Object(ObjectType { properties })
+    Type::Object(ObjectType {
+        properties,
+        string_index_type: None,
+    })
 }
 
 fn array_element_name(element: &Type) -> String {
@@ -390,7 +401,11 @@ mod tests {
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(
-            Type::Array(Box::new(Type::Object(ObjectType { properties }))).name(),
+            Type::Array(Box::new(Type::Object(ObjectType {
+                properties,
+                string_index_type: None,
+            })))
+            .name(),
             "{ name: string; }[]"
         );
     }
@@ -466,7 +481,14 @@ mod tests {
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(
-            Type::Tuple(vec![Type::Object(ObjectType { properties }), Type::Number]).name(),
+            Type::Tuple(vec![
+                Type::Object(ObjectType {
+                    properties,
+                    string_index_type: None,
+                }),
+                Type::Number,
+            ])
+            .name(),
             "[{ name: string; }, number]"
         );
     }

@@ -87,89 +87,9 @@ pub(crate) fn validate_local_type_declarations(file_name: &str, ctx: &mut Checke
             _ => None,
         })
         .collect::<Vec<_>>();
-    let referenced_names = local_declarations
-        .iter()
-        .flat_map(referenced_type_names)
-        .collect::<std::collections::HashSet<_>>();
 
     for declaration in local_declarations {
-        let declaration_name = match &declaration {
-            TypeDeclarationInfo::Alias(alias) => &alias.name,
-            TypeDeclarationInfo::Interface(interface) => &interface.name,
-        };
-
-        if referenced_names.contains(declaration_name) {
-            continue;
-        }
         validate_local_type_declaration(&declaration, ctx);
-    }
-}
-
-fn referenced_type_names(declaration: &TypeDeclarationInfo) -> Vec<String> {
-    let mut names = Vec::new();
-
-    match declaration {
-        TypeDeclarationInfo::Alias(alias) => {
-            collect_referenced_type_names_from_type(&alias.ty, &mut names);
-        }
-        TypeDeclarationInfo::Interface(interface) => {
-            for base in &interface.extends {
-                names.push(base.name.clone());
-            }
-            for member in &interface.members {
-                collect_referenced_type_names_from_type(&member.ty, &mut names);
-            }
-        }
-    }
-
-    names
-}
-
-fn collect_referenced_type_names_from_type(ty: &ParsedType, names: &mut Vec<String>) {
-    match ty {
-        ParsedType::Named(named) => names.push(named.name.clone()),
-        ParsedType::Array(element) => collect_referenced_type_names_from_type(element, names),
-        ParsedType::Tuple(elements) => {
-            for element in elements {
-                collect_referenced_type_names_from_type(element, names);
-            }
-        }
-        ParsedType::Union(types) => {
-            for element in types {
-                collect_referenced_type_names_from_type(element, names);
-            }
-        }
-        ParsedType::Function(function_type) => {
-            for parameter in &function_type.parameters {
-                collect_referenced_type_names_from_type(&parameter.ty, names);
-            }
-            collect_referenced_type_names_from_type(function_type.return_type.as_ref(), names);
-        }
-        ParsedType::Object(object_type) => {
-            for property in &object_type.properties {
-                collect_referenced_type_names_from_type(&property.ty, names);
-            }
-        }
-        ParsedType::Mapped(mapped_type) => {
-            collect_referenced_type_names_from_type(&mapped_type.constraint, names);
-            collect_referenced_type_names_from_type(&mapped_type.value_type, names);
-        }
-        ParsedType::IndexedAccess(indexed_access) => {
-            collect_referenced_type_names_from_type(&indexed_access.object_type, names);
-            collect_referenced_type_names_from_type(&indexed_access.index_type, names);
-        }
-        ParsedType::KeyOf(inner) => collect_referenced_type_names_from_type(inner, names),
-        ParsedType::TypeOf(_) => {}
-        ParsedType::String
-        | ParsedType::Number
-        | ParsedType::Boolean
-        | ParsedType::Undefined
-        | ParsedType::Void
-        | ParsedType::Any
-        | ParsedType::Unknown
-        | ParsedType::StringLiteral(_)
-        | ParsedType::NumberLiteral(_)
-        | ParsedType::BooleanLiteral(_) => {}
     }
 }
 

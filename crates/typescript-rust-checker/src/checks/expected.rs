@@ -239,9 +239,10 @@ fn evaluate_object_literal_with_expected_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    if let Some(property) = properties
-        .iter()
-        .find(|property| !expected_object_type.contains_property(&property.name))
+    if !expected_object_type.allows_string_index_access()
+        && let Some(property) = properties
+            .iter()
+            .find(|property| !expected_object_type.contains_property(&property.name))
     {
         let diagnostic = Diagnostic::ts2353(
             &property.name,
@@ -262,7 +263,10 @@ fn evaluate_object_literal_with_expected_type(
     for property in properties {
         // Writes and contextual object checking use the declared property type,
         // not the widened access type.
-        let Some(expected_property_type) = expected_object_type.get_property_type(&property.name)
+        let Some(expected_property_type) = expected_object_type
+            .get_property_type(&property.name)
+            .cloned()
+            .or_else(|| expected_object_type.string_index_type.as_deref().cloned())
         else {
             continue;
         };
@@ -270,7 +274,7 @@ fn evaluate_object_literal_with_expected_type(
         let inferred_property = evaluate_expression_with_expected_type(
             &property.value,
             property.value_span.or(property.span),
-            Some(expected_property_type),
+            Some(&expected_property_type),
             ExpectedTypeDiagnostic::TypeNotAssignable,
             symbols,
             ctx,
@@ -282,7 +286,7 @@ fn evaluate_object_literal_with_expected_type(
                     continue;
                 }
 
-                if !is_assignable_to(&actual_type, expected_property_type) {
+                if !is_assignable_to(&actual_type, &expected_property_type) {
                     let actual_type_name = actual_type.name();
                     let expected_type_name = expected_property_type.name();
                     let diagnostic = Diagnostic::ts2322(
@@ -358,7 +362,10 @@ fn object_literal_source_type_name(
         })
         .collect::<std::collections::BTreeMap<_, _>>();
 
-    Type::Object(typescript_rust_types::ObjectType { properties })
+    Type::Object(typescript_rust_types::ObjectType {
+        properties,
+        string_index_type: None,
+    })
 }
 
 fn evaluate_conditional_expression_with_expected_type(

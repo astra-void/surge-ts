@@ -591,6 +591,13 @@ fn parse_binary_expression(binary_expression: &BinaryExpression<'_>) -> Option<P
         BinaryOperator::Multiplication => ParsedBinaryOperator::Multiply,
         BinaryOperator::Division => ParsedBinaryOperator::Divide,
         BinaryOperator::Remainder => ParsedBinaryOperator::Remainder,
+        BinaryOperator::Exponential => ParsedBinaryOperator::Exponential,
+        BinaryOperator::ShiftLeft => ParsedBinaryOperator::ShiftLeft,
+        BinaryOperator::ShiftRight => ParsedBinaryOperator::ShiftRight,
+        BinaryOperator::ShiftRightZeroFill => ParsedBinaryOperator::ShiftRightZeroFill,
+        BinaryOperator::BitwiseOR => ParsedBinaryOperator::BitwiseOR,
+        BinaryOperator::BitwiseXOR => ParsedBinaryOperator::BitwiseXOR,
+        BinaryOperator::BitwiseAnd => ParsedBinaryOperator::BitwiseAnd,
         _ => return None,
     };
 

@@ -1224,6 +1224,32 @@ fn resolve_import_declaration(
             is_type_only,
             specifiers,
         } => {
+            if let Some((resolved_index, local_scope)) = resolve_relative_local_type_scope(
+                &ctx.file_name,
+                &import.module_specifier,
+                program_files,
+                module_resolution_scopes,
+            ) {
+                let mut bound_any = false;
+
+                for specifier in specifiers {
+                    if let Some(local_declaration) =
+                        local_scope.get(&specifier.imported_name).cloned()
+                    {
+                        let declaration =
+                            attach_type_resolution_scope(local_declaration, local_scope.clone());
+                        insert_type_export(type_declarations, &specifier.local_name, declaration);
+                        bound_any = true;
+                    }
+                }
+
+                if bound_any {
+                    return;
+                }
+
+                let _ = resolved_index;
+            }
+
             let Some((export_table, scope, resolved_index)) = try_resolve_module(
                 &import.module_specifier,
                 ctx,
@@ -1231,35 +1257,77 @@ fn resolve_import_declaration(
                 module_export_tables,
                 module_resolution_scopes,
             ) else {
-                if resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
-                    .is_none()
-                {
+                let Some(resolved) = resolve_relative_module(
+                    &ctx.file_name,
+                    &import.module_specifier,
+                    program_files,
+                ) else {
                     if !(ctx.options.stub_external_modules
                         && is_external_specifier(&import.module_specifier))
                     {
                         emit_unresolved_module_diagnostic(ctx, import);
                     }
-                } else {
                     for specifier in specifiers {
-                        emit_missing_export_diagnostic(
-                            ctx,
-                            &import.module_specifier,
-                            &specifier.imported_name,
-                            specifier.name_span,
-                        );
-                    }
-                }
+                        if *is_type_only {
+                            insert_unknown_type_import(
+                                type_declarations,
+                                &specifier.local_name,
+                                ctx.file_name.clone(),
+                                specifier.name_span,
+                            );
+                            continue;
+                        }
 
-                for specifier in specifiers {
-                    if *is_type_only {
                         insert_unknown_type_import(
                             type_declarations,
                             &specifier.local_name,
                             ctx.file_name.clone(),
                             specifier.name_span,
                         );
-                        continue;
+                        insert_unknown_value_import(&specifier.local_name, symbols);
                     }
+                    return;
+                };
+
+                let local_scope = module_resolution_scopes
+                    .get(resolved.resolved_file_index)
+                    .and_then(|scope| scope.clone());
+
+                for specifier in specifiers {
+                    if let Some(local_scope) = &local_scope {
+                        if let Some(local_declaration) =
+                            local_scope.get(&specifier.imported_name).cloned()
+                        {
+                            if *is_type_only {
+                                insert_type_export(
+                                    type_declarations,
+                                    &specifier.local_name,
+                                    attach_type_resolution_scope(
+                                        local_declaration,
+                                        local_scope.clone(),
+                                    ),
+                                );
+                                continue;
+                            }
+
+                            insert_type_export(
+                                type_declarations,
+                                &specifier.local_name,
+                                attach_type_resolution_scope(
+                                    local_declaration,
+                                    local_scope.clone(),
+                                ),
+                            );
+                            continue;
+                        }
+                    }
+
+                    emit_missing_export_diagnostic(
+                        ctx,
+                        &import.module_specifier,
+                        &specifier.imported_name,
+                        specifier.name_span,
+                    );
 
                     insert_unknown_type_import(
                         type_declarations,
@@ -1273,7 +1341,39 @@ fn resolve_import_declaration(
             };
 
             let Some(scope) = scope else {
+                let local_scope = module_resolution_scopes
+                    .get(resolved_index.unwrap_or(usize::MAX))
+                    .and_then(|scope| scope.clone());
+
                 for specifier in specifiers {
+                    if let Some(local_scope) = &local_scope {
+                        if let Some(local_declaration) =
+                            local_scope.get(&specifier.imported_name).cloned()
+                        {
+                            if *is_type_only {
+                                insert_type_export(
+                                    type_declarations,
+                                    &specifier.local_name,
+                                    attach_type_resolution_scope(
+                                        local_declaration,
+                                        local_scope.clone(),
+                                    ),
+                                );
+                                continue;
+                            }
+
+                            insert_type_export(
+                                type_declarations,
+                                &specifier.local_name,
+                                attach_type_resolution_scope(
+                                    local_declaration,
+                                    local_scope.clone(),
+                                ),
+                            );
+                            continue;
+                        }
+                    }
+
                     emit_missing_export_diagnostic(
                         ctx,
                         &import.module_specifier,
@@ -1342,6 +1442,15 @@ fn resolve_import_declaration(
                         continue;
                     }
 
+                    if let Some(local_declaration) = scope.get(&specifier.imported_name).cloned() {
+                        insert_type_export(
+                            type_declarations,
+                            &specifier.local_name,
+                            attach_type_resolution_scope(local_declaration, scope.clone()),
+                        );
+                        continue;
+                    }
+
                     emit_missing_export_diagnostic(
                         ctx,
                         &import.module_specifier,
@@ -1364,6 +1473,14 @@ fn resolve_import_declaration(
                         type_declarations,
                         &specifier.local_name,
                         attach_type_resolution_scope(type_export, scope.clone()),
+                    );
+                    found = true;
+                } else if let Some(local_declaration) = scope.get(&specifier.imported_name).cloned()
+                {
+                    insert_type_export(
+                        type_declarations,
+                        &specifier.local_name,
+                        attach_type_resolution_scope(local_declaration, scope.clone()),
                     );
                     found = true;
                 }
@@ -1406,6 +1523,7 @@ fn resolve_import_declaration(
                     insert_unknown_value_import(&specifier.local_name, symbols);
                 }
             }
+            return;
         }
     };
 }
@@ -1536,7 +1654,10 @@ fn namespace_export_object_type(export_table: &ModuleExportTable) -> Type {
         );
     }
 
-    Type::Object(typescript_rust_types::ObjectType { properties })
+    Type::Object(typescript_rust_types::ObjectType {
+        properties,
+        string_index_type: None,
+    })
 }
 
 fn push_duplicate_default_export_diagnostic(ctx: &mut CheckerContext, name_span: Option<TextSpan>) {
@@ -1703,6 +1824,19 @@ fn attach_type_resolution_scope(
             TypeDeclarationInfo::Interface(interface)
         }
     }
+}
+
+fn resolve_relative_local_type_scope(
+    importer_file_name: &str,
+    module_specifier: &str,
+    program_files: &[ParsedProgramFile],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
+) -> Option<(usize, Arc<TypeDeclarationTable>)> {
+    let resolved = resolve_relative_module(importer_file_name, module_specifier, program_files)?;
+    let local_scope = module_resolution_scopes
+        .get(resolved.resolved_file_index)
+        .and_then(|scope| scope.clone())?;
+    Some((resolved.resolved_file_index, local_scope))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

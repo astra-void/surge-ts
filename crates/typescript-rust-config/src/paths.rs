@@ -3,10 +3,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) fn resolve_project_path(project: &Path) -> (PathBuf, PathBuf) {
+pub fn resolve_project_path(project: &Path) -> (PathBuf, PathBuf) {
     let project = absolutize(project);
 
     if project.exists() && project.is_file() {
+        let project = canonicalize_if_exists(&project);
         let root_dir = project
             .parent()
             .map(Path::to_path_buf)
@@ -15,6 +16,7 @@ pub(crate) fn resolve_project_path(project: &Path) -> (PathBuf, PathBuf) {
     }
 
     if project.exists() && project.is_dir() {
+        let project = canonicalize_if_exists(&project);
         let config_path = project.join("tsconfig.json");
         return (config_path, project);
     }
@@ -35,7 +37,7 @@ pub(crate) fn resolve_project_path(project: &Path) -> (PathBuf, PathBuf) {
     }
 }
 
-pub(crate) fn resolve_path(base_dir: &Path, raw: &str) -> PathBuf {
+pub fn resolve_path(base_dir: &Path, raw: &str) -> PathBuf {
     let path = PathBuf::from(raw);
     if path.is_absolute() {
         path
@@ -44,7 +46,7 @@ pub(crate) fn resolve_path(base_dir: &Path, raw: &str) -> PathBuf {
     }
 }
 
-pub(crate) fn absolutize(path: &Path) -> PathBuf {
+pub fn absolutize(path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }
@@ -55,10 +57,75 @@ pub(crate) fn absolutize(path: &Path) -> PathBuf {
     }
 }
 
-pub(crate) fn canonicalize_if_exists(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
+    normalize_path_buf(path)
 }
 
-pub(crate) fn cycle_key(path: &Path) -> PathBuf {
+pub fn cycle_key(path: &Path) -> PathBuf {
     canonicalize_if_exists(path)
+}
+
+pub fn normalize_path_string(path: &str) -> String {
+    normalize_path_buf(Path::new(path))
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+pub fn normalize_path_buf(path: &Path) -> PathBuf {
+    let path = path.to_string_lossy().replace('\\', "/");
+    let is_absolute = path.starts_with('/');
+    let mut drive_letter = "";
+
+    let path_to_split = if path.chars().nth(1) == Some(':') {
+        drive_letter = &path[0..2];
+        &path[2..]
+    } else {
+        &path
+    };
+
+    let mut segments = Vec::new();
+    for segment in path_to_split.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+
+        if segment == ".." {
+            if let Some(last) = segments.last() {
+                if last != ".." {
+                    segments.pop();
+                    continue;
+                }
+            }
+
+            if !is_absolute && drive_letter.is_empty() {
+                segments.push(segment.to_string());
+            }
+
+            continue;
+        }
+
+        segments.push(segment.to_string());
+    }
+
+    let mut result = String::new();
+    if !drive_letter.is_empty() {
+        result.push_str(drive_letter);
+        if path_to_split.starts_with('/') {
+            result.push('/');
+        }
+    } else if is_absolute {
+        result.push('/');
+    }
+
+    result.push_str(&segments.join("/"));
+
+    if result.is_empty() {
+        if is_absolute {
+            PathBuf::from("/")
+        } else {
+            PathBuf::from(".")
+        }
+    } else {
+        PathBuf::from(result)
+    }
 }

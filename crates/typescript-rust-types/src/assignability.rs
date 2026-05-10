@@ -91,7 +91,12 @@ pub fn object_assignability_failure(
     };
 
     for (property_name, target_property) in &target.properties {
-        let Some(source_property) = source.properties.get(property_name) else {
+        let source_property = source.properties.get(property_name);
+        let source_property_ty = source_property
+            .map(|property| &property.ty)
+            .or_else(|| source.string_index_type.as_deref());
+
+        let Some(source_property_ty) = source_property_ty else {
             if target_property.is_optional() {
                 continue;
             }
@@ -101,16 +106,19 @@ pub fn object_assignability_failure(
             });
         };
 
-        if source_property.is_optional() && target_property.is_required() {
+        if source_property.is_some()
+            && source_property.is_some_and(|p| p.is_optional())
+            && target_property.is_required()
+        {
             return Some(ObjectAssignabilityFailure::MissingProperty {
                 property_name: property_name.clone(),
             });
         }
 
-        if !is_assignable_to(&source_property.ty, &target_property.ty) {
+        if !is_assignable_to(source_property_ty, &target_property.ty) {
             return Some(ObjectAssignabilityFailure::PropertyTypeMismatch {
                 property_name: property_name.clone(),
-                source_type: source_property.ty.clone(),
+                source_type: source_property_ty.clone(),
                 target_type: target_property.ty.clone(),
             });
         }
@@ -218,9 +226,11 @@ mod tests {
         assert!(is_assignable_to(
             &Type::Object(ObjectType {
                 properties: source_properties,
+                string_index_type: None,
             }),
             &Type::Object(ObjectType {
                 properties: target_properties,
+                string_index_type: None,
             })
         ));
     }
@@ -648,7 +658,14 @@ mod tests {
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(
-            Type::Tuple(vec![Type::Object(ObjectType { properties }), Type::Number]).name(),
+            Type::Tuple(vec![
+                Type::Object(ObjectType {
+                    properties,
+                    string_index_type: None,
+                }),
+                Type::Number
+            ])
+            .name(),
             "[{ name: string; }, number]"
         );
     }

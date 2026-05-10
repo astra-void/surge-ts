@@ -67,6 +67,24 @@ impl Default for CheckerOptions {
 
 use crate::modules::ModuleExportTable;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum DeclarationNamespace {
+    Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct DeclarationResolutionKey {
+    pub(crate) file_name: String,
+    pub(crate) name: String,
+    pub(crate) namespace: DeclarationNamespace,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum DeclarationResolutionState {
+    Resolving,
+    Resolved { ty: Type, had_error: bool },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
@@ -78,7 +96,7 @@ pub(crate) struct CheckerContext {
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) resolved_named_types:
-        Arc<Mutex<HashMap<(String, String, usize), typescript_rust_types::Type>>>,
+        Arc<Mutex<HashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: TypeDeclarationTable,

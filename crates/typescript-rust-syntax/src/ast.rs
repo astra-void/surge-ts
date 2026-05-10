@@ -440,6 +440,13 @@ pub enum ParsedBinaryOperator {
     Multiply,
     Divide,
     Remainder,
+    Exponential,
+    ShiftLeft,
+    ShiftRight,
+    ShiftRightZeroFill,
+    BitwiseOR,
+    BitwiseXOR,
+    BitwiseAnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

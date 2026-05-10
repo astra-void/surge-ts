@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::diagnostics::{ConfigDiagnostic, ConfigDiagnosticCode};
 use crate::model::NormalizedCompilerOptions;
-use crate::paths::resolve_path;
+use crate::paths::{canonicalize_if_exists, resolve_path};
 
 pub(crate) fn resolve_source_files(
     root_dir: &Path,
@@ -79,7 +79,7 @@ pub(crate) fn resolve_source_files(
         }
 
         if is_supported_source_file(path, compiler_options.allow_js) {
-            files.push(path.to_path_buf());
+            files.push(canonicalize_if_exists(path));
         }
     }
 
@@ -155,6 +155,7 @@ fn resolve_explicit_files(
             continue;
         }
 
+        let candidate = canonicalize_if_exists(&candidate);
         if seen.insert(candidate.clone()) {
             results.push(candidate);
         }

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use typescript_rust_checker::SourceFileInput;
 use typescript_rust_config::PathMapping;
+use typescript_rust_config::{canonicalize_if_exists, normalize_path_string};
 use typescript_rust_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
 
 pub fn expand_project_inputs(
@@ -49,9 +50,7 @@ pub fn expand_project_inputs(
                 continue;
             }
 
-            let canonical = candidate
-                .canonicalize()
-                .unwrap_or_else(|_| candidate.to_path_buf());
+            let canonical = canonicalize_if_exists(&candidate);
             let normalized = normalize_existing_path(&canonical.to_string_lossy());
             if !known_files.insert(normalized) {
                 continue;
@@ -350,54 +349,8 @@ fn strip_extension(path: &str) -> String {
     }
 }
 
-fn normalize_path_string(path: &str) -> String {
-    let path = path.replace('\\', "/");
-    let is_absolute = path.starts_with('/');
-    let mut segments = Vec::new();
-
-    for segment in path.split('/') {
-        if segment.is_empty() || segment == "." {
-            continue;
-        }
-
-        if segment == ".." {
-            if let Some(last) = segments.last() {
-                if last != ".." {
-                    segments.pop();
-                    continue;
-                }
-            }
-
-            if !is_absolute {
-                segments.push(segment.to_string());
-            }
-
-            continue;
-        }
-
-        segments.push(segment.to_string());
-    }
-
-    let mut result = String::new();
-    if is_absolute {
-        result.push('/');
-    }
-    result.push_str(&segments.join("/"));
-
-    if result.is_empty() {
-        if is_absolute {
-            "/".to_string()
-        } else {
-            ".".to_string()
-        }
-    } else {
-        result
-    }
-}
-
 fn normalize_existing_path(path: &str) -> String {
-    fs::canonicalize(path)
-        .unwrap_or_else(|_| PathBuf::from(path))
+    canonicalize_if_exists(Path::new(path))
         .to_string_lossy()
         .replace('\\', "/")
 }

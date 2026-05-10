@@ -397,7 +397,10 @@ pub(crate) fn infer_object_literal(
         })
         .collect::<BTreeMap<_, _>>();
 
-    Type::Object(ObjectType { properties })
+    Type::Object(ObjectType {
+        properties,
+        string_index_type: None,
+    })
 }
 
 fn infer_array_literal(
@@ -674,7 +677,14 @@ fn infer_binary_expression(
         ParsedBinaryOperator::Subtract
         | ParsedBinaryOperator::Multiply
         | ParsedBinaryOperator::Divide
-        | ParsedBinaryOperator::Remainder => InferredExpression::Known(Type::Number),
+        | ParsedBinaryOperator::Remainder
+        | ParsedBinaryOperator::Exponential
+        | ParsedBinaryOperator::ShiftLeft
+        | ParsedBinaryOperator::ShiftRight
+        | ParsedBinaryOperator::ShiftRightZeroFill
+        | ParsedBinaryOperator::BitwiseAnd
+        | ParsedBinaryOperator::BitwiseOR
+        | ParsedBinaryOperator::BitwiseXOR => InferredExpression::Known(Type::Number),
     }
 }
 

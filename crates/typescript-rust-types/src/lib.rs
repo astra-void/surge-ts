@@ -22,7 +22,10 @@ mod tests {
         let mut properties = BTreeMap::new();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
-        let ty = Type::Object(ObjectType { properties });
+        let ty = Type::Object(ObjectType {
+            properties,
+            string_index_type: None,
+        });
 
         assert_eq!(ty.name(), "{ name: string; }");
         assert!(is_assignable_to(&Type::String, &Type::Any));
@@ -33,7 +36,10 @@ mod tests {
         let mut properties = BTreeMap::new();
         properties.insert("name".to_string(), ObjectProperty::optional(Type::String));
 
-        let ty = ObjectType { properties };
+        let ty = ObjectType {
+            properties,
+            string_index_type: None,
+        };
 
         assert_eq!(
             ty.get_property_access_type("name"),

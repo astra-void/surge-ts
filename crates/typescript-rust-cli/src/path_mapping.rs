@@ -3,6 +3,7 @@ use std::path::Path;
 
 use typescript_rust_checker::SourceFileInput;
 use typescript_rust_config::PathMapping;
+use typescript_rust_config::{canonicalize_if_exists, normalize_path_string};
 use typescript_rust_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
 
 pub fn resolve_path_mappings(
@@ -19,7 +20,7 @@ pub fn resolve_path_mappings(
     let mut loaded_files = HashMap::new();
     for input in inputs {
         loaded_files.insert(
-            normalize_path_string(&input.file_name),
+            normalize_existing_path(&input.file_name),
             input.file_name.clone(),
         );
     }
@@ -61,62 +62,6 @@ pub fn resolve_path_mappings(
     }
 
     resolved_modules
-}
-
-fn normalize_path_string(path: &str) -> String {
-    let path = path.replace('\\', "/");
-    let mut segments = Vec::new();
-    let is_absolute = path.starts_with('/');
-    let mut drive_letter = "";
-
-    // Handle Windows drive letters
-    let path_to_split = if path.chars().nth(1) == Some(':') {
-        drive_letter = &path[0..2];
-        &path[2..]
-    } else {
-        &path
-    };
-
-    for segment in path_to_split.split('/') {
-        if segment.is_empty() || segment == "." {
-            continue;
-        }
-        if segment == ".." {
-            if let Some(last) = segments.last() {
-                if last != &".." {
-                    segments.pop();
-                    continue;
-                }
-            }
-            if !is_absolute && drive_letter.is_empty() {
-                segments.push(segment);
-            }
-            continue;
-        }
-        segments.push(segment);
-    }
-
-    let mut result = String::new();
-    if !drive_letter.is_empty() {
-        result.push_str(drive_letter);
-        if path_to_split.starts_with('/') {
-            result.push('/');
-        }
-    } else if is_absolute {
-        result.push('/');
-    }
-
-    result.push_str(&segments.join("/"));
-
-    if result.is_empty() {
-        if is_absolute {
-            "/".to_string()
-        } else {
-            ".".to_string()
-        }
-    } else {
-        result
-    }
 }
 
 fn is_external_specifier(specifier: &str) -> bool {
@@ -258,4 +203,10 @@ fn strip_extension(path: &str) -> String {
         Some((head, _)) => head.to_string(),
         None => path.to_string(),
     }
+}
+
+fn normalize_existing_path(path: &str) -> String {
+    canonicalize_if_exists(Path::new(path))
+        .to_string_lossy()
+        .replace('\\', "/")
 }
