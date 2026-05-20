@@ -30,3 +30,10 @@ export interface ChallengeStore {
 export interface PasskeyProviderParams {
   store?: ChallengeStore;
 }
+
+export const provider: Provider = {
+  name: "credentials",
+  type: "credentials",
+  config: { email: "x" },
+  authorize: async (body) => ({ id: String(body.email) }),
+};
