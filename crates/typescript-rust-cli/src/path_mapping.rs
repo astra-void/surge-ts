@@ -3,7 +3,7 @@ use std::path::Path;
 
 use typescript_rust_checker::SourceFileInput;
 use typescript_rust_config::PathMapping;
-use typescript_rust_config::{canonicalize_if_exists, normalize_path_string};
+use typescript_rust_config::canonicalize_if_exists_string;
 use typescript_rust_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
 
 pub fn resolve_path_mappings(
@@ -20,7 +20,7 @@ pub fn resolve_path_mappings(
     let mut loaded_files = HashMap::new();
     for input in inputs {
         loaded_files.insert(
-            normalize_existing_path(&input.file_name),
+            canonicalize_if_exists_string(Path::new(&input.file_name)),
             input.file_name.clone(),
         );
     }
@@ -127,7 +127,7 @@ fn try_resolve_path_mapping(
                 let joined = root_dir.join(&target_path);
 
                 // Normalize path to use forward slashes
-                let normalized = normalize_path_string(&joined.to_string_lossy());
+                let normalized = canonicalize_if_exists_string(&joined);
 
                 let candidates = path_resolution_candidates(&normalized);
 
@@ -203,10 +203,4 @@ fn strip_extension(path: &str) -> String {
         Some((head, _)) => head.to_string(),
         None => path.to_string(),
     }
-}
-
-fn normalize_existing_path(path: &str) -> String {
-    canonicalize_if_exists(Path::new(path))
-        .to_string_lossy()
-        .replace('\\', "/")
 }

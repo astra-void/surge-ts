@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use typescript_rust_checker::{
     CheckerOptions, SourceFileInput, check_program_with_stats_and_jobs, check_source_with_options,
 };
-use typescript_rust_config::{TsConfigLoadOptions, canonicalize_if_exists, load_tsconfig};
+use typescript_rust_config::{TsConfigLoadOptions, canonicalize_if_exists_string, load_tsconfig};
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode, render_diagnostics};
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -205,7 +205,7 @@ fn run_single_file_mode(
         }
     };
 
-    let file_name = canonicalize_if_exists(&file_path).to_string_lossy().into_owned();
+    let file_name = canonicalize_if_exists_string(&file_path);
 
     let diagnostics = check_source_with_options(
         &source_text,
@@ -296,7 +296,7 @@ fn run_project_mode(
             }
         };
 
-        let file_name = canonicalize_if_exists(file_path).to_string_lossy().into_owned();
+        let file_name = canonicalize_if_exists_string(file_path);
         inputs.push(SourceFileInput {
             file_name: file_name.clone(),
             source_text: source_text.clone(),

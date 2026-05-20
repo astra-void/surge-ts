@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use typescript_rust_checker::SourceFileInput;
-use typescript_rust_config::canonicalize_if_exists;
+use typescript_rust_config::canonicalize_if_exists_string;
 use typescript_rust_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
 
 pub struct PackageDeclarationRequest {
@@ -79,7 +79,7 @@ pub fn resolve_package_declaration_entrypoints(
     let mut resolved_packages = HashMap::new();
     let mut known_file_names: HashSet<String> = inputs
         .iter()
-        .map(|input| normalize_existing_path(&input.file_name))
+        .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
         .collect();
     let mut queued_specifiers: HashSet<String> = HashSet::new();
 
@@ -219,9 +219,7 @@ pub fn resolve_package_declaration_entrypoints(
 
         if let Some(path) = resolved_path {
             if let Ok(path) = path.canonicalize() {
-                let file_name = path.to_string_lossy().into_owned();
-
-                let normalized_file_name = normalize_existing_path(&file_name);
+                let normalized_file_name = canonicalize_if_exists_string(&path);
                 resolved_packages.insert(req.specifier.clone(), normalized_file_name.clone());
 
                 if !known_file_names.contains(&normalized_file_name) {
@@ -231,7 +229,11 @@ pub fn resolve_package_declaration_entrypoints(
                             file_name: normalized_file_name.clone(),
                             source_text: source_text.clone(),
                         });
-                        sources.push((path.clone(), normalized_file_name.clone(), source_text.clone()));
+                        sources.push((
+                            path.clone(),
+                            normalized_file_name.clone(),
+                            source_text.clone(),
+                        ));
 
                         let new_importer_dir = path.parent().unwrap_or(root_dir).to_path_buf();
                         extract_packages_from_source(
@@ -246,7 +248,7 @@ pub fn resolve_package_declaration_entrypoints(
             }
         } else if let Some(path) = runtime_only_path {
             if let Ok(path) = path.canonicalize() {
-                let file_name = normalize_existing_path(&path.to_string_lossy());
+                let file_name = canonicalize_if_exists_string(&path);
                 resolved_packages.insert(req.specifier.clone(), file_name);
             }
         }
@@ -304,12 +306,6 @@ fn is_runtime_javascript_file(path: &Path) -> bool {
         || lower.ends_with(".jsx")
         || lower.ends_with(".mjs")
         || lower.ends_with(".cjs")
-}
-
-fn normalize_existing_path(path: &str) -> String {
-    canonicalize_if_exists(Path::new(path))
-        .to_string_lossy()
-        .replace('\\', "/")
 }
 
 fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {

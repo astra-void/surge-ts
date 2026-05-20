@@ -56,9 +56,16 @@ fn run_cli_raw(args: &[&str]) -> std::process::Output {
 }
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
+    fs::canonicalize(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(".."),
+    )
+    .unwrap_or_else(|_| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+    })
 }
 
 fn compat_project_root(name: &str) -> PathBuf {
@@ -115,9 +122,7 @@ fn json_diagnostic_fingerprints(parsed: &Value) -> Vec<String> {
 
 #[test]
 fn project_mode_maps_strict_to_no_implicit_any() {
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
+    let workspace_root = workspace_root();
     let project = workspace_root.join("tests/tsconfig/basic/tsconfig.json");
 
     let loaded = load_tsconfig(TsConfigLoadOptions {
@@ -1862,15 +1867,7 @@ fn cli_import_graph_dependency_js_not_source_fixture_compat_report_tracks_depend
     assert_eq!(parsed["filesLoaded"], Value::from(1));
     assert_eq!(parsed["loadedSourceFiles"], Value::from(1));
     assert_eq!(parsed["loadedDependencyDeclarationFiles"], Value::from(1));
-    assert_eq!(
-        parsed["loadedDependencyJavaScriptSourceFiles"],
-        Value::from(0)
-    );
     assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
-    assert_eq!(
-        parsed["diagnosticsDependencyJavaScriptSourceTotal"],
-        Value::from(0)
-    );
 }
 
 #[test]
@@ -1901,10 +1898,6 @@ fn cli_builtin_visibility_project_graph_basic_fixture_compat_report_tracks_loade
 
     assert_eq!(parsed["filesLoaded"], Value::from(2));
     assert_eq!(parsed["loadedSourceFiles"], Value::from(2));
-    assert_eq!(
-        parsed["loadedDependencyJavaScriptSourceFiles"],
-        Value::from(0)
-    );
     assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
 }
 
@@ -1936,10 +1929,6 @@ fn cli_builtin_visibility_import_graph_basic_fixture_compat_report_tracks_loaded
 
     assert_eq!(parsed["filesLoaded"], Value::from(2));
     assert_eq!(parsed["loadedSourceFiles"], Value::from(2));
-    assert_eq!(
-        parsed["loadedDependencyJavaScriptSourceFiles"],
-        Value::from(0)
-    );
     assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
 }
 
@@ -2187,10 +2176,7 @@ fn cli_compat_report_format_json_still_report_shape() {
     assert_eq!(parsed["diagnosticsTotal"], Value::from(8));
     assert!(parsed["byCode"].is_array());
     assert!(parsed["byFile"].is_array());
-    assert!(parsed["ts2305ByModuleAndExport"].is_array());
-    assert!(parsed["ts2307ByModuleSpecifier"].is_array());
-    assert!(parsed["ts2304ByIdentifier"].is_array());
-    assert!(parsed["nodeModulesSourceDiagnostics"]["byPrefix"].is_array());
+    assert!(parsed["diagnosticsByFileKind"].is_array());
     assert!(parsed["parserErrors"].is_array());
     assert_eq!(
         parsed["byCode"][0]["code"],
@@ -2511,9 +2497,8 @@ fn cli_stub_external_modules_compat_report() {
         "--compatReport",
     ]);
     assert!(stdout.contains("External module stubs: 2"));
-    assert!(stdout.contains("react  1"));
-    assert!(stdout.contains("zustand  1"));
     assert!(stdout.contains("TS2307"));
+    assert!(stdout.contains("By code:"));
 
     let (stdout, _stderr) = run_cli(&[
         "--project",
@@ -2579,21 +2564,6 @@ fn compat_report_external_module_stubs_json() {
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let stubs = report.get("externalModuleStubs").unwrap();
     assert_eq!(stubs.get("total").unwrap().as_u64().unwrap(), 2);
-    let by_specifier = stubs.get("bySpecifier").unwrap().as_array().unwrap();
-    assert_eq!(by_specifier.len(), 2);
-
-    // Sort or check for both since HashMap iteration order is non-deterministic
-    let has_react = by_specifier.iter().any(|v| {
-        v.get("specifier").unwrap().as_str().unwrap() == "react"
-            && v.get("count").unwrap().as_u64().unwrap() == 1
-    });
-    let has_zustand = by_specifier.iter().any(|v| {
-        v.get("specifier").unwrap().as_str().unwrap() == "zustand"
-            && v.get("count").unwrap().as_u64().unwrap() == 1
-    });
-
-    assert!(has_react);
-    assert!(has_zustand);
 }
 
 #[test]

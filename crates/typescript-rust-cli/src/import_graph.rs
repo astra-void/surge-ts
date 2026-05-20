@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use typescript_rust_checker::SourceFileInput;
 use typescript_rust_config::PathMapping;
-use typescript_rust_config::{canonicalize_if_exists, normalize_path_string};
+use typescript_rust_config::{
+    canonicalize_if_exists, canonicalize_if_exists_string, normalize_path_string,
+};
 use typescript_rust_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
 
 pub fn expand_project_inputs(
@@ -15,7 +17,7 @@ pub fn expand_project_inputs(
 ) -> usize {
     let mut known_files = HashSet::new();
     for input in inputs.iter() {
-        known_files.insert(normalize_existing_path(&input.file_name));
+        known_files.insert(canonicalize_if_exists_string(Path::new(&input.file_name)));
     }
 
     let mut added = 0usize;
@@ -51,7 +53,7 @@ pub fn expand_project_inputs(
             }
 
             let canonical = canonicalize_if_exists(&candidate);
-            let normalized = normalize_existing_path(&canonical.to_string_lossy());
+            let normalized = canonicalize_if_exists_string(&canonical);
             if !known_files.insert(normalized) {
                 continue;
             }
@@ -347,10 +349,4 @@ fn strip_extension(path: &str) -> String {
         Some((head, _)) => head.to_string(),
         None => path.to_string(),
     }
-}
-
-fn normalize_existing_path(path: &str) -> String {
-    canonicalize_if_exists(Path::new(path))
-        .to_string_lossy()
-        .replace('\\', "/")
 }
