@@ -6,9 +6,10 @@
 	"scripts": {
 		"oracle:tsc": "tsc --noEmit --pretty false",
 		"oracle:compare": "tsx scripts/oracle/compare-tsc.ts",
-		"oracle:test": "tsx scripts/oracle/compare-tsc.test.ts",
+		"oracle:test": "tsx scripts/oracle/compare-tsc.test.ts && tsx --test scripts/oracle/no-classifier-guard.test.ts",
 		"bench:compilers": "tsx scripts/bench/compare-compilers.ts",
-		"bench:test": "tsx --test scripts/bench/compare-compilers.test.ts"
+		"bench:test": "tsx --test scripts/bench/compare-compilers.test.ts",
+		"real:auth-kit": "tsx scripts/real-projects/measure-auth-kit.ts"
 	},
 	"devDependencies": {
 		"@types/node": "^25.6.0",
