@@ -250,6 +250,11 @@ fn parse_try_statement(try_statement: &TryStatement<'_>) -> Option<ParsedTryStat
 }
 
 fn parse_catch_clause(catch_clause: &CatchClause<'_>) -> crate::ParsedCatchClause {
+    let declared_type = catch_clause
+        .param
+        .as_ref()
+        .and_then(|param| param.type_annotation.as_ref())
+        .and_then(|annotation| parse_type_annotation(annotation));
     let binding_name = catch_clause
         .param
         .as_ref()
@@ -257,6 +262,7 @@ fn parse_catch_clause(catch_clause: &CatchClause<'_>) -> crate::ParsedCatchClaus
 
     crate::ParsedCatchClause {
         binding_name,
+        declared_type,
         body: parse_block_statement_as_function_body(&catch_clause.body),
         span: Some(text_span_from_oxc_span(catch_clause.span)),
     }

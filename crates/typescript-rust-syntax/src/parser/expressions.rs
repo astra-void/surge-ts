@@ -571,6 +571,7 @@ fn parse_arrow_function_expression(
         type_parameters: parse_type_parameters(arrow_expression.type_parameters.as_deref()),
         parameters,
         return_type,
+        is_async: arrow_expression.r#async,
         body,
         span: Some(text_span_from_oxc_span(arrow_expression.span)),
     })

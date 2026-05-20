@@ -546,6 +546,7 @@ pub struct ParsedTryStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCatchClause {
     pub binding_name: Option<ParsedBindingName>,
+    pub declared_type: Option<ParsedType>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,
 }
@@ -585,6 +586,7 @@ pub struct ParsedArrowFunction {
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub return_type: Option<ParsedType>,
+    pub is_async: bool,
     pub body: ParsedArrowFunctionBody,
     pub span: Option<TextSpan>,
 }
