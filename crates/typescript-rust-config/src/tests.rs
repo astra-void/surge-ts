@@ -16,7 +16,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
     );
     let path = env::temp_dir().join(unique);
     fs::create_dir_all(&path).unwrap();
-    path
+    fs::canonicalize(&path).unwrap_or(path)
 }
 
 fn write_file(root: &Path, relative: &str, contents: &str) -> PathBuf {

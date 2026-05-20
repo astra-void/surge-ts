@@ -58,7 +58,18 @@ pub fn absolutize(path: &Path) -> PathBuf {
 }
 
 pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
-    normalize_path_buf(path)
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        normalize_path_buf(&canonical)
+    } else {
+        normalize_path_buf(path)
+    }
+}
+
+#[allow(dead_code)]
+pub fn canonicalize_if_exists_string(path: &Path) -> String {
+    canonicalize_if_exists(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 pub fn cycle_key(path: &Path) -> PathBuf {
