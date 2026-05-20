@@ -10,7 +10,6 @@ struct ManifestEntry {
     fixtures: Option<Vec<String>>,
     span_tests: Option<Vec<String>>,
     oracle: Option<Vec<String>>,
-    cascade: Option<Vec<String>>,
     reason: Option<String>,
 }
 
