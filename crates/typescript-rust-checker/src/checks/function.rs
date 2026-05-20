@@ -1,4 +1,4 @@
-use typescript_rust_diagnostics::Diagnostic;
+use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
 use typescript_rust_syntax::{
     ParsedArrowFunction, ParsedArrowFunctionBody, ParsedAssignment, ParsedBindingName,
     ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
@@ -25,8 +25,8 @@ use crate::flow::{
     mark_assignment_state, merge_branch_states,
 };
 use crate::infer::{
-    InferredExpression, TypeParameterSubstitution, map_parsed_type_with_substitution,
-    report_duplicate_type_parameters,
+    InferredExpression, TypeParameterSubstitution, map_parsed_type,
+    map_parsed_type_with_substitution, report_duplicate_type_parameters,
 };
 use crate::symbols::{FunctionSignatureInfo, ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
@@ -577,9 +577,11 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
         type_parameters,
         parameters,
         return_type,
+        is_async,
         body,
         span: arrow_span,
     } = arrow;
+    let _ = is_async;
 
     let contextual_parameter_types =
         expected_type.map(|expected_type| expected_type.parameters.as_slice());
@@ -1148,7 +1150,28 @@ fn check_function_try_statement(
         let mut catch_flow_state = base_flow_state.clone();
         scopes.push_child();
         if let Some(binding_name) = handler_clause.binding_name.as_ref() {
-            insert_binding_name(binding_name, Type::Unknown, scopes);
+            if let Some(declared_type) = handler_clause.declared_type.as_ref() {
+                if !matches!(declared_type, ParsedType::Any | ParsedType::Unknown) {
+                    let mut diagnostic = Diagnostic::new(
+                        DiagnosticCode::TypeScript(1196),
+                        "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
+                        ctx.file_name.clone(),
+                    );
+                    if let ParsedBindingName::Identifier { span, .. } = binding_name {
+                        if let Some(span) = span {
+                            diagnostic = diagnostic.with_span(convert_span(*span));
+                        }
+                    }
+                    ctx.push(diagnostic);
+                }
+            }
+
+            let catch_type = handler_clause
+                .declared_type
+                .clone()
+                .map(|ty| map_parsed_type(ty, ctx))
+                .unwrap_or(Type::Unknown);
+            insert_binding_name(binding_name, catch_type, scopes);
         }
         check_function_body(
             handler_clause.body,

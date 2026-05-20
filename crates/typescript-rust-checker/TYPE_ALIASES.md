@@ -33,7 +33,8 @@ Alias limitations:
   re-exports for loaded `.ts` files
 - v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and
   `Omit` on top of mapped types; `Required`, `Readonly`, `ReturnType`,
-  `Parameters`, `Awaited`, conditional-type-backed utilities, and
-  `Record<string, T>` / index-signature style behavior remain unsupported or
-  synthetic noise reducers
+  `Parameters`, `Awaited`, and conditional-type-backed utilities remain
+  unsupported or synthetic noise reducers. Full index signatures remain
+  unsupported, while any narrow `Record<string, T>` / string-index fallback is
+  confined to oracle-backed narrow paths when explicitly implemented.
 - program-mode relative module visibility only for loaded `.ts` files

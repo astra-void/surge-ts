@@ -1,6 +1,7 @@
 # Real Project Compatibility
 
 This crate tracks compatibility in narrow, oracle-backed phases rather than claiming full TypeScript parity.
+Its compatibility surfaces are raw measurements, not root-cause classifiers.
 
 ## Current coverage
 

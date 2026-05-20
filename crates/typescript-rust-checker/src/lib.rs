@@ -5,6 +5,7 @@ mod driver;
 mod flow;
 mod infer;
 mod modules;
+mod paths;
 mod program;
 mod spans;
 mod symbols;

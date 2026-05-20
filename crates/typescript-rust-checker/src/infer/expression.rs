@@ -761,11 +761,26 @@ fn infer_property_call(
     match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown => InferredExpression::Unknown,
+        Type::Array(element_type) if property_name == "find" => {
+            InferredExpression::Known(typescript_rust_types::union_type(vec![
+                element_type.as_ref().clone(),
+                Type::Undefined,
+            ]))
+        }
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in &union_type.types {
                 if *ty == Type::Undefined {
                     result_types.push(ty.clone());
+                    continue;
+                }
+                if property_name == "find"
+                    && let Type::Array(element_type) = ty
+                {
+                    result_types.push(typescript_rust_types::union_type(vec![
+                        element_type.as_ref().clone(),
+                        Type::Undefined,
+                    ]));
                     continue;
                 }
                 match ty.get_property_access_type(property_name) {

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use typescript_rust_diagnostics::Diagnostic;
@@ -8,6 +9,7 @@ use typescript_rust_syntax::{
 };
 
 use crate::context::{CheckerContext, FileKind, convert_span};
+use crate::paths::{canonicalize_if_exists_string, normalize_path_string};
 use crate::program::ParsedProgramFile;
 use crate::symbols::{
     SymbolInfo, SymbolKind, SymbolTable, TypeAliasInfo, TypeDeclarationInfo, TypeDeclarationTable,
@@ -67,15 +69,15 @@ pub(crate) fn resolve_relative_module(
     let file_index_by_key = program_files
         .iter()
         .enumerate()
-        .map(|(index, file)| (ModuleKey(normalize_module_path(&file.file_name)), index))
+        .map(|(index, file)| (ModuleKey(canonical_file_identity(&file.file_name)), index))
         .collect::<HashMap<_, _>>();
 
     let importer_dir = module_directory(importer_file_name);
-    let normalized_specifier = normalize_module_path(specifier);
+    let normalized_specifier = normalize_path_string(specifier);
     let joined_specifier = if importer_dir.is_empty() {
         normalized_specifier.clone()
     } else {
-        normalize_module_path(&format!("{importer_dir}/{normalized_specifier}"))
+        normalize_path_string(&format!("{importer_dir}/{normalized_specifier}"))
     };
 
     let candidate_paths = match relative_specifier_kind(&normalized_specifier) {
@@ -112,7 +114,8 @@ pub(crate) fn resolve_relative_module(
     };
 
     for candidate in candidate_paths {
-        if let Some(resolved_file_index) = file_index_by_key.get(&ModuleKey(candidate.clone())) {
+        let candidate = canonical_file_identity(&candidate);
+        if let Some(resolved_file_index) = file_index_by_key.get(&ModuleKey(candidate)) {
             return Some(ModuleResolution {
                 resolved_file_index: *resolved_file_index,
                 resolved_file_name: program_files[*resolved_file_index].file_name.clone(),
@@ -238,10 +241,11 @@ fn try_resolve_module(
     }
 
     if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
+        let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some((resolved_index, _)) = program_files
             .iter()
             .enumerate()
-            .find(|(_, file)| file.file_name == *resolved_file_name)
+            .find(|(_, file)| canonical_file_identity(&file.file_name) == resolved_file_name)
         {
             if let Some(Some(export_table)) = module_export_tables.get(resolved_index) {
                 let scope = module_resolution_scopes
@@ -283,10 +287,11 @@ fn try_resolve_module_export_table(
     }
 
     if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
+        let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some((resolved_index, _)) = parsed_files
             .iter()
             .enumerate()
-            .find(|(_, file)| file.file_name == *resolved_file_name)
+            .find(|(_, file)| canonical_file_identity(&file.file_name) == resolved_file_name)
         {
             if let Some(export_table) = resolve_module_export_table(
                 resolved_index,
@@ -1243,7 +1248,7 @@ fn resolve_import_declaration(
                     }
                 }
 
-                if bound_any {
+                if bound_any && *is_type_only {
                     return;
                 }
 
@@ -1486,9 +1491,7 @@ fn resolve_import_declaration(
                 }
 
                 if let Some(value_export) = value_export {
-                    if local_symbols.get(&specifier.local_name).is_none() {
-                        symbols.insert(specifier.local_name.clone(), value_export);
-                    }
+                    symbols.insert(specifier.local_name.clone(), value_export);
                     found = true;
                 }
 
@@ -1888,57 +1891,15 @@ fn relative_specifier_kind(specifier: &str) -> RelativeSpecifierKind {
 }
 
 fn module_directory(file_name: &str) -> String {
-    let normalized = normalize_module_path(file_name);
+    let normalized = normalize_path_string(file_name);
     normalized
         .rsplit_once('/')
         .map(|(directory, _)| directory.to_string())
         .unwrap_or_default()
 }
 
-fn normalize_module_path(path: &str) -> String {
-    let path = path.replace('\\', "/");
-    let is_absolute = path.starts_with('/');
-    let mut segments = Vec::new();
-
-    for segment in path.split('/') {
-        if segment.is_empty() || segment == "." {
-            continue;
-        }
-
-        if segment == ".." {
-            if let Some(last) = segments.last() {
-                if last != ".." {
-                    segments.pop();
-                    continue;
-                }
-            }
-
-            if !is_absolute {
-                segments.push(segment.to_string());
-            }
-
-            continue;
-        }
-
-        segments.push(segment.to_string());
-    }
-
-    let mut normalized = String::new();
-    if is_absolute {
-        normalized.push('/');
-    }
-
-    normalized.push_str(&segments.join("/"));
-
-    if normalized.is_empty() {
-        if is_absolute {
-            "/".to_string()
-        } else {
-            ".".to_string()
-        }
-    } else {
-        normalized
-    }
+fn canonical_file_identity(file_name: &str) -> String {
+    canonicalize_if_exists_string(Path::new(file_name))
 }
 
 fn relative_resolution_candidates(base: &str) -> Vec<String> {

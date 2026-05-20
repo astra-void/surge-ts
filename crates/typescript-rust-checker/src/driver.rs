@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedInterfaceDeclaration,
@@ -5,8 +7,9 @@ use typescript_rust_syntax::{
 };
 
 use crate::checks::{assign, call, expr, function as check_function, var};
-use crate::context::{CheckerContext, FileKind};
+use crate::context::{CheckerContext, DeclarationNamespace, DeclarationResolutionKey, FileKind};
 use crate::infer::{report_duplicate_type_parameters, validate_local_type_declaration};
+use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
 
 pub fn check_source(source_text: &str, file_name: &str) -> Vec<Diagnostic> {
@@ -48,7 +51,7 @@ pub fn check_source_with_options(
     }
 
     collect_type_declarations(&parsed.statements, &mut ctx);
-    validate_local_type_declarations(&file_name, &mut ctx);
+    validate_local_type_declarations(&parsed.statements, &file_name, &mut ctx);
     validate_direct_utility_aliases(&parsed.statements, &mut ctx);
 
     for statement in parsed.statements {
@@ -73,23 +76,118 @@ pub(crate) fn validate_direct_utility_aliases(
     }
 }
 
-pub(crate) fn validate_local_type_declarations(file_name: &str, ctx: &mut CheckerContext) {
-    let local_declarations = ctx
-        .type_declarations
-        .iter()
-        .filter_map(|(_, declaration)| match declaration {
-            TypeDeclarationInfo::Alias(alias) if alias.file_name == file_name => {
-                Some(declaration.clone())
-            }
-            TypeDeclarationInfo::Interface(interface) if interface.file_name == file_name => {
-                Some(declaration.clone())
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+pub(crate) fn validate_local_type_declarations(
+    statements: &[ParsedStatement],
+    file_name: &str,
+    ctx: &mut CheckerContext,
+) {
+    let mut local_declarations = Vec::new();
+    let mut seen = HashSet::new();
 
-    for declaration in local_declarations {
+    collect_local_type_declarations_from_statements(
+        statements,
+        file_name,
+        &mut seen,
+        &mut local_declarations,
+        ctx,
+    );
+
+    for declaration in local_declarations.into_iter().rev() {
         validate_local_type_declaration(&declaration, ctx);
+    }
+}
+
+fn collect_local_type_declarations_from_statements(
+    statements: &[ParsedStatement],
+    file_name: &str,
+    seen: &mut HashSet<DeclarationResolutionKey>,
+    local_declarations: &mut Vec<TypeDeclarationInfo>,
+    ctx: &CheckerContext,
+) {
+    for statement in statements {
+        collect_local_type_declarations_from_statement(
+            statement,
+            file_name,
+            seen,
+            local_declarations,
+            ctx,
+        );
+    }
+}
+
+fn collect_local_type_declarations_from_statement(
+    statement: &ParsedStatement,
+    file_name: &str,
+    seen: &mut HashSet<DeclarationResolutionKey>,
+    local_declarations: &mut Vec<TypeDeclarationInfo>,
+    ctx: &CheckerContext,
+) {
+    match statement {
+        ParsedStatement::TypeAliasDeclaration(alias) => {
+            let key = DeclarationResolutionKey {
+                file_name: canonicalize_if_exists_string(std::path::Path::new(file_name)),
+                name: alias.name.clone(),
+                namespace: DeclarationNamespace::Type,
+            };
+            if seen.insert(key)
+                && let Some(declaration) =
+                    ctx.type_declarations
+                        .iter()
+                        .find_map(|(_, declaration)| match declaration {
+                            TypeDeclarationInfo::Alias(info)
+                                if info.name == alias.name
+                                    && canonicalize_if_exists_string(std::path::Path::new(
+                                        &info.file_name,
+                                    )) == canonicalize_if_exists_string(
+                                        std::path::Path::new(file_name),
+                                    ) =>
+                            {
+                                Some(declaration)
+                            }
+                            _ => None,
+                        })
+            {
+                local_declarations.push(declaration.clone());
+            }
+        }
+        ParsedStatement::InterfaceDeclaration(interface) => {
+            let key = DeclarationResolutionKey {
+                file_name: canonicalize_if_exists_string(std::path::Path::new(file_name)),
+                name: interface.name.clone(),
+                namespace: DeclarationNamespace::Type,
+            };
+            if seen.insert(key)
+                && let Some(declaration) =
+                    ctx.type_declarations
+                        .iter()
+                        .find_map(|(_, declaration)| match declaration {
+                            TypeDeclarationInfo::Interface(info)
+                                if info.name == interface.name
+                                    && canonicalize_if_exists_string(std::path::Path::new(
+                                        &info.file_name,
+                                    )) == canonicalize_if_exists_string(
+                                        std::path::Path::new(file_name),
+                                    ) =>
+                            {
+                                Some(declaration)
+                            }
+                            _ => None,
+                        })
+            {
+                local_declarations.push(declaration.clone());
+            }
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+            declaration,
+            ..
+        }) => collect_local_type_declarations_from_statement(
+            declaration.as_ref(),
+            file_name,
+            seen,
+            local_declarations,
+            ctx,
+        ),
+        _ => {}
     }
 }
 

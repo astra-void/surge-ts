@@ -202,7 +202,7 @@ pub fn check_program_with_stats_and_jobs(
     };
 
     for result in file_results {
-        ctx.diagnostics.extend(result.diagnostics);
+        extend_diagnostics_dedup(&mut ctx.diagnostics, result.diagnostics);
         ctx.stats.suppressed_diagnostics_total += result.stats.suppressed_diagnostics_total;
         ctx.stats.suppressed_declaration_diagnostics_total +=
             result.stats.suppressed_declaration_diagnostics_total;
@@ -526,6 +526,24 @@ fn check_program_files_parallel(
     flattened
 }
 
+fn extend_diagnostics_dedup(
+    diagnostics: &mut Vec<typescript_rust_diagnostics::Diagnostic>,
+    new_diagnostics: Vec<typescript_rust_diagnostics::Diagnostic>,
+) {
+    for diagnostic in new_diagnostics {
+        if diagnostics.iter().any(|existing| {
+            existing.code.to_string() == diagnostic.code.to_string()
+                && existing.file_name == diagnostic.file_name
+                && existing.message == diagnostic.message
+                && existing.span == diagnostic.span
+        }) {
+            continue;
+        }
+
+        diagnostics.push(diagnostic);
+    }
+}
+
 fn check_program_file(
     file_index: usize,
     parsed_file: &ParsedProgramFile,
@@ -587,7 +605,7 @@ fn check_program_file(
 
         ctx.type_declarations = merged_type_declarations;
         ctx.set_symbols(merged_symbols);
-        validate_local_type_declarations(&parsed_file.file_name, ctx);
+        validate_local_type_declarations(&parsed_file.statements, &parsed_file.file_name, ctx);
         validate_direct_utility_aliases(&parsed_file.statements, ctx);
         check_program_file_statements(
             &parsed_file.statements,
@@ -608,7 +626,7 @@ fn check_program_file(
         }
         ctx.set_symbols(script_sym);
 
-        validate_local_type_declarations(&parsed_file.file_name, ctx);
+        validate_local_type_declarations(&parsed_file.statements, &parsed_file.file_name, ctx);
         validate_direct_utility_aliases(&parsed_file.statements, ctx);
         check_program_file_statements(
             &parsed_file.statements,

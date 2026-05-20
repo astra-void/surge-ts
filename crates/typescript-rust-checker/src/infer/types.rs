@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 
 use typescript_rust_diagnostics::Diagnostic;
@@ -11,9 +12,10 @@ use typescript_rust_types::{
 };
 
 use crate::context::{
-    CheckerContext, DeclarationNamespace, DeclarationResolutionKey,
-    DeclarationResolutionState, convert_span,
+    CheckerContext, DeclarationNamespace, DeclarationResolutionKey, DeclarationResolutionState,
+    convert_span,
 };
+use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
 
 pub(crate) type TypeParameterSubstitution = BTreeMap<String, Type>;
@@ -378,8 +380,17 @@ fn resolve_parsed_type(
                     }
                 }
                 (_, invalid_index) => {
-                    // For Type::Unknown index (like UnresolvedKey), avoid cascading TS2538 if possible
                     if let Type::Unknown = invalid_index {
+                        if ctx.options.diagnostic_profile
+                            != crate::context::DiagnosticProfile::Native
+                        {
+                            let mut diagnostic =
+                                Diagnostic::ts2538(&invalid_index.name(), ctx.file_name.clone());
+                            if let Some(span) = indexed_access.span {
+                                diagnostic = diagnostic.with_span(convert_span(span));
+                            }
+                            ctx.push(diagnostic);
+                        }
                         return ResolvedType {
                             ty: Type::Unknown,
                             had_error: true,
@@ -553,30 +564,6 @@ fn resolve_union_type(
     }
 }
 
-fn type_contains_unknown(ty: &Type) -> bool {
-    match ty {
-        Type::Unknown => true,
-        Type::Array(element) => type_contains_unknown(element),
-        Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
-        Type::Function(function) => {
-            function.parameters.iter().any(type_contains_unknown)
-                || type_contains_unknown(&function.return_type)
-        }
-        Type::Object(object) => {
-            object
-                .properties
-                .values()
-                .any(|property| type_contains_unknown(&property.ty))
-                || object
-                    .string_index_type
-                    .as_deref()
-                    .is_some_and(type_contains_unknown)
-        }
-        Type::Union(union) => union.types.iter().any(type_contains_unknown),
-        _ => false,
-    }
-}
-
 fn resolve_named_type(
     named_type: ParsedNamedType,
     ctx: &mut CheckerContext,
@@ -678,17 +665,15 @@ fn resolve_named_type(
     resolved
 }
 
-fn type_declaration_resolution_key(
-    declaration: &TypeDeclarationInfo,
-) -> DeclarationResolutionKey {
+fn type_declaration_resolution_key(declaration: &TypeDeclarationInfo) -> DeclarationResolutionKey {
     match declaration {
         TypeDeclarationInfo::Alias(alias) => DeclarationResolutionKey {
-            file_name: alias.file_name.clone(),
+            file_name: canonical_declaration_file_name(&alias.file_name),
             name: alias.name.clone(),
             namespace: DeclarationNamespace::Type,
         },
         TypeDeclarationInfo::Interface(interface) => DeclarationResolutionKey {
-            file_name: interface.file_name.clone(),
+            file_name: canonical_declaration_file_name(&interface.file_name),
             name: interface.name.clone(),
             namespace: DeclarationNamespace::Type,
         },
@@ -697,7 +682,7 @@ fn type_declaration_resolution_key(
 
 fn declaration_resolution_key(file_name: &str, name: &str) -> DeclarationResolutionKey {
     DeclarationResolutionKey {
-        file_name: file_name.to_string(),
+        file_name: canonical_declaration_file_name(file_name),
         name: name.to_string(),
         namespace: DeclarationNamespace::Type,
     }
@@ -716,7 +701,7 @@ fn get_cached_named_type_resolution(
             had_error: *had_error,
         }),
         Some(DeclarationResolutionState::Resolving) => {
-            if resolving.last().is_some_and(|current| current == key) {
+            if resolving.iter().any(|current| current == key) {
                 None
             } else {
                 Some(ResolvedType {
@@ -757,10 +742,15 @@ fn is_ambient_type_declaration(declaration: &TypeDeclarationInfo) -> bool {
         TypeDeclarationInfo::Interface(interface) => &interface.file_name,
     };
 
+    let file_name = canonical_declaration_file_name(file_name);
     file_name == "<built-in>"
         || file_name.ends_with(".d.ts")
         || file_name.ends_with(".d.mts")
         || file_name.ends_with(".d.cts")
+}
+
+fn canonical_declaration_file_name(file_name: &str) -> String {
+    canonicalize_if_exists_string(Path::new(file_name))
 }
 
 fn resolve_type_alias(
@@ -1391,7 +1381,11 @@ fn with_type_declarations<R>(
     let saved_type_declarations = ctx.type_declarations.clone();
 
     if let Some(type_declarations) = type_declarations {
-        ctx.type_declarations = (**type_declarations).clone();
+        let mut merged = saved_type_declarations.clone();
+        for (name, declaration) in type_declarations.iter() {
+            let _ = merged.insert(name.clone(), declaration.clone());
+        }
+        ctx.type_declarations = merged;
     }
 
     let result = f(ctx);

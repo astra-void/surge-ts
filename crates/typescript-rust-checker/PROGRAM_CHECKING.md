@@ -5,7 +5,7 @@
 - `check_program(files: Vec<SourceFileInput>)`
 - `check_program_with_options(files: Vec<SourceFileInput>, options: CheckerOptions)`
 
-The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, v0.65 hardens the ambient declaration path for loaded `.d.ts` files, and v0.69/v0.69.1/v0.70 add and harden bare package declaration entrypoint and subpath support. v0.84 hardens already-loaded source and declaration export visibility, including namespace re-exports and exact declaration-only package `types` entrypoints, while staying out of full package/runtime resolution. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts` (disabled by `noLib: true`), providing basic `Array<T>` support, while v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of mapped types. That lowering is still narrow: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utility types remain unsupported or synthetic noise reducers, and `Record<string, T>` / index-signature behavior remains unsupported unless a later oracle-backed phase adds it. v0.74 adds a narrow optional chaining and nullish coalescing compatibility foundation for expression evaluation. v0.74.1 hardens nested optional property/call chains, adds optional element access for arrays and tuples, and maintains ?? conservative undefined-removal. v0.82 is the project visibility hardening pass: directory-style `include` roots are treated recursively, `.tsx` files are visible without implying JSX semantics, and project mode now emits an explicit custom diagnostic when it discovers zero source files. v0.83 adds parser-safe binding-pattern parameter diagnostics and arrow-function expression support for `TS7031` on object binding elements without claiming full destructuring or callback contextual typing.
+The API is intentionally narrow. v0.57.1 hardens relative module resolution-lite for loaded program files while keeping the single-file APIs unchanged, v0.59/v0.59.1 add a small generic syntax surface on top of the existing declaration prepass, v0.61 expands the module surface to cover default imports/exports, namespace imports, named re-exports, type-only re-exports, and star re-exports over loaded relative `.ts` files, v0.65 hardens the ambient declaration path for loaded `.d.ts` files, and v0.69/v0.69.1/v0.70 add and harden bare package declaration entrypoint and subpath support. v0.84 hardens already-loaded source and declaration export visibility, including namespace re-exports and exact declaration-only package `types` entrypoints, while staying out of full package/runtime resolution. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts` (disabled by `noLib: true`), providing basic `Array<T>` support, while v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of mapped types. That lowering is still narrow: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utility types remain unsupported or synthetic noise reducers. Full index signatures remain unsupported, while any narrow `Record<string, T>` / string-index fallback stays limited to oracle-backed narrow paths when the implementation explicitly supports it. v0.74 adds a narrow optional chaining and nullish coalescing compatibility foundation for expression evaluation. v0.74.1 hardens nested optional property/call chains, adds optional element access for arrays and tuples, and maintains ?? conservative undefined-removal. v0.82 is the project visibility hardening pass: directory-style `include` roots are treated recursively, `.tsx` files are visible without implying JSX semantics, and project mode now emits an explicit custom diagnostic when it discovers zero source files. v0.83 adds parser-safe binding-pattern parameter diagnostics and arrow-function expression support for `TS7031` on object binding elements without claiming full destructuring or callback contextual typing.
 
 ## Public API
 
@@ -119,11 +119,14 @@ See [MODULES.md](./MODULES.md) for the import/export syntax surface, module-file
 - `--showSpans` prints the diagnostic code and span metadata before the rendered excerpt.
 - `--compatReport` prints a compatibility summary with loaded-file count,
   total diagnostic count, counts by code, counts by file, parser-error
-  grouping, and a visibility warning when no source files were loaded.
+  grouping, file-kind counts, suppressed totals, and a visibility warning
+  when no source files were loaded. It is raw measurement, not a root-cause
+  classifier.
 - Generic type arguments on references are parsed and lowered for explicit
   alias/interface instantiation, but generic inference is still intentionally
   omitted.
-- Call-site type arguments are parsed and preserved for syntax stability, but the checker currently ignores them.
+- Call-site type arguments are parsed and preserved for syntax stability, and
+  narrow generic call-instantiation paths apply them when supported.
 - `--maxDiagnostics` limits rendered diagnostics but does not change the total
   counts in the compatibility summary.
 - `.tsx` visibility in project mode is file-discovery only; JSX syntax, JSX
@@ -131,7 +134,7 @@ See [MODULES.md](./MODULES.md) for the import/export syntax surface, module-file
   still out of scope.
 - Positional single-file mode still uses the single-file checker APIs and does not resolve sibling files.
 - Diagnostic span policy lives in [DIAGNOSTIC_SPANS.md](./DIAGNOSTIC_SPANS.md).
-- v0.81 synthetic utility lowering covers `Record<K, T>`, `Partial<T>`, `Pick<T, K>`, and `Omit<T, K>` for concrete object/interface shapes and string-literal key unions. It does not imply physical `lib.d.ts`, `@types`, DOM/Node globals, conditional types, template literal types, or the rest of the utility-type ecosystem, and it does not broaden `Record<string, T>` or index-signature-style behavior.
+- v0.81 synthetic utility lowering covers `Record<K, T>`, `Partial<T>`, `Pick<T, K>`, and `Omit<T, K>` for concrete object/interface shapes and string-literal key unions. It does not imply physical `lib.d.ts`, `@types`, DOM/Node globals, conditional types, template literal types, or the rest of the utility-type ecosystem, and full index signatures remain unsupported.
 
 ## Upstream Virtual Files
 

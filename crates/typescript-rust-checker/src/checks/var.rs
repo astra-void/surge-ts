@@ -91,6 +91,8 @@ pub(crate) fn check_variable_declaration_with_symbols(
         InferredExpression::Known(inferred_initializer_type) => {
             if let Some(ref declared_type) = declared_type {
                 if *inferred_initializer_type != Type::Unknown
+                    && !type_contains_unknown(declared_type)
+                    && !type_contains_unknown(inferred_initializer_type)
                     && !is_assignable_to(inferred_initializer_type, declared_type)
                 {
                     let inferred_type_name = inferred_initializer_type.name();
@@ -159,5 +161,29 @@ pub(crate) fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, 
         ty.base_primitive().unwrap_or_else(|| ty.clone())
     } else {
         ty.clone()
+    }
+}
+
+fn type_contains_unknown(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown => true,
+        Type::Array(element) => type_contains_unknown(element),
+        Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
+        Type::Function(function) => {
+            function.parameters.iter().any(type_contains_unknown)
+                || type_contains_unknown(&function.return_type)
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .any(|property| type_contains_unknown(&property.ty))
+                || object
+                    .string_index_type
+                    .as_deref()
+                    .is_some_and(type_contains_unknown)
+        }
+        Type::Union(union) => union.types.iter().any(type_contains_unknown),
+        _ => false,
     }
 }

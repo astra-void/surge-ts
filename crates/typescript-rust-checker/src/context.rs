@@ -180,6 +180,7 @@ impl CheckerContext {
             code: diagnostic.code.to_string(),
             file_name: diagnostic.file_name.clone(),
             span: diagnostic.span.map(|span| (span.start, span.end)),
+            message: diagnostic.message.clone(),
         };
 
         if self.utility_diagnostic_keys.insert(key) {
@@ -245,6 +246,7 @@ pub(crate) struct UtilityDiagnosticKey {
     code: String,
     file_name: String,
     span: Option<(usize, usize)>,
+    message: String,
 }
 
 fn is_rust_only_compat_diagnostic(code: &str) -> bool {

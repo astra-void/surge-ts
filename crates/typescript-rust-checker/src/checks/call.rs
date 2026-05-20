@@ -158,6 +158,14 @@ pub(crate) fn check_property_call_like(
             symbols,
             ctx,
         ),
+        Type::Array(element_type) if property_name == "find" => check_array_find_call(
+            element_type.as_ref(),
+            property_span,
+            call_span,
+            arguments,
+            symbols,
+            ctx,
+        ),
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in &union_type.types {
@@ -178,6 +186,36 @@ pub(crate) fn check_property_call_like(
                         ctx,
                     )?;
                     result_types.push(mapped);
+                    continue;
+                }
+
+                if property_name == "find"
+                    && let Type::Array(element_type) = ty
+                {
+                    let found = check_array_find_call(
+                        element_type.as_ref(),
+                        property_span,
+                        call_span,
+                        arguments,
+                        symbols,
+                        ctx,
+                    )?;
+                    result_types.push(found);
+                    continue;
+                }
+
+                if property_name == "find"
+                    && let Type::Array(element_type) = ty
+                {
+                    let found = check_array_find_call(
+                        element_type.as_ref(),
+                        property_span,
+                        call_span,
+                        arguments,
+                        symbols,
+                        ctx,
+                    )?;
+                    result_types.push(found);
                     continue;
                 }
 
@@ -307,6 +345,15 @@ pub(crate) fn check_optional_property_call(
             ctx,
         )
         .map(|ret| union_type(vec![ret, Type::Undefined])),
+        Type::Array(element_type) if property_name == "find" => check_array_find_call(
+            element_type.as_ref(),
+            property_span,
+            call_span,
+            arguments,
+            symbols,
+            ctx,
+        )
+        .map(|ret| union_type(vec![ret, Type::Undefined])),
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in &union_type.types {
@@ -380,6 +427,20 @@ pub(crate) fn check_optional_property_call(
                 && let Type::Array(element_type) = &base_type
             {
                 return check_array_map_call(
+                    element_type.as_ref(),
+                    property_span,
+                    call_span,
+                    arguments,
+                    symbols,
+                    ctx,
+                )
+                .map(|ret| typescript_rust_types::union_type(vec![ret, Type::Undefined]));
+            }
+
+            if property_name == "find"
+                && let Type::Array(element_type) = &base_type
+            {
+                return check_array_find_call(
                     element_type.as_ref(),
                     property_span,
                     call_span,
@@ -472,6 +533,54 @@ fn check_array_map_call(
         | InferredExpression::MissingProperty { .. }
         | InferredExpression::Unknown => None,
         InferredExpression::Known(other) => Some(Type::Array(Box::new(other))),
+    }
+}
+
+fn check_array_find_call(
+    element_type: &Type,
+    property_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if arguments.is_empty() {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2554(1, 0, ctx.file_name.clone()),
+            call_span.or(property_span),
+        ));
+        return None;
+    }
+
+    let callback_type = Type::Function(FunctionType {
+        parameters: vec![element_type.clone()],
+        return_type: Box::new(Type::Boolean),
+        is_variadic: false,
+        required_parameter_count: 1,
+    });
+
+    let inferred_callback = evaluate_expression_with_expected_type(
+        &arguments[0].expression,
+        arguments[0].span,
+        Some(&callback_type),
+        ExpectedTypeDiagnostic::ArgumentNotAssignable,
+        symbols,
+        ctx,
+    );
+
+    match inferred_callback {
+        InferredExpression::Known(Type::Function(_)) => {
+            Some(typescript_rust_types::union_type(vec![
+                element_type.clone(),
+                Type::Undefined,
+            ]))
+        }
+        InferredExpression::Known(Type::Any) => Some(Type::Any),
+        InferredExpression::Known(Type::Unknown) => None,
+        InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. }
+        | InferredExpression::Unknown => None,
+        InferredExpression::Known(other) => Some(other),
     }
 }
 
@@ -688,7 +797,10 @@ pub(crate) fn check_function_type_call(
                     continue;
                 }
 
-                if !is_assignable_to(&argument_type, parameter_type) {
+                if !type_contains_unknown(parameter_type)
+                    && !type_contains_unknown(&argument_type)
+                    && !is_assignable_to(&argument_type, parameter_type)
+                {
                     let argument_type_name = argument_type.name();
                     let parameter_type_name = parameter_type.name();
                     let diagnostic = Diagnostic::ts2345(
@@ -713,4 +825,28 @@ pub(crate) fn check_function_type_call(
     }
 
     Some((*function_type.return_type).clone())
+}
+
+fn type_contains_unknown(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown => true,
+        Type::Array(element) => type_contains_unknown(element),
+        Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
+        Type::Function(function) => {
+            function.parameters.iter().any(type_contains_unknown)
+                || type_contains_unknown(&function.return_type)
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .any(|property| type_contains_unknown(&property.ty))
+                || object
+                    .string_index_type
+                    .as_deref()
+                    .is_some_and(type_contains_unknown)
+        }
+        Type::Union(union) => union.types.iter().any(type_contains_unknown),
+        _ => false,
+    }
 }
