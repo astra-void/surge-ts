@@ -13,45 +13,48 @@ miss. `.tsx` visibility is not the same as JSX or React type support.
 
 ## v0.84 Real-Project Audit
 
-The old `trpc` baseline is retired as the active real-project target. `auth-kit` is
-the intended finite baseline for this phase, but this workspace does not currently
-contain `.local-projects/auth-kit`, so the measured metrics below are pending in
-this checkout rather than fabricated from another project.
+The old `trpc` baseline is retired as the active real-project target.
+`auth-kit` is the finite baseline for this phase.
 
-Preflight commands to run once the `auth-kit` checkout is available:
+Primary local path: `AUTH_KIT_PROJECT`
+
+Secondary local path: `../../typescript/auth-project/auth-kit`
+
+Fallback local path: `.local-projects/auth-kit`
+
+This workspace measured auth-kit through the secondary local path above:
+`/Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit`.
+
+Preflight commands for future reruns:
 
 - `cargo fmt --check`
 - `cargo test`
 - `pnpm run oracle:test`
 - `pnpm run bench:test`
-- `cargo run -q -p typescript-rust-cli -- --project .local-projects/auth-kit/tsconfig.json --showConfig`
-- `cargo run -q -p typescript-rust-cli -- --project .local-projects/auth-kit/tsconfig.json --compatReport --maxDiagnostics 200`
-- `pnpm run oracle:compare -- --project .local-projects/auth-kit/tsconfig.json --maxDiagnostics 200`
+- `cargo run -q -p typescript-rust-cli -- --project /Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json --showConfig`
+- `cargo run -q -p typescript-rust-cli -- --project /Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json --compatReport --maxDiagnostics 200`
+- `pnpm run oracle:compare -- --project /Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json --maxDiagnostics 200`
 
-Measured real-project state for `.local-projects/auth-kit/tsconfig.json`:
+Measured real-project state for `/Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json`:
 
 | Metric | Value |
 | --- | ---: |
-| TypeScript diagnostics | pending |
-| typescript-rust diagnostics, raw oracle compare | pending |
-| typescript-rust diagnostics, compat-report JSON | pending |
-| loaded files total | pending |
-| root source files | pending |
-| root declarations | pending |
-| dependency declarations | pending |
-| generated files | pending |
-| dependency JavaScript source files loaded | pending |
-| diagnostics from dependency declarations | pending |
-| diagnostics from dependency JavaScript source files | pending |
-| Rust-only `typescript-rust::*` diagnostics in `tsc` profile | pending |
-
-When the audit is rerun, the report should explicitly note whether raw oracle
-compare and compat-report totals differ, and if they do, capture the counting
-path that needs to be fixed later instead of hiding the gap.
+| TypeScript diagnostics | 0 |
+| typescript-rust diagnostics, raw oracle compare | 52 |
+| typescript-rust diagnostics, compat-report JSON | 52 |
+| loaded files total | 65 |
+| root source files | 65 |
+| root declarations | 0 |
+| dependency declarations | 9 |
+| generated files | 212 |
+| diagnostics from dependency declarations | 0 |
+| Rust-only `typescript-rust::*` diagnostics in `tsc` profile | 10 |
 
 The compat-report and oracle compare surfaces are raw measurements, not
 semantic diagnosis. Missing features are fixed in checker, resolver, and
-type-model phases rather than in the report layer. v0.84.8 adds real-source
+type-model phases rather than in the report layer. They do not invent root-cause
+buckets or dependency-noise labels. Root-cause analysis belongs in implementation
+notes and targeted fixtures, not in the report layer. v0.84.8 adds real-source
 syntax/scope reconciliation fixtures to narrow the gap between toy fixtures and
 auth-kit output.
 
@@ -66,7 +69,7 @@ v0.77.1 implements non-null assertions and a parser-safe `as const` foundation u
 v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics and control-flow narrowing remain unsupported. `ignoreDeprecations` is not used in committed fixtures because TS 7-oriented compatibility should not hide deprecated option behavior.
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
-v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-type foundation introduced in v0.80.1. This is still not full utility-type support: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers, and `Record<string, T>` / index-signature style behavior remains unsupported unless a later phase proves it with oracle evidence. Physical `lib.d.ts`, `@types`, DOM, Node, and true lib loading remain unsupported. `noLib: true` disables synthetic built-ins.
+v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-type foundation introduced in v0.80.1. This is still not full utility-type support: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers. Full index signatures remain unsupported, while any narrow `Record<string, T>` / string-index fallback stays limited to oracle-backed narrow paths when the implementation explicitly supports it. Physical `lib.d.ts`, `@types`, DOM, Node, and true lib loading remain unsupported. `noLib: true` disables synthetic built-ins.
 Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exact `exports["."].types` / `exports["./x"].types` declaration targets.
 Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, physical `lib.d.ts` loading, DOM/Node globals, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
 
@@ -93,8 +96,8 @@ pnpm run oracle:compare -- --file examples/basic.ts --ignoreConfig
 
 ## What the report tells you
 
-The compatibility report is a triage tool. It helps separate the first-order
-blockers from the noise:
+The compatibility report is raw measurement. It helps count the observed
+surface without making semantic diagnosis claims:
 
 1. Parser errors
 2. Unsupported module syntax
@@ -103,8 +106,9 @@ blockers from the noise:
 5. Plain type mismatches
 
 The report does not guarantee that a project is expected to pass.
-The oracle comparison does not guarantee that message text or exact spans
-match; it starts with code, file, and line/column normalization first.
+The oracle comparison is also raw measurement. It does not guarantee that
+message text or exact spans match; it starts with code, file, and line/column
+normalization first.
 Diagnostic codes and messages are catalog-driven in `typescript-rust-diagnostics`,
 so catalog updates can legitimately move oracle output even when checker
 semantics stay the same.
