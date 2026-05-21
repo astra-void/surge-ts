@@ -234,14 +234,6 @@ fn try_resolve_module(
     Option<Arc<TypeDeclarationTable>>,
     Option<usize>,
 )> {
-    if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
-        return Some((
-            export_table.clone(),
-            Some(Arc::new(ctx.type_declarations.clone())),
-            None,
-        ));
-    }
-
     if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some((resolved_index, _)) = program_files
@@ -256,6 +248,14 @@ fn try_resolve_module(
                 return Some((export_table.clone(), scope, Some(resolved_index)));
             }
         }
+    }
+
+    if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
+        return Some((
+            export_table.clone(),
+            Some(Arc::new(ctx.type_declarations.clone())),
+            None,
+        ));
     }
 
     if let Some(resolved) = resolve_relative_module(&ctx.file_name, module_specifier, program_files)
@@ -284,10 +284,6 @@ fn try_resolve_module_export_table(
     resolving: &mut [bool],
     file_name: &str,
 ) -> Option<(ModuleExportTable, Option<usize>)> {
-    if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
-        return Some((export_table.clone(), None));
-    }
-
     if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some((resolved_index, _)) = parsed_files
@@ -306,6 +302,10 @@ fn try_resolve_module_export_table(
                 return Some((export_table, Some(resolved_index)));
             }
         }
+    }
+
+    if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
+        return Some((export_table.clone(), None));
     }
 
     if let Some(resolved) = resolve_relative_module(file_name, module_specifier, parsed_files) {
@@ -1391,27 +1391,6 @@ fn resolve_import_declaration(
                     .unwrap_or(false);
 
             for specifier in specifiers {
-                if has_unresolved_star_export {
-                    if *is_type_only {
-                        insert_unknown_type_import(
-                            type_declarations,
-                            &specifier.local_name,
-                            ctx.file_name.clone(),
-                            specifier.name_span,
-                        );
-                        continue;
-                    }
-
-                    insert_unknown_type_import(
-                        type_declarations,
-                        &specifier.local_name,
-                        ctx.file_name.clone(),
-                        specifier.name_span,
-                    );
-                    insert_unknown_value_import(&specifier.local_name, symbols);
-                    continue;
-                }
-
                 let type_export = lookup_type_export(&export_table, &specifier.imported_name);
                 let value_export = lookup_value_export(&export_table, &specifier.imported_name);
 
@@ -1478,6 +1457,27 @@ fn resolve_import_declaration(
                 }
 
                 if !found {
+                    if has_unresolved_star_export {
+                        if *is_type_only {
+                            insert_unknown_type_import(
+                                type_declarations,
+                                &specifier.local_name,
+                                ctx.file_name.clone(),
+                                specifier.name_span,
+                            );
+                            continue;
+                        }
+
+                        insert_unknown_type_import(
+                            type_declarations,
+                            &specifier.local_name,
+                            ctx.file_name.clone(),
+                            specifier.name_span,
+                        );
+                        insert_unknown_value_import(&specifier.local_name, symbols);
+                        continue;
+                    }
+
                     if should_bind_unknown_for_missing_export(
                         &export_table,
                         resolved_index,
@@ -1804,6 +1804,24 @@ fn push_unresolved_export_diagnostic(
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
+    }
+
+    let key = (
+        diagnostic.code.to_string(),
+        diagnostic.file_name.clone(),
+        diagnostic.span.map(|span| (span.start, span.end)),
+        diagnostic.message.clone(),
+    );
+
+    if ctx.diagnostics().iter().any(|existing| {
+        (
+            existing.code.to_string(),
+            existing.file_name.clone(),
+            existing.span.map(|span| (span.start, span.end)),
+            existing.message.clone(),
+        ) == key
+    }) {
+        return;
     }
 
     ctx.push(diagnostic);

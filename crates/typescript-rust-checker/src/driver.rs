@@ -206,15 +206,11 @@ fn attach_current_type_scope_if_missing(
 
     match declaration {
         TypeDeclarationInfo::Alias(mut alias) => {
-            if alias.resolution_scope.is_none() {
-                alias.resolution_scope = Some(current_scope);
-            }
+            alias.resolution_scope = Some(current_scope);
             TypeDeclarationInfo::Alias(alias)
         }
         TypeDeclarationInfo::Interface(mut interface) => {
-            if interface.resolution_scope.is_none() {
-                interface.resolution_scope = Some(current_scope);
-            }
+            interface.resolution_scope = Some(current_scope);
             TypeDeclarationInfo::Interface(interface)
         }
     }

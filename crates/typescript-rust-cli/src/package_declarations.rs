@@ -68,6 +68,7 @@ fn parse_package_specifier(specifier: &str) -> Option<(String, Option<String>)> 
     }
 }
 
+#[allow(dead_code)]
 fn resolve_exports_types(exports: &serde_json::Value, subpath_key: &str) -> Option<String> {
     if subpath_key.contains('*') {
         return None;
@@ -103,6 +104,62 @@ fn resolve_exports_types(exports: &serde_json::Value, subpath_key: &str) -> Opti
     }
 }
 
+fn resolve_exports_entrypoint(exports: &serde_json::Value, subpath_key: &str) -> Option<String> {
+    if subpath_key.contains('*') {
+        return None;
+    }
+
+    match exports {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|item| resolve_exports_entrypoint(item, subpath_key)),
+        serde_json::Value::Object(map) => {
+            if let Some(val) = map.get(subpath_key) {
+                if let Some(path) = resolve_export_entrypoint_condition_value(val) {
+                    return Some(path);
+                }
+            }
+
+            if subpath_key == "." {
+                if let Some(path) = resolve_export_entrypoint_condition_value(exports) {
+                    return Some(path);
+                }
+            }
+
+            None
+        }
+        _ => None,
+    }
+}
+
+fn resolve_export_entrypoint_condition_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(resolve_export_entrypoint_condition_value),
+        serde_json::Value::Object(map) => {
+            if let Some(types) = map
+                .get("types")
+                .and_then(resolve_export_entrypoint_condition_value)
+            {
+                return Some(types);
+            }
+
+            for value in map.values() {
+                if let Some(path) = resolve_export_entrypoint_condition_value(value) {
+                    return Some(path);
+                }
+            }
+
+            None
+        }
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
 fn resolve_types_condition_value(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(s) => {
@@ -248,12 +305,20 @@ fn resolve_package_entrypoint(
     root_dir: &Path,
 ) -> Option<PackageEntrypointResolution> {
     let mut current_dir = req.importer_dir.clone();
+    let mut runtime_fallback = None;
 
     loop {
         let pkg_dir = current_dir.join("node_modules").join(&req.package_name);
 
         if let Some(resolution) = resolve_package_entrypoint_in_directory(req, &pkg_dir, cache) {
-            return Some(resolution);
+            match resolution.kind {
+                PackageEntrypointKind::Declaration => return Some(resolution),
+                PackageEntrypointKind::RuntimeOnly => {
+                    if runtime_fallback.is_none() {
+                        runtime_fallback = Some(resolution);
+                    }
+                }
+            }
         }
 
         if let Some(resolution) =
@@ -268,7 +333,7 @@ fn resolve_package_entrypoint(
         current_dir = parent.to_path_buf();
     }
 
-    None
+    runtime_fallback
 }
 
 fn resolve_package_entrypoint_in_directory(
@@ -276,6 +341,7 @@ fn resolve_package_entrypoint_in_directory(
     pkg_dir: &Path,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PackageEntrypointResolution> {
+    let mut runtime_fallback = None;
     let pkg_json_path = pkg_dir.join("package.json");
 
     if pkg_json_path.exists() && pkg_json_path.is_file() {
@@ -284,10 +350,17 @@ fn resolve_package_entrypoint_in_directory(
                 let subpath_key = format!("./{}", subpath);
 
                 if let Some(exports) = json.get("exports") {
-                    if let Some(types_path_str) = resolve_exports_types(exports, &subpath_key) {
-                        let path = pkg_dir.join(types_path_str);
+                    if let Some(path_str) = resolve_exports_entrypoint(exports, &subpath_key) {
+                        let path = pkg_dir.join(path_str);
                         if let Some(resolution) = resolve_declaration_or_runtime_candidate(&path) {
-                            return Some(resolution);
+                            match resolution.kind {
+                                PackageEntrypointKind::Declaration => return Some(resolution),
+                                PackageEntrypointKind::RuntimeOnly => {
+                                    if runtime_fallback.is_none() {
+                                        runtime_fallback = Some(resolution);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -295,18 +368,28 @@ fn resolve_package_entrypoint_in_directory(
                 if let Some(resolution) =
                     resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath))
                 {
-                    return Some(resolution);
-                }
-
-                if let Some(resolution) = resolve_runtime_only_candidate(&pkg_dir.join(subpath)) {
-                    return Some(resolution);
+                    match resolution.kind {
+                        PackageEntrypointKind::Declaration => return Some(resolution),
+                        PackageEntrypointKind::RuntimeOnly => {
+                            if runtime_fallback.is_none() {
+                                runtime_fallback = Some(resolution);
+                            }
+                        }
+                    }
                 }
             } else {
                 if let Some(exports) = json.get("exports") {
-                    if let Some(types_path_str) = resolve_exports_types(exports, ".") {
-                        let path = pkg_dir.join(types_path_str);
+                    if let Some(path_str) = resolve_exports_entrypoint(exports, ".") {
+                        let path = pkg_dir.join(path_str);
                         if let Some(resolution) = resolve_declaration_or_runtime_candidate(&path) {
-                            return Some(resolution);
+                            match resolution.kind {
+                                PackageEntrypointKind::Declaration => return Some(resolution),
+                                PackageEntrypointKind::RuntimeOnly => {
+                                    if runtime_fallback.is_none() {
+                                        runtime_fallback = Some(resolution);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -315,7 +398,14 @@ fn resolve_package_entrypoint_in_directory(
                     if let Some(resolution) =
                         resolve_declaration_or_runtime_candidate(&pkg_dir.join(types))
                     {
-                        return Some(resolution);
+                        match resolution.kind {
+                            PackageEntrypointKind::Declaration => return Some(resolution),
+                            PackageEntrypointKind::RuntimeOnly => {
+                                if runtime_fallback.is_none() {
+                                    runtime_fallback = Some(resolution);
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -323,7 +413,14 @@ fn resolve_package_entrypoint_in_directory(
                     if let Some(resolution) =
                         resolve_declaration_or_runtime_candidate(&pkg_dir.join(typings))
                     {
-                        return Some(resolution);
+                        match resolution.kind {
+                            PackageEntrypointKind::Declaration => return Some(resolution),
+                            PackageEntrypointKind::RuntimeOnly => {
+                                if runtime_fallback.is_none() {
+                                    runtime_fallback = Some(resolution);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -332,23 +429,29 @@ fn resolve_package_entrypoint_in_directory(
 
     if let Some(subpath) = &req.subpath {
         if let Some(resolution) = resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath)) {
-            return Some(resolution);
+            match resolution.kind {
+                PackageEntrypointKind::Declaration => return Some(resolution),
+                PackageEntrypointKind::RuntimeOnly => {
+                    if runtime_fallback.is_none() {
+                        runtime_fallback = Some(resolution);
+                    }
+                }
+            }
         }
     } else if let Some(resolution) =
         resolve_declaration_or_runtime_candidate(&pkg_dir.join("index"))
     {
-        return Some(resolution);
-    }
-
-    if let Some(subpath) = &req.subpath {
-        if let Some(resolution) = resolve_runtime_only_candidate(&pkg_dir.join(subpath)) {
-            return Some(resolution);
+        match resolution.kind {
+            PackageEntrypointKind::Declaration => return Some(resolution),
+            PackageEntrypointKind::RuntimeOnly => {
+                if runtime_fallback.is_none() {
+                    runtime_fallback = Some(resolution);
+                }
+            }
         }
-    } else if let Some(resolution) = resolve_runtime_only_candidate(&pkg_dir.join("index")) {
-        return Some(resolution);
     }
 
-    None
+    runtime_fallback
 }
 
 fn resolve_at_types_fallback_in_directory(
@@ -663,6 +766,31 @@ mod tests {
         assert_eq!(
             resolve_exports_types(&exports, "./subpath"),
             Some("./dist/subpath.d.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_exports_entrypoint_prefers_types_then_runtime() {
+        let exports = serde_json::json!({
+            ".": {
+                "import": "./dist/index.js",
+                "types": "./dist/index.d.ts"
+            },
+            "./feature": {
+                "default": {
+                    "require": "./dist/feature.cjs",
+                    "import": "./dist/feature.js"
+                }
+            }
+        });
+
+        assert_eq!(
+            resolve_exports_entrypoint(&exports, "."),
+            Some("./dist/index.d.ts".to_string())
+        );
+        assert_eq!(
+            resolve_exports_entrypoint(&exports, "./feature"),
+            Some("./dist/feature.js".to_string())
         );
     }
 

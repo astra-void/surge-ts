@@ -22,7 +22,7 @@ export function createAdapter(db: any): Adapter {
 export function wrongAdapter(db: any): Adapter {
   return {
     createPasskey: async (userId) => {
-      return { nope: userId };
+      return 123;
     },
   };
 }

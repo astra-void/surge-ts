@@ -1,4 +1,4 @@
-import { User } from "../react/hooks";
+import { User } from "../react/hooks/types";
 
 export interface AdapterUser extends User {
   role?: "admin" | "member";

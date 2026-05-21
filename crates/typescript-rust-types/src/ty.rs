@@ -127,6 +127,12 @@ fn string_property_access_type(name: &str) -> Option<Type> {
             is_variadic: false,
             required_parameter_count: 2,
         })),
+        "indexOf" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::String],
+            return_type: Box::new(Type::Number),
+            is_variadic: true,
+            required_parameter_count: 1,
+        })),
         "split" => Some(Type::Function(FunctionType {
             parameters: vec![Type::String],
             return_type: Box::new(Type::Array(Box::new(Type::String))),

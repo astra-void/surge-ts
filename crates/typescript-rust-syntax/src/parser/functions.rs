@@ -1,16 +1,17 @@
 use oxc_ast::ast::{
     BindingPattern, BindingProperty, BlockStatement, CatchClause, Declaration, Expression,
-    ExpressionStatement, FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey,
-    Statement, SwitchCase, SwitchStatement, ThrowStatement, TryStatement, VariableDeclaration,
-    WhileStatement,
+    ExpressionStatement, ForOfStatement, ForStatementLeft, FormalParameter, Function, IfStatement,
+    ObjectPattern, PropertyKey, Statement, SwitchCase, SwitchStatement, ThrowStatement,
+    TryStatement, VariableDeclaration, WhileStatement,
 };
 use oxc_span::GetSpan;
 
 use crate::{
-    ParsedBindingName, ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
-    ParsedFunctionParameter, ParsedIfStatement, ParsedObjectBindingElement,
-    ParsedObjectBindingPattern, ParsedReturnStatement, ParsedSwitchCase, ParsedSwitchStatement,
-    ParsedThrowStatement, ParsedTryStatement, ParsedWhileStatement,
+    ParsedBindingName, ParsedExpression, ParsedForOfStatement, ParsedFunctionBodyStatement,
+    ParsedFunctionDeclaration, ParsedFunctionParameter, ParsedIfStatement,
+    ParsedObjectBindingElement, ParsedObjectBindingPattern, ParsedReturnStatement,
+    ParsedSwitchCase, ParsedSwitchStatement, ParsedThrowStatement, ParsedTryStatement,
+    ParsedWhileStatement,
 };
 
 use super::expressions::parse_expression;
@@ -77,6 +78,8 @@ fn parse_function_body_statement(
             .map(|if_statement| vec![ParsedFunctionBodyStatement::If(if_statement)]),
         Statement::WhileStatement(while_statement) => parse_while_statement(while_statement)
             .map(|while_statement| vec![ParsedFunctionBodyStatement::While(while_statement)]),
+        Statement::ForOfStatement(for_of_statement) => parse_for_of_statement(for_of_statement)
+            .map(|for_of_statement| vec![ParsedFunctionBodyStatement::ForOf(for_of_statement)]),
         Statement::SwitchStatement(switch_statement) => parse_switch_statement(switch_statement)
             .map(|switch_statement| vec![ParsedFunctionBodyStatement::Switch(switch_statement)]),
         Statement::ThrowStatement(throw_statement) => parse_throw_statement(throw_statement)
@@ -181,6 +184,32 @@ fn parse_while_statement(while_statement: &WhileStatement<'_>) -> Option<ParsedW
     Some(ParsedWhileStatement {
         condition,
         condition_span: Some(text_span_from_oxc_span(condition_span)),
+        body,
+    })
+}
+
+fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<ParsedForOfStatement> {
+    let binding_name = match &for_of_statement.left {
+        ForStatementLeft::VariableDeclaration(declaration) => {
+            let declarator = declaration.declarations.first()?;
+            parse_binding_name(&declarator.id)
+        }
+        ForStatementLeft::AssignmentTargetIdentifier(identifier) => ParsedBindingName::Identifier {
+            name: identifier.name.to_string(),
+            span: Some(text_span_from_oxc_span(identifier.span)),
+        },
+        _ => {
+            return None;
+        }
+    };
+
+    let (iterable, iterable_span) = parse_expression(&for_of_statement.right);
+    let body = parse_branch_body(&for_of_statement.body);
+
+    Some(ParsedForOfStatement {
+        binding_name,
+        iterable,
+        iterable_span: Some(text_span_from_oxc_span(iterable_span)),
         body,
     })
 }

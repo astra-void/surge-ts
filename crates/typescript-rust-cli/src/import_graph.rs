@@ -128,10 +128,20 @@ fn resolve_relative_candidate(importer_file: &Path, specifier: &str) -> Option<P
         RelativeSpecifierKind::Unsupported => return None,
     };
 
-    candidate_paths
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|candidate| candidate.exists() && candidate.is_file())
+    for candidate in candidate_paths {
+        let candidate = PathBuf::from(candidate);
+        if !(candidate.exists() && candidate.is_file()) {
+            continue;
+        }
+
+        if is_dependency_javascript_source_file(&candidate) || !is_loadable_graph_file(&candidate) {
+            continue;
+        }
+
+        return Some(candidate);
+    }
+
+    None
 }
 
 fn resolve_paths_alias_candidate(
@@ -198,9 +208,17 @@ fn resolve_paths_alias_candidate(
 
             for candidate in candidate_paths {
                 let candidate = PathBuf::from(candidate);
-                if candidate.exists() && candidate.is_file() {
-                    return Some(candidate);
+                if !(candidate.exists() && candidate.is_file()) {
+                    continue;
                 }
+
+                if is_dependency_javascript_source_file(&candidate)
+                    || !is_loadable_graph_file(&candidate)
+                {
+                    continue;
+                }
+
+                return Some(candidate);
             }
         }
     }

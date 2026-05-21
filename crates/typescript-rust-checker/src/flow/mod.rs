@@ -686,6 +686,9 @@ fn function_statement_contains_value_return(statement: &ParsedFunctionBodyStatem
         ParsedFunctionBodyStatement::While(while_statement) => {
             function_body_contains_value_return(&while_statement.body)
         }
+        ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+            function_body_contains_value_return(&for_of_statement.body)
+        }
         ParsedFunctionBodyStatement::Switch(switch_statement) => switch_statement
             .cases
             .iter()
@@ -714,6 +717,9 @@ fn function_statement_contains_throw(statement: &ParsedFunctionBodyStatement) ->
         }
         ParsedFunctionBodyStatement::While(while_statement) => {
             function_body_contains_throw(&while_statement.body)
+        }
+        ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+            function_body_contains_throw(&for_of_statement.body)
         }
         ParsedFunctionBodyStatement::Switch(switch_statement) => switch_statement
             .cases
@@ -752,7 +758,7 @@ fn function_statement_guarantees_value_return(statement: &ParsedFunctionBodyStat
                 && function_body_guarantees_value_return(&if_statement.then_body)
                 && function_body_guarantees_value_return(&if_statement.else_body)
         }
-        ParsedFunctionBodyStatement::While(_) => false,
+        ParsedFunctionBodyStatement::While(_) | ParsedFunctionBodyStatement::ForOf(_) => false,
         ParsedFunctionBodyStatement::Switch(switch_statement) => {
             !switch_statement.cases.is_empty()
                 && switch_statement

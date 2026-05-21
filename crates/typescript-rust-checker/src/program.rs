@@ -171,7 +171,7 @@ pub fn check_program_with_stats_and_jobs(
     });
 
     let type_collection_start = Instant::now();
-    let module_analyses = collect_module_analyses_with_bindings(
+    let preliminary_module_analyses = collect_module_analyses_with_bindings(
         &parsed_files,
         &local_type_declarations_by_module,
         &preliminary_module_import_bindings,
@@ -181,7 +181,7 @@ pub fn check_program_with_stats_and_jobs(
         timings.type_declaration_collection += type_collection_start.elapsed()
     });
 
-    let local_module_export_tables = module_analyses
+    let local_module_export_tables = preliminary_module_analyses
         .iter()
         .map(|analysis| {
             analysis
@@ -192,56 +192,51 @@ pub fn check_program_with_stats_and_jobs(
     let module_binding_start = Instant::now();
     let module_export_tables =
         resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
-    let preliminary_module_resolution_scopes = local_type_declarations_by_module
-        .iter()
-        .enumerate()
-        .map(|(file_index, local_type_declarations)| {
-            let Some(local_type_declarations) = local_type_declarations else {
-                return None;
-            };
-
-            let mut merged_type_declarations = local_type_declarations.clone();
-            if let Some(imported) = preliminary_module_import_bindings
-                .get(file_index)
-                .and_then(|bindings| bindings.as_ref())
-            {
-                for (name, declaration) in imported.type_declarations.iter() {
-                    let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
-                }
-            }
-
-            Some(Arc::new(merged_type_declarations))
-        })
-        .collect::<Vec<_>>();
+    let preliminary_module_resolution_scopes = build_module_resolution_scopes(
+        &local_type_declarations_by_module,
+        &preliminary_module_import_bindings,
+    );
     let module_import_bindings = collect_module_import_bindings(
         &parsed_files,
-        &module_analyses,
+        &preliminary_module_analyses,
         &module_export_tables,
         &preliminary_module_resolution_scopes,
         &mut ctx,
     );
-    let module_resolution_scopes = local_type_declarations_by_module
+    let module_resolution_scopes =
+        build_module_resolution_scopes(&local_type_declarations_by_module, &module_import_bindings);
+    let diagnostics_before_second_bindings = ctx.diagnostics().len();
+    let module_import_bindings = collect_module_import_bindings(
+        &parsed_files,
+        &preliminary_module_analyses,
+        &module_export_tables,
+        &module_resolution_scopes,
+        &mut ctx,
+    );
+    ctx.truncate_diagnostics(diagnostics_before_second_bindings);
+    let module_resolution_scopes =
+        build_module_resolution_scopes(&local_type_declarations_by_module, &module_import_bindings);
+    let type_collection_start = Instant::now();
+    let module_analyses = collect_module_analyses_with_bindings(
+        &parsed_files,
+        &local_type_declarations_by_module,
+        &module_import_bindings,
+        &mut ctx,
+    );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.type_declaration_collection += type_collection_start.elapsed()
+    });
+    let local_module_export_tables = module_analyses
         .iter()
-        .enumerate()
-        .map(|(file_index, local_type_declarations)| {
-            let Some(local_type_declarations) = local_type_declarations else {
-                return None;
-            };
-
-            let mut merged_type_declarations = local_type_declarations.clone();
-            if let Some(imported) = module_import_bindings
-                .get(file_index)
-                .and_then(|bindings| bindings.as_ref())
-            {
-                for (name, declaration) in imported.type_declarations.iter() {
-                    let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
-                }
-            }
-
-            Some(Arc::new(merged_type_declarations))
+        .map(|analysis| {
+            analysis
+                .as_ref()
+                .map(|analysis| analysis.local_export_table.clone())
         })
         .collect::<Vec<_>>();
-    let diagnostics_before_second_bindings = ctx.diagnostics().len();
+    let module_export_tables =
+        resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
+    let diagnostics_before_final_bindings = ctx.diagnostics().len();
     let module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &module_analyses,
@@ -249,28 +244,9 @@ pub fn check_program_with_stats_and_jobs(
         &module_resolution_scopes,
         &mut ctx,
     );
-    ctx.truncate_diagnostics(diagnostics_before_second_bindings);
-    let module_resolution_scopes = local_type_declarations_by_module
-        .iter()
-        .enumerate()
-        .map(|(file_index, local_type_declarations)| {
-            let Some(local_type_declarations) = local_type_declarations else {
-                return None;
-            };
-
-            let mut merged_type_declarations = local_type_declarations.clone();
-            if let Some(imported) = module_import_bindings
-                .get(file_index)
-                .and_then(|bindings| bindings.as_ref())
-            {
-                for (name, declaration) in imported.type_declarations.iter() {
-                    let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
-                }
-            }
-
-            Some(Arc::new(merged_type_declarations))
-        })
-        .collect::<Vec<_>>();
+    ctx.truncate_diagnostics(diagnostics_before_final_bindings);
+    let module_resolution_scopes =
+        build_module_resolution_scopes(&local_type_declarations_by_module, &module_import_bindings);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
     });
@@ -472,6 +448,33 @@ fn parse_program_files(files: Vec<SourceFileInput>) -> Vec<ParsedProgramFile> {
                 is_module: parsed.is_module,
                 file_kind: classify_file_kind(&file_name),
             }
+        })
+        .collect()
+}
+
+fn build_module_resolution_scopes(
+    local_type_declarations_by_module: &[Option<TypeDeclarationTable>],
+    module_import_bindings: &[Option<ModuleImportBindings>],
+) -> Vec<Option<Arc<TypeDeclarationTable>>> {
+    local_type_declarations_by_module
+        .iter()
+        .enumerate()
+        .map(|(file_index, local_type_declarations)| {
+            let Some(local_type_declarations) = local_type_declarations else {
+                return None;
+            };
+
+            let mut merged_type_declarations = local_type_declarations.clone();
+            if let Some(imported) = module_import_bindings
+                .get(file_index)
+                .and_then(|bindings| bindings.as_ref())
+            {
+                for (name, declaration) in imported.type_declarations.iter() {
+                    let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+                }
+            }
+
+            Some(Arc::new(merged_type_declarations))
         })
         .collect()
 }

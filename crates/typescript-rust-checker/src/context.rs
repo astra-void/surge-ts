@@ -172,6 +172,17 @@ impl CheckerContext {
             return;
         }
 
+        let duplicate = self.diagnostics.iter().any(|existing| {
+            existing.code.to_string() == diagnostic.code.to_string()
+                && existing.file_name == diagnostic.file_name
+                && existing.span == diagnostic.span
+                && existing.message == diagnostic.message
+        });
+
+        if duplicate {
+            return;
+        }
+
         self.diagnostics.push(diagnostic);
     }
 

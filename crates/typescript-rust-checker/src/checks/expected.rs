@@ -261,20 +261,28 @@ fn evaluate_object_literal_with_expected_type(
     }
 
     for property in properties {
-        // Writes and contextual object checking use the declared property type,
-        // not the widened access type.
-        let Some(expected_property_type) = expected_object_type
-            .get_property_type(&property.name)
-            .cloned()
-            .or_else(|| expected_object_type.string_index_type.as_deref().cloned())
-        else {
+        let expected_property = if let Some(expected_property) =
+            expected_object_type.get_property(&property.name).cloned()
+        {
+            expected_property
+        } else if let Some(index_type) = expected_object_type.string_index_type.as_deref().cloned()
+        {
+            ObjectProperty::required(index_type)
+        } else {
             continue;
+        };
+
+        let contextual_property_type = expected_property.ty.clone();
+        let expected_property_type = if expected_property.is_optional() {
+            typescript_rust_types::union_type(vec![expected_property.ty.clone(), Type::Undefined])
+        } else {
+            expected_property.ty.clone()
         };
 
         let inferred_property = evaluate_expression_with_expected_type(
             &property.value,
             property.value_span.or(property.span),
-            Some(&expected_property_type),
+            Some(&contextual_property_type),
             ExpectedTypeDiagnostic::TypeNotAssignable,
             symbols,
             ctx,

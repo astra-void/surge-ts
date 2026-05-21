@@ -98,6 +98,11 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::KnownNoop,
     },
     TsConfigOptionDefinition {
+        name: "declarationDir",
+        value_kind: TsConfigOptionValueKind::String,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
         name: "declaration",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::KnownNoop,

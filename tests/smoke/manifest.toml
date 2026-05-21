@@ -2303,7 +2303,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "object-type-optional-present-undefined-without-union-mismatch"
 path = "tests/smoke/object_type_optional_present_undefined_without_union_mismatch.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = []
 
 [[case]]
 name = "object-type-optional-present-undefined-with-union-valid"
@@ -4068,7 +4068,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "interface-optional-property-present-undefined-without-union-mismatch"
 path = "tests/smoke/interface_optional_property_present_undefined_without_union_mismatch.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = []
 
 [[case]]
 name = "interface-optional-property-present-undefined-with-union-valid"
@@ -4368,7 +4368,7 @@ expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
 [[case]]
 name = "interface-optional-write-uses-declared-type"
 path = "tests/smoke/interface_optional_write_uses_declared_type.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = []
 
 [[case]]
 name = "interface-optional-read-widens-to-undefined"

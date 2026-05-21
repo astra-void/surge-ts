@@ -1,17 +1,18 @@
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
 use typescript_rust_syntax::{
     ParsedArrowFunction, ParsedArrowFunctionBody, ParsedAssignment, ParsedBindingName,
-    ParsedExpression, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
+    ParsedExpression, ParsedForOfStatement, ParsedFunctionBodyStatement, ParsedFunctionDeclaration,
     ParsedFunctionParameter, ParsedIfStatement, ParsedLogicalOperator, ParsedObjectBindingElement,
     ParsedObjectBindingPattern, ParsedReturnStatement, ParsedSwitchStatement, ParsedTryStatement,
     ParsedType, ParsedTypeParameter, ParsedUnaryOperator, ParsedVariableDeclaration,
     ParsedVariableKind, ParsedWhileStatement,
 };
-use typescript_rust_types::{FunctionType, Type, is_assignable_to};
+use typescript_rust_types::{FunctionType, Type, is_assignable_to, union_type};
 
 use super::assign::check_assignment_with_symbols;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use super::expr::evaluate_expression;
+use super::ops;
 use super::var::{
     VariableCheckOptions, check_variable_declaration_with_symbols,
     widen_implicit_variable_initializer_type,
@@ -605,6 +606,10 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                 }
             }
 
+            if !has_explicit_return_type {
+                function_type.return_type = expected_type.return_type.clone();
+            }
+
             if has_contextual_unknown_object_binding_pattern(
                 &parameters,
                 contextual_parameter_types,
@@ -814,6 +819,16 @@ fn check_function_body_statement(
                 ctx,
             );
         }
+        ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+            check_function_for_of_statement(
+                for_of_statement,
+                statement_index,
+                return_type,
+                scopes,
+                flow_state,
+                ctx,
+            );
+        }
         ParsedFunctionBodyStatement::Switch(switch_statement) => {
             check_function_switch_statement(
                 switch_statement,
@@ -922,7 +937,7 @@ fn check_function_if_statement(
 
     if !condition_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
-        let _ = evaluate_expression(
+        let _ = evaluate_condition_expression_with_truthy_guards(
             &if_statement.condition,
             if_statement.condition_span,
             &visible_symbols,
@@ -966,24 +981,39 @@ fn check_function_if_statement(
     *flow_state = merge_branch_states(&base_flow_state, &branch_states);
 }
 
-fn narrow_truthy_guarded_identifiers(condition: &ParsedExpression, scopes: &mut ScopeStack) {
-    let mut names = Vec::new();
-    if !collect_truthy_guarded_identifiers(condition, &mut names) {
-        return;
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TruthyGuardTarget {
+    Identifier(String),
+    Property { base: String, property: String },
+}
 
-    for name in names {
-        let Some(symbol) = scopes.resolve(&name).cloned() else {
+fn narrow_truthy_guarded_identifiers(condition: &ParsedExpression, scopes: &mut ScopeStack) {
+    let mut targets = Vec::new();
+    collect_truthy_guarded_identifiers(condition, &mut targets);
+
+    for target in targets {
+        let base_name = match &target {
+            TruthyGuardTarget::Identifier(name) => name,
+            TruthyGuardTarget::Property { base, .. } => base,
+        };
+
+        let Some(symbol) = scopes.resolve(base_name).cloned() else {
             continue;
         };
 
-        let narrowed = typescript_rust_types::remove_undefined(&symbol.ty);
+        let narrowed = match &target {
+            TruthyGuardTarget::Identifier(_) => typescript_rust_types::remove_undefined(&symbol.ty),
+            TruthyGuardTarget::Property { property, .. } => {
+                narrow_truthy_guarded_property(&symbol.ty, property)
+            }
+        };
+
         if narrowed == symbol.ty {
             continue;
         }
 
         let _ = scopes.update_visible(
-            &name,
+            base_name,
             SymbolInfo {
                 ty: narrowed,
                 kind: symbol.kind,
@@ -995,8 +1025,8 @@ fn narrow_truthy_guarded_identifiers(condition: &ParsedExpression, scopes: &mut 
 
 fn collect_truthy_guarded_identifiers(
     condition: &ParsedExpression,
-    names: &mut Vec<String>,
-) -> bool {
+    targets: &mut Vec<TruthyGuardTarget>,
+) {
     match condition {
         ParsedExpression::Logical {
             left,
@@ -1004,21 +1034,82 @@ fn collect_truthy_guarded_identifiers(
             right,
             ..
         } => {
-            collect_truthy_guarded_identifiers(left, names)
-                && collect_truthy_guarded_identifiers(right, names)
+            collect_truthy_guarded_identifiers(left, targets);
+            collect_truthy_guarded_identifiers(right, targets);
         }
         ParsedExpression::Unary {
             operator: ParsedUnaryOperator::Not,
             operand,
             ..
-        } => match operand.as_ref() {
-            ParsedExpression::Identifier { name, .. } => {
-                names.push(name.clone());
-                true
+        } => {
+            if let Some(target) = truthy_guard_target(operand) {
+                if !targets.contains(&target) {
+                    targets.push(target);
+                }
             }
-            _ => false,
-        },
-        _ => false,
+        }
+        _ => {}
+    }
+}
+
+fn truthy_guard_target(expression: &ParsedExpression) -> Option<TruthyGuardTarget> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => {
+            Some(TruthyGuardTarget::Identifier(name.clone()))
+        }
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        }
+        | ParsedExpression::OptionalPropertyAccess {
+            object,
+            property_name,
+            ..
+        } => truthy_guard_base_identifier(object).map(|base| TruthyGuardTarget::Property {
+            base,
+            property: property_name.clone(),
+        }),
+        ParsedExpression::NonNullAssertion { expression, .. } => truthy_guard_target(expression),
+        _ => None,
+    }
+}
+
+fn truthy_guard_base_identifier(expression: &ParsedExpression) -> Option<String> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => Some(name.clone()),
+        ParsedExpression::NonNullAssertion { expression, .. } => {
+            truthy_guard_base_identifier(expression)
+        }
+        _ => None,
+    }
+}
+
+fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type {
+    let narrowed_base = typescript_rust_types::remove_undefined(ty);
+
+    match narrowed_base {
+        Type::Object(mut object_type) => {
+            if let Some(existing) = object_type.properties.get(property).cloned() {
+                object_type.properties.insert(
+                    property.to_string(),
+                    typescript_rust_types::ObjectProperty {
+                        ty: typescript_rust_types::remove_undefined(&existing.ty),
+                        optional: false,
+                    },
+                );
+            }
+
+            Type::Object(object_type)
+        }
+        Type::Union(union) => union_type(
+            union
+                .types
+                .iter()
+                .map(|member| narrow_truthy_guarded_property(member, property))
+                .collect(),
+        ),
+        _ => narrowed_base,
     }
 }
 
@@ -1046,7 +1137,7 @@ fn check_function_while_statement(
 
     if !condition_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
-        let _ = evaluate_expression(
+        let _ = evaluate_condition_expression_with_truthy_guards(
             &while_statement.condition,
             while_statement.condition_span,
             &visible_symbols,
@@ -1064,6 +1155,78 @@ fn check_function_while_statement(
         ctx,
     );
     scopes.pop_child();
+}
+
+fn check_function_for_of_statement(
+    for_of_statement: ParsedForOfStatement,
+    statement_index: usize,
+    return_type: Option<Type>,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let iterable_blocked = check_expression_flow(
+        &for_of_statement.iterable,
+        for_of_statement.iterable_span,
+        flow_state,
+        statement_index,
+        ctx,
+    );
+
+    let mut element_type = Type::Unknown;
+    if !iterable_blocked.is_blocked() {
+        let visible_symbols = visible_symbols(scopes);
+        if let InferredExpression::Known(iterable_type) = evaluate_expression(
+            &for_of_statement.iterable,
+            for_of_statement.iterable_span,
+            &visible_symbols,
+            ctx,
+        ) {
+            element_type = for_of_element_type(&iterable_type);
+        }
+    }
+
+    let mut body_flow_state = flow_state.clone();
+    scopes.push_child();
+    insert_binding_name(&for_of_statement.binding_name, element_type, scopes);
+    check_function_body(
+        for_of_statement.body,
+        return_type,
+        scopes,
+        &mut body_flow_state,
+        ctx,
+    );
+    scopes.pop_child();
+}
+
+fn for_of_element_type(iterable_type: &Type) -> Type {
+    match iterable_type {
+        Type::Any => Type::Any,
+        Type::Array(element) => element.as_ref().clone(),
+        Type::Tuple(elements) => {
+            if elements.is_empty() {
+                Type::Unknown
+            } else {
+                union_type(elements.clone())
+            }
+        }
+        Type::String | Type::StringLiteral(_) => Type::String,
+        Type::Union(union) => {
+            let element_types = union
+                .types
+                .iter()
+                .filter(|ty| **ty != Type::Undefined)
+                .map(for_of_element_type)
+                .collect::<Vec<_>>();
+
+            if element_types.is_empty() {
+                Type::Unknown
+            } else {
+                union_type(element_types)
+            }
+        }
+        _ => Type::Unknown,
+    }
 }
 
 fn check_function_switch_statement(
@@ -1225,7 +1388,7 @@ fn check_function_throw_statement(
 fn check_function_assignment(
     assignment: ParsedAssignment,
     statement_index: usize,
-    scopes: &ScopeStack,
+    scopes: &mut ScopeStack,
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
@@ -1249,12 +1412,62 @@ fn check_function_assignment(
 
     if !target_blocked.is_blocked() && !value_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
+        let inferred_value = evaluate_expression(
+            &assignment.value,
+            assignment.value_span,
+            &visible_symbols,
+            ctx,
+        );
         check_assignment_with_symbols(assignment, &visible_symbols, ctx);
+        update_assigned_symbol_type(&target_name, inferred_value, scopes);
     }
 
     if !target_blocked.is_blocked() {
         mark_assignment_state(&target_name, flow_state);
     }
+}
+
+fn update_assigned_symbol_type(
+    target_name: &str,
+    inferred_value: InferredExpression,
+    scopes: &mut ScopeStack,
+) {
+    let InferredExpression::Known(value_ty) = inferred_value else {
+        return;
+    };
+
+    if value_ty == Type::Unknown {
+        return;
+    }
+
+    let Some(symbol) = scopes.resolve(target_name).cloned() else {
+        return;
+    };
+
+    let updated_ty = if symbol.ty == Type::Undefined {
+        union_type(vec![Type::Undefined, value_ty.clone()])
+    } else if symbol.ty == value_ty || is_assignable_to(&value_ty, &symbol.ty) {
+        symbol.ty.clone()
+    } else if matches!(symbol.ty, Type::Any | Type::Unknown) {
+        union_type(vec![symbol.ty.clone(), value_ty])
+    } else {
+        // Preserve the declared/inferred symbol type when an incompatible assignment
+        // is already reported to avoid cascading return/usage diagnostics.
+        symbol.ty.clone()
+    };
+
+    if updated_ty == symbol.ty {
+        return;
+    }
+
+    let _ = scopes.update_visible(
+        target_name,
+        SymbolInfo {
+            ty: updated_ty,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        },
+    );
 }
 
 fn check_function_expression_statement(
@@ -1281,6 +1494,82 @@ fn check_function_expression_statement(
 
     let visible_symbols = visible_symbols(scopes);
     let _ = evaluate_expression(&expression, None, &visible_symbols, ctx);
+}
+
+fn evaluate_condition_expression_with_truthy_guards(
+    expression: &ParsedExpression,
+    fallback_span: Option<typescript_rust_syntax::TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    match expression {
+        ParsedExpression::Logical {
+            left,
+            left_span,
+            operator: ParsedLogicalOperator::Or,
+            right,
+            right_span,
+            ..
+        } => {
+            let left_result = evaluate_condition_expression_with_truthy_guards(
+                left,
+                left_span.or(fallback_span),
+                symbols,
+                ctx,
+            );
+            let narrowed_symbols = narrow_truthy_guarded_symbol_table(left, symbols);
+            let right_result = evaluate_condition_expression_with_truthy_guards(
+                right,
+                right_span.or(fallback_span),
+                &narrowed_symbols,
+                ctx,
+            );
+            ops::evaluate_logical_expression(left_result, right_result)
+        }
+        _ => evaluate_expression(expression, fallback_span, symbols, ctx),
+    }
+}
+
+fn narrow_truthy_guarded_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> SymbolTable {
+    let mut narrowed_symbols = symbols.clone();
+    let mut targets = Vec::new();
+    collect_truthy_guarded_identifiers(condition, &mut targets);
+
+    for target in targets {
+        let base_name = match &target {
+            TruthyGuardTarget::Identifier(name) => name,
+            TruthyGuardTarget::Property { base, .. } => base,
+        };
+
+        let Some(symbol) = narrowed_symbols.get(base_name).cloned() else {
+            continue;
+        };
+
+        let narrowed = match &target {
+            TruthyGuardTarget::Identifier(_) => typescript_rust_types::remove_undefined(&symbol.ty),
+            TruthyGuardTarget::Property { property, .. } => {
+                narrow_truthy_guarded_property(&symbol.ty, property)
+            }
+        };
+
+        if narrowed == symbol.ty {
+            continue;
+        }
+
+        narrowed_symbols.insert(
+            base_name.clone(),
+            SymbolInfo {
+                ty: narrowed,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+        );
+    }
+
+    narrowed_symbols
 }
 
 fn visible_symbols(scopes: &ScopeStack) -> SymbolTable {

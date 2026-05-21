@@ -403,6 +403,15 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
             }),
         ),
         (
+            "decodeURIComponent",
+            Type::Function(FunctionType {
+                parameters: vec![Type::String],
+                return_type: Box::new(Type::String),
+                is_variadic: false,
+                required_parameter_count: 1,
+            }),
+        ),
+        (
             "Number",
             Type::Function(FunctionType {
                 parameters: vec![Type::Any],
@@ -447,6 +456,7 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
                 required_parameter_count: 1,
             }),
         ),
+        ("document", Type::Any),
     ];
 
     for (name, ty) in builtins {

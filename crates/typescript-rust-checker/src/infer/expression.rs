@@ -903,16 +903,6 @@ fn infer_optional_property_access(
     let base_type = typescript_rust_types::remove_undefined(&object_type);
 
     let result_type = match base_type {
-        Type::Object(ref object_type) => {
-            match object_type.get_property_access_type(property_name) {
-                Some(ty) => InferredExpression::Known(ty),
-                None => InferredExpression::MissingProperty {
-                    property_name: property_name.to_string(),
-                    object_type: base_type.clone(),
-                    span: *property_span,
-                },
-            }
-        }
         Type::Unknown | Type::Any => InferredExpression::Known(base_type.clone()),
         Type::Union(ref union_type) => {
             let mut result_types = Vec::new();
@@ -945,17 +935,14 @@ fn infer_optional_property_access(
                 ]))
             }
         }
-        Type::Function(_)
-        | Type::Array(_)
-        | Type::Tuple(_)
-        | Type::String
-        | Type::Number
-        | Type::Boolean
-        | Type::StringLiteral(_)
-        | Type::NumberLiteral(_)
-        | Type::BooleanLiteral(_)
-        | Type::Void
-        | Type::Undefined => InferredExpression::Known(Type::Unknown),
+        _ => base_type
+            .get_property_access_type(property_name)
+            .map(InferredExpression::Known)
+            .unwrap_or_else(|| InferredExpression::MissingProperty {
+                property_name: property_name.to_string(),
+                object_type: base_type.clone(),
+                span: *property_span,
+            }),
     };
 
     match result_type {
@@ -980,12 +967,10 @@ fn instantiate_function_return_type(
         return (*function_type.return_type).clone();
     };
 
+    // For non-generic calls, the declaration signature has already been resolved when the symbol
+    // was collected; remapping in the caller scope can lose declaration-local context.
     if function_signature.type_parameters.is_empty() || type_arguments.is_empty() {
-        return map_parsed_type_with_substitution(
-            return_type.clone(),
-            ctx,
-            &TypeParameterSubstitution::new(),
-        );
+        return (*function_type.return_type).clone();
     }
 
     let mut substitution = TypeParameterSubstitution::new();

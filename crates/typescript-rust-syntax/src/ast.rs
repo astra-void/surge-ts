@@ -508,6 +508,7 @@ pub enum ParsedFunctionBodyStatement {
     Block(Vec<ParsedFunctionBodyStatement>),
     If(ParsedIfStatement),
     While(ParsedWhileStatement),
+    ForOf(ParsedForOfStatement),
     Switch(ParsedSwitchStatement),
     Try(ParsedTryStatement),
 }
@@ -569,6 +570,14 @@ pub struct ParsedIfStatement {
 pub struct ParsedWhileStatement {
     pub condition: ParsedExpression,
     pub condition_span: Option<TextSpan>,
+    pub body: Vec<ParsedFunctionBodyStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedForOfStatement {
+    pub binding_name: ParsedBindingName,
+    pub iterable: ParsedExpression,
+    pub iterable_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
 }
 
