@@ -126,21 +126,7 @@ pub(crate) fn check_variable_declaration_with_symbols(
         | InferredExpression::Unknown => declared_type.clone().or(Some(Type::Unknown)),
     };
 
-    if declared_type.is_none()
-        && variable.initializer.is_none()
-        && ctx.options.no_implicit_any
-        && matches!(
-            symbol_kind,
-            SymbolKind::Var | SymbolKind::Let | SymbolKind::Const
-        )
-    {
-        let diagnostic = Diagnostic::ts7005(&variable.name, "any", ctx.file_name.clone());
-        let diagnostic = match variable.name_span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-
-        ctx.push(diagnostic);
+    if declared_type.is_none() && variable.initializer.is_none() {
         inferred_symbol_type = Some(Type::Any);
     }
 

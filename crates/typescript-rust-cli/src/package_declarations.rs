@@ -11,6 +11,31 @@ pub struct PackageDeclarationRequest {
     pub importer_dir: PathBuf,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct PackageDeclarationResolverCache {
+    package_json_cache: HashMap<PathBuf, Option<serde_json::Value>>,
+    entrypoint_cache: HashMap<PackageEntrypointCacheKey, Option<PackageEntrypointResolution>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PackageEntrypointCacheKey {
+    importer_dir: String,
+    package_name: String,
+    subpath: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PackageEntrypointResolution {
+    path: PathBuf,
+    kind: PackageEntrypointKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageEntrypointKind {
+    Declaration,
+    RuntimeOnly,
+}
+
 fn is_external_specifier(specifier: &str) -> bool {
     !specifier.starts_with("./")
         && !specifier.starts_with("../")
@@ -49,31 +74,77 @@ fn resolve_exports_types(exports: &serde_json::Value, subpath_key: &str) -> Opti
     }
 
     match exports {
-        serde_json::Value::Object(map) => {
-            if let Some(val) = map.get(subpath_key) {
-                match val {
-                    serde_json::Value::String(s) if is_declaration_file_path_str(s) => {
-                        Some(s.clone())
-                    }
-                    serde_json::Value::Object(obj) => obj
-                        .get("types")
-                        .and_then(|types_val| types_val.as_str())
-                        .filter(|s| is_declaration_file_path_str(s))
-                        .map(|s| s.to_string()),
-                    _ => None,
-                }
+        serde_json::Value::String(s) => {
+            if is_declaration_file_path_str(s) {
+                Some(s.clone())
             } else {
                 None
             }
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|item| resolve_exports_types(item, subpath_key)),
+        serde_json::Value::Object(map) => {
+            if let Some(val) = map.get(subpath_key) {
+                if let Some(types) = resolve_types_condition_value(val) {
+                    return Some(types);
+                }
+            }
+
+            if subpath_key == "." {
+                if let Some(types) = map.get("types").and_then(resolve_types_condition_value) {
+                    return Some(types);
+                }
+            }
+
+            None
         }
         _ => None,
     }
 }
 
+fn resolve_types_condition_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => {
+            if is_declaration_file_path_str(s) {
+                Some(s.clone())
+            } else {
+                None
+            }
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(resolve_types_condition_value),
+        serde_json::Value::Object(map) => {
+            if let Some(types) = map.get("types").and_then(resolve_types_condition_value) {
+                return Some(types);
+            }
+
+            for value in map.values() {
+                if let Some(types) = resolve_types_condition_value(value) {
+                    return Some(types);
+                }
+            }
+
+            None
+        }
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
 pub fn resolve_package_declaration_entrypoints(
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
     root_dir: &Path,
+) -> HashMap<String, String> {
+    let mut cache = PackageDeclarationResolverCache::default();
+    resolve_package_declaration_entrypoints_with_cache(inputs, sources, root_dir, &mut cache)
+}
+
+pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
+    inputs: &mut Vec<SourceFileInput>,
+    sources: &mut Vec<(PathBuf, String, String)>,
+    root_dir: &Path,
+    cache: &mut PackageDeclarationResolverCache,
 ) -> HashMap<String, String> {
     let mut packages_to_resolve: VecDeque<PackageDeclarationRequest> = VecDeque::new();
     let mut resolved_packages = HashMap::new();
@@ -83,7 +154,6 @@ pub fn resolve_package_declaration_entrypoints(
         .collect();
     let mut queued_specifiers: HashSet<String> = HashSet::new();
 
-    // Extract packages from initial inputs
     for (file_path, _, source_text) in sources.iter() {
         let importer_dir = file_path.parent().unwrap_or(root_dir).to_path_buf();
         extract_packages_from_source(
@@ -95,7 +165,6 @@ pub fn resolve_package_declaration_entrypoints(
         );
     }
 
-    // Bound the work queue to prevent any infinite loops despite deduping
     let mut max_resolutions = 1000;
 
     while let Some(req) = packages_to_resolve.pop_front() {
@@ -108,153 +177,276 @@ pub fn resolve_package_declaration_entrypoints(
             continue;
         }
 
-        let mut current_dir = req.importer_dir.clone();
-        let mut resolved_path = None;
-        let mut runtime_only_path = None;
+        let cache_key = PackageEntrypointCacheKey {
+            importer_dir: canonicalize_if_exists_string(&req.importer_dir),
+            package_name: req.package_name.clone(),
+            subpath: req.subpath.clone(),
+        };
 
-        loop {
-            let pkg_dir = current_dir.join("node_modules").join(&req.package_name);
-            let pkg_json_path = pkg_dir.join("package.json");
+        let resolution = if let Some(cached) = cache.entrypoint_cache.get(&cache_key) {
+            cached.clone()
+        } else {
+            let resolved = resolve_package_entrypoint(&req, cache, root_dir);
+            cache.entrypoint_cache.insert(cache_key, resolved.clone());
+            resolved
+        };
 
-            if pkg_json_path.exists() && pkg_json_path.is_file() {
-                if let Ok(json_str) = std::fs::read_to_string(&pkg_json_path) {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                        if let Some(subpath) = &req.subpath {
-                            // Subpath resolution
-                            let subpath_key = format!("./{}", subpath);
+        let Some(resolution) = resolution else {
+            continue;
+        };
 
-                            if let Some(exports) = json.get("exports") {
-                                if let Some(types_path_str) =
-                                    resolve_exports_types(exports, &subpath_key)
-                                {
-                                    let path = pkg_dir.join(types_path_str);
-                                    if path.exists() && path.is_file() {
-                                        resolved_path = Some(path);
-                                        break;
-                                    }
-                                }
-                            }
-                        } else {
-                            // Bare package resolution
-                            let mut types_path = None;
+        match resolution.kind {
+            PackageEntrypointKind::Declaration => {
+                let Ok(path) = resolution.path.canonicalize() else {
+                    continue;
+                };
 
-                            if let Some(exports) = json.get("exports") {
-                                if let Some(types_path_str) = resolve_exports_types(exports, ".") {
-                                    types_path = Some(pkg_dir.join(types_path_str));
-                                }
-                            }
-
-                            if types_path.is_none() {
-                                if let Some(types) = json.get("types").and_then(|t| t.as_str()) {
-                                    types_path = Some(pkg_dir.join(types));
-                                } else if let Some(typings) =
-                                    json.get("typings").and_then(|t| t.as_str())
-                                {
-                                    types_path = Some(pkg_dir.join(typings));
-                                }
-                            }
-
-                            if let Some(path) = types_path {
-                                let path = resolve_declaration_candidate(&path);
-
-                                if path.is_some() {
-                                    resolved_path = path;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Fallbacks still apply when there is no package.json.
-            if let Some(subpath) = &req.subpath {
-                for candidate in declaration_candidates(pkg_dir.join(subpath)) {
-                    if candidate.exists() && candidate.is_file() {
-                        resolved_path = Some(candidate);
-                        break;
-                    }
-                }
-                if resolved_path.is_some() {
-                    break;
-                }
-
-                for candidate in runtime_javascript_candidates(pkg_dir.join(subpath)) {
-                    if candidate.exists() && candidate.is_file() {
-                        runtime_only_path = Some(candidate);
-                        break;
-                    }
-                }
-                if runtime_only_path.is_some() {
-                    break;
-                }
-            } else {
-                for candidate in declaration_candidates(pkg_dir.join("index")) {
-                    if candidate.exists() && candidate.is_file() {
-                        resolved_path = Some(candidate);
-                        break;
-                    }
-                }
-                if resolved_path.is_some() {
-                    break;
-                }
-
-                for candidate in runtime_javascript_candidates(pkg_dir.join("index")) {
-                    if candidate.exists() && candidate.is_file() {
-                        runtime_only_path = Some(candidate);
-                        break;
-                    }
-                }
-                if runtime_only_path.is_some() {
-                    break;
-                }
-            }
-
-            if let Some(parent) = current_dir.parent() {
-                current_dir = parent.to_path_buf();
-            } else {
-                break;
-            }
-        }
-
-        if let Some(path) = resolved_path {
-            if let Ok(path) = path.canonicalize() {
                 let normalized_file_name = canonicalize_if_exists_string(&path);
                 resolved_packages.insert(req.specifier.clone(), normalized_file_name.clone());
 
                 if !known_file_names.contains(&normalized_file_name) {
-                    if let Ok(source_text) = std::fs::read_to_string(&path) {
-                        known_file_names.insert(normalized_file_name.clone());
-                        inputs.push(SourceFileInput {
-                            file_name: normalized_file_name.clone(),
-                            source_text: source_text.clone(),
-                        });
-                        sources.push((
-                            path.clone(),
-                            normalized_file_name.clone(),
-                            source_text.clone(),
-                        ));
+                    let Ok(source_text) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
 
-                        let new_importer_dir = path.parent().unwrap_or(root_dir).to_path_buf();
-                        extract_packages_from_source(
-                            &source_text,
-                            &normalized_file_name,
-                            &new_importer_dir,
-                            &mut packages_to_resolve,
-                            &mut queued_specifiers,
-                        );
-                    }
+                    known_file_names.insert(normalized_file_name.clone());
+                    inputs.push(SourceFileInput {
+                        file_name: normalized_file_name.clone(),
+                        source_text: source_text.clone(),
+                    });
+                    sources.push((
+                        path.clone(),
+                        normalized_file_name.clone(),
+                        source_text.clone(),
+                    ));
+
+                    let new_importer_dir = path.parent().unwrap_or(root_dir).to_path_buf();
+                    extract_packages_from_source(
+                        &source_text,
+                        &normalized_file_name,
+                        &new_importer_dir,
+                        &mut packages_to_resolve,
+                        &mut queued_specifiers,
+                    );
                 }
             }
-        } else if let Some(path) = runtime_only_path {
-            if let Ok(path) = path.canonicalize() {
-                let file_name = canonicalize_if_exists_string(&path);
-                resolved_packages.insert(req.specifier.clone(), file_name);
+            PackageEntrypointKind::RuntimeOnly => {
+                if let Ok(path) = resolution.path.canonicalize() {
+                    let file_name = canonicalize_if_exists_string(&path);
+                    resolved_packages.insert(req.specifier.clone(), file_name);
+                }
             }
         }
     }
 
     resolved_packages
+}
+
+fn resolve_package_entrypoint(
+    req: &PackageDeclarationRequest,
+    cache: &mut PackageDeclarationResolverCache,
+    root_dir: &Path,
+) -> Option<PackageEntrypointResolution> {
+    let mut current_dir = req.importer_dir.clone();
+
+    loop {
+        let pkg_dir = current_dir.join("node_modules").join(&req.package_name);
+
+        if let Some(resolution) = resolve_package_entrypoint_in_directory(req, &pkg_dir, cache) {
+            return Some(resolution);
+        }
+
+        if let Some(resolution) =
+            resolve_at_types_fallback_in_directory(req, &current_dir, root_dir)
+        {
+            return Some(resolution);
+        }
+
+        let Some(parent) = current_dir.parent() else {
+            break;
+        };
+        current_dir = parent.to_path_buf();
+    }
+
+    None
+}
+
+fn resolve_package_entrypoint_in_directory(
+    req: &PackageDeclarationRequest,
+    pkg_dir: &Path,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PackageEntrypointResolution> {
+    let pkg_json_path = pkg_dir.join("package.json");
+
+    if pkg_json_path.exists() && pkg_json_path.is_file() {
+        if let Some(json) = read_package_json(&pkg_json_path, cache) {
+            if let Some(subpath) = &req.subpath {
+                let subpath_key = format!("./{}", subpath);
+
+                if let Some(exports) = json.get("exports") {
+                    if let Some(types_path_str) = resolve_exports_types(exports, &subpath_key) {
+                        let path = pkg_dir.join(types_path_str);
+                        if let Some(resolution) = resolve_declaration_or_runtime_candidate(&path) {
+                            return Some(resolution);
+                        }
+                    }
+                }
+
+                if let Some(resolution) =
+                    resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath))
+                {
+                    return Some(resolution);
+                }
+
+                if let Some(resolution) = resolve_runtime_only_candidate(&pkg_dir.join(subpath)) {
+                    return Some(resolution);
+                }
+            } else {
+                if let Some(exports) = json.get("exports") {
+                    if let Some(types_path_str) = resolve_exports_types(exports, ".") {
+                        let path = pkg_dir.join(types_path_str);
+                        if let Some(resolution) = resolve_declaration_or_runtime_candidate(&path) {
+                            return Some(resolution);
+                        }
+                    }
+                }
+
+                if let Some(types) = json.get("types").and_then(|t| t.as_str()) {
+                    if let Some(resolution) =
+                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(types))
+                    {
+                        return Some(resolution);
+                    }
+                }
+
+                if let Some(typings) = json.get("typings").and_then(|t| t.as_str()) {
+                    if let Some(resolution) =
+                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(typings))
+                    {
+                        return Some(resolution);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(subpath) = &req.subpath {
+        if let Some(resolution) = resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath)) {
+            return Some(resolution);
+        }
+    } else if let Some(resolution) =
+        resolve_declaration_or_runtime_candidate(&pkg_dir.join("index"))
+    {
+        return Some(resolution);
+    }
+
+    if let Some(subpath) = &req.subpath {
+        if let Some(resolution) = resolve_runtime_only_candidate(&pkg_dir.join(subpath)) {
+            return Some(resolution);
+        }
+    } else if let Some(resolution) = resolve_runtime_only_candidate(&pkg_dir.join("index")) {
+        return Some(resolution);
+    }
+
+    None
+}
+
+fn resolve_at_types_fallback_in_directory(
+    req: &PackageDeclarationRequest,
+    current_dir: &Path,
+    root_dir: &Path,
+) -> Option<PackageEntrypointResolution> {
+    let fallback_name = types_package_name(&req.package_name);
+
+    let fallback_dir = current_dir
+        .join("node_modules")
+        .join("@types")
+        .join(&fallback_name);
+    if let Some(resolution) = resolve_types_package_directory(&fallback_dir, req.subpath.as_deref())
+    {
+        return Some(resolution);
+    }
+
+    if current_dir != root_dir {
+        let root_fallback_dir = root_dir
+            .join("node_modules")
+            .join("@types")
+            .join(&fallback_name);
+        if let Some(resolution) =
+            resolve_types_package_directory(&root_fallback_dir, req.subpath.as_deref())
+        {
+            return Some(resolution);
+        }
+    }
+
+    None
+}
+
+fn resolve_types_package_directory(
+    package_dir: &Path,
+    subpath: Option<&str>,
+) -> Option<PackageEntrypointResolution> {
+    if let Some(subpath) = subpath {
+        if let Some(resolution) =
+            resolve_declaration_or_runtime_candidate(&package_dir.join(subpath))
+        {
+            return Some(resolution);
+        }
+    } else if let Some(resolution) =
+        resolve_declaration_or_runtime_candidate(&package_dir.join("index"))
+    {
+        return Some(resolution);
+    }
+
+    None
+}
+
+fn read_package_json(
+    pkg_json_path: &Path,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<serde_json::Value> {
+    if let Some(cached) = cache.package_json_cache.get(pkg_json_path) {
+        return cached.clone();
+    }
+
+    let parsed = std::fs::read_to_string(pkg_json_path)
+        .ok()
+        .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok());
+    cache
+        .package_json_cache
+        .insert(pkg_json_path.to_path_buf(), parsed.clone());
+    parsed
+}
+
+fn resolve_declaration_or_runtime_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
+    if let Some(path) = resolve_declaration_candidate(path) {
+        return Some(PackageEntrypointResolution {
+            path,
+            kind: PackageEntrypointKind::Declaration,
+        });
+    }
+
+    resolve_runtime_only_candidate(path)
+}
+
+fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
+    for candidate in runtime_javascript_candidates(path.to_path_buf()) {
+        if candidate.exists() && candidate.is_file() {
+            return Some(PackageEntrypointResolution {
+                path: candidate,
+                kind: PackageEntrypointKind::RuntimeOnly,
+            });
+        }
+    }
+
+    None
+}
+
+fn types_package_name(package_name: &str) -> String {
+    package_name
+        .strip_prefix('@')
+        .map(|name| name.replace('/', "__"))
+        .unwrap_or_else(|| package_name.to_string())
 }
 
 fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
@@ -336,20 +528,18 @@ fn extract_packages_from_source(
     for statement in parsed.statements {
         match statement {
             ParsedStatement::ImportDeclaration(import) => {
-                if is_external_specifier(&import.module_specifier) {
-                    if !queued_specifiers.contains(&import.module_specifier) {
-                        if let Some((package_name, subpath)) =
-                            parse_package_specifier(&import.module_specifier)
-                        {
-                            queued_specifiers.insert(import.module_specifier.clone());
-                            packages_to_resolve.push_back(PackageDeclarationRequest {
-                                specifier: import.module_specifier.clone(),
-                                package_name,
-                                subpath,
-                                importer_dir: importer_dir.to_path_buf(),
-                            });
-                        }
-                    }
+                if is_external_specifier(&import.module_specifier)
+                    && !queued_specifiers.contains(&import.module_specifier)
+                    && let Some((package_name, subpath)) =
+                        parse_package_specifier(&import.module_specifier)
+                {
+                    queued_specifiers.insert(import.module_specifier.clone());
+                    packages_to_resolve.push_back(PackageDeclarationRequest {
+                        specifier: import.module_specifier.clone(),
+                        package_name,
+                        subpath,
+                        importer_dir: importer_dir.to_path_buf(),
+                    });
                 }
             }
             ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
@@ -360,20 +550,18 @@ fn extract_packages_from_source(
                 module_specifier,
                 ..
             }) => {
-                if is_external_specifier(&module_specifier) {
-                    if !queued_specifiers.contains(&module_specifier) {
-                        if let Some((package_name, subpath)) =
-                            parse_package_specifier(&module_specifier)
-                        {
-                            queued_specifiers.insert(module_specifier.clone());
-                            packages_to_resolve.push_back(PackageDeclarationRequest {
-                                specifier: module_specifier.clone(),
-                                package_name,
-                                subpath,
-                                importer_dir: importer_dir.to_path_buf(),
-                            });
-                        }
-                    }
+                if is_external_specifier(&module_specifier)
+                    && !queued_specifiers.contains(&module_specifier)
+                    && let Some((package_name, subpath)) =
+                        parse_package_specifier(&module_specifier)
+                {
+                    queued_specifiers.insert(module_specifier.clone());
+                    packages_to_resolve.push_back(PackageDeclarationRequest {
+                        specifier: module_specifier.clone(),
+                        package_name,
+                        subpath,
+                        importer_dir: importer_dir.to_path_buf(),
+                    });
                 }
             }
             _ => {}
@@ -384,6 +572,7 @@ fn extract_packages_from_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_parse_package_specifier() {
@@ -443,10 +632,38 @@ mod tests {
             Some("./dist/string-dts.d.ts".to_string())
         );
         assert_eq!(resolve_exports_types(&exports, "./runtime-only"), None);
-        assert_eq!(resolve_exports_types(&exports, "./feature-nested"), None);
+        assert_eq!(
+            resolve_exports_types(&exports, "./feature-nested"),
+            Some("./dist/feature.d.ts".to_string())
+        );
         assert_eq!(resolve_exports_types(&exports, "./wild/*"), None);
         assert_eq!(resolve_exports_types(&exports, "./wild/feature"), None);
         assert_eq!(resolve_exports_types(&exports, "./missing"), None);
+    }
+
+    #[test]
+    fn test_resolve_exports_types_nested_conditions() {
+        let exports = serde_json::json!({
+            ".": {
+                "import": {
+                    "types": "./dist/index.d.ts"
+                }
+            },
+            "./subpath": {
+                "default": {
+                    "types": "./dist/subpath.d.ts"
+                }
+            }
+        });
+
+        assert_eq!(
+            resolve_exports_types(&exports, "."),
+            Some("./dist/index.d.ts".to_string())
+        );
+        assert_eq!(
+            resolve_exports_types(&exports, "./subpath"),
+            Some("./dist/subpath.d.ts".to_string())
+        );
     }
 
     #[test]
@@ -466,5 +683,28 @@ mod tests {
     fn test_declaration_candidates_keep_declaration_files() {
         let candidates = declaration_candidates(PathBuf::from("pkg/subpath.d.ts"));
         assert_eq!(candidates, vec![PathBuf::from("pkg/subpath.d.ts")]);
+    }
+
+    #[test]
+    fn test_types_package_name_scoped_package() {
+        assert_eq!(types_package_name("@scope/pkg"), "scope__pkg");
+        assert_eq!(types_package_name("pkg"), "pkg");
+    }
+
+    #[test]
+    fn test_read_package_json_is_cached() {
+        let root =
+            std::env::temp_dir().join(format!("package-declarations-cache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let pkg_json = root.join("package.json");
+        fs::write(&pkg_json, r#"{ "types": "./index.d.ts" }"#).unwrap();
+
+        let mut cache = PackageDeclarationResolverCache::default();
+        let first = read_package_json(&pkg_json, &mut cache);
+        let second = read_package_json(&pkg_json, &mut cache);
+
+        assert_eq!(first, second);
+        assert!(cache.package_json_cache.contains_key(&pkg_json));
     }
 }

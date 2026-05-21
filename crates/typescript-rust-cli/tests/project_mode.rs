@@ -3038,6 +3038,152 @@ fn cli_package_declarations_missing_export_from_resolved_subpath_reports_ts2305(
 }
 
 #[test]
+fn cli_package_types_node_modules_basic_resolves_bundled_types() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-node-modules-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    assert!(json_diagnostic_codes(&parsed).is_empty());
+}
+
+#[test]
+fn cli_package_types_exports_conditions_basic_resolves_nested_types() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-exports-conditions-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(codes.contains(&"TS2305".to_string()));
+    assert!(!codes.contains(&"TS2307".to_string()));
+}
+
+#[test]
+fn cli_package_types_at_types_fallback_basic_resolves_root_package() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-at-types-fallback-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    assert!(json_diagnostic_codes(&parsed).is_empty());
+}
+
+#[test]
+fn cli_package_types_scoped_at_types_fallback_basic_resolves_scoped_package() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-scoped-at-types-fallback-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    assert!(json_diagnostic_codes(&parsed).is_empty());
+}
+
+#[test]
+fn cli_no_implicit_any_uninitialized_let_basic_matches_typescript() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/no-implicit-any-uninitialized-let-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(!codes.contains(&"TS7005".to_string()));
+}
+
+#[test]
+fn cli_jwt_payload_same_file_visibility_basic_reports_type_error_only() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/jwt-payload-same-file-visibility-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(codes.contains(&"TS2322".to_string()));
+    assert!(!codes.contains(&"TS2304".to_string()));
+}
+
+#[test]
+fn cli_imported_interface_extends_downstream_assignability_basic_reports_missing_property() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/imported-interface-extends-downstream-assignability-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(codes.contains(&"TS2741".to_string()) || codes.contains(&"TS2322".to_string()));
+    assert!(!codes.contains(&"TS2304".to_string()));
+}
+
+#[test]
+fn cli_imported_type_bindings_in_declaration_bodies_basic_resolves_imports() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/imported-type-bindings-in-declaration-bodies-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(codes.contains(&"TS2741".to_string()) || codes.contains(&"TS2322".to_string()));
+    assert!(!codes.contains(&"TS2304".to_string()));
+}
+
+#[test]
+fn cli_contextual_async_object_property_return_basic_reports_type_errors_only() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/contextual-async-object-property-return-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(codes.contains(&"TS2322".to_string()));
+    assert!(!codes.contains(&"TS2304".to_string()));
+}
+
+#[test]
+fn cli_array_find_contextual_callback_basic_resolves_find_and_reports_property_error() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/array-find-contextual-callback-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(codes.contains(&"TS2339".to_string()));
+    assert!(!codes.contains(&"TS7006".to_string()));
+}
+
+#[test]
+fn cli_random_return_flow_authkit_shape_does_not_emit_ts2366() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/random-return-flow-authkit-shape/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(!codes.contains(&"TS2366".to_string()));
+}
+
+#[test]
 fn cli_skip_lib_check_dependency_dts_loads_as_symbol_source_without_noise() {
     let parsed = run_cli_json(&[
         "--project",

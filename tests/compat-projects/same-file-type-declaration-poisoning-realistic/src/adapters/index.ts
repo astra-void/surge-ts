@@ -1,0 +1,1 @@
+export { AdapterUser } from "./types";

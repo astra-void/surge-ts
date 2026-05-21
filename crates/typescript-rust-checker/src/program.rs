@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
@@ -55,6 +56,7 @@ struct ProgramCheckSharedState {
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     module_analyses: Vec<Option<ModuleAnalysis>>,
     module_import_bindings: Vec<Option<ModuleImportBindings>>,
+    module_resolution_scopes: Vec<Option<Arc<TypeDeclarationTable>>>,
 }
 
 #[derive(Debug)]
@@ -68,6 +70,7 @@ struct FileCheckResult {
 struct ModuleAnalysis {
     local_type_declarations: TypeDeclarationTable,
     local_symbols: SymbolTable,
+    #[allow(dead_code)]
     local_function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     local_export_table: ModuleExportTable,
 }
@@ -77,6 +80,15 @@ struct AmbientModuleEntry {
     module_specifier: String,
     file: ParsedProgramFile,
     raw_export_table: ModuleExportTable,
+}
+
+#[derive(Debug, Default)]
+struct ProgramTimings {
+    parsing: Duration,
+    type_declaration_collection: Duration,
+    module_binding: Duration,
+    declaration_validation: Duration,
+    per_file_statement_checking: Duration,
 }
 
 pub fn check_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
@@ -109,7 +121,14 @@ pub fn check_program_with_stats_and_jobs(
         };
     }
 
+    let timings_enabled = std::env::var_os("TYPESCRIPT_RUST_TIMINGS").is_some();
+    let timings = timings_enabled.then(|| Arc::new(Mutex::new(ProgramTimings::default())));
+
+    let parse_start = Instant::now();
     let parsed_files = parse_program_files(files);
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.parsing += parse_start.elapsed()
+    });
     let file_kinds = parsed_files
         .iter()
         .map(|file| (file.file_name.clone(), file.file_kind))
@@ -128,7 +147,12 @@ pub fn check_program_with_stats_and_jobs(
     emit_parser_diagnostics(&parsed_files, &mut ctx);
     collect_ambient_globals(&parsed_files, &mut ctx);
     collect_ambient_modules(&parsed_files, &mut ctx);
+
+    let type_collection_start = Instant::now();
     collect_global_type_declarations(&parsed_files, &mut ctx);
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.type_declaration_collection += type_collection_start.elapsed()
+    });
     let global_type_declarations = ctx.type_declarations.clone();
     collect_global_function_signatures(
         &parsed_files,
@@ -139,15 +163,23 @@ pub fn check_program_with_stats_and_jobs(
     collect_global_variables(&parsed_files, &mut global_symbols, &mut ctx);
 
     // PRELIMINARY PASS: collect types and resolve imports/exports to make them available for function signature collection
+    let type_collection_start = Instant::now();
     let (local_type_declarations_by_module, preliminary_module_import_bindings) =
         collect_preliminary_module_type_bindings(&parsed_files, &mut ctx);
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.type_declaration_collection += type_collection_start.elapsed()
+    });
 
+    let type_collection_start = Instant::now();
     let module_analyses = collect_module_analyses_with_bindings(
         &parsed_files,
         &local_type_declarations_by_module,
         &preliminary_module_import_bindings,
         &mut ctx,
     );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.type_declaration_collection += type_collection_start.elapsed()
+    });
 
     let local_module_export_tables = module_analyses
         .iter()
@@ -157,9 +189,10 @@ pub fn check_program_with_stats_and_jobs(
                 .map(|analysis| analysis.local_export_table.clone())
         })
         .collect::<Vec<_>>();
+    let module_binding_start = Instant::now();
     let module_export_tables =
         resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
-    let module_resolution_scopes = local_type_declarations_by_module
+    let preliminary_module_resolution_scopes = local_type_declarations_by_module
         .iter()
         .enumerate()
         .map(|(file_index, local_type_declarations)| {
@@ -184,21 +217,76 @@ pub fn check_program_with_stats_and_jobs(
         &parsed_files,
         &module_analyses,
         &module_export_tables,
+        &preliminary_module_resolution_scopes,
+        &mut ctx,
+    );
+    let module_resolution_scopes = local_type_declarations_by_module
+        .iter()
+        .enumerate()
+        .map(|(file_index, local_type_declarations)| {
+            let Some(local_type_declarations) = local_type_declarations else {
+                return None;
+            };
+
+            let mut merged_type_declarations = local_type_declarations.clone();
+            if let Some(imported) = module_import_bindings
+                .get(file_index)
+                .and_then(|bindings| bindings.as_ref())
+            {
+                for (name, declaration) in imported.type_declarations.iter() {
+                    let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+                }
+            }
+
+            Some(Arc::new(merged_type_declarations))
+        })
+        .collect::<Vec<_>>();
+    let diagnostics_before_second_bindings = ctx.diagnostics().len();
+    let module_import_bindings = collect_module_import_bindings(
+        &parsed_files,
+        &module_analyses,
+        &module_export_tables,
         &module_resolution_scopes,
         &mut ctx,
     );
+    ctx.truncate_diagnostics(diagnostics_before_second_bindings);
+    let module_resolution_scopes = local_type_declarations_by_module
+        .iter()
+        .enumerate()
+        .map(|(file_index, local_type_declarations)| {
+            let Some(local_type_declarations) = local_type_declarations else {
+                return None;
+            };
+
+            let mut merged_type_declarations = local_type_declarations.clone();
+            if let Some(imported) = module_import_bindings
+                .get(file_index)
+                .and_then(|bindings| bindings.as_ref())
+            {
+                for (name, declaration) in imported.type_declarations.iter() {
+                    let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+                }
+            }
+
+            Some(Arc::new(merged_type_declarations))
+        })
+        .collect::<Vec<_>>();
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.module_binding += module_binding_start.elapsed()
+    });
     let shared_state = ProgramCheckSharedState {
         global_type_declarations,
         global_symbols,
         function_signatures,
         module_analyses,
         module_import_bindings,
+        module_resolution_scopes,
     };
 
     let file_results = if jobs <= 1 || parsed_files.len() <= 1 {
-        check_program_files_serial(&parsed_files, &shared_state, &ctx)
+        check_program_files_serial(&parsed_files, &shared_state, &ctx, timings.clone())
     } else {
-        check_program_files_parallel(&parsed_files, &shared_state, &ctx, jobs)
+        check_program_files_parallel(&parsed_files, &shared_state, &ctx, jobs, timings.clone())
     };
 
     for result in file_results {
@@ -211,6 +299,10 @@ pub fn check_program_with_stats_and_jobs(
     }
 
     let (diagnostics, stats) = ctx.finish_with_stats();
+
+    if let Some(timings) = timings.as_ref() {
+        render_program_timings(timings);
+    }
 
     ProgramCheckResult { diagnostics, stats }
 }
@@ -247,6 +339,7 @@ fn collect_preliminary_module_type_bindings(
             parsed_file,
             &local_type_declarations,
             &SymbolTable::new(), // empty symbols
+            None,
             ctx,
         );
 
@@ -260,7 +353,7 @@ fn collect_preliminary_module_type_bindings(
     let preliminary_module_export_tables =
         resolve_module_export_tables(parsed_files, &preliminary_local_export_tables, ctx);
 
-    let module_resolution_scopes = local_type_declarations_by_module
+    let preliminary_module_resolution_scopes = local_type_declarations_by_module
         .iter()
         .map(|td| td.as_ref().map(|td| Arc::new(td.clone())))
         .collect::<Vec<_>>();
@@ -277,7 +370,7 @@ fn collect_preliminary_module_type_bindings(
             parsed_file,
             parsed_files,
             &preliminary_module_export_tables,
-            &module_resolution_scopes,
+            &preliminary_module_resolution_scopes,
             &SymbolTable::new(), // empty local symbols
             ctx,
         );
@@ -327,10 +420,12 @@ fn collect_module_analyses_with_bindings(
                 let _ = full_type_declarations.insert(k.clone(), v.clone());
             }
         }
+        let full_type_declarations_scope = Arc::new(full_type_declarations.clone());
         ctx.type_declarations = full_type_declarations;
 
         let mut local_symbols = SymbolTable::new();
         let mut local_function_signatures = HashMap::new();
+        let diagnostics_before_signatures = ctx.diagnostics().len();
         collect_function_signatures_from_statements(
             &parsed_file.statements,
             file_index,
@@ -338,9 +433,16 @@ fn collect_module_analyses_with_bindings(
             &mut local_function_signatures,
             ctx,
         );
+        ctx.truncate_diagnostics(diagnostics_before_signatures);
+        ctx.resolved_named_types = Arc::new(Mutex::new(HashMap::new()));
 
-        let export_table =
-            build_module_export_table(parsed_file, &local_type_declarations, &local_symbols, ctx);
+        let export_table = build_module_export_table(
+            parsed_file,
+            &local_type_declarations,
+            &local_symbols,
+            Some(full_type_declarations_scope),
+            ctx,
+        );
 
         ctx.type_declarations = saved_type_declarations;
         ctx.symbols = saved_symbols;
@@ -454,6 +556,7 @@ fn check_program_files_serial(
     parsed_files: &[ParsedProgramFile],
     shared_state: &ProgramCheckSharedState,
     ctx: &CheckerContext,
+    timings: Option<Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<FileCheckResult> {
     let mut results = Vec::with_capacity(parsed_files.len());
 
@@ -461,7 +564,13 @@ fn check_program_files_serial(
         let mut local_ctx = ctx.clone();
         local_ctx.diagnostics.clear();
         local_ctx.stats = CompatibilityStats::default();
-        let result = check_program_file(file_index, parsed_file, shared_state, &mut local_ctx);
+        let result = check_program_file(
+            file_index,
+            parsed_file,
+            shared_state,
+            &mut local_ctx,
+            timings.as_ref(),
+        );
         results.push(result);
     }
 
@@ -473,10 +582,11 @@ fn check_program_files_parallel(
     shared_state: &ProgramCheckSharedState,
     ctx: &CheckerContext,
     jobs: usize,
+    timings: Option<Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<FileCheckResult> {
     let worker_count = jobs.max(1).min(parsed_files.len());
     if worker_count <= 1 {
-        return check_program_files_serial(parsed_files, shared_state, ctx);
+        return check_program_files_serial(parsed_files, shared_state, ctx, timings);
     }
 
     let chunk_size = (parsed_files.len() + worker_count - 1) / worker_count;
@@ -488,6 +598,7 @@ fn check_program_files_parallel(
         for (chunk_index, chunk) in parsed_files.chunks(chunk_size).enumerate() {
             let shared_state = shared_state;
             let worker_ctx = worker_base.clone();
+            let timings = timings.clone();
             let start_index = chunk_index * chunk_size;
 
             handles.push(scope.spawn(move || {
@@ -503,6 +614,7 @@ fn check_program_files_parallel(
                         parsed_file,
                         shared_state,
                         &mut local_ctx,
+                        timings.as_ref(),
                     ));
                 }
 
@@ -549,6 +661,7 @@ fn check_program_file(
     parsed_file: &ParsedProgramFile,
     shared_state: &ProgramCheckSharedState,
     ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> FileCheckResult {
     ctx.set_file_name(parsed_file.file_name.clone());
     ctx.resolved_named_types = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
@@ -586,8 +699,16 @@ fn check_program_file(
             .unwrap_or_default();
 
         let mut merged_type_declarations = ctx.ambient_global_type_declarations.clone();
-        for (name, declaration) in module_analysis.local_type_declarations.iter() {
-            let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+        if let Some(module_resolution_scope) =
+            shared_state.module_resolution_scopes[file_index].as_ref()
+        {
+            for (name, declaration) in module_resolution_scope.iter() {
+                let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+            }
+        } else {
+            for (name, declaration) in module_analysis.local_type_declarations.iter() {
+                let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
+            }
         }
         for (name, declaration) in imported_bindings.type_declarations.iter() {
             let _ = merged_type_declarations.insert(name.clone(), declaration.clone());
@@ -604,15 +725,46 @@ fn check_program_file(
         }
 
         ctx.type_declarations = merged_type_declarations;
-        ctx.set_symbols(merged_symbols);
+        ctx.set_symbols(merged_symbols.clone());
+
+        let validation_start = Instant::now();
         validate_local_type_declarations(&parsed_file.statements, &parsed_file.file_name, ctx);
         validate_direct_utility_aliases(&parsed_file.statements, ctx);
+        record_program_timing(timings, |timings| {
+            timings.declaration_validation += validation_start.elapsed()
+        });
+
+        let mut signature_ctx = ctx.clone();
+        signature_ctx.diagnostics.clear();
+        signature_ctx.utility_diagnostic_keys.clear();
+        signature_ctx.resolved_named_types =
+            std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let mut signature_local_symbols = crate::symbols::SymbolTable::new();
+        for (name, symbol) in merged_symbols.iter() {
+            if !matches!(symbol.kind, crate::symbols::SymbolKind::Function) {
+                signature_local_symbols.insert(name.clone(), symbol.clone());
+            }
+        }
+        let mut final_function_signatures = HashMap::new();
+        collect_function_signatures_from_statements(
+            &parsed_file.statements,
+            file_index,
+            &mut signature_local_symbols,
+            &mut final_function_signatures,
+            &mut signature_ctx,
+        );
+        extend_diagnostics_dedup(&mut ctx.diagnostics, signature_ctx.diagnostics);
+
+        let statement_check_start = Instant::now();
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
-            &module_analysis.local_function_signatures,
+            &final_function_signatures,
             ctx,
         );
+        record_program_timing(timings, |timings| {
+            timings.per_file_statement_checking += statement_check_start.elapsed()
+        });
     } else {
         let mut script_td = shared_state.global_type_declarations.clone();
         for (name, declaration) in ctx.ambient_global_type_declarations.iter() {
@@ -626,14 +778,23 @@ fn check_program_file(
         }
         ctx.set_symbols(script_sym);
 
+        let validation_start = Instant::now();
         validate_local_type_declarations(&parsed_file.statements, &parsed_file.file_name, ctx);
         validate_direct_utility_aliases(&parsed_file.statements, ctx);
+        record_program_timing(timings, |timings| {
+            timings.declaration_validation += validation_start.elapsed()
+        });
+
+        let statement_check_start = Instant::now();
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
             &shared_state.function_signatures,
             ctx,
         );
+        record_program_timing(timings, |timings| {
+            timings.per_file_statement_checking += statement_check_start.elapsed()
+        });
     }
 
     let diagnostics = std::mem::take(&mut ctx.diagnostics);
@@ -1149,6 +1310,7 @@ fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                 &temp_file,
                 &current_type_declarations,
                 &current_symbols,
+                Some(Arc::new(current_type_declarations.clone())),
                 ctx,
             );
             ctx.type_declarations = current_type_declarations;
@@ -1297,4 +1459,46 @@ fn collect_global_variables(
             }
         }
     }
+}
+
+fn record_program_timing(
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+    update: impl FnOnce(&mut ProgramTimings),
+) {
+    let Some(timings) = timings else {
+        return;
+    };
+
+    if let Ok(mut guard) = timings.lock() {
+        update(&mut guard);
+    }
+}
+
+fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
+    let Ok(timings) = timings.lock() else {
+        return;
+    };
+
+    eprintln!("Timings:");
+    eprintln!("  parsing: {}", format_duration(timings.parsing));
+    eprintln!(
+        "  type_declaration_collection: {}",
+        format_duration(timings.type_declaration_collection)
+    );
+    eprintln!(
+        "  module_binding: {}",
+        format_duration(timings.module_binding)
+    );
+    eprintln!(
+        "  declaration_validation: {}",
+        format_duration(timings.declaration_validation)
+    );
+    eprintln!(
+        "  per_file_statement_checking: {}",
+        format_duration(timings.per_file_statement_checking)
+    );
+}
+
+fn format_duration(duration: Duration) -> String {
+    format!("{:.3}ms", duration.as_secs_f64() * 1000.0)
 }

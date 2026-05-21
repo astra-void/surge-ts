@@ -675,7 +675,7 @@ fn function_statement_contains_value_return(statement: &ParsedFunctionBodyStatem
         ParsedFunctionBodyStatement::Return(return_statement) => {
             return_statement.expression.is_some()
         }
-        ParsedFunctionBodyStatement::Throw(_) => false,
+        ParsedFunctionBodyStatement::Throw(_) => true,
         ParsedFunctionBodyStatement::Block(block_body) => {
             function_body_contains_value_return(block_body)
         }
@@ -743,7 +743,7 @@ fn function_statement_guarantees_value_return(statement: &ParsedFunctionBodyStat
         ParsedFunctionBodyStatement::Return(return_statement) => {
             return_statement.expression.is_some()
         }
-        ParsedFunctionBodyStatement::Throw(_) => false,
+        ParsedFunctionBodyStatement::Throw(_) => true,
         ParsedFunctionBodyStatement::Block(block_body) => {
             function_body_guarantees_value_return(block_body)
         }

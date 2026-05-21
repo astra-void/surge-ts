@@ -74,8 +74,14 @@ fn compat_report_does_not_classify_root_causes() {
         "candidate",
         "category",
     ] {
-        assert!(!text.contains(needle), "compat report text still contains classifier text: {needle}");
-        assert!(!json.contains(needle), "compat report json still contains classifier text: {needle}");
+        assert!(
+            !text.contains(needle),
+            "compat report text still contains classifier text: {needle}"
+        );
+        assert!(
+            !json.contains(needle),
+            "compat report json still contains classifier text: {needle}"
+        );
         assert!(
             !implementation_source.contains(needle),
             "report.rs still contains classifier text: {needle}"

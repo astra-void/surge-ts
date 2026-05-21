@@ -926,10 +926,7 @@ mod tests {
     fn report_source_has_no_classifier_terms() {
         let report_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/report.rs");
         let source = std::fs::read_to_string(report_path).expect("report source");
-        let implementation_source = source
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or(&source);
+        let implementation_source = source.split("#[cfg(test)]").next().unwrap_or(&source);
         for needle in [
             "CategorizedCountEntry",
             "nodeModulesSourceDiagnostics",

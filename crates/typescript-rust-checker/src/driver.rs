@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
@@ -147,7 +148,10 @@ fn collect_local_type_declarations_from_statement(
                             _ => None,
                         })
             {
-                local_declarations.push(declaration.clone());
+                local_declarations.push(attach_current_type_scope_if_missing(
+                    declaration.clone(),
+                    ctx,
+                ));
             }
         }
         ParsedStatement::InterfaceDeclaration(interface) => {
@@ -174,7 +178,10 @@ fn collect_local_type_declarations_from_statement(
                             _ => None,
                         })
             {
-                local_declarations.push(declaration.clone());
+                local_declarations.push(attach_current_type_scope_if_missing(
+                    declaration.clone(),
+                    ctx,
+                ));
             }
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
@@ -188,6 +195,28 @@ fn collect_local_type_declarations_from_statement(
             ctx,
         ),
         _ => {}
+    }
+}
+
+fn attach_current_type_scope_if_missing(
+    declaration: TypeDeclarationInfo,
+    ctx: &CheckerContext,
+) -> TypeDeclarationInfo {
+    let current_scope = Arc::new(ctx.type_declarations.clone());
+
+    match declaration {
+        TypeDeclarationInfo::Alias(mut alias) => {
+            if alias.resolution_scope.is_none() {
+                alias.resolution_scope = Some(current_scope);
+            }
+            TypeDeclarationInfo::Alias(alias)
+        }
+        TypeDeclarationInfo::Interface(mut interface) => {
+            if interface.resolution_scope.is_none() {
+                interface.resolution_scope = Some(current_scope);
+            }
+            TypeDeclarationInfo::Interface(interface)
+        }
     }
 }
 

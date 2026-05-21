@@ -256,7 +256,7 @@ fn span_ts7031_points_to_binding_element_name() {
 }
 
 #[test]
-fn span_ts7005_points_to_variable_name() {
+fn span_uninitialized_variable_no_longer_emits_ts7005() {
     let source = "let value;";
     let diagnostics = check_source_with_options(
         source,
@@ -271,7 +271,7 @@ fn span_ts7005_points_to_variable_name() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS7005", span(source, "value"));
+    assert!(diagnostics.is_empty(), "source: {source}");
 }
 
 #[test]

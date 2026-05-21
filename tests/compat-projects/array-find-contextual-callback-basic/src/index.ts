@@ -12,3 +12,8 @@ export function select(providers: Provider[], provider: string) {
 export function wrong(providers: Provider[]) {
   return providers.find((p) => p.missing === "x");
 }
+
+export function unknownFind(values: unknown[]) {
+  const selected = values.find((value) => value !== null);
+  return selected;
+}

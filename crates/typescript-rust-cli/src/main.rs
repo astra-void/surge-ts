@@ -3,6 +3,7 @@ mod package_declarations;
 mod path_mapping;
 mod report;
 
+use std::time::Instant;
 use std::{fs, path::PathBuf, process::ExitCode};
 
 use clap::{Error, Parser, error::ErrorKind};
@@ -31,6 +32,15 @@ impl Into<typescript_rust_checker::DiagnosticProfile> for CliDiagnosticProfile {
             CliDiagnosticProfile::Native => typescript_rust_checker::DiagnosticProfile::Native,
         }
     }
+}
+
+#[derive(Debug, Default)]
+struct CliTimings {
+    config_project_loading: std::time::Duration,
+    file_discovery: std::time::Duration,
+    package_declaration_discovery: std::time::Duration,
+    import_graph_expansion: std::time::Duration,
+    diagnostic_rendering: std::time::Duration,
 }
 
 #[derive(Debug, Parser)]
@@ -74,10 +84,19 @@ struct Cli {
 
     #[arg(long = "noLib")]
     no_lib: bool,
+
+    #[arg(long, hide = true)]
+    timings: bool,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    if cli.timings {
+        unsafe {
+            std::env::set_var("TYPESCRIPT_RUST_TIMINGS", "1");
+        }
+    }
 
     if cli.max_diagnostics == Some(0) {
         Error::raw(
@@ -115,6 +134,7 @@ fn main() -> ExitCode {
             cli.diagnostic_profile
                 .unwrap_or(CliDiagnosticProfile::Tsc)
                 .into(),
+            cli.timings,
         );
     }
 
@@ -256,8 +276,15 @@ fn run_project_mode(
     jobs: usize,
     stub_external_modules: bool,
     diagnostic_profile: typescript_rust_checker::DiagnosticProfile,
+    timings_enabled: bool,
 ) -> ExitCode {
+    let mut timings = CliTimings::default();
+
+    let config_start = Instant::now();
     let loaded = load_tsconfig(TsConfigLoadOptions { project });
+    if timings_enabled {
+        timings.config_project_loading += config_start.elapsed();
+    }
 
     for diagnostic in &loaded.diagnostics {
         eprintln!("{diagnostic}");
@@ -266,13 +293,16 @@ fn run_project_mode(
     if show_config {
         let config = build_show_config_json(&loaded);
         println!("{}", serde_json::to_string_pretty(&config).unwrap());
+        if timings_enabled {
+            render_cli_timings(&timings);
+        }
         return ExitCode::SUCCESS;
     }
 
     if loaded.files.is_empty() {
         let diagnostics = vec![project_has_no_source_files_diagnostic(&loaded)];
         let stats = typescript_rust_checker::CompatibilityStats::default();
-        return render_project_mode_output(
+        let exit_code = render_project_mode_output(
             &loaded,
             &diagnostics,
             &[],
@@ -281,12 +311,19 @@ fn run_project_mode(
             compat_report,
             format,
             max_diagnostics,
+            timings_enabled,
+            &mut timings,
         );
+        if timings_enabled {
+            render_cli_timings(&timings);
+        }
+        return exit_code;
     }
 
     let mut inputs = Vec::with_capacity(loaded.files.len());
     let mut sources = Vec::with_capacity(loaded.files.len());
 
+    let file_discovery_start = Instant::now();
     for file_path in &loaded.files {
         let source_text = match fs::read_to_string(&file_path) {
             Ok(source_text) => source_text,
@@ -303,26 +340,41 @@ fn run_project_mode(
         });
         sources.push((file_path.clone(), file_name, source_text));
     }
+    if timings_enabled {
+        timings.file_discovery += file_discovery_start.elapsed();
+    }
 
     let mut resolved_modules = std::collections::HashMap::new();
+    let mut package_resolution_cache =
+        package_declarations::PackageDeclarationResolverCache::default();
     loop {
         let files_before = inputs.len();
 
-        let package_modules = package_declarations::resolve_package_declaration_entrypoints(
-            &mut inputs,
-            &mut sources,
-            &loaded.root_dir,
-        );
+        let package_start = Instant::now();
+        let package_modules =
+            package_declarations::resolve_package_declaration_entrypoints_with_cache(
+                &mut inputs,
+                &mut sources,
+                &loaded.root_dir,
+                &mut package_resolution_cache,
+            );
+        if timings_enabled {
+            timings.package_declaration_discovery += package_start.elapsed();
+        }
         for (specifier, resolved_file) in package_modules {
             resolved_modules.insert(specifier, resolved_file);
         }
 
+        let import_graph_start = Instant::now();
         let graph_loaded = import_graph::expand_project_inputs(
             &mut inputs,
             &mut sources,
             &loaded.root_dir,
             &loaded.compiler_options.paths,
         );
+        if timings_enabled {
+            timings.import_graph_expansion += import_graph_start.elapsed();
+        }
 
         if graph_loaded == 0 && inputs.len() == files_before {
             break;
@@ -355,7 +407,7 @@ fn run_project_mode(
         loaded.compiler_options.no_lib,
         diagnostic_profile,
     );
-    render_project_mode_output(
+    let exit_code = render_project_mode_output(
         &loaded,
         &diagnostics,
         &sources,
@@ -364,7 +416,13 @@ fn run_project_mode(
         compat_report,
         format,
         max_diagnostics,
-    )
+        timings_enabled,
+        &mut timings,
+    );
+    if timings_enabled {
+        render_cli_timings(&timings);
+    }
+    exit_code
 }
 
 fn parse_jobs(value: &str) -> Result<usize, String> {
@@ -387,7 +445,10 @@ fn render_project_mode_output(
     compat_report: bool,
     format: ReportFormat,
     max_diagnostics: Option<usize>,
+    timings_enabled: bool,
+    timings: &mut CliTimings,
 ) -> ExitCode {
+    let render_start = Instant::now();
     if compat_report {
         let report = build_project_compatibility_report(loaded, diagnostics, sources, stats);
         match format {
@@ -413,6 +474,9 @@ fn render_project_mode_output(
                     .unwrap()
                 );
             }
+        }
+        if timings_enabled {
+            timings.diagnostic_rendering += render_start.elapsed();
         }
         return ExitCode::SUCCESS;
     }
@@ -441,6 +505,10 @@ fn render_project_mode_output(
                 .unwrap()
             );
         }
+    }
+
+    if timings_enabled {
+        timings.diagnostic_rendering += render_start.elapsed();
     }
 
     ExitCode::SUCCESS
@@ -488,6 +556,34 @@ fn project_no_lib_missing_global_type_diagnostics() -> Vec<Diagnostic> {
         )
     })
     .collect()
+}
+
+fn render_cli_timings(timings: &CliTimings) {
+    eprintln!("CLI timings:");
+    eprintln!(
+        "  config_project_loading: {}",
+        format_duration(timings.config_project_loading)
+    );
+    eprintln!(
+        "  file_discovery: {}",
+        format_duration(timings.file_discovery)
+    );
+    eprintln!(
+        "  package_declaration_discovery: {}",
+        format_duration(timings.package_declaration_discovery)
+    );
+    eprintln!(
+        "  import_graph_expansion: {}",
+        format_duration(timings.import_graph_expansion)
+    );
+    eprintln!(
+        "  diagnostic_rendering: {}",
+        format_duration(timings.diagnostic_rendering)
+    );
+}
+
+fn format_duration(duration: std::time::Duration) -> String {
+    format!("{:.3}ms", duration.as_secs_f64() * 1000.0)
 }
 
 fn render_single_file_diagnostics(

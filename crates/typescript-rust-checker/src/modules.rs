@@ -130,6 +130,7 @@ pub(crate) fn build_module_export_table(
     parsed_file: &ParsedProgramFile,
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
+    resolution_scope: Option<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) -> ModuleExportTable {
     let exportable_values = collect_exportable_value_symbols(
@@ -149,6 +150,7 @@ pub(crate) fn build_module_export_table(
             &exportable_values,
             local_type_declarations,
             local_symbols,
+            resolution_scope.as_ref(),
             &mut type_declarations,
             &mut symbols,
             &mut default_symbol,
@@ -417,6 +419,7 @@ pub(crate) fn resolve_module_export_table(
                             export_local_type_declaration(
                                 &type_export,
                                 &specifier.exported_name,
+                                None,
                                 &mut resolved_export_table.type_declarations,
                             );
                             continue;
@@ -443,6 +446,7 @@ pub(crate) fn resolve_module_export_table(
                         export_local_type_declaration(
                             &type_export,
                             &specifier.exported_name,
+                            None,
                             &mut resolved_export_table.type_declarations,
                         );
                         found = true;
@@ -694,6 +698,7 @@ fn collect_exports_from_statement(
     exportable_values: &SymbolTable,
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
+    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     default_symbol: &mut Option<SymbolInfo>,
@@ -708,6 +713,7 @@ fn collect_exports_from_statement(
             exportable_values,
             local_type_declarations,
             local_symbols,
+            resolution_scope,
             type_declarations,
             symbols,
             default_symbol,
@@ -732,6 +738,7 @@ fn collect_exports_from_statement(
                         &specifier.exported_name,
                         &specifier.name_span,
                         local_type_declarations,
+                        resolution_scope,
                         type_declarations,
                         ctx,
                     );
@@ -744,6 +751,7 @@ fn collect_exports_from_statement(
                     export_local_type_declaration(
                         type_declaration,
                         &specifier.exported_name,
+                        resolution_scope,
                         type_declarations,
                     );
                     found = true;
@@ -821,6 +829,7 @@ fn collect_exports_from_statement(
                 &alias.name,
                 &alias.name_span,
                 local_type_declarations,
+                resolution_scope,
                 type_declarations,
                 ctx,
             );
@@ -831,6 +840,7 @@ fn collect_exports_from_statement(
                 &interface.name,
                 &interface.name_span,
                 local_type_declarations,
+                resolution_scope,
                 type_declarations,
                 ctx,
             );
@@ -1022,6 +1032,7 @@ fn resolve_import_declaration(
                         export_local_type_declaration(
                             &type_export,
                             &specifier.local_name,
+                            None,
                             type_declarations,
                         );
                         continue;
@@ -1048,6 +1059,7 @@ fn resolve_import_declaration(
                     export_local_type_declaration(
                         &type_export,
                         &specifier.local_name,
+                        None,
                         type_declarations,
                     );
                     found = true;
@@ -1229,32 +1241,6 @@ fn resolve_import_declaration(
             is_type_only,
             specifiers,
         } => {
-            if let Some((resolved_index, local_scope)) = resolve_relative_local_type_scope(
-                &ctx.file_name,
-                &import.module_specifier,
-                program_files,
-                module_resolution_scopes,
-            ) {
-                let mut bound_any = false;
-
-                for specifier in specifiers {
-                    if let Some(local_declaration) =
-                        local_scope.get(&specifier.imported_name).cloned()
-                    {
-                        let declaration =
-                            attach_type_resolution_scope(local_declaration, local_scope.clone());
-                        insert_type_export(type_declarations, &specifier.local_name, declaration);
-                        bound_any = true;
-                    }
-                }
-
-                if bound_any && *is_type_only {
-                    return;
-                }
-
-                let _ = resolved_index;
-            }
-
             let Some((export_table, scope, resolved_index)) = try_resolve_module(
                 &import.module_specifier,
                 ctx,
@@ -1307,10 +1293,8 @@ fn resolve_import_declaration(
                                 insert_type_export(
                                     type_declarations,
                                     &specifier.local_name,
-                                    attach_type_resolution_scope(
-                                        local_declaration,
-                                        local_scope.clone(),
-                                    ),
+                                    Some(&local_scope),
+                                    local_declaration,
                                 );
                                 continue;
                             }
@@ -1318,10 +1302,8 @@ fn resolve_import_declaration(
                             insert_type_export(
                                 type_declarations,
                                 &specifier.local_name,
-                                attach_type_resolution_scope(
-                                    local_declaration,
-                                    local_scope.clone(),
-                                ),
+                                Some(&local_scope),
+                                local_declaration,
                             );
                             continue;
                         }
@@ -1359,10 +1341,8 @@ fn resolve_import_declaration(
                                 insert_type_export(
                                     type_declarations,
                                     &specifier.local_name,
-                                    attach_type_resolution_scope(
-                                        local_declaration,
-                                        local_scope.clone(),
-                                    ),
+                                    Some(&local_scope),
+                                    local_declaration,
                                 );
                                 continue;
                             }
@@ -1370,10 +1350,8 @@ fn resolve_import_declaration(
                             insert_type_export(
                                 type_declarations,
                                 &specifier.local_name,
-                                attach_type_resolution_scope(
-                                    local_declaration,
-                                    local_scope.clone(),
-                                ),
+                                Some(&local_scope),
+                                local_declaration,
                             );
                             continue;
                         }
@@ -1442,7 +1420,8 @@ fn resolve_import_declaration(
                         insert_type_export(
                             type_declarations,
                             &specifier.local_name,
-                            attach_type_resolution_scope(type_export, scope.clone()),
+                            Some(&scope),
+                            type_export,
                         );
                         continue;
                     }
@@ -1451,7 +1430,8 @@ fn resolve_import_declaration(
                         insert_type_export(
                             type_declarations,
                             &specifier.local_name,
-                            attach_type_resolution_scope(local_declaration, scope.clone()),
+                            Some(&scope),
+                            local_declaration,
                         );
                         continue;
                     }
@@ -1477,7 +1457,8 @@ fn resolve_import_declaration(
                     insert_type_export(
                         type_declarations,
                         &specifier.local_name,
-                        attach_type_resolution_scope(type_export, scope.clone()),
+                        Some(&scope),
+                        type_export,
                     );
                     found = true;
                 } else if let Some(local_declaration) = scope.get(&specifier.imported_name).cloned()
@@ -1485,7 +1466,8 @@ fn resolve_import_declaration(
                     insert_type_export(
                         type_declarations,
                         &specifier.local_name,
-                        attach_type_resolution_scope(local_declaration, scope.clone()),
+                        Some(&scope),
+                        local_declaration,
                     );
                     found = true;
                 }
@@ -1536,6 +1518,7 @@ fn export_local_type_name(
     exported_name: &str,
     name_span: &Option<TextSpan>,
     local_type_declarations: &TypeDeclarationTable,
+    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
     type_declarations: &mut TypeDeclarationTable,
     ctx: &mut CheckerContext,
 ) {
@@ -1544,15 +1527,24 @@ fn export_local_type_name(
         return;
     };
 
-    export_local_type_declaration(&local_declaration, exported_name, type_declarations);
+    export_local_type_declaration(
+        &local_declaration,
+        exported_name,
+        resolution_scope,
+        type_declarations,
+    );
 }
 
 fn export_local_type_declaration(
     declaration: &TypeDeclarationInfo,
     exported_name: &str,
+    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
     type_declarations: &mut TypeDeclarationTable,
 ) {
-    let declaration = rename_type_declaration(declaration.clone(), exported_name.to_string());
+    let declaration = rename_type_declaration(
+        attach_type_resolution_scope_if_missing(declaration.clone(), resolution_scope),
+        exported_name.to_string(),
+    );
     let _ = type_declarations.insert(exported_name.to_string(), declaration);
 }
 
@@ -1575,9 +1567,13 @@ fn rename_type_declaration(
 fn insert_type_export(
     type_declarations: &mut TypeDeclarationTable,
     local_name: &str,
+    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
     declaration: TypeDeclarationInfo,
 ) {
-    let declaration = rename_type_declaration(declaration, local_name.to_string());
+    let declaration = rename_type_declaration(
+        attach_type_resolution_scope_if_missing(declaration, resolution_scope),
+        local_name.to_string(),
+    );
     let _ = type_declarations.insert(local_name.to_string(), declaration);
 }
 
@@ -1819,16 +1815,31 @@ fn attach_type_resolution_scope(
 ) -> TypeDeclarationInfo {
     match declaration {
         TypeDeclarationInfo::Alias(mut alias) => {
-            alias.resolution_scope = Some(resolution_scope);
+            if alias.resolution_scope.is_none() {
+                alias.resolution_scope = Some(resolution_scope);
+            }
             TypeDeclarationInfo::Alias(alias)
         }
         TypeDeclarationInfo::Interface(mut interface) => {
-            interface.resolution_scope = Some(resolution_scope);
+            if interface.resolution_scope.is_none() {
+                interface.resolution_scope = Some(resolution_scope);
+            }
             TypeDeclarationInfo::Interface(interface)
         }
     }
 }
 
+fn attach_type_resolution_scope_if_missing(
+    declaration: TypeDeclarationInfo,
+    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
+) -> TypeDeclarationInfo {
+    match resolution_scope {
+        Some(scope) => attach_type_resolution_scope(declaration, scope.clone()),
+        None => declaration,
+    }
+}
+
+#[allow(dead_code)]
 fn resolve_relative_local_type_scope(
     importer_file_name: &str,
     module_specifier: &str,
@@ -2106,6 +2117,7 @@ mod tests {
                     file,
                     &local_types,
                     &local_symbols,
+                    None,
                     &mut ctx,
                 ))
             })

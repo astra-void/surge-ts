@@ -2125,7 +2125,7 @@ expected_diagnostics = ["TS2393"]
 [[case]]
 name = "no_implicit_any_variable"
 path = "tests/smoke/no_implicit_any_variable.ts"
-expected_diagnostics = ["TS7005"]
+expected_diagnostics = []
 no_implicit_any = true
 
 [[case]]

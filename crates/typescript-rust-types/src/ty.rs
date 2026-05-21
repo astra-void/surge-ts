@@ -193,6 +193,19 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             is_variadic: false,
             required_parameter_count: 1,
         })),
+        "find" => Some(Type::Function(FunctionType {
+            parameters: vec![Type::Function(FunctionType {
+                parameters: vec![element.clone()],
+                return_type: Box::new(Type::Boolean),
+                is_variadic: false,
+                required_parameter_count: 1,
+            })],
+            return_type: Box::new(Type::Union(UnionType {
+                types: vec![element.clone(), Type::Undefined],
+            })),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
         "filter" => Some(Type::Function(FunctionType {
             parameters: vec![Type::Function(FunctionType {
                 parameters: vec![element.clone()],
