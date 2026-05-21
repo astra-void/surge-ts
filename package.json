@@ -13,7 +13,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^25.6.0",
-		"@typescript/native-preview": "7.0.0-dev.20260503.1",
+		"@typescript/native-preview": "7.0.0-dev.20260519.1",
 		"tsx": "4.21.0",
 		"typescript": "6.0.3"
 	},
