@@ -29,7 +29,7 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::BooleanLiteral(boolean_literal) => {
             ParsedExpression::BooleanLiteral(boolean_literal.value)
         }
-        Expression::NullLiteral(_) => ParsedExpression::UndefinedLiteral,
+        Expression::NullLiteral(_) => ParsedExpression::NullLiteral,
         Expression::Identifier(identifier) => {
             if identifier.name == "undefined" {
                 ParsedExpression::UndefinedLiteral
@@ -406,7 +406,7 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             ParsedExpression::BooleanLiteral(boolean_literal.value),
             argument.span(),
         ),
-        Argument::NullLiteral(_) => (ParsedExpression::UndefinedLiteral, argument.span()),
+        Argument::NullLiteral(_) => (ParsedExpression::NullLiteral, argument.span()),
         Argument::NumericLiteral(numeric_literal) => (
             ParsedExpression::NumberLiteral(numeric_literal.value.to_string()),
             argument.span(),

@@ -244,7 +244,7 @@ pub(crate) fn evaluate_expression(
                     } else if left_type == Type::Undefined {
                         InferredExpression::Known(right_type)
                     } else {
-                        let filtered_left = typescript_rust_types::remove_undefined(&left_type);
+                        let filtered_left = typescript_rust_types::remove_nullish(&left_type);
                         InferredExpression::Known(union_type(vec![filtered_left, right_type]))
                     }
                 }

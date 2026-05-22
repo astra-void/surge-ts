@@ -114,6 +114,37 @@ fn empty_config_uses_ts7_defaults() {
 }
 
 #[test]
+fn lib_option_is_preserved() {
+    let root = temp_dir("lib-option");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "lib": ["ES2022", "DOM"] } }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert_eq!(
+        loaded.compiler_options.lib,
+        vec!["ES2022".to_string(), "DOM".to_string()]
+    );
+}
+
+#[test]
+fn no_lib_is_preserved() {
+    let root = temp_dir("no-lib");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "noLib": true } }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert!(loaded.compiler_options.no_lib);
+}
+
+#[test]
 fn relative_extends_merges_compiler_options() {
     let root = temp_dir("extends");
     write_file(

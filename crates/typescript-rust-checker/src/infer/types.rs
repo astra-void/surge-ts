@@ -15,6 +15,7 @@ use crate::context::{
     CheckerContext, DeclarationNamespace, DeclarationResolutionKey, DeclarationResolutionState,
     convert_span,
 };
+use crate::default_lib::is_generated_default_lib_file_name;
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
 
@@ -787,7 +788,7 @@ fn resolve_type_alias(
         };
     };
 
-    if alias.file_name == "<built-in>" {
+    if alias.file_name == "<built-in>" || is_generated_default_lib_file_name(&alias.file_name) {
         if let Some(resolved) = resolve_builtin_utility_alias(
             &alias.name,
             &local_substitution,
@@ -829,6 +830,8 @@ fn resolve_builtin_utility_alias(
         "Record" => Some(resolve_record_utility_type(substitution)),
         "Pick" => Some(resolve_pick_utility_type(substitution, name_span, ctx)),
         "Omit" => Some(resolve_omit_utility_type(substitution)),
+        "Parameters" => Some(resolve_parameters_utility_type(substitution)),
+        "ReturnType" => Some(resolve_return_type_utility_type(substitution)),
         _ => None,
     }
 }
@@ -1014,6 +1017,48 @@ fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution) -> Resolv
     }
 }
 
+fn resolve_parameters_utility_type(substitution: &TypeParameterSubstitution) -> ResolvedType {
+    let Some(source_type) = substitution.get("T").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Type::Function(function_type) = source_type else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    ResolvedType {
+        ty: Type::Tuple(function_type.parameters.clone()),
+        had_error: false,
+    }
+}
+
+fn resolve_return_type_utility_type(substitution: &TypeParameterSubstitution) -> ResolvedType {
+    let Some(source_type) = substitution.get("T").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Type::Function(function_type) = source_type else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    ResolvedType {
+        ty: (*function_type.return_type).clone(),
+        had_error: false,
+    }
+}
+
 fn string_literal_union_keys(ty: &Type) -> Option<Vec<String>> {
     match ty {
         Type::StringLiteral(value) => Some(vec![value.clone()]),
@@ -1063,6 +1108,45 @@ fn resolve_interface(
             had_error: true,
         };
     };
+
+    if is_generated_default_lib_file_name(&interface.file_name) {
+        match interface.name.as_str() {
+            "Array" | "ReadonlyArray" => {
+                let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
+                resolving.pop();
+                return ResolvedType {
+                    ty: Type::Array(Box::new(element_type)),
+                    had_error: false,
+                };
+            }
+            "Uint8Array" => {
+                resolving.pop();
+                return ResolvedType {
+                    ty: Type::Array(Box::new(Type::Number)),
+                    had_error: false,
+                };
+            }
+            "Map" => {
+                resolving.pop();
+                return ResolvedType {
+                    ty: generated_default_lib_map_instance_type(),
+                    had_error: false,
+                };
+            }
+            "Promise" | "PromiseLike" => {
+                let ty = local_substitution
+                    .get("T")
+                    .cloned()
+                    .unwrap_or(Type::Unknown);
+                resolving.pop();
+                return ResolvedType {
+                    ty,
+                    had_error: false,
+                };
+            }
+            _ => {}
+        }
+    }
 
     let resolved = with_type_declarations(&interface.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &interface.file_name, |ctx| {
@@ -1129,6 +1213,61 @@ fn resolve_interface_declaration(
         }),
         had_error,
     }
+}
+
+fn generated_default_lib_map_instance_type() -> Type {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "get".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Any),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+    );
+    properties.insert(
+        "set".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any, Type::Any],
+            return_type: Box::new(Type::Any),
+            is_variadic: false,
+            required_parameter_count: 2,
+        })),
+    );
+    properties.insert(
+        "has".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Boolean),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+    );
+    properties.insert(
+        "delete".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![Type::Any],
+            return_type: Box::new(Type::Boolean),
+            is_variadic: false,
+            required_parameter_count: 1,
+        })),
+    );
+    properties.insert(
+        "clear".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType {
+            parameters: vec![],
+            return_type: Box::new(Type::Void),
+            is_variadic: false,
+            required_parameter_count: 0,
+        })),
+    );
+    properties.insert("size".to_string(), ObjectProperty::required(Type::Number));
+
+    Type::Object(ObjectType {
+        properties,
+        string_index_type: None,
+    })
 }
 
 fn bind_type_arguments(

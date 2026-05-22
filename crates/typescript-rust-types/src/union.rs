@@ -21,6 +21,22 @@ pub fn remove_undefined(ty: &Type) -> Type {
     }
 }
 
+pub fn remove_nullish(ty: &Type) -> Type {
+    match ty {
+        Type::Union(union) => {
+            let filtered: Vec<Type> = union
+                .types
+                .iter()
+                .filter(|t| **t != Type::Undefined && **t != Type::Void)
+                .cloned()
+                .collect();
+            union_type(filtered)
+        }
+        Type::Undefined | Type::Void => Type::Unknown,
+        _ => ty.clone(),
+    }
+}
+
 pub fn union_type(types: Vec<Type>) -> Type {
     let mut flattened = Vec::new();
 

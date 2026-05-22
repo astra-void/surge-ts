@@ -157,6 +157,97 @@ fn project_mode_maps_strict_to_no_implicit_any() {
 }
 
 #[test]
+fn project_mode_generated_default_libs_visible_by_default() {
+    let root = temp_dir("project-default-lib-visible");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"
+        {
+          "compilerOptions": {},
+          "include": ["src/**/*.ts"]
+        }
+        "#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        const n = Math.max(1, 2);
+        const transport: AuthenticatorTransport = "usb";
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(json_diagnostics(&parsed).is_empty());
+}
+
+#[test]
+fn project_mode_lib_option_es_only_skips_dom_generated_libs() {
+    let root = temp_dir("project-lib-es-only");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"
+        {
+          "compilerOptions": {
+            "lib": ["ES2022"]
+          },
+          "include": ["src/**/*.ts"]
+        }
+        "#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        const n = Math.max(1, 2);
+        const transport: AuthenticatorTransport = "usb";
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert_eq!(json_diagnostic_codes(&parsed), vec!["TS2304"]);
+}
+
+#[test]
+fn project_mode_lib_option_dom_enables_authenticator_transport() {
+    let root = temp_dir("project-lib-dom");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"
+        {
+          "compilerOptions": {
+            "lib": ["ES2022", "DOM"]
+          },
+          "include": ["src/**/*.ts"]
+        }
+        "#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        const n = Math.max(1, 2);
+        const transport: AuthenticatorTransport = "usb";
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(json_diagnostics(&parsed).is_empty());
+}
+
+#[test]
 fn show_config_omits_base_url_and_keeps_paths() {
     let root = temp_dir("show-config-paths");
     write_file(

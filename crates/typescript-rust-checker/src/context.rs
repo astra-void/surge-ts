@@ -100,6 +100,7 @@ pub(crate) struct CheckerContext {
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
+    pub(crate) module_file_index_by_identity: HashMap<String, usize>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     file_kinds: HashMap<String, FileKind>,
 }
@@ -128,6 +129,7 @@ impl CheckerContext {
             ambient_modules: std::collections::HashMap::new(),
             ambient_global_symbols: SymbolTable::new(),
             ambient_global_type_declarations: TypeDeclarationTable::new(),
+            module_file_index_by_identity: HashMap::new(),
             type_parameter_scopes: Vec::new(),
             file_kinds,
         }
@@ -164,6 +166,13 @@ impl CheckerContext {
 
     pub(crate) fn set_symbols(&mut self, symbols: SymbolTable) {
         self.symbols = symbols;
+    }
+
+    pub(crate) fn set_module_file_index_by_identity(
+        &mut self,
+        module_file_index_by_identity: HashMap<String, usize>,
+    ) {
+        self.module_file_index_by_identity = module_file_index_by_identity;
     }
 
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
@@ -218,6 +227,10 @@ impl CheckerContext {
     fn should_suppress(&self, diagnostic: &Diagnostic) -> bool {
         if self.options.diagnostic_profile == DiagnosticProfile::Native {
             return false;
+        }
+
+        if self.current_file_kind == FileKind::GeneratedDeclaration {
+            return diagnostic.code.to_string() != "typescript-rust::parser-error";
         }
 
         let code = diagnostic.code.to_string();

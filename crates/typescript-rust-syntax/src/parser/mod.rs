@@ -1,8 +1,8 @@
 use oxc_ast::ast::{
     ArrayPattern, AssignmentOperator, AssignmentTarget, BindingPattern, BindingProperty,
     Declaration, Expression, ExpressionStatement, ModuleDeclaration, ObjectPattern, PropertyKey,
-    Statement, TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName,
-    VariableDeclaration, VariableDeclarationKind,
+    Statement, TSGlobalDeclaration, TSModuleDeclaration, TSModuleDeclarationBody,
+    TSModuleDeclarationName, VariableDeclaration, VariableDeclarationKind,
 };
 
 use crate::{
@@ -90,6 +90,7 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
         Declaration::TSInterfaceDeclaration(interface) => parse_interface_declaration(interface)
             .map(|interface| vec![ParsedStatement::InterfaceDeclaration(interface)]),
         Declaration::TSModuleDeclaration(module) => Some(parse_ts_module_declaration(module)),
+        Declaration::TSGlobalDeclaration(global) => Some(parse_ts_global_declaration(global)),
         Declaration::TSImportEqualsDeclaration(import_equals) => {
             parse_import_equals_declaration(import_equals)
                 .map(|import| vec![ParsedStatement::ImportDeclaration(import)])
@@ -380,6 +381,25 @@ fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedSt
             module_specifier_span: Some(text_span_from_oxc_span(module.id.span())),
             statements,
             span: Some(text_span_from_oxc_span(module.span)),
+        },
+    )]
+}
+
+fn parse_ts_global_declaration(global: &TSGlobalDeclaration<'_>) -> Vec<ParsedStatement> {
+    let statements = global
+        .body
+        .body
+        .iter()
+        .filter_map(parse_statement)
+        .flatten()
+        .collect();
+
+    vec![ParsedStatement::DeclareModuleDeclaration(
+        ParsedDeclareModuleDeclaration {
+            module_specifier: "global".to_string(),
+            module_specifier_span: Some(text_span_from_oxc_span(global.global_span)),
+            statements,
+            span: Some(text_span_from_oxc_span(global.span)),
         },
     )]
 }

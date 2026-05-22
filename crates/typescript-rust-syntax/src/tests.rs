@@ -3299,12 +3299,15 @@ fn parse_declare_namespace_is_unsupported() {
 }
 
 #[test]
-fn parse_declare_global_is_unsupported() {
+fn parse_declare_global_is_supported() {
     let parsed = parse_source("declare global {}", "example.d.ts");
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::UnsupportedDeclaration { .. }
+        ParsedStatement::DeclareModuleDeclaration(ParsedDeclareModuleDeclaration {
+            module_specifier,
+            ..
+        }) if module_specifier == "global"
     ));
 }
 

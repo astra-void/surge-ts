@@ -250,7 +250,7 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
     TsConfigOptionDefinition {
         name: "lib",
         value_kind: TsConfigOptionValueKind::StringArray,
-        support: TsConfigOptionSupport::KnownNoop,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "plugins",

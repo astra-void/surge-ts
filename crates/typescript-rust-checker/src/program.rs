@@ -13,11 +13,16 @@ use typescript_rust_types::FunctionType;
 use crate::checks::{assign, call, expr, function as check_function, var};
 use crate::context::{CheckerContext, CheckerOptions, CompatibilityStats, FileKind};
 use crate::driver::validate_direct_utility_aliases;
-use crate::driver::{collect_type_declarations, validate_local_type_declarations};
+use crate::driver::{
+    collect_global_augmentations_from_statements, collect_type_declarations,
+    sync_global_this_symbol, validate_local_type_declarations,
+};
+use crate::load_default_lib_inputs;
 use crate::modules::{
     ModuleExportTable, ModuleImportBindings, build_module_export_table,
     resolve_module_export_tables, resolve_module_imports,
 };
+use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{SymbolTable, TypeDeclarationTable};
 
 #[derive(Debug, Clone)]
@@ -27,9 +32,9 @@ pub struct SourceFileInput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct FunctionDeclarationLocation {
-    file_index: usize,
-    statement_index: usize,
+pub(crate) struct FunctionDeclarationLocation {
+    pub(crate) file_index: usize,
+    pub(crate) statement_index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -85,10 +90,38 @@ struct AmbientModuleEntry {
 #[derive(Debug, Default)]
 struct ProgramTimings {
     parsing: Duration,
+    ambient_collection: Duration,
+    generated_default_lib_global_collection: Duration,
+    root_source_global_collection: Duration,
+    dependency_declaration_collection: Duration,
     type_declaration_collection: Duration,
+    preliminary_module_type_binding_collection: Duration,
+    module_analysis_collection: Duration,
+    declaration_table_merging_cloning: Duration,
+    utility_alias_validation: Duration,
     module_binding: Duration,
+    preliminary_export_table_resolution: Duration,
+    final_export_table_resolution: Duration,
+    import_binding_resolution: Duration,
+    module_resolution_scope_construction: Duration,
+    ambient_module_binding: Duration,
+    re_export_resolution: Duration,
+    package_dependency_module_binding: Duration,
+    generated_default_lib_module_handling: Duration,
+    clone_copy_heavy_operations: Duration,
     declaration_validation: Duration,
     per_file_statement_checking: Duration,
+    file_metrics: HashMap<String, FileTimings>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct FileTimings {
+    collect_type_declarations_passes: u64,
+    lowered_type_declarations: u64,
+    validate_local_type_declarations_passes: u64,
+    validate_local_type_declarations_items: u64,
+    collect_type_declarations_duration: Duration,
+    validate_local_type_declarations_duration: Duration,
 }
 
 pub fn check_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
@@ -121,6 +154,9 @@ pub fn check_program_with_stats_and_jobs(
         };
     }
 
+    let mut files = files;
+    inject_generated_default_lib_inputs(&mut files, options.no_lib);
+
     let timings_enabled = std::env::var_os("TYPESCRIPT_RUST_TIMINGS").is_some();
     let timings = timings_enabled.then(|| Arc::new(Mutex::new(ProgramTimings::default())));
 
@@ -129,6 +165,16 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.parsing += parse_start.elapsed()
     });
+    let module_file_index_by_identity = parsed_files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| {
+            (
+                canonicalize_if_exists_string(std::path::Path::new(&file.file_name)),
+                index,
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let file_kinds = parsed_files
         .iter()
         .map(|file| (file.file_name.clone(), file.file_kind))
@@ -138,20 +184,25 @@ pub fn check_program_with_stats_and_jobs(
         .map(|file| file.file_name.clone())
         .unwrap_or_default();
     let mut ctx = CheckerContext::new(first_file_name, options, file_kinds);
+    ctx.set_module_file_index_by_identity(module_file_index_by_identity);
 
     crate::builtins::inject_builtins(&mut ctx);
 
     let mut global_symbols = SymbolTable::new();
     let mut function_signatures = HashMap::new();
 
+    let ambient_collection_start = Instant::now();
     emit_parser_diagnostics(&parsed_files, &mut ctx);
-    collect_ambient_globals(&parsed_files, &mut ctx);
-    collect_ambient_modules(&parsed_files, &mut ctx);
-
-    let type_collection_start = Instant::now();
-    collect_global_type_declarations(&parsed_files, &mut ctx);
+    collect_ambient_globals(&parsed_files, &mut ctx, timings.as_ref());
+    collect_ambient_modules(&parsed_files, &mut ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
-        timings.type_declaration_collection += type_collection_start.elapsed()
+        timings.ambient_collection += ambient_collection_start.elapsed()
+    });
+
+    let type_declaration_collection_start = Instant::now();
+    collect_global_type_declarations(&parsed_files, &mut ctx, timings.as_ref());
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.root_source_global_collection += type_declaration_collection_start.elapsed()
     });
     let global_type_declarations = ctx.type_declarations.clone();
     collect_global_function_signatures(
@@ -165,9 +216,9 @@ pub fn check_program_with_stats_and_jobs(
     // PRELIMINARY PASS: collect types and resolve imports/exports to make them available for function signature collection
     let type_collection_start = Instant::now();
     let (local_type_declarations_by_module, preliminary_module_import_bindings) =
-        collect_preliminary_module_type_bindings(&parsed_files, &mut ctx);
+        collect_preliminary_module_type_bindings(&parsed_files, &mut ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
-        timings.type_declaration_collection += type_collection_start.elapsed()
+        timings.preliminary_module_type_binding_collection += type_collection_start.elapsed()
     });
 
     let type_collection_start = Instant::now();
@@ -176,9 +227,10 @@ pub fn check_program_with_stats_and_jobs(
         &local_type_declarations_by_module,
         &preliminary_module_import_bindings,
         &mut ctx,
+        timings.as_ref(),
     );
     record_program_timing(timings.as_ref(), |timings| {
-        timings.type_declaration_collection += type_collection_start.elapsed()
+        timings.module_analysis_collection += type_collection_start.elapsed()
     });
 
     let local_module_export_tables = preliminary_module_analyses
@@ -190,12 +242,22 @@ pub fn check_program_with_stats_and_jobs(
         })
         .collect::<Vec<_>>();
     let module_binding_start = Instant::now();
+    let export_resolution_start = Instant::now();
     let module_export_tables =
         resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.preliminary_export_table_resolution += export_resolution_start.elapsed()
+    });
+    let scope_build_start = Instant::now();
     let preliminary_module_resolution_scopes = build_module_resolution_scopes(
         &local_type_declarations_by_module,
         &preliminary_module_import_bindings,
+        timings.as_ref(),
     );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.module_resolution_scope_construction += scope_build_start.elapsed()
+    });
+    let import_binding_start = Instant::now();
     let module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &preliminary_module_analyses,
@@ -203,9 +265,20 @@ pub fn check_program_with_stats_and_jobs(
         &preliminary_module_resolution_scopes,
         &mut ctx,
     );
-    let module_resolution_scopes =
-        build_module_resolution_scopes(&local_type_declarations_by_module, &module_import_bindings);
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.import_binding_resolution += import_binding_start.elapsed()
+    });
+    let scope_build_start = Instant::now();
+    let module_resolution_scopes = build_module_resolution_scopes(
+        &local_type_declarations_by_module,
+        &module_import_bindings,
+        timings.as_ref(),
+    );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.module_resolution_scope_construction += scope_build_start.elapsed()
+    });
     let diagnostics_before_second_bindings = ctx.diagnostics().len();
+    let import_binding_start = Instant::now();
     let module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &preliminary_module_analyses,
@@ -213,18 +286,32 @@ pub fn check_program_with_stats_and_jobs(
         &module_resolution_scopes,
         &mut ctx,
     );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.import_binding_resolution += import_binding_start.elapsed()
+    });
     ctx.truncate_diagnostics(diagnostics_before_second_bindings);
-    let module_resolution_scopes =
-        build_module_resolution_scopes(&local_type_declarations_by_module, &module_import_bindings);
+    let scope_build_start = Instant::now();
+    let module_resolution_scopes = build_module_resolution_scopes(
+        &local_type_declarations_by_module,
+        &module_import_bindings,
+        timings.as_ref(),
+    );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.module_resolution_scope_construction += scope_build_start.elapsed()
+    });
     let type_collection_start = Instant::now();
     let module_analyses = collect_module_analyses_with_bindings(
         &parsed_files,
         &local_type_declarations_by_module,
         &module_import_bindings,
         &mut ctx,
+        timings.as_ref(),
     );
     record_program_timing(timings.as_ref(), |timings| {
-        timings.type_declaration_collection += type_collection_start.elapsed()
+        timings.module_analysis_collection += type_collection_start.elapsed()
+    });
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.type_declaration_collection += type_declaration_collection_start.elapsed()
     });
     let local_module_export_tables = module_analyses
         .iter()
@@ -234,9 +321,14 @@ pub fn check_program_with_stats_and_jobs(
                 .map(|analysis| analysis.local_export_table.clone())
         })
         .collect::<Vec<_>>();
+    let export_resolution_start = Instant::now();
     let module_export_tables =
         resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.final_export_table_resolution += export_resolution_start.elapsed()
+    });
     let diagnostics_before_final_bindings = ctx.diagnostics().len();
+    let import_binding_start = Instant::now();
     let module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &module_analyses,
@@ -244,9 +336,20 @@ pub fn check_program_with_stats_and_jobs(
         &module_resolution_scopes,
         &mut ctx,
     );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.import_binding_resolution += import_binding_start.elapsed()
+    });
     ctx.truncate_diagnostics(diagnostics_before_final_bindings);
-    let module_resolution_scopes =
-        build_module_resolution_scopes(&local_type_declarations_by_module, &module_import_bindings);
+    let scope_build_start = Instant::now();
+    let module_resolution_scopes = build_module_resolution_scopes(
+        &local_type_declarations_by_module,
+        &module_import_bindings,
+        timings.as_ref(),
+    );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.module_resolution_scope_construction += scope_build_start.elapsed()
+    });
+    sync_global_this_symbol(&mut ctx);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
     });
@@ -286,6 +389,7 @@ pub fn check_program_with_stats_and_jobs(
 fn collect_preliminary_module_type_bindings(
     parsed_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> (
     Vec<Option<TypeDeclarationTable>>,
     Vec<Option<ModuleImportBindings>>,
@@ -308,8 +412,16 @@ fn collect_preliminary_module_type_bindings(
             std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
         let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
 
+        let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
         let local_type_declarations = ctx.type_declarations.clone();
+        let lowered_type_declarations = local_type_declarations.len() as u64;
+        let collect_duration = collect_start.elapsed();
+        record_program_file_timing(timings, &parsed_file.file_name, |metrics| {
+            metrics.collect_type_declarations_passes += 1;
+            metrics.lowered_type_declarations += lowered_type_declarations;
+            metrics.collect_type_declarations_duration += collect_duration;
+        });
 
         let preliminary_export_table = build_module_export_table(
             parsed_file,
@@ -319,6 +431,8 @@ fn collect_preliminary_module_type_bindings(
             ctx,
         );
 
+        collect_global_augmentations_from_statements(&parsed_file.statements, ctx);
+
         ctx.type_declarations = saved_type_declarations;
         ctx.symbols = saved_symbols;
 
@@ -326,15 +440,24 @@ fn collect_preliminary_module_type_bindings(
         preliminary_local_export_tables.push(Some(preliminary_export_table));
     }
 
+    let preliminary_export_resolution_start = Instant::now();
     let preliminary_module_export_tables =
         resolve_module_export_tables(parsed_files, &preliminary_local_export_tables, ctx);
+    record_program_timing(timings, |timings| {
+        timings.preliminary_export_table_resolution += preliminary_export_resolution_start.elapsed()
+    });
 
+    let preliminary_scope_start = Instant::now();
     let preliminary_module_resolution_scopes = local_type_declarations_by_module
         .iter()
         .map(|td| td.as_ref().map(|td| Arc::new(td.clone())))
         .collect::<Vec<_>>();
+    record_program_timing(timings, |timings| {
+        timings.module_resolution_scope_construction += preliminary_scope_start.elapsed()
+    });
 
     let mut preliminary_module_import_bindings = Vec::with_capacity(parsed_files.len());
+    let preliminary_import_resolution_start = Instant::now();
     for (_file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !parsed_file.is_module {
             preliminary_module_import_bindings.push(None);
@@ -352,6 +475,9 @@ fn collect_preliminary_module_type_bindings(
         );
         preliminary_module_import_bindings.push(Some(imported_bindings));
     }
+    record_program_timing(timings, |timings| {
+        timings.import_binding_resolution += preliminary_import_resolution_start.elapsed()
+    });
 
     // Discard any diagnostics emitted during the preliminary pass
     ctx.truncate_diagnostics(initial_diagnostics_len);
@@ -367,6 +493,7 @@ fn collect_module_analyses_with_bindings(
     _local_type_declarations_by_module: &[Option<TypeDeclarationTable>],
     preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
     ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<Option<ModuleAnalysis>> {
     let mut analyses = Vec::with_capacity(parsed_files.len());
 
@@ -383,10 +510,19 @@ fn collect_module_analyses_with_bindings(
         let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
 
         // Re-run collect_type_declarations to emit the correct TS2300 diagnostics
+        let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
         let local_type_declarations = ctx.type_declarations.clone();
+        let lowered_type_declarations = local_type_declarations.len() as u64;
+        let collect_duration = collect_start.elapsed();
+        record_program_file_timing(timings, &parsed_file.file_name, |metrics| {
+            metrics.collect_type_declarations_passes += 1;
+            metrics.lowered_type_declarations += lowered_type_declarations;
+            metrics.collect_type_declarations_duration += collect_duration;
+        });
 
         // Set up the full type environment for function signature collection
+        let merge_start = Instant::now();
         let mut full_type_declarations = ctx.ambient_global_type_declarations.clone();
         for (k, v) in local_type_declarations.iter() {
             let _ = full_type_declarations.insert(k.clone(), v.clone());
@@ -398,6 +534,9 @@ fn collect_module_analyses_with_bindings(
         }
         let full_type_declarations_scope = Arc::new(full_type_declarations.clone());
         ctx.type_declarations = full_type_declarations;
+        record_program_timing(timings, |timings| {
+            timings.declaration_table_merging_cloning += merge_start.elapsed()
+        });
 
         let mut local_symbols = SymbolTable::new();
         let mut local_function_signatures = HashMap::new();
@@ -411,6 +550,11 @@ fn collect_module_analyses_with_bindings(
         );
         ctx.truncate_diagnostics(diagnostics_before_signatures);
         ctx.resolved_named_types = Arc::new(Mutex::new(HashMap::new()));
+
+        let saved_symbols_for_global_augments =
+            std::mem::replace(&mut ctx.symbols, local_symbols.clone());
+        collect_global_augmentations_from_statements(&parsed_file.statements, ctx);
+        ctx.symbols = saved_symbols_for_global_augments;
 
         let export_table = build_module_export_table(
             parsed_file,
@@ -455,6 +599,7 @@ fn parse_program_files(files: Vec<SourceFileInput>) -> Vec<ParsedProgramFile> {
 fn build_module_resolution_scopes(
     local_type_declarations_by_module: &[Option<TypeDeclarationTable>],
     module_import_bindings: &[Option<ModuleImportBindings>],
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<Option<Arc<TypeDeclarationTable>>> {
     local_type_declarations_by_module
         .iter()
@@ -464,6 +609,7 @@ fn build_module_resolution_scopes(
                 return None;
             };
 
+            let clone_start = Instant::now();
             let mut merged_type_declarations = local_type_declarations.clone();
             if let Some(imported) = module_import_bindings
                 .get(file_index)
@@ -474,6 +620,9 @@ fn build_module_resolution_scopes(
                 }
             }
 
+            record_program_timing(timings, |timings| {
+                timings.clone_copy_heavy_operations += clone_start.elapsed()
+            });
             Some(Arc::new(merged_type_declarations))
         })
         .collect()
@@ -504,8 +653,12 @@ fn is_generated_declaration_file_name(file_name: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
     lower.contains("/.nuxt/")
         || lower.contains("/.generated/")
+        || lower.contains("/generated-libs/")
         || lower.contains("/generated/")
         || lower.contains("/dist/")
+        || lower.ends_with(".generated.d.ts")
+        || lower.ends_with(".generated.d.mts")
+        || lower.ends_with(".generated.d.cts")
 }
 
 fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
@@ -521,14 +674,44 @@ fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
     }
 }
 
-fn collect_global_type_declarations(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
+fn inject_generated_default_lib_inputs(files: &mut Vec<SourceFileInput>, no_lib: bool) {
+    if no_lib
+        || files
+            .iter()
+            .any(|file| crate::default_lib::is_generated_default_lib_file_name(&file.file_name))
+    {
+        return;
+    }
+
+    let mut default_lib_inputs = load_default_lib_inputs(false, None);
+    if default_lib_inputs.is_empty() {
+        return;
+    }
+
+    default_lib_inputs.extend(files.drain(..));
+    *files = default_lib_inputs;
+}
+
+fn collect_global_type_declarations(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) {
     for parsed_file in parsed_files {
         if parsed_file.is_module && !parsed_file.file_kind.is_declaration() {
             continue;
         }
 
         ctx.set_file_name(parsed_file.file_name.clone());
+        let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
+        let lowered_type_declarations = ctx.type_declarations.len() as u64;
+        let collect_duration = collect_start.elapsed();
+        record_program_file_timing(timings, &parsed_file.file_name, |timings| {
+            timings.collect_type_declarations_passes += 1;
+            timings.lowered_type_declarations += lowered_type_declarations;
+            timings.collect_type_declarations_duration += collect_duration
+        });
     }
 }
 
@@ -718,13 +901,11 @@ fn check_program_file(
         }
 
         let mut merged_symbols = ctx.ambient_global_symbols.clone();
-        for (name, symbol) in module_analysis.local_symbols.iter() {
+        for (name, symbol) in imported_bindings.symbols.iter() {
             let _ = merged_symbols.insert(name.clone(), symbol.clone());
         }
-        for (name, symbol) in imported_bindings.symbols.iter() {
-            if merged_symbols.get(name).is_none() {
-                merged_symbols.insert(name.clone(), symbol.clone());
-            }
+        for (name, symbol) in module_analysis.local_symbols.iter() {
+            let _ = merged_symbols.insert(name.clone(), symbol.clone());
         }
 
         ctx.type_declarations = merged_type_declarations;
@@ -732,9 +913,21 @@ fn check_program_file(
 
         let validation_start = Instant::now();
         validate_local_type_declarations(&parsed_file.statements, &parsed_file.file_name, ctx);
+        let validation_duration = validation_start.elapsed();
+        record_program_timing(timings, |timings| {
+            timings.declaration_validation += validation_duration
+        });
+        record_program_file_timing(timings, &parsed_file.file_name, |metrics| {
+            metrics.validate_local_type_declarations_passes += 1;
+            metrics.validate_local_type_declarations_items +=
+                count_local_type_declarations_in_statements(&parsed_file.statements) as u64;
+            metrics.validate_local_type_declarations_duration += validation_duration;
+        });
+
+        let utility_validation_start = Instant::now();
         validate_direct_utility_aliases(&parsed_file.statements, ctx);
         record_program_timing(timings, |timings| {
-            timings.declaration_validation += validation_start.elapsed()
+            timings.utility_alias_validation += utility_validation_start.elapsed()
         });
 
         let mut signature_ctx = ctx.clone();
@@ -783,9 +976,21 @@ fn check_program_file(
 
         let validation_start = Instant::now();
         validate_local_type_declarations(&parsed_file.statements, &parsed_file.file_name, ctx);
+        let validation_duration = validation_start.elapsed();
+        record_program_timing(timings, |timings| {
+            timings.declaration_validation += validation_duration
+        });
+        record_program_file_timing(timings, &parsed_file.file_name, |metrics| {
+            metrics.validate_local_type_declarations_passes += 1;
+            metrics.validate_local_type_declarations_items +=
+                count_local_type_declarations_in_statements(&parsed_file.statements) as u64;
+            metrics.validate_local_type_declarations_duration += validation_duration;
+        });
+
+        let utility_validation_start = Instant::now();
         validate_direct_utility_aliases(&parsed_file.statements, ctx);
         record_program_timing(timings, |timings| {
-            timings.declaration_validation += validation_start.elapsed()
+            timings.utility_alias_validation += utility_validation_start.elapsed()
         });
 
         let statement_check_start = Instant::now();
@@ -845,7 +1050,7 @@ fn collect_module_import_bindings(
     module_import_bindings
 }
 
-fn collect_function_signatures_from_statements(
+pub(crate) fn collect_function_signatures_from_statements(
     statements: &[ParsedStatement],
     file_index: usize,
     symbols: &mut SymbolTable,
@@ -1104,7 +1309,30 @@ fn check_program_function_declaration(
     ctx.symbols = saved_symbols;
 }
 
-fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
+fn count_local_type_declarations_in_statements(statements: &[ParsedStatement]) -> usize {
+    statements
+        .iter()
+        .map(count_local_type_declarations_in_statement)
+        .sum()
+}
+
+fn count_local_type_declarations_in_statement(statement: &ParsedStatement) -> usize {
+    match statement {
+        ParsedStatement::TypeAliasDeclaration(_) => 1,
+        ParsedStatement::InterfaceDeclaration(_) => 1,
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+            declaration,
+            ..
+        }) => count_local_type_declarations_in_statement(declaration.as_ref()),
+        _ => 0,
+    }
+}
+
+fn collect_ambient_globals(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) {
     for parsed_file in parsed_files {
         if !parsed_file.file_kind.is_declaration() {
             continue;
@@ -1114,8 +1342,23 @@ fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
 
         let saved_type_declarations =
             std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+        let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
         let ambient_td = ctx.type_declarations.clone();
+        let lowered_type_declarations = ambient_td.len() as u64;
+        let collect_duration = collect_start.elapsed();
+        record_program_file_timing(timings, &parsed_file.file_name, |metrics| {
+            metrics.collect_type_declarations_passes += 1;
+            metrics.lowered_type_declarations += lowered_type_declarations;
+            metrics.collect_type_declarations_duration += collect_duration;
+        });
+        record_program_timing(timings, |timings| {
+            if parsed_file.file_kind == FileKind::GeneratedDeclaration {
+                timings.generated_default_lib_global_collection += collect_duration;
+            } else {
+                timings.dependency_declaration_collection += collect_duration;
+            }
+        });
 
         for (name, decl) in ambient_td.iter() {
             let _ = ctx
@@ -1217,7 +1460,12 @@ fn collect_ambient_globals(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
     }
 }
 
-fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
+fn collect_ambient_modules(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) {
+    let ambient_binding_start = Instant::now();
     let mut ambient_module_entries = Vec::<AmbientModuleEntry>::new();
     let mut ambient_module_indexes = HashMap::<String, usize>::new();
 
@@ -1228,10 +1476,15 @@ fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                 continue;
             };
 
+            if module.module_specifier == "global" {
+                continue;
+            }
+
             let saved_type_declarations =
                 std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
             let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
 
+            let collect_start = Instant::now();
             collect_type_declarations(&module.statements, ctx);
             let mut local_function_signatures = HashMap::new();
             let mut current_symbols = std::mem::take(&mut ctx.symbols);
@@ -1316,6 +1569,7 @@ fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                 Some(Arc::new(current_type_declarations.clone())),
                 ctx,
             );
+            let lowered_type_declarations = current_type_declarations.len() as u64;
             ctx.type_declarations = current_type_declarations;
             ctx.symbols = current_symbols;
 
@@ -1347,6 +1601,12 @@ fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
 
             ctx.type_declarations = saved_type_declarations;
             ctx.symbols = saved_symbols;
+            let collect_duration = collect_start.elapsed();
+            record_program_file_timing(timings, &parsed_file.file_name, |metrics| {
+                metrics.collect_type_declarations_passes += 1;
+                metrics.lowered_type_declarations += lowered_type_declarations;
+                metrics.collect_type_declarations_duration += collect_duration;
+            });
         }
     }
 
@@ -1379,6 +1639,10 @@ fn collect_ambient_modules(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
                 .insert(entry.module_specifier.clone(), resolved_export_table);
         }
     }
+
+    record_program_timing(timings, |timings| {
+        timings.ambient_module_binding += ambient_binding_start.elapsed()
+    });
 }
 
 fn merge_module_export_tables(target: &mut ModuleExportTable, source: &ModuleExportTable) {
@@ -1477,6 +1741,20 @@ fn record_program_timing(
     }
 }
 
+fn record_program_file_timing(
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+    file_name: &str,
+    update: impl FnOnce(&mut FileTimings),
+) {
+    let Some(timings) = timings else {
+        return;
+    };
+
+    if let Ok(mut guard) = timings.lock() {
+        update(guard.file_metrics.entry(file_name.to_string()).or_default());
+    }
+}
+
 fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     let Ok(timings) = timings.lock() else {
         return;
@@ -1485,12 +1763,80 @@ fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     eprintln!("Timings:");
     eprintln!("  parsing: {}", format_duration(timings.parsing));
     eprintln!(
+        "  ambient_collection: {}",
+        format_duration(timings.ambient_collection)
+    );
+    eprintln!(
+        "  generated_default_lib_global_collection: {}",
+        format_duration(timings.generated_default_lib_global_collection)
+    );
+    eprintln!(
+        "  root_source_global_collection: {}",
+        format_duration(timings.root_source_global_collection)
+    );
+    eprintln!(
+        "  dependency_declaration_collection: {}",
+        format_duration(timings.dependency_declaration_collection)
+    );
+    eprintln!(
         "  type_declaration_collection: {}",
         format_duration(timings.type_declaration_collection)
     );
     eprintln!(
+        "    preliminary_module_type_binding_collection: {}",
+        format_duration(timings.preliminary_module_type_binding_collection)
+    );
+    eprintln!(
+        "    module_analysis_collection: {}",
+        format_duration(timings.module_analysis_collection)
+    );
+    eprintln!(
+        "    declaration_table_merging_cloning: {}",
+        format_duration(timings.declaration_table_merging_cloning)
+    );
+    eprintln!(
+        "    utility_alias_validation: {}",
+        format_duration(timings.utility_alias_validation)
+    );
+    eprintln!(
         "  module_binding: {}",
         format_duration(timings.module_binding)
+    );
+    eprintln!(
+        "    preliminary_export_table_resolution: {}",
+        format_duration(timings.preliminary_export_table_resolution)
+    );
+    eprintln!(
+        "    final_export_table_resolution: {}",
+        format_duration(timings.final_export_table_resolution)
+    );
+    eprintln!(
+        "    import_binding_resolution: {}",
+        format_duration(timings.import_binding_resolution)
+    );
+    eprintln!(
+        "    module_resolution_scope_construction: {}",
+        format_duration(timings.module_resolution_scope_construction)
+    );
+    eprintln!(
+        "    ambient_module_binding: {}",
+        format_duration(timings.ambient_module_binding)
+    );
+    eprintln!(
+        "    re_export_resolution: {}",
+        format_duration(timings.re_export_resolution)
+    );
+    eprintln!(
+        "    package_dependency_module_binding: {}",
+        format_duration(timings.package_dependency_module_binding)
+    );
+    eprintln!(
+        "    generated_default_lib_module_handling: {}",
+        format_duration(timings.generated_default_lib_module_handling)
+    );
+    eprintln!(
+        "    clone_copy_heavy_operations: {}",
+        format_duration(timings.clone_copy_heavy_operations)
     );
     eprintln!(
         "  declaration_validation: {}",
@@ -1500,6 +1846,28 @@ fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "  per_file_statement_checking: {}",
         format_duration(timings.per_file_statement_checking)
     );
+    if !timings.file_metrics.is_empty() {
+        let mut file_metrics = timings.file_metrics.iter().collect::<Vec<_>>();
+        file_metrics.sort_by(|(file_a, metrics_a), (file_b, metrics_b)| {
+            metrics_b
+                .collect_type_declarations_passes
+                .cmp(&metrics_a.collect_type_declarations_passes)
+                .then_with(|| file_a.cmp(file_b))
+        });
+
+        eprintln!("  file_metrics:");
+        for (file_name, metrics) in file_metrics {
+            eprintln!(
+                "    {} | collect_type_declarations={} lower_type_declarations={} validate_local_type_declarations={} | collect_time={} validate_time={}",
+                file_name,
+                metrics.collect_type_declarations_passes,
+                metrics.lowered_type_declarations,
+                metrics.validate_local_type_declarations_passes,
+                format_duration(metrics.collect_type_declarations_duration),
+                format_duration(metrics.validate_local_type_declarations_duration)
+            );
+        }
+    }
 }
 
 fn format_duration(duration: Duration) -> String {

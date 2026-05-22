@@ -21,8 +21,6 @@ export function createAdapter(db: any): Adapter {
 
 export function wrongAdapter(db: any): Adapter {
   return {
-    createPasskey: async (userId) => {
-      return 123;
-    },
+    createPasskey: async (userId) => { return 123; },
   };
 }

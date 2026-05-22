@@ -105,7 +105,9 @@ pub fn build_project_compatibility_report(
             FileKindLabel::GeneratedDeclaration => loaded_generated_declaration_files += 1,
         }
 
-        if is_declaration_file_name(file_name) {
+        if is_declaration_file_name(file_name)
+            && classify_file_kind(file_name) != FileKindLabel::GeneratedDeclaration
+        {
             declaration_files_loaded += 1;
         }
         let parsed = typescript_rust_syntax::parse_source(source_text, file_name);
@@ -899,8 +901,12 @@ fn classify_file_kind(file_name: &str) -> FileKindLabel {
     if is_decl {
         if lower.contains("/.nuxt/")
             || lower.contains("/.generated/")
+            || lower.contains("/generated-libs/")
             || lower.contains("/generated/")
             || lower.contains("/dist/")
+            || lower.ends_with(".generated.d.ts")
+            || lower.ends_with(".generated.d.mts")
+            || lower.ends_with(".generated.d.cts")
         {
             return FileKindLabel::GeneratedDeclaration;
         }

@@ -281,6 +281,7 @@ pub enum ParsedExpression {
     NumberLiteral(String),
     BooleanLiteral(bool),
     UndefinedLiteral,
+    NullLiteral,
     Identifier {
         name: String,
         span: Option<TextSpan>,

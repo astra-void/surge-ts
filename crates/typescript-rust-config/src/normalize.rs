@@ -72,6 +72,9 @@ pub(crate) fn normalize_compiler_options(
             "paths" => {
                 normalized.paths = parse_paths_option(value, diagnostics, config_dir);
             }
+            "lib" => {
+                normalized.lib = parse_string_list_option(value, diagnostics, config_dir);
+            }
             "typeRoots" => {
                 normalized.type_roots = parse_path_list_option(value, config_dir, diagnostics);
             }

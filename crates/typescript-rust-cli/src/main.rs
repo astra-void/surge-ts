@@ -15,6 +15,7 @@ use report::{
 use serde_json::{Map, Value};
 use typescript_rust_checker::{
     CheckerOptions, SourceFileInput, check_program_with_stats_and_jobs, check_source_with_options,
+    load_default_lib_inputs,
 };
 use typescript_rust_config::{TsConfigLoadOptions, canonicalize_if_exists_string, load_tsconfig};
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode, render_diagnostics};
@@ -38,6 +39,7 @@ impl Into<typescript_rust_checker::DiagnosticProfile> for CliDiagnosticProfile {
 struct CliTimings {
     config_project_loading: std::time::Duration,
     file_discovery: std::time::Duration,
+    default_lib_loading: std::time::Duration,
     package_declaration_discovery: std::time::Duration,
     import_graph_expansion: std::time::Duration,
     diagnostic_rendering: std::time::Duration,
@@ -344,6 +346,30 @@ fn run_project_mode(
         timings.file_discovery += file_discovery_start.elapsed();
     }
 
+    let default_lib_loading_start = Instant::now();
+    let default_lib_inputs = load_default_lib_inputs(
+        loaded.compiler_options.no_lib,
+        Some(loaded.compiler_options.lib.as_slice()),
+    );
+    if timings_enabled {
+        timings.default_lib_loading += default_lib_loading_start.elapsed();
+    }
+
+    if !default_lib_inputs.is_empty() {
+        let default_lib_sources = default_lib_inputs
+            .iter()
+            .map(|input| {
+                (
+                    PathBuf::from(&input.file_name),
+                    input.file_name.clone(),
+                    input.source_text.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        inputs.splice(0..0, default_lib_inputs);
+        sources.splice(0..0, default_lib_sources);
+    }
+
     let mut resolved_modules = std::collections::HashMap::new();
     let mut package_resolution_cache =
         package_declarations::PackageDeclarationResolverCache::default();
@@ -567,6 +593,10 @@ fn render_cli_timings(timings: &CliTimings) {
     eprintln!(
         "  file_discovery: {}",
         format_duration(timings.file_discovery)
+    );
+    eprintln!(
+        "  default_lib_loading: {}",
+        format_duration(timings.default_lib_loading)
     );
     eprintln!(
         "  package_declaration_discovery: {}",
@@ -836,6 +866,18 @@ fn build_compiler_options_json(
                             ),
                         )
                     })
+                    .collect(),
+            ),
+        );
+    }
+    if !compiler_options.lib.is_empty() {
+        options.insert(
+            "lib".to_string(),
+            Value::Array(
+                compiler_options
+                    .lib
+                    .iter()
+                    .map(|lib| Value::String(lib.clone()))
                     .collect(),
             ),
         );

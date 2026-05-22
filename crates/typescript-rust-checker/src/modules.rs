@@ -19,9 +19,6 @@ use crate::{
 };
 use typescript_rust_types::Type;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ModuleKey(String);
-
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleResolution {
     pub(crate) resolved_file_index: usize,
@@ -61,16 +58,11 @@ pub(crate) fn resolve_relative_module(
     importer_file_name: &str,
     specifier: &str,
     program_files: &[ParsedProgramFile],
+    file_index_by_identity: &HashMap<String, usize>,
 ) -> Option<ModuleResolution> {
     if !is_relative_specifier(specifier) {
         return None;
     }
-
-    let file_index_by_key = program_files
-        .iter()
-        .enumerate()
-        .map(|(index, file)| (ModuleKey(canonical_file_identity(&file.file_name)), index))
-        .collect::<HashMap<_, _>>();
 
     let importer_dir = module_directory(importer_file_name);
     let normalized_specifier = normalize_path_string(specifier);
@@ -115,7 +107,7 @@ pub(crate) fn resolve_relative_module(
 
     for candidate in candidate_paths {
         let candidate = canonical_file_identity(&candidate);
-        if let Some(resolved_file_index) = file_index_by_key.get(&ModuleKey(candidate)) {
+        if let Some(resolved_file_index) = file_index_by_identity.get(&candidate) {
             return Some(ModuleResolution {
                 resolved_file_index: *resolved_file_index,
                 resolved_file_name: program_files[*resolved_file_index].file_name.clone(),
@@ -236,16 +228,12 @@ fn try_resolve_module(
 )> {
     if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
-        if let Some((resolved_index, _)) = program_files
-            .iter()
-            .enumerate()
-            .find(|(_, file)| canonical_file_identity(&file.file_name) == resolved_file_name)
-        {
-            if let Some(Some(export_table)) = module_export_tables.get(resolved_index) {
+        if let Some(resolved_index) = ctx.module_file_index_by_identity.get(&resolved_file_name) {
+            if let Some(Some(export_table)) = module_export_tables.get(*resolved_index) {
                 let scope = module_resolution_scopes
-                    .get(resolved_index)
+                    .get(*resolved_index)
                     .and_then(|scope| scope.clone());
-                return Some((export_table.clone(), scope, Some(resolved_index)));
+                return Some((export_table.clone(), scope, Some(*resolved_index)));
             }
         }
     }
@@ -258,8 +246,12 @@ fn try_resolve_module(
         ));
     }
 
-    if let Some(resolved) = resolve_relative_module(&ctx.file_name, module_specifier, program_files)
-    {
+    if let Some(resolved) = resolve_relative_module(
+        &ctx.file_name,
+        module_specifier,
+        program_files,
+        &ctx.module_file_index_by_identity,
+    ) {
         if let Some(Some(export_table)) = module_export_tables.get(resolved.resolved_file_index) {
             let scope = module_resolution_scopes
                 .get(resolved.resolved_file_index)
@@ -286,10 +278,10 @@ fn try_resolve_module_export_table(
 ) -> Option<(ModuleExportTable, Option<usize>)> {
     if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
-        if let Some((resolved_index, _)) = parsed_files
-            .iter()
-            .enumerate()
-            .find(|(_, file)| canonical_file_identity(&file.file_name) == resolved_file_name)
+        if let Some(resolved_index) = ctx
+            .module_file_index_by_identity
+            .get(&resolved_file_name)
+            .copied()
         {
             if let Some(export_table) = resolve_module_export_table(
                 resolved_index,
@@ -308,7 +300,12 @@ fn try_resolve_module_export_table(
         return Some((export_table.clone(), None));
     }
 
-    if let Some(resolved) = resolve_relative_module(file_name, module_specifier, parsed_files) {
+    if let Some(resolved) = resolve_relative_module(
+        file_name,
+        module_specifier,
+        parsed_files,
+        &ctx.module_file_index_by_identity,
+    ) {
         if let Some(export_table) = resolve_module_export_table(
             resolved.resolved_file_index,
             parsed_files,
@@ -371,6 +368,7 @@ pub(crate) fn resolve_module_export_table(
                         &parsed_files[file_index].file_name,
                         module_specifier,
                         parsed_files,
+                        &ctx.module_file_index_by_identity,
                     )
                     .is_none()
                     {
@@ -468,7 +466,13 @@ pub(crate) fn resolve_module_export_table(
                     if !found {
                         if target_export_table.has_unresolved_star_export
                             || resolved_index
-                                .map(|i| module_has_unresolved_star_export(i, parsed_files))
+                                .map(|i| {
+                                    module_has_unresolved_star_export(
+                                        i,
+                                        parsed_files,
+                                        &ctx.module_file_index_by_identity,
+                                    )
+                                })
                                 .unwrap_or(false)
                         {
                             insert_unknown_type_import(
@@ -546,6 +550,7 @@ pub(crate) fn resolve_module_export_table(
                         &parsed_files[file_index].file_name,
                         module_specifier,
                         parsed_files,
+                        &ctx.module_file_index_by_identity,
                     )
                     .is_none()
                     {
@@ -893,8 +898,13 @@ fn resolve_import_declaration(
                 module_export_tables,
                 module_resolution_scopes,
             ) else {
-                if resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
-                    .is_none()
+                if resolve_relative_module(
+                    &ctx.file_name,
+                    &import.module_specifier,
+                    program_files,
+                    &ctx.module_file_index_by_identity,
+                )
+                .is_none()
                 {
                     if !(ctx.options.stub_external_modules
                         && is_external_specifier(&import.module_specifier))
@@ -1116,8 +1126,13 @@ fn resolve_import_declaration(
                 module_export_tables,
                 module_resolution_scopes,
             ) else {
-                if resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
-                    .is_none()
+                if resolve_relative_module(
+                    &ctx.file_name,
+                    &import.module_specifier,
+                    program_files,
+                    &ctx.module_file_index_by_identity,
+                )
+                .is_none()
                 {
                     if !(ctx.options.stub_external_modules
                         && is_external_specifier(&import.module_specifier))
@@ -1190,8 +1205,13 @@ fn resolve_import_declaration(
             ) {
                 namespace_export_object_type(&export_table)
             } else {
-                if resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
-                    .is_none()
+                if resolve_relative_module(
+                    &ctx.file_name,
+                    &import.module_specifier,
+                    program_files,
+                    &ctx.module_file_index_by_identity,
+                )
+                .is_none()
                 {
                     if !(ctx.options.stub_external_modules
                         && is_external_specifier(&import.module_specifier))
@@ -1226,8 +1246,13 @@ fn resolve_import_declaration(
             {
                 return;
             }
-            if resolve_relative_module(&ctx.file_name, &import.module_specifier, program_files)
-                .is_none()
+            if resolve_relative_module(
+                &ctx.file_name,
+                &import.module_specifier,
+                program_files,
+                &ctx.module_file_index_by_identity,
+            )
+            .is_none()
             {
                 if !(ctx.options.stub_external_modules
                     && is_external_specifier(&import.module_specifier))
@@ -1252,6 +1277,7 @@ fn resolve_import_declaration(
                     &ctx.file_name,
                     &import.module_specifier,
                     program_files,
+                    &ctx.module_file_index_by_identity,
                 ) else {
                     if !(ctx.options.stub_external_modules
                         && is_external_specifier(&import.module_specifier))
@@ -1387,7 +1413,13 @@ fn resolve_import_declaration(
 
             let has_unresolved_star_export = export_table.has_unresolved_star_export
                 || resolved_index
-                    .map(|i| module_has_unresolved_star_export(i, program_files))
+                    .map(|i| {
+                        module_has_unresolved_star_export(
+                            i,
+                            program_files,
+                            &ctx.module_file_index_by_identity,
+                        )
+                    })
                     .unwrap_or(false);
 
             for specifier in specifiers {
@@ -1702,6 +1734,7 @@ fn emit_unresolved_module_diagnostic(ctx: &mut CheckerContext, import: &ParsedIm
 fn module_has_unresolved_star_export(
     file_index: usize,
     parsed_files: &[ParsedProgramFile],
+    file_index_by_identity: &HashMap<String, usize>,
 ) -> bool {
     parsed_files[file_index].statements.iter().any(|statement| {
         let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
@@ -1716,6 +1749,7 @@ fn module_has_unresolved_star_export(
             &parsed_files[file_index].file_name,
             module_specifier,
             parsed_files,
+            file_index_by_identity,
         )
         .is_none()
     })
@@ -1862,9 +1896,15 @@ fn resolve_relative_local_type_scope(
     importer_file_name: &str,
     module_specifier: &str,
     program_files: &[ParsedProgramFile],
+    file_index_by_identity: &HashMap<String, usize>,
     module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
 ) -> Option<(usize, Arc<TypeDeclarationTable>)> {
-    let resolved = resolve_relative_module(importer_file_name, module_specifier, program_files)?;
+    let resolved = resolve_relative_module(
+        importer_file_name,
+        module_specifier,
+        program_files,
+        file_index_by_identity,
+    )?;
     let local_scope = module_resolution_scopes
         .get(resolved.resolved_file_index)
         .and_then(|scope| scope.clone())?;
@@ -1990,6 +2030,8 @@ fn is_declaration_file_name(file_name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     fn program(files: &[(&str, &str)]) -> Vec<ParsedProgramFile> {
@@ -2007,6 +2049,25 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    fn resolve_relative_module(
+        importer_file_name: &str,
+        specifier: &str,
+        program_files: &[ParsedProgramFile],
+    ) -> Option<ModuleResolution> {
+        let file_index_by_identity = program_files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (canonical_file_identity(&file.file_name), index))
+            .collect::<HashMap<_, _>>();
+
+        super::resolve_relative_module(
+            importer_file_name,
+            specifier,
+            program_files,
+            &file_index_by_identity,
+        )
     }
 
     #[test]

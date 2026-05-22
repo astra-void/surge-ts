@@ -9,7 +9,7 @@ use typescript_rust_types::{
 };
 
 use crate::context::CheckerContext;
-use crate::infer::{TypeParameterSubstitution, map_parsed_type_with_substitution};
+use crate::infer::{TypeParameterSubstitution, map_parsed_type, map_parsed_type_with_substitution};
 use crate::symbols::{FunctionSignatureInfo, SymbolTable};
 
 use super::InferredExpression;
@@ -32,6 +32,7 @@ pub(crate) fn infer_expression(
             InferredExpression::Known(Type::BooleanLiteral(*value))
         }
         ParsedExpression::UndefinedLiteral => InferredExpression::Known(Type::Undefined),
+        ParsedExpression::NullLiteral => InferredExpression::Known(Type::Any),
         ParsedExpression::Identifier { name, span } => symbols
             .get(name)
             .map(|symbol| InferredExpression::Known(symbol.ty.clone()))
@@ -106,7 +107,7 @@ pub(crate) fn infer_expression(
                     } else if left_ty == Type::Undefined {
                         InferredExpression::Known(right_ty)
                     } else {
-                        let filtered_left = typescript_rust_types::remove_undefined(&left_ty);
+                        let filtered_left = typescript_rust_types::remove_nullish(&left_ty);
                         InferredExpression::Known(union_type(vec![filtered_left, right_ty]))
                     }
                 }
@@ -152,29 +153,7 @@ pub(crate) fn infer_expression(
         ),
         ParsedExpression::TypeAssertion {
             expression: _, ty, ..
-        } => {
-            // Primitive types can be inferred purely from AST
-            match ty {
-                typescript_rust_syntax::ParsedType::String => {
-                    InferredExpression::Known(Type::String)
-                }
-                typescript_rust_syntax::ParsedType::Number => {
-                    InferredExpression::Known(Type::Number)
-                }
-                typescript_rust_syntax::ParsedType::Boolean => {
-                    InferredExpression::Known(Type::Boolean)
-                }
-                typescript_rust_syntax::ParsedType::Any => InferredExpression::Known(Type::Any),
-                typescript_rust_syntax::ParsedType::Unknown => {
-                    InferredExpression::Known(Type::Unknown)
-                }
-                typescript_rust_syntax::ParsedType::Undefined => {
-                    InferredExpression::Known(Type::Undefined)
-                }
-                typescript_rust_syntax::ParsedType::Void => InferredExpression::Known(Type::Void),
-                _ => InferredExpression::Unknown,
-            }
-        }
+        } => InferredExpression::Known(map_parsed_type(ty.clone(), ctx)),
         ParsedExpression::Call {
             callee_name,
             type_arguments,

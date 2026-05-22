@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use typescript_rust_diagnostics::Diagnostic;
@@ -10,7 +10,9 @@ use typescript_rust_syntax::{
 use crate::checks::{assign, call, expr, function as check_function, var};
 use crate::context::{CheckerContext, DeclarationNamespace, DeclarationResolutionKey, FileKind};
 use crate::infer::{report_duplicate_type_parameters, validate_local_type_declaration};
+use crate::load_default_lib_inputs;
 use crate::paths::canonicalize_if_exists_string;
+use crate::program::collect_function_signatures_from_statements;
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
 
 pub fn check_source(source_text: &str, file_name: &str) -> Vec<Diagnostic> {
@@ -33,6 +35,7 @@ pub fn check_source_with_options(
     let mut ctx = CheckerContext::new(file_name.clone(), options, file_kinds);
 
     crate::builtins::inject_builtins(&mut ctx);
+    inject_generated_default_libs(&mut ctx);
 
     let mut merged_td = ctx.ambient_global_type_declarations.clone();
     for (k, v) in ctx.type_declarations.iter() {
@@ -52,6 +55,13 @@ pub fn check_source_with_options(
     }
 
     collect_type_declarations(&parsed.statements, &mut ctx);
+    collect_global_augmentations_from_statements(&parsed.statements, &mut ctx);
+    sync_global_this_symbol(&mut ctx);
+    let mut merged_sym = ctx.ambient_global_symbols.clone();
+    for (k, v) in ctx.symbols.iter() {
+        let _ = merged_sym.insert(k.clone(), v.clone());
+    }
+    ctx.set_symbols(merged_sym);
     validate_local_type_declarations(&parsed.statements, &file_name, &mut ctx);
     validate_direct_utility_aliases(&parsed.statements, &mut ctx);
 
@@ -62,10 +72,297 @@ pub fn check_source_with_options(
     ctx.finish()
 }
 
+fn inject_generated_default_libs(ctx: &mut CheckerContext) {
+    let default_lib_inputs = load_default_lib_inputs(ctx.options.no_lib, None);
+    let original_file_name = ctx.file_name.clone();
+
+    for input in default_lib_inputs {
+        let parsed = parse_source(&input.source_text, &input.file_name);
+        ctx.set_file_name(parsed.file_name.clone());
+
+        for message in parsed.parser_errors {
+            let diagnostic =
+                Diagnostic::typescript_rust_parser_error(message, parsed.file_name.clone());
+            ctx.push(diagnostic);
+        }
+
+        let saved_type_declarations = std::mem::replace(
+            &mut ctx.type_declarations,
+            crate::symbols::TypeDeclarationTable::new(),
+        );
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, crate::symbols::SymbolTable::new());
+
+        collect_type_declarations(&parsed.statements, ctx);
+        let ambient_td = ctx.type_declarations.clone();
+        for (name, decl) in ambient_td.iter() {
+            let _ = ctx
+                .ambient_global_type_declarations
+                .insert(name.clone(), decl.clone());
+        }
+
+        let mut current_symbols = std::mem::take(&mut ctx.symbols);
+        for statement in &parsed.statements {
+            inject_generated_default_lib_function_signatures_from_statement(
+                statement,
+                &mut current_symbols,
+                ctx,
+            );
+        }
+        ctx.symbols = current_symbols;
+
+        for stmt in &parsed.statements {
+            let var = match stmt {
+                ParsedStatement::VariableDeclaration(var) => Some(var),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    },
+                ) => {
+                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                        Some(var)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(var) = var {
+                let ty = var
+                    .declared_type
+                    .as_ref()
+                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                    .unwrap_or(typescript_rust_types::Type::Unknown);
+                if ctx.ambient_global_symbols.get(&var.name).is_none() {
+                    ctx.ambient_global_symbols.insert(
+                        var.name.clone(),
+                        crate::symbols::SymbolInfo {
+                            ty,
+                            kind: if matches!(
+                                var.kind,
+                                typescript_rust_syntax::ParsedVariableKind::Const
+                            ) {
+                                crate::symbols::SymbolKind::Const
+                            } else {
+                                crate::symbols::SymbolKind::Let
+                            },
+                            function_signature: None,
+                        },
+                    );
+                }
+            }
+        }
+
+        ctx.type_declarations = saved_type_declarations;
+        ctx.symbols = saved_symbols;
+    }
+
+    ctx.set_file_name(original_file_name);
+}
+
+fn inject_generated_default_lib_function_signatures_from_statement(
+    statement: &ParsedStatement,
+    symbols: &mut crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    match statement {
+        ParsedStatement::FunctionDeclaration(function) => {
+            let function_type =
+                check_function::collect_function_declaration_signature(function, symbols, ctx);
+            if ctx.ambient_global_symbols.get(&function.name).is_none() {
+                ctx.ambient_global_symbols.insert(
+                    function.name.clone(),
+                    crate::symbols::SymbolInfo {
+                        ty: typescript_rust_types::Type::Function(function_type),
+                        kind: crate::symbols::SymbolKind::Function,
+                        function_signature: None,
+                    },
+                );
+            }
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+            declaration,
+            ..
+        }) => inject_generated_default_lib_function_signatures_from_statement(
+            declaration.as_ref(),
+            symbols,
+            ctx,
+        ),
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Function(function),
+            ..
+        }) => {
+            let function_type =
+                check_function::collect_function_declaration_signature(function, symbols, ctx);
+            if ctx.ambient_global_symbols.get(&function.name).is_none() {
+                ctx.ambient_global_symbols.insert(
+                    function.name.clone(),
+                    crate::symbols::SymbolInfo {
+                        ty: typescript_rust_types::Type::Function(function_type),
+                        kind: crate::symbols::SymbolKind::Function,
+                        function_signature: None,
+                    },
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn collect_type_declarations(statements: &[ParsedStatement], ctx: &mut CheckerContext) {
     for statement in statements {
         collect_type_declarations_from_statement(statement, ctx);
     }
+}
+
+pub(crate) fn collect_global_augmentations_from_statements(
+    statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) {
+    for statement in statements {
+        let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
+            continue;
+        };
+
+        if module.module_specifier != "global" {
+            continue;
+        }
+
+        let saved_type_declarations = std::mem::replace(
+            &mut ctx.type_declarations,
+            crate::symbols::TypeDeclarationTable::new(),
+        );
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, crate::symbols::SymbolTable::new());
+
+        collect_type_declarations(&module.statements, ctx);
+        let ambient_td = ctx.type_declarations.clone();
+        for (name, decl) in ambient_td.iter() {
+            let _ = ctx
+                .ambient_global_type_declarations
+                .insert(name.clone(), decl.clone());
+        }
+
+        let mut local_function_signatures = HashMap::new();
+        let mut current_symbols = std::mem::take(&mut ctx.symbols);
+        collect_function_signatures_from_statements(
+            &module.statements,
+            0,
+            &mut current_symbols,
+            &mut local_function_signatures,
+            ctx,
+        );
+        ctx.symbols = current_symbols;
+
+        for stmt in &module.statements {
+            let var = match stmt {
+                ParsedStatement::VariableDeclaration(var) => Some(var),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    },
+                ) => {
+                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                        Some(var)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(var) = var {
+                let ty = var
+                    .declared_type
+                    .as_ref()
+                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                    .unwrap_or(typescript_rust_types::Type::Unknown);
+                if ctx.ambient_global_symbols.get(&var.name).is_none() {
+                    ctx.ambient_global_symbols.insert(
+                        var.name.clone(),
+                        crate::symbols::SymbolInfo {
+                            ty,
+                            kind: if matches!(
+                                var.kind,
+                                typescript_rust_syntax::ParsedVariableKind::Const
+                            ) {
+                                crate::symbols::SymbolKind::Const
+                            } else {
+                                crate::symbols::SymbolKind::Let
+                            },
+                            function_signature: None,
+                        },
+                    );
+                }
+            }
+        }
+
+        for (loc, fun_ty) in local_function_signatures {
+            let name = match &module.statements[loc.statement_index] {
+                ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Default {
+                        declaration:
+                            typescript_rust_syntax::ParsedDefaultExportDeclaration::Function(f),
+                        ..
+                    },
+                ) => f.name.clone(),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    },
+                ) => {
+                    if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
+                        f.name.clone()
+                    } else {
+                        "unknown".to_string()
+                    }
+                }
+                _ => "unknown".to_string(),
+            };
+
+            if ctx.ambient_global_symbols.get(&name).is_none() {
+                ctx.ambient_global_symbols.insert(
+                    name,
+                    crate::symbols::SymbolInfo {
+                        ty: typescript_rust_types::Type::Function(fun_ty),
+                        kind: crate::symbols::SymbolKind::Function,
+                        function_signature: None,
+                    },
+                );
+            }
+        }
+
+        ctx.type_declarations = saved_type_declarations;
+        ctx.symbols = saved_symbols;
+    }
+}
+
+pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
+    use std::collections::BTreeMap;
+
+    let mut properties = BTreeMap::new();
+    for (name, symbol) in ctx.ambient_global_symbols.iter() {
+        if name == "globalThis" {
+            continue;
+        }
+
+        properties.insert(
+            name.clone(),
+            typescript_rust_types::ObjectProperty::required(symbol.ty.clone()),
+        );
+    }
+
+    ctx.ambient_global_symbols.insert(
+        "globalThis".to_string(),
+        crate::symbols::SymbolInfo {
+            ty: typescript_rust_types::Type::Object(typescript_rust_types::ObjectType {
+                properties,
+                string_index_type: None,
+            }),
+            kind: crate::symbols::SymbolKind::Const,
+            function_signature: None,
+        },
+    );
 }
 
 pub(crate) fn validate_direct_utility_aliases(
@@ -575,6 +872,10 @@ fn validate_direct_utility_aliases_from_statement(
 }
 
 fn validate_direct_utility_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut CheckerContext) {
+    if ctx.current_file_kind == crate::context::FileKind::GeneratedDeclaration {
+        return;
+    }
+
     let ParsedType::Named(named_type) = &alias.ty else {
         return;
     };

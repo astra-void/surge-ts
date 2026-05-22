@@ -33,7 +33,7 @@ This is a typescript-rust-only compatibility mode.
 
 Loaded `.d.ts` files from project inputs participate in semantic checking.
 Bare package imports (`pkg`, `@scope/pkg`) and exact subpaths resolve their `.d.ts` entrypoints via `types`, `typings`, `exports["types"]`, or `index.d.ts` fallback.
-Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. The CLI still does not discover full package resolution, wildcard `exports`, `@types`, or `lib.d.ts`. `baseUrl` resolution remains unsupported/deprecated. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`, to reduce TS2304 noise. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit`, but not the full utility-type ecosystem; `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers. Full index signatures remain unsupported, while any narrow `Record<string, T>` / string-index fallback stays confined to oracle-backed narrow paths when the implementation explicitly supports it. `noLib: true` disables synthetic built-ins. DOM, Node, `@types`, and true lib loading remain unsupported.
+Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. The CLI still does not discover full package resolution, wildcard `exports`, `@types`, or full `lib.d.ts` parity. `baseUrl` resolution remains unsupported/deprecated. v0.85 introduces a generated default-lib foundation: it does not load the full official TypeScript lib files at runtime, but instead generates a small supported subset from the local TypeScript package and loads those generated declarations as ambient default libs. `noLib: true` disables the generated default libs. Full lib.d.ts parity remains future work.
 Default export, namespace import, named re-export, type-only re-export, star re-export, duplicate ambient module, and duplicate ambient global behavior is pinned rather than full TypeScript declaration merging.
 
 `.tsx` files are visible to project mode, but that does not imply JSX
@@ -72,7 +72,7 @@ cargo run -p typescript-rust-cli -- --ignoreConfig examples/basic.ts
 - `--compatReport` is a raw measurement surface: it reports totals, counts by code and file, parser-error grouping, loaded file counts, file-kind counts, and suppressed diagnostic totals where relevant. It does not perform semantic diagnosis. Raw parity analysis belongs in oracle output, fixtures, and implementation notes.
 - The oracle comparison output prints the exact `typescript-rust` command and the explicit job count when `--rustJobs` is provided.
 
-The synthetic builtin surface stays narrow: it covers `Array.from`, `Date.now`, `Number`, `String`, `Boolean`, `Math`, `JSON`, `Object`, `Map`, `Uint8Array`, `globalThis`, and `isNaN` as synthetic globals, not as a physical `lib.d.ts` loader.
+The synthetic builtin surface stays narrow and now serves as bootstrap coverage for the remaining gaps outside the generated default libs.
 
 The JSON diagnostic shape stays stable across the catalog migration:
 

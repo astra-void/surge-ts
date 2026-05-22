@@ -40,15 +40,18 @@ Measured real-project state for `/Users/returnf4lse/Desktop/Workspace/typescript
 | Metric | Value |
 | --- | ---: |
 | TypeScript diagnostics | 0 |
-| typescript-rust diagnostics, raw oracle compare | 52 |
-| typescript-rust diagnostics, compat-report JSON | 52 |
+| typescript-rust diagnostics, raw oracle compare | 0 |
+| typescript-rust diagnostics, compat-report JSON | 0 |
 | loaded files total | 65 |
 | root source files | 65 |
 | root declarations | 0 |
-| dependency declarations | 9 |
-| generated files | 212 |
+| dependency declarations | 35 |
+| generated files | 231 |
 | diagnostics from dependency declarations | 0 |
-| Rust-only `typescript-rust::*` diagnostics in `tsc` profile | 10 |
+| Rust-only `typescript-rust::*` diagnostics in `tsc` profile | 20 |
+
+auth-kit currently matches TypeScript with 0 diagnostics under the measured
+command set.
 
 The compat-report and oracle compare surfaces are raw measurements, not
 semantic diagnosis. Missing features are fixed in checker, resolver, and
@@ -58,10 +61,9 @@ notes and targeted fixtures, not in the report layer. v0.84.8 adds real-source
 syntax/scope reconciliation fixtures to narrow the gap between toy fixtures and
 auth-kit output.
 
-The synthetic builtin pack remains intentionally narrow and synthetic: it covers
-`Array.from`, `Date.now`, `Number`, `String`, `Boolean`, `Math`, `JSON`,
-`Object`, `Map`, `Uint8Array`, `globalThis`, `isNaN`, and a narrow
-`TextEncoder` shape without pretending to load a physical `lib.d.ts`.
+v0.85 adds a generated default-lib foundation. It does not load the full official TypeScript lib files at runtime; instead it generates a small supported subset from the local TypeScript package and loads those generated declarations as ambient default libs. `noLib: true` disables the generated default libs. Full lib.d.ts parity, Node discovery, and `@types` discovery remain future work.
+
+v0.86 keeps auth-kit exact at 0 diagnostics and shifts the hot path away from repeated module-resolution scans. The checker now reuses canonical file identity lookup for module binding instead of repeatedly scanning loaded file lists, and the timing output has been split into nested module-binding and declaration-collection buckets so the remaining work is visible. On the measured auth-kit project, `module_binding` dropped from 22.731s to 2.049s and `type_declaration_collection` dropped from 11.041s to 3.743s, with `ts-rust` benchmark medians improving from 29.34s to 7.42s at `jobs=1` and from 28.47s to 6.20s at `jobs=4`.
 
 v0.68.1 hardens the diagnostic coverage metadata, ensuring that `support = "emitted"` accurately reflects current checker capabilities and is backed by testing.
 
@@ -69,7 +71,7 @@ v0.77.1 implements non-null assertions and a parser-safe `as const` foundation u
 v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics and control-flow narrowing remain unsupported. `ignoreDeprecations` is not used in committed fixtures because TS 7-oriented compatibility should not hide deprecated option behavior.
 v0.70 supports package declaration subpath entrypoints.
 v0.69 supports narrow bare package declaration entrypoints.
-v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-type foundation introduced in v0.80.1. This is still not full utility-type support: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers. Full index signatures remain unsupported, while any narrow `Record<string, T>` / string-index fallback stays limited to oracle-backed narrow paths when the implementation explicitly supports it. Physical `lib.d.ts`, `@types`, DOM, Node, and true lib loading remain unsupported. `noLib: true` disables synthetic built-ins.
+v0.69.1 hardens/refactors this support. v0.72/v0.72.1 uses synthetic built-ins, not physical `lib.d.ts`. `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-type foundation introduced in v0.80.1. This is still not full utility-type support: `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers. Full index signatures remain unsupported, while any narrow `Record<string, T>` / string-index fallback stays limited to oracle-backed narrow paths when the implementation explicitly supports it. The generated default-lib subset now covers the supported ambient core/DOM globals, while full `lib.d.ts` parity, Node discovery, and `@types` discovery remain future work. `noLib: true` disables synthetic built-ins and the generated default libs.
 Supported: types, typings, index.d.ts, bare scoped/unscoped packages, exact declaration subpaths, exact `exports["."].types` / `exports["./x"].types` declaration targets.
 Unsupported: exports runtime conditions, main, typesVersions, wildcard exports, @types, physical `lib.d.ts` loading, DOM/Node globals, baseUrl resolution, JS runtime entrypoints, rootDirs, project references.
 

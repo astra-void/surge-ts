@@ -1,4 +1,4 @@
-use crate::{FunctionType, ObjectProperty, ObjectType, UnionType};
+use crate::{FunctionType, ObjectType, UnionType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NumberLiteralType {
@@ -46,11 +46,7 @@ impl Type {
 
     pub fn builtin_constructor_result_type(name: &str) -> Option<Type> {
         match name {
-            "Array" => Some(Type::Array(Box::new(Type::Any))),
-            "Uint8Array" => Some(Type::Array(Box::new(Type::Number))),
-            "Map" => Some(Type::Object(map_instance_type())),
             "Date" => Some(Type::Any),
-            "TextEncoder" => Some(text_encoder_instance_type()),
             _ => None,
         }
     }
@@ -243,78 +239,6 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
         })),
         _ => None,
     }
-}
-
-fn map_instance_type() -> ObjectType {
-    let mut properties = std::collections::BTreeMap::new();
-    properties.insert(
-        "get".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::Any],
-            return_type: Box::new(Type::Any),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
-    );
-    properties.insert(
-        "set".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::Any, Type::Any],
-            return_type: Box::new(Type::Any),
-            is_variadic: false,
-            required_parameter_count: 2,
-        })),
-    );
-    properties.insert(
-        "has".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::Any],
-            return_type: Box::new(Type::Boolean),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
-    );
-    properties.insert(
-        "delete".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::Any],
-            return_type: Box::new(Type::Boolean),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
-    );
-    properties.insert(
-        "clear".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 0,
-        })),
-    );
-    properties.insert("size".to_string(), ObjectProperty::required(Type::Number));
-    ObjectType {
-        properties,
-        string_index_type: None,
-    }
-}
-
-fn text_encoder_instance_type() -> Type {
-    let mut properties = std::collections::BTreeMap::new();
-    properties.insert(
-        "encode".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Array(Box::new(Type::Number))),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
-    );
-
-    Type::Object(ObjectType {
-        properties,
-        string_index_type: None,
-    })
 }
 
 fn array_element_name(element: &Type) -> String {

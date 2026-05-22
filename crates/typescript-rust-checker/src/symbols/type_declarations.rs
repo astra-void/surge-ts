@@ -50,6 +50,10 @@ impl TypeDeclarationTable {
         self.declarations.get(name)
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.declarations.len()
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &TypeDeclarationInfo)> {
         self.declarations.iter()
     }

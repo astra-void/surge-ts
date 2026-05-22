@@ -95,7 +95,7 @@ pub(crate) fn check_obvious_truthiness_condition(
         ParsedExpression::BooleanLiteral(false) => {
             (Diagnostic::ts2873(ctx.file_name.clone()), false)
         }
-        ParsedExpression::UndefinedLiteral => return false,
+        ParsedExpression::UndefinedLiteral | ParsedExpression::NullLiteral => return false,
         _ => return false,
     };
 
@@ -457,6 +457,7 @@ pub(crate) fn check_expression_flow(
         | ParsedExpression::NumberLiteral(_)
         | ParsedExpression::BooleanLiteral(_)
         | ParsedExpression::UndefinedLiteral
+        | ParsedExpression::NullLiteral
         | ParsedExpression::Unknown => FlowCheck::Clear,
     }
 }

@@ -1,6 +1,7 @@
 mod builtins;
 mod checks;
 mod context;
+mod default_lib;
 mod driver;
 mod flow;
 mod infer;
@@ -11,6 +12,7 @@ mod spans;
 mod symbols;
 
 pub use context::{CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind};
+pub use default_lib::load_default_lib_inputs;
 pub use driver::{check_source, check_source_with_options};
 pub use program::{
     ProgramCheckResult, SourceFileInput, check_program, check_program_with_options,

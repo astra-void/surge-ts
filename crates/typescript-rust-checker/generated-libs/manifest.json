@@ -1,0 +1,53 @@
+{
+  "generatorVersion": "v0.85",
+  "generatedFrom": {
+    "typescriptPackageVersion": "6.0.3",
+    "sourceLibFiles": [
+      "node_modules/typescript/lib/lib.es5.d.ts",
+      "node_modules/typescript/lib/lib.es2015.collection.d.ts",
+      "node_modules/typescript/lib/lib.es2015.promise.d.ts",
+      "node_modules/typescript/lib/lib.es2017.typedarrays.d.ts",
+      "node_modules/typescript/lib/lib.dom.d.ts"
+    ]
+  },
+  "generatedFiles": [
+    "lib.es.generated.d.ts",
+    "lib.dom.generated.d.ts"
+  ],
+  "generatedDeclarations": [
+    "Array",
+    "ArrayConstructor",
+    "AuthenticatorTransport",
+    "Boolean",
+    "Crypto",
+    "Date",
+    "Headers",
+    "JSON",
+    "Map",
+    "Math",
+    "Number",
+    "Object",
+    "Promise",
+    "PromiseConstructor",
+    "PromiseLike",
+    "Partial",
+    "Pick",
+    "Parameters",
+    "Record",
+    "Omit",
+    "ReturnType",
+    "ReadonlyArray",
+    "Request",
+    "Response",
+    "console",
+    "String",
+    "TextEncoder",
+    "URL",
+    "Uint8Array",
+    "fetch",
+    "globalThis",
+    "decodeURIComponent",
+    "isNaN"
+  ],
+  "stableHash": "66905495e4e9f86979595db3b5b457b0fde83192c68ccaf152f45714cab90e98"
+}

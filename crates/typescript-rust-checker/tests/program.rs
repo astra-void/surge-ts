@@ -74,6 +74,37 @@ fn program_parser_errors_preserve_file_name() {
 }
 
 #[test]
+fn program_api_generated_default_libs_visible() {
+    let diagnostics = program(&[(
+        "example.ts",
+        "const transport: AuthenticatorTransport = \"usb\"; const n = Math.max(1, 2);",
+    )]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn program_api_no_lib_hides_generated_default_libs() {
+    let diagnostics = program_with_options(
+        &[(
+            "example.ts",
+            "const transport: AuthenticatorTransport = \"usb\"; const n = Math.max(1, 2);",
+        )],
+        CheckerOptions {
+            diagnostic_profile: Default::default(),
+            resolved_modules: Default::default(),
+            stub_external_modules: false,
+            no_implicit_any: false,
+            no_lib: true,
+            skip_lib_check: false,
+            types: Vec::new(),
+        },
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS2304", "TS2304"]);
+}
+
+#[test]
 fn program_type_alias_cross_file_valid() {
     let diagnostics = program(&[
         ("a.ts", "type Name = string;"),
@@ -3290,12 +3321,9 @@ fn declaration_file_unsupported_namespace_still_reports() {
 }
 
 #[test]
-fn declaration_file_unsupported_global_still_reports() {
+fn declaration_file_global_augmentation_is_supported() {
     let diagnostics = native_program(&[("types/globals.d.ts", "declare global {}")]);
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-declaration"]
-    );
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
