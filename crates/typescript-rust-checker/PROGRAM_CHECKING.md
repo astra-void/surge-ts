@@ -167,6 +167,7 @@ The next phase should still be chosen from compatibility-report output rather
 than reshaping the single-file APIs.
 
 ## Ambient Globals
+
 Ambient globals from loaded `.d.ts` files are gathered into `ambient_global_symbols` and `ambient_global_type_declarations`, then mixed into modules and scripts.
 
 ## Diagnostic Profiles

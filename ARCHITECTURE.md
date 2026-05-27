@@ -52,6 +52,7 @@ Diagnostics are catalog-driven in `typescript-rust-diagnostics`.
 The Rust accessors are generated from `diagnostic-messages.json`, and spans remain a checker/parser concern rather than a catalog concern.
 
 ## Declaration Ingestion
+
 v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable before any package or lib discovery work lands.
 
 - Loaded `.d.ts` files can contribute ambient globals and exact `declare module "pkg"` blocks.

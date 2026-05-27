@@ -4,6 +4,7 @@ Minimal type declarations are shared by top-level `type` aliases and
 top-level `interface` declarations.
 
 Shared namespace rules:
+
 - both declarations are type-only and do not create value symbols
 - both are collected in a top-level prepass before statement checking
 - both support forward references
@@ -12,6 +13,7 @@ Shared namespace rules:
 - first declaration wins and later duplicates do not replace the original
 
 Resolution model:
+
 - aliases are desugared to their target `Type`
 - interfaces are lowered to `Type::Object(ObjectType { ... })`
 - aliases and interfaces can carry type parameters, and explicit type arguments
@@ -29,6 +31,7 @@ Resolution model:
 - v0.84.11 extends that lowering narrowly for imported interface bases, same-file forward references, and string-index fallback objects, so `interface extends` over already-loaded relative modules can resolve without package discovery. Full index signatures remain unsupported, while any narrow `Record<string, T>` / string-index fallback stays confined to oracle-backed narrow paths when explicitly implemented; `Required`, `Readonly`, `ReturnType`, `Parameters`, `Awaited`, and conditional-type-backed utilities remain unsupported or synthetic noise reducers
 
 Current limitations:
+
 - no interface merging
 - narrow interface `extends` over imported object/interface types is supported; full declaration merging is still unsupported
 - no generic inference
@@ -49,17 +52,21 @@ Current limitations:
 - program-mode module visibility is limited to loaded relative `.ts` files
 
 Design note:
+
 - interface names are not preserved in downstream diagnostics today because the
   checker resolves them to object types before assignability and display.
 
 ## Type Operators
+
 Type operators provide a parser-safe foundation for common compatibility patterns.
 
 `typeof value`:
+
 - Resolves to the inferred type of a top-level or in-scope value symbol in a narrow type-position subset
 - If the value symbol is unresolved, emits `TS2304` or defaults to `unknown`
 
 `keyof T`:
+
 - Extracts the property names of an object or interface type into a string literal union in a narrow type-position subset
 - Optional properties still contribute their names
 - `keyof typeof constObject` maps are supported
@@ -69,6 +76,7 @@ Type operators provide a parser-safe foundation for common compatibility pattern
 - Mapped types (`{ [K in keyof T]: T[K] }` and `{ [K in keyof T]?: T[K] }`) are supported. Homomorphic mapped types and optional mapped properties map over string-literal keys. Generic mapped aliases are supported after concrete substitution. Key remapping, conditional types, template literal types, index signatures, readonly mapped semantics, modifier arithmetic, generic inference, `@types`, and modifiers beyond bare `?` remain unsupported. The generated default-lib subset supplies the ambient core/DOM globals used by the checker, but physical `lib.d.ts`, Node discovery, and full lib.d.ts parity remain future work. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of that mapped-type foundation: supported key shapes are string-literal unions, and supported sources are concrete object/interface shapes. This is still not full TypeScript utility-type support.
 
 Current limitations:
+
 - fully unresolved generic indexed access types and generic constraint enforcement on `keyof`
 - mapped type modifiers `readonly`, `-readonly`, `-?`, `+?`
 - key remapping `as SomeRemap<K>`

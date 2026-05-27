@@ -51,11 +51,13 @@ v1.2.2 keeps module export lookup read-only by sharing exported symbol handles a
 v0.70 adds support for package declaration subpath entrypoints. It resolves exact subpath imports (e.g. `pkg/subpath` or `@scope/pkg/subpath`) and exact `exports["."].types` / `exports["./x"].types` declaration entrypoints. Resolved package files act as external modules.
 
 Default mode for unresolved packages:
+
 - reports TS2307 for ordinary non-relative module specifiers
 - reports TS2882 for non-relative side-effect imports
 - inserts unknown type/value stubs where possible
 
 `--stubExternalModules`:
+
 - suppresses non-relative missing-module diagnostics, including TS2307 and the
   side-effect-import TS2882 form
 - keeps unknown stubs
@@ -91,4 +93,5 @@ These forms remain intentionally out of scope for v0.70.1:
 - The next phase should continue from compatibility-report output. Likely follow-ups are `@types` / `lib.d.ts` foundational support.
 
 ## Ambient Modules
+
 Imports try to resolve from ambient external modules defined by loaded `.d.ts` files with `declare module "pkg"` before falling back to package stubbing. Unsupported declaration syntax remains parser-safe and emits the pinned unsupported-declaration diagnostic.

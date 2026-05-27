@@ -7,6 +7,7 @@ collection, resolution, duplicate, and cycle rules.
 This file remains the alias-focused quick reference:
 
 Current alias scope:
+
 - top-level `type Name = ...`
 - named type references in annotations
 - aliases of primitive, object, optional, and union types
@@ -14,6 +15,7 @@ Current alias scope:
 - forward references
 
 Alias resolver model:
+
 - aliases are collected in a top-level prepass before checking statements
 - aliases are type-only and do not create value symbols
 - aliases are desugared to their target `Type`
@@ -21,6 +23,7 @@ Alias resolver model:
 - alias names are not preserved in `Type::name()` diagnostics yet
 
 Alias limitations:
+
 - generic aliases now support explicit type arguments, defaults, and simple
   type-parameter substitution
 - constraints are parsed and stored but are not enforced yet
