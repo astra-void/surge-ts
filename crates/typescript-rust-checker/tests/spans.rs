@@ -874,6 +874,25 @@ fn span_ts2339_property_call_missing_points_to_property_name() {
 }
 
 #[test]
+fn span_ts2536_invalid_generic_indexed_access_points_to_index_type() {
+    let source = "type PickValue<T, K> = T[K];";
+    let diagnostics = check_source_with_options(
+        source,
+        "example.ts",
+        CheckerOptions {
+            diagnostic_profile: Default::default(),
+            resolved_modules: Default::default(),
+            stub_external_modules: false,
+            no_implicit_any: false,
+            no_lib: false,
+            skip_lib_check: false,
+            types: Vec::new(),
+        },
+    );
+    assert_single_span(source, diagnostics, "TS2536", span_nth(source, "K", 1));
+}
+
+#[test]
 fn span_ts2339_primitive_receiver_property_name() {
     let source = "let value = 1; value.foo;";
     let diagnostics = check_source_with_options(

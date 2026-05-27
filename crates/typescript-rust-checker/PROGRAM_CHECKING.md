@@ -49,6 +49,16 @@ Program mode treats the input files as one shared global script:
 ## What is shared
 
 - Type declarations and function signatures are collected in a prepass before statement checking begins.
+- Checker value symbol tables store shared `SymbolInfo` handles. Cloning a
+  `SymbolTable` copies handles, not symbol payloads or nested function/union
+  type payloads. v1.2.4 keeps that v1.2.3 storage model and reduces hot
+  materialization by borrowing visible symbols for function-local variable
+  checks, lazily cloning function-parameter scope tables only when parameter
+  initializers need them, and restoring `ScopeStack` visible-symbol shadows on
+  pop instead of rebuilding the whole flat visible map.
+- `SymbolInfo` entries are treated as immutable once shared. Narrowing or
+  assignment-style updates create a replacement `SymbolInfo` and swap the table
+  handle instead of mutating a shared payload in place.
 - Declaration diagnostics keep the declaration file name.
 - Consuming expression diagnostics keep the consumer file name.
 - Script files participate in the global prepass.
@@ -124,10 +134,16 @@ See [MODULES.md](./MODULES.md) for the import/export syntax surface, module-file
   when no source files were loaded. It is raw measurement, not a root-cause
   classifier.
 - Generic type arguments on references are parsed and lowered for explicit
-  alias/interface instantiation, but generic inference is still intentionally
-  omitted.
-- Call-site type arguments are parsed and preserved for syntax stability, and
-  narrow generic call-instantiation paths apply them when supported.
+  alias/interface instantiation.
+- v1.1 supports narrow generic indexed access after concrete substitution,
+  including `T["key"]`, `T[K]`, and `T[keyof T]` when the receiver/key have
+  been substituted to concrete types. Fully unresolved generic indexed access
+  and constraint enforcement remain unsupported.
+- Narrow generic call-site inference exists for simple direct calls, repeated-
+  parameter calls, and array-element calls. Explicit type arguments are still
+  preserved and applied when present, but full generic inference, overload
+  resolution, generic classes, callback contextual typing, higher-order
+  inference, and tuple-valued implicit generic returns remain unsupported.
 - `--maxDiagnostics` limits rendered diagnostics but does not change the total
   counts in the compatibility summary.
 - `.tsx` visibility in project mode is file-discovery only; JSX syntax, JSX

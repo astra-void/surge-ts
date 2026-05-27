@@ -24,6 +24,20 @@ pub enum Type {
     Union(UnionType),
 }
 
+fn function_type(
+    parameters: Vec<Type>,
+    return_type: Type,
+    is_variadic: bool,
+    required_parameter_count: usize,
+) -> Type {
+    Type::Function(FunctionType::new(
+        parameters,
+        return_type,
+        is_variadic,
+        required_parameter_count,
+    ))
+}
+
 impl Type {
     pub fn base_primitive(&self) -> Option<Type> {
         match self {
@@ -47,6 +61,64 @@ impl Type {
     pub fn builtin_constructor_result_type(name: &str) -> Option<Type> {
         match name {
             "Date" => Some(Type::Any),
+            "Array" => Some(Type::Array(Box::new(Type::Any))),
+            "Uint8Array" => Some(Type::Array(Box::new(Type::Number))),
+            "Map" => Some(Type::Object(ObjectType::new(
+                {
+                    let mut properties = std::collections::BTreeMap::new();
+                    properties.insert(
+                        "get".to_string(),
+                        crate::ObjectProperty::required(function_type(
+                            vec![Type::Any],
+                            Type::Any,
+                            false,
+                            1,
+                        )),
+                    );
+                    properties.insert(
+                        "set".to_string(),
+                        crate::ObjectProperty::required(function_type(
+                            vec![Type::Any, Type::Any],
+                            Type::Any,
+                            false,
+                            2,
+                        )),
+                    );
+                    properties.insert(
+                        "has".to_string(),
+                        crate::ObjectProperty::required(function_type(
+                            vec![Type::Any],
+                            Type::Boolean,
+                            false,
+                            1,
+                        )),
+                    );
+                    properties.insert(
+                        "delete".to_string(),
+                        crate::ObjectProperty::required(function_type(
+                            vec![Type::Any],
+                            Type::Boolean,
+                            false,
+                            1,
+                        )),
+                    );
+                    properties.insert(
+                        "clear".to_string(),
+                        crate::ObjectProperty::required(function_type(
+                            vec![],
+                            Type::Void,
+                            false,
+                            0,
+                        )),
+                    );
+                    properties.insert(
+                        "size".to_string(),
+                        crate::ObjectProperty::required(Type::Number),
+                    );
+                    properties
+                },
+                None,
+            ))),
             _ => None,
         }
     }
@@ -99,12 +171,12 @@ impl Type {
                 format!("[{elements}]")
             }
             Type::Union(union) => {
-                if union.types.is_empty() {
+                if union.types().is_empty() {
                     return "unknown".to_string();
                 }
 
                 union
-                    .types
+                    .types()
                     .iter()
                     .map(Type::name)
                     .collect::<Vec<_>>()
@@ -117,66 +189,36 @@ impl Type {
 fn string_property_access_type(name: &str) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
-        "replace" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::String, Type::String],
-            return_type: Box::new(Type::String),
-            is_variadic: false,
-            required_parameter_count: 2,
-        })),
-        "indexOf" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Number),
-            is_variadic: true,
-            required_parameter_count: 1,
-        })),
-        "split" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Array(Box::new(Type::String))),
-            is_variadic: true,
-            required_parameter_count: 1,
-        })),
-        "slice" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::Number],
-            return_type: Box::new(Type::String),
-            is_variadic: true,
-            required_parameter_count: 1,
-        })),
-        "toLowerCase" | "toUpperCase" => Some(Type::Function(FunctionType {
-            parameters: vec![],
-            return_type: Box::new(Type::String),
-            is_variadic: false,
-            required_parameter_count: 0,
-        })),
-        "toString" => Some(Type::Function(FunctionType {
-            parameters: vec![],
-            return_type: Box::new(Type::String),
-            is_variadic: false,
-            required_parameter_count: 0,
-        })),
-        "padStart" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::Number, Type::String],
-            return_type: Box::new(Type::String),
-            is_variadic: true,
-            required_parameter_count: 1,
-        })),
-        "charCodeAt" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::Number],
-            return_type: Box::new(Type::Number),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
+        "replace" => Some(function_type(
+            vec![Type::String, Type::String],
+            Type::String,
+            false,
+            2,
+        )),
+        "indexOf" => Some(function_type(vec![Type::String], Type::Number, true, 1)),
+        "split" => Some(function_type(
+            vec![Type::String],
+            Type::Array(Box::new(Type::String)),
+            true,
+            1,
+        )),
+        "slice" => Some(function_type(vec![Type::Number], Type::String, true, 1)),
+        "toLowerCase" | "toUpperCase" => Some(function_type(vec![], Type::String, false, 0)),
+        "toString" => Some(function_type(vec![], Type::String, false, 0)),
+        "padStart" => Some(function_type(
+            vec![Type::Number, Type::String],
+            Type::String,
+            true,
+            1,
+        )),
+        "charCodeAt" => Some(function_type(vec![Type::Number], Type::Number, false, 1)),
         _ => None,
     }
 }
 
 fn number_property_access_type(name: &str) -> Option<Type> {
     match name {
-        "toString" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::Number],
-            return_type: Box::new(Type::String),
-            is_variadic: true,
-            required_parameter_count: 0,
-        })),
+        "toString" => Some(function_type(vec![Type::Number], Type::String, true, 0)),
         _ => None,
     }
 }
@@ -184,59 +226,42 @@ fn number_property_access_type(name: &str) -> Option<Type> {
 fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
-        "map" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::Function(FunctionType {
-                parameters: vec![element.clone()],
-                return_type: Box::new(Type::Any),
-                is_variadic: false,
-                required_parameter_count: 1,
-            })],
-            return_type: Box::new(Type::Array(Box::new(Type::Any))),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
-        "find" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::Function(FunctionType {
-                parameters: vec![element.clone()],
-                return_type: Box::new(Type::Boolean),
-                is_variadic: false,
-                required_parameter_count: 1,
-            })],
-            return_type: Box::new(Type::Union(UnionType {
-                types: vec![element.clone(), Type::Undefined],
-            })),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
-        "filter" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::Function(FunctionType {
-                parameters: vec![element.clone()],
-                return_type: Box::new(Type::Boolean),
-                is_variadic: false,
-                required_parameter_count: 1,
-            })],
-            return_type: Box::new(Type::Array(Box::new(element.clone()))),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
-        "join" => Some(Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::String),
-            is_variadic: true,
-            required_parameter_count: 0,
-        })),
-        "push" => Some(Type::Function(FunctionType {
-            parameters: vec![element.clone()],
-            return_type: Box::new(Type::Number),
-            is_variadic: true,
-            required_parameter_count: 1,
-        })),
-        "includes" => Some(Type::Function(FunctionType {
-            parameters: vec![element.clone()],
-            return_type: Box::new(Type::Boolean),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
+        "map" => Some(function_type(
+            vec![function_type(vec![element.clone()], Type::Any, false, 1)],
+            Type::Array(Box::new(Type::Any)),
+            false,
+            1,
+        )),
+        "find" => Some(function_type(
+            vec![function_type(
+                vec![element.clone()],
+                Type::Boolean,
+                false,
+                1,
+            )],
+            Type::Union(UnionType::new(vec![element.clone(), Type::Undefined])),
+            false,
+            1,
+        )),
+        "filter" => Some(function_type(
+            vec![function_type(
+                vec![element.clone()],
+                Type::Boolean,
+                false,
+                1,
+            )],
+            Type::Array(Box::new(element.clone())),
+            false,
+            1,
+        )),
+        "join" => Some(function_type(vec![Type::String], Type::String, true, 0)),
+        "push" => Some(function_type(vec![element.clone()], Type::Number, true, 1)),
+        "includes" => Some(function_type(
+            vec![element.clone()],
+            Type::Boolean,
+            false,
+            1,
+        )),
         _ => None,
     }
 }
@@ -316,9 +341,10 @@ mod tests {
     #[test]
     fn array_type_name_union() {
         assert_eq!(
-            Type::Array(Box::new(Type::Union(crate::UnionType {
-                types: vec![Type::String, Type::Number],
-            })))
+            Type::Array(Box::new(Type::Union(crate::UnionType::new(vec![
+                Type::String,
+                Type::Number,
+            ]))))
             .name(),
             "(string | number)[]"
         );
@@ -327,12 +353,12 @@ mod tests {
     #[test]
     fn array_type_name_function() {
         assert_eq!(
-            Type::Array(Box::new(Type::Function(FunctionType {
-                parameters: vec![],
-                return_type: Box::new(Type::String),
-                is_variadic: false,
-                required_parameter_count: 0
-            })))
+            Type::Array(Box::new(Type::Function(FunctionType::new(
+                vec![],
+                Type::String,
+                false,
+                0,
+            ))))
             .name(),
             "(() => string)[]"
         );
@@ -344,11 +370,7 @@ mod tests {
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(
-            Type::Array(Box::new(Type::Object(ObjectType {
-                properties,
-                string_index_type: None,
-            })))
-            .name(),
+            Type::Array(Box::new(Type::Object(ObjectType::new(properties, None)))).name(),
             "{ name: string; }[]"
         );
     }
@@ -391,9 +413,7 @@ mod tests {
     fn tuple_type_name_union_element() {
         assert_eq!(
             Type::Tuple(vec![
-                Type::Union(crate::UnionType {
-                    types: vec![Type::String, Type::Number],
-                }),
+                Type::Union(crate::UnionType::new(vec![Type::String, Type::Number,])),
                 Type::Boolean,
             ])
             .name(),
@@ -405,12 +425,7 @@ mod tests {
     fn tuple_type_name_function_element() {
         assert_eq!(
             Type::Tuple(vec![
-                Type::Function(FunctionType {
-                    parameters: vec![],
-                    return_type: Box::new(Type::Void),
-                    is_variadic: false,
-                    required_parameter_count: 0
-                }),
+                Type::Function(FunctionType::new(vec![], Type::Void, false, 0)),
                 Type::String,
             ])
             .name(),
@@ -425,10 +440,7 @@ mod tests {
 
         assert_eq!(
             Type::Tuple(vec![
-                Type::Object(ObjectType {
-                    properties,
-                    string_index_type: None,
-                }),
+                Type::Object(ObjectType::new(properties, None)),
                 Type::Number,
             ])
             .name(),

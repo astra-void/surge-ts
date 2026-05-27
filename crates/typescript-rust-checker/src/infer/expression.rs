@@ -1,25 +1,81 @@
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use typescript_rust_syntax::{
     ParsedArrayElement, ParsedArrowFunction, ParsedArrowFunctionBody, ParsedBinaryOperator,
     ParsedExpression, ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
 };
 use typescript_rust_types::{
-    NumberLiteralType, ObjectProperty, ObjectType, Type, is_assignable_to, union_type,
+    NumberLiteralType, ObjectProperty, Type, is_assignable_to, union_type,
 };
 
+use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::CheckerContext;
-use crate::infer::{TypeParameterSubstitution, map_parsed_type, map_parsed_type_with_substitution};
-use crate::symbols::{FunctionSignatureInfo, SymbolTable};
+use crate::infer::map_parsed_type;
+use crate::program::{
+    record_expression_infer, record_function_type_copy_from_expression_call_return_count,
+    record_function_type_copy_from_expression_identifier_count,
+    record_function_type_copy_from_expression_optional_call_return_count,
+    record_object_literal_property_check, record_object_type_clone_count,
+    record_object_type_id_copy_count, record_program_timing, record_property_lookup,
+    record_type_clone_count, record_union_type_clone_count,
+    record_union_type_copy_from_expression_call_return_count,
+    record_union_type_copy_from_expression_identifier_count,
+    record_union_type_copy_from_expression_optional_call_return_count,
+};
+use crate::symbols::SymbolTable;
 
 use super::InferredExpression;
+
+enum CopySource {
+    Identifier,
+    CallReturn,
+    OptionalCallReturn,
+}
+
+fn clone_type_with_metrics(ty: &Type, source: CopySource) -> Type {
+    record_type_clone_count();
+    match ty {
+        Type::Object(_) => record_object_type_clone_count(),
+        Type::Union(_) => record_union_type_clone_count(),
+        _ => {}
+    }
+    if matches!(ty, Type::Object(_)) {
+        record_object_type_id_copy_count();
+    }
+    match (source, ty) {
+        (CopySource::Identifier, Type::Function(_)) => {
+            record_function_type_copy_from_expression_identifier_count();
+        }
+        (CopySource::Identifier, Type::Union(_)) => {
+            record_union_type_copy_from_expression_identifier_count();
+        }
+        (CopySource::CallReturn, Type::Function(_)) => {
+            record_function_type_copy_from_expression_call_return_count();
+        }
+        (CopySource::CallReturn, Type::Union(_)) => {
+            record_union_type_copy_from_expression_call_return_count();
+        }
+        (CopySource::OptionalCallReturn, Type::Function(_)) => {
+            record_function_type_copy_from_expression_optional_call_return_count();
+        }
+        (CopySource::OptionalCallReturn, Type::Union(_)) => {
+            record_union_type_copy_from_expression_optional_call_return_count();
+        }
+        _ => {}
+    }
+
+    ty.clone()
+}
 
 pub(crate) fn infer_expression(
     parsed_expression: &ParsedExpression,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    match parsed_expression {
+    record_expression_infer();
+    let infer_start = Instant::now();
+    let result = match parsed_expression {
         ParsedExpression::StringLiteral(value) => {
             InferredExpression::Known(Type::StringLiteral(value.clone()))
         }
@@ -35,7 +91,12 @@ pub(crate) fn infer_expression(
         ParsedExpression::NullLiteral => InferredExpression::Known(Type::Any),
         ParsedExpression::Identifier { name, span } => symbols
             .get(name)
-            .map(|symbol| InferredExpression::Known(symbol.ty.clone()))
+            .map(|symbol| {
+                InferredExpression::Known(clone_type_with_metrics(
+                    &symbol.ty,
+                    CopySource::Identifier,
+                ))
+            })
             .unwrap_or_else(|| InferredExpression::UnresolvedIdentifier {
                 name: name.clone(),
                 span: *span,
@@ -156,17 +217,22 @@ pub(crate) fn infer_expression(
         } => InferredExpression::Known(map_parsed_type(ty.clone(), ctx)),
         ParsedExpression::Call {
             callee_name,
+            callee_span: _,
             type_arguments,
+            arguments,
             ..
         } => match symbols.get(callee_name) {
             Some(symbol) => match &symbol.ty {
                 Type::Function(function_type) => {
-                    let return_type = instantiate_function_return_type(
-                        symbol.function_signature.as_ref(),
-                        function_type,
-                        type_arguments,
-                        ctx,
-                    );
+                    let return_type =
+                        crate::checks::call::instantiate_function_return_type_for_call(
+                            function_type,
+                            symbol.function_signature.as_ref(),
+                            type_arguments,
+                            arguments,
+                            symbols,
+                            ctx,
+                        );
                     InferredExpression::Known(return_type)
                 }
                 Type::Unknown | Type::Any => InferredExpression::Unknown,
@@ -208,7 +274,10 @@ pub(crate) fn infer_expression(
                         let prop_base = typescript_rust_types::remove_undefined(&property_type);
                         if let Type::Function(function_type) = prop_base {
                             InferredExpression::Known(union_type(vec![
-                                *function_type.return_type.clone(),
+                                clone_type_with_metrics(
+                                    function_type.return_type(),
+                                    CopySource::OptionalCallReturn,
+                                ),
                                 Type::Undefined,
                             ]))
                         } else {
@@ -229,7 +298,7 @@ pub(crate) fn infer_expression(
 
             match base_type {
                 Type::Function(function_type) => InferredExpression::Known(union_type(vec![
-                    *function_type.return_type.clone(),
+                    clone_type_with_metrics(function_type.return_type(), CopySource::CallReturn),
                     Type::Undefined,
                 ])),
                 Type::Any => InferredExpression::Known(Type::Any),
@@ -243,7 +312,11 @@ pub(crate) fn infer_expression(
             index_span,
         } => infer_optional_index_access(object, object_span, index, index_span, symbols, ctx),
         ParsedExpression::Unknown => InferredExpression::Unknown,
-    }
+    };
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.type_inference += infer_start.elapsed()
+    });
+    result
 }
 
 fn infer_arrow_function(
@@ -290,12 +363,12 @@ fn infer_arrow_function(
             .unwrap_or(Type::Unknown),
     };
 
-    typescript_rust_types::FunctionType {
+    alloc_function_type(
         parameters,
-        return_type: Box::new(return_type),
-        is_variadic: false,
-        required_parameter_count: required_parameter_count(arrow_function.parameters.as_slice()),
-    }
+        return_type,
+        false,
+        required_parameter_count(arrow_function.parameters.as_slice()),
+    )
 }
 
 fn required_parameter_count(
@@ -362,9 +435,12 @@ pub(crate) fn infer_object_literal(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Type {
+    let object_literal_start = Instant::now();
     let properties = properties
         .iter()
         .map(|property| {
+            record_property_lookup();
+            record_object_literal_property_check();
             (
                 property.name.clone(),
                 ObjectProperty::required(infer_object_property_value(
@@ -376,10 +452,11 @@ pub(crate) fn infer_object_literal(
         })
         .collect::<BTreeMap<_, _>>();
 
-    Type::Object(ObjectType {
-        properties,
-        string_index_type: None,
-    })
+    let result = Type::Object(alloc_object_type(properties, None));
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.object_literal_checking += object_literal_start.elapsed()
+    });
+    result
 }
 
 fn infer_array_literal(
@@ -431,7 +508,7 @@ fn infer_index_access(
         Type::Unknown => InferredExpression::Unknown,
         Type::Union(union_type) => {
             let mut result_types = vec![];
-            for ty in &union_type.types {
+            for ty in union_type.types() {
                 if *ty == Type::Undefined {
                     result_types.push(ty.clone());
                     continue;
@@ -675,6 +752,8 @@ fn infer_property_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    record_property_lookup();
+    let property_access_start = Instant::now();
     let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {
@@ -685,12 +764,12 @@ fn infer_property_access(
         }
     };
 
-    match &object_type {
+    let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown => InferredExpression::Unknown,
         Type::Union(union_type) => {
             let mut result_types = vec![];
-            for ty in &union_type.types {
+            for ty in union_type.types() {
                 if *ty == Type::Undefined {
                     result_types.push(ty.clone());
                     continue;
@@ -716,7 +795,11 @@ fn infer_property_access(
                 object_type: object_type.clone(),
                 span: *property_span,
             }),
-    }
+    };
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.property_access_checking += property_access_start.elapsed()
+    });
+    result
 }
 
 fn infer_property_call(
@@ -727,6 +810,8 @@ fn infer_property_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    record_property_lookup();
+    let property_call_start = Instant::now();
     let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {
@@ -737,7 +822,7 @@ fn infer_property_call(
         }
     };
 
-    match &object_type {
+    let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown => InferredExpression::Unknown,
         Type::Array(element_type) if property_name == "find" => {
@@ -748,7 +833,7 @@ fn infer_property_call(
         }
         Type::Union(union_type) => {
             let mut result_types = vec![];
-            for ty in &union_type.types {
+            for ty in union_type.types() {
                 if *ty == Type::Undefined {
                     result_types.push(ty.clone());
                     continue;
@@ -764,7 +849,7 @@ fn infer_property_call(
                 }
                 match ty.get_property_access_type(property_name) {
                     Some(Type::Function(function_type)) => {
-                        result_types.push((*function_type.return_type).clone());
+                        result_types.push(function_type.return_type().clone());
                     }
                     Some(Type::Any) => result_types.push(Type::Any),
                     Some(_) | None => return InferredExpression::Unknown,
@@ -774,12 +859,16 @@ fn infer_property_call(
         }
         _ => match object_type.get_property_access_type(property_name) {
             Some(Type::Function(function_type)) => {
-                InferredExpression::Known((*function_type.return_type).clone())
+                InferredExpression::Known(function_type.return_type().clone())
             }
             Some(Type::Any) => InferredExpression::Known(Type::Any),
             Some(_) | None => InferredExpression::Unknown,
         },
-    }
+    };
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.property_access_checking += property_call_start.elapsed()
+    });
+    result
 }
 
 fn infer_new_expression(
@@ -796,7 +885,7 @@ fn infer_new_expression(
 
     match infer_expression(callee, symbols, ctx) {
         InferredExpression::Known(Type::Function(function_type)) => {
-            InferredExpression::Known((*function_type.return_type).clone())
+            InferredExpression::Known(function_type.return_type().clone())
         }
         InferredExpression::Known(Type::Any) => InferredExpression::Known(Type::Any),
         InferredExpression::UnresolvedIdentifier { name, span } => {
@@ -869,6 +958,8 @@ fn infer_optional_property_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    record_property_lookup();
+    let property_access_start = Instant::now();
     let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {
@@ -887,7 +978,7 @@ fn infer_optional_property_access(
             let mut result_types = Vec::new();
             let mut saw_known = false;
 
-            for ty in &union_type.types {
+            for ty in union_type.types() {
                 if *ty == Type::Undefined || *ty == Type::Unknown {
                     continue;
                 }
@@ -924,52 +1015,16 @@ fn infer_optional_property_access(
             }),
     };
 
-    match result_type {
+    let result = match result_type {
         InferredExpression::Known(ty) => {
             InferredExpression::Known(union_type(vec![ty, Type::Undefined]))
         }
         other => other,
-    }
-}
-
-fn instantiate_function_return_type(
-    function_signature: Option<&FunctionSignatureInfo>,
-    function_type: &typescript_rust_types::FunctionType,
-    type_arguments: &[typescript_rust_syntax::ParsedType],
-    ctx: &mut CheckerContext,
-) -> Type {
-    let Some(function_signature) = function_signature else {
-        return (*function_type.return_type).clone();
     };
-
-    let Some(return_type) = function_signature.return_type.as_ref() else {
-        return (*function_type.return_type).clone();
-    };
-
-    // For non-generic calls, the declaration signature has already been resolved when the symbol
-    // was collected; remapping in the caller scope can lose declaration-local context.
-    if function_signature.type_parameters.is_empty() || type_arguments.is_empty() {
-        return (*function_type.return_type).clone();
-    }
-
-    let mut substitution = TypeParameterSubstitution::new();
-    for (type_parameter, type_argument) in function_signature
-        .type_parameters
-        .iter()
-        .zip(type_arguments.iter())
-    {
-        let type_argument = type_argument.clone();
-        substitution.insert(
-            type_parameter.name.clone(),
-            map_parsed_type_with_substitution(
-                type_argument,
-                ctx,
-                &TypeParameterSubstitution::new(),
-            ),
-        );
-    }
-
-    map_parsed_type_with_substitution(return_type.clone(), ctx, &substitution)
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.property_access_checking += property_access_start.elapsed()
+    });
+    result
 }
 
 fn is_known_non_unknown(result: &InferredExpression) -> bool {

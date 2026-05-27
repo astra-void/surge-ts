@@ -40,6 +40,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2349 non-callable | callee expression span |
 | TS2339 missing property access | property name span |
 | TS2339 invalid index receiver/out-of-range tuple index | offending index or receiver span, pinned |
+| TS2536 invalid generic indexed-access key | key type / index type span when available, otherwise indexed-access type span |
 | TS2538 invalid index type | index expression span |
 | TS2353 excess object property | excess property name span |
 | TS2741 missing required property | object literal span |

@@ -12,6 +12,7 @@ Supported surface:
 - non-literal number index access returns the union of tuple element types
 - tuple values are assignable to compatible arrays
 - arrays are not assignable to tuples
+- tuple-valued implicit generic call returns are intentionally suppressed for now; explicit type arguments still preserve tuple returns
 
 Limitations:
 
@@ -24,6 +25,6 @@ Limitations:
 - no tuple methods or length property
 - no property index access
 - no nested index access
-- no generic indexed access types
+- no unresolved generic indexed access types; narrow post-substitution generic indexed access is supported in the checker's general type-operator surface, not as tuple-specific syntax
 - no lib.d.ts modeling
 - no generics, variadic tuples, or tuple destructuring

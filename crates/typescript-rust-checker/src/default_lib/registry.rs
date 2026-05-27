@@ -2,6 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use crate::symbols::{SymbolTable, TypeDeclarationTable};
+
 use super::source::DefaultLibSelection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +19,13 @@ pub(crate) struct DefaultLibSource {
     pub(crate) source_text: String,
     #[allow(dead_code)]
     pub(crate) declared_names: &'static [&'static str],
+}
+
+#[derive(Debug)]
+pub(crate) struct GeneratedDefaultLibSnapshot {
+    pub(crate) file_name: &'static str,
+    pub(crate) type_declarations: TypeDeclarationTable,
+    pub(crate) symbols: SymbolTable,
 }
 
 static DEFAULT_LIB_SOURCES: OnceLock<Vec<DefaultLibSource>> = OnceLock::new();
@@ -36,6 +45,20 @@ pub(crate) fn selected_default_lib_sources(
         })
         .cloned()
         .collect()
+}
+
+pub(crate) fn generated_default_lib_snapshot_for_file_name(
+    file_name: &str,
+) -> Option<&'static GeneratedDefaultLibSnapshot> {
+    if !super::source::is_generated_default_lib_file_name(file_name) {
+        return None;
+    }
+
+    if file_name.to_ascii_lowercase().contains("dom") {
+        Some(super::generated_tables::dom_snapshot())
+    } else {
+        Some(super::generated_tables::core_snapshot())
+    }
 }
 
 fn default_lib_sources() -> &'static [DefaultLibSource] {

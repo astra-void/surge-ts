@@ -49,6 +49,16 @@ span_tests = [
   "crates/typescript-rust-checker/tests/program.rs",
 ]
 
+[TS2614]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/compat-projects/package-declarations",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+
 [TS2306]
 status = "catalog-only"
 reason = "Cataloged for future coverage"
@@ -270,6 +280,15 @@ fixtures = [
 status = "emitted"
 fixtures = [
   "tests/compat-projects/indexed-access-basic/src/index.ts",
+]
+
+[TS2536]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/typescript-rust-checker/tests/spans.rs",
 ]
 
 [TS2538]

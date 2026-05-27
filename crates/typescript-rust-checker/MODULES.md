@@ -25,6 +25,8 @@ All relative module-syntax forms are limited to already loaded relative `.ts` fi
 
 Namespace imports bind a single value symbol whose object type is built from the source module's visible value exports. Default imports bind only a value symbol. Type-only exports stay in the type namespace. Star re-exports forward named value exports and named type exports, but they do not forward default exports. Namespace re-exports bind a conservative namespace object from the target module's visible exports.
 
+v1.2.2 keeps module export lookup read-only by sharing exported symbol handles and caching the namespace object materialization per module, so repeated export resolution no longer deep-clones exported payloads.
+
 ## Current Policy
 
 - Script files still share top-level `type` aliases, `interface` declarations, and function declarations across files.
@@ -36,6 +38,7 @@ Namespace imports bind a single value symbol whose object type is built from the
 - Missing side-effect imports emit TS2882, matching TypeScript's priority for
   `import "pkg";` / `import "./missing";`.
 - Missing exported members emit TS2305.
+- Named missing exports from the `package-declarations` auth-kit fixture use TS2614 when TypeScript does.
 - Unsupported module syntax stays parser-safe and is pinned with `typescript-rust::unsupported-module-syntax`.
 - `export * from` follows a pinned conflict policy: local explicit exports win, and the first star export wins when multiple star exports provide the same name.
 - Unresolved star re-exports are intentionally kept from cascading extra consumer diagnostics.

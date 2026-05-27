@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::ParsedVariableDeclaration;
 use typescript_rust_types::{Type, is_assignable_to};
@@ -6,7 +8,7 @@ use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_
 use super::expr::evaluate_expression;
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::{InferredExpression, map_parsed_type};
-use crate::symbols::{SymbolInfo, SymbolKind, SymbolTable, map_symbol_kind};
+use crate::symbols::{SymbolInfo, SymbolInfoHandle, SymbolKind, SymbolTable, map_symbol_kind};
 
 pub(crate) struct VariableCheckOptions {
     pub(crate) report_duplicate_let_const: bool,
@@ -37,17 +39,23 @@ pub(crate) fn check_variable_declaration_with_symbols(
     symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
     options: VariableCheckOptions,
-) -> Option<SymbolInfo> {
-    // Put symbols back into ctx for map_parsed_type to use
-    let temp_symbols = std::mem::take(symbols);
-    ctx.set_symbols(temp_symbols);
+) -> Option<SymbolInfoHandle> {
+    let variable_name = variable.name.clone();
+    let symbol = check_variable_declaration_against_symbols(variable, symbols, ctx, options)?;
 
+    symbols.insert_handle(variable_name, Arc::clone(&symbol));
+    Some(symbol)
+}
+
+pub(crate) fn check_variable_declaration_against_symbols(
+    variable: ParsedVariableDeclaration,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+    options: VariableCheckOptions,
+) -> Option<SymbolInfoHandle> {
     let declared_type = variable
         .declared_type
         .map(|declared_type| map_parsed_type(declared_type, ctx));
-
-    // Take them back out
-    *symbols = std::mem::take(&mut ctx.symbols);
 
     let symbol_kind = map_symbol_kind(variable.kind);
 
@@ -131,14 +139,11 @@ pub(crate) fn check_variable_declaration_with_symbols(
     }
 
     declared_type.or(inferred_symbol_type).map(|ty| {
-        let symbol = SymbolInfo {
+        Arc::new(SymbolInfo {
             ty,
             kind: symbol_kind,
             function_signature: None,
-        };
-
-        symbols.insert(variable.name, symbol.clone());
-        symbol
+        })
     })
 }
 
@@ -156,8 +161,8 @@ fn type_contains_unknown(ty: &Type) -> bool {
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {
-            function.parameters.iter().any(type_contains_unknown)
-                || type_contains_unknown(&function.return_type)
+            function.parameters().iter().any(type_contains_unknown)
+                || type_contains_unknown(function.return_type())
         }
         Type::Object(object) => {
             object
@@ -169,7 +174,7 @@ fn type_contains_unknown(ty: &Type) -> bool {
                     .as_deref()
                     .is_some_and(type_contains_unknown)
         }
-        Type::Union(union) => union.types.iter().any(type_contains_unknown),
+        Type::Union(union) => union.types().iter().any(type_contains_unknown),
         _ => false,
     }
 }

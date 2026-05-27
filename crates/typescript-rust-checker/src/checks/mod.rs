@@ -16,9 +16,7 @@ pub(crate) fn emit_type_only_as_value_diagnostic(
     span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
-    if ctx.type_declarations.get(name).is_none()
-        && ctx.ambient_global_type_declarations.get(name).is_none()
-    {
+    if ctx.lookup_type_declaration(name).is_none() {
         return false;
     }
 

@@ -64,11 +64,12 @@ Type operators provide a parser-safe foundation for common compatibility pattern
 - Optional properties still contribute their names
 - `keyof typeof constObject` maps are supported
 - Unresolved or unsupported targets (primitives, template literal types, index signatures, etc.) fallback to `unknown` without exact TypeScript semantics
+- v1.1 supports narrow generic indexed access after concrete substitution, including `T["key"]`, `T[K]`, and `T[keyof T]` when the receiver/key have been substituted to concrete types. Fully unresolved generic indexed access and constraint enforcement remain unsupported.
 - Narrow indexed access types (`T["K"]`, `T[keyof T]`, tuple numeric literal index) are supported. Unresolved index keys correctly emit cascading `TS2538` diagnostics under the `tsc` profile.
 - Mapped types (`{ [K in keyof T]: T[K] }` and `{ [K in keyof T]?: T[K] }`) are supported. Homomorphic mapped types and optional mapped properties map over string-literal keys. Generic mapped aliases are supported after concrete substitution. Key remapping, conditional types, template literal types, index signatures, readonly mapped semantics, modifier arithmetic, generic inference, `@types`, and modifiers beyond bare `?` remain unsupported. The generated default-lib subset supplies the ambient core/DOM globals used by the checker, but physical `lib.d.ts`, Node discovery, and full lib.d.ts parity remain future work. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of that mapped-type foundation: supported key shapes are string-literal unions, and supported sources are concrete object/interface shapes. This is still not full TypeScript utility-type support.
 
 Current limitations:
-- generic indexed access types (e.g., `T[K]`) outside mapped type body
+- fully unresolved generic indexed access types and generic constraint enforcement on `keyof`
 - mapped type modifiers `readonly`, `-readonly`, `-?`, `+?`
 - key remapping `as SomeRemap<K>`
 - conditional types

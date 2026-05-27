@@ -3374,3 +3374,18 @@ fn native_profile_suppresses_indexed_access_cascade() {
     let native_diagnostics = check_program_with_options(files, options);
     assert_eq!(codes(&native_diagnostics), vec!["TS2304"]);
 }
+
+#[test]
+fn indexed_access_unresolved_object_reports_only_missing_type() {
+    let files = vec![SourceFileInput {
+        file_name: "index.ts".to_string(),
+        source_text: "
+        type UnresolvedObjectIndex = MissingObject[\"x\"];
+        let _trigger: UnresolvedObjectIndex;
+        "
+        .to_string(),
+    }];
+
+    let diagnostics = check_program_with_options(files, CheckerOptions::default());
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+}

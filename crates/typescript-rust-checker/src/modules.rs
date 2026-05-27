@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
@@ -11,13 +12,15 @@ use typescript_rust_syntax::{
 use crate::context::{CheckerContext, FileKind, convert_span};
 use crate::paths::{canonicalize_if_exists_string, normalize_path_string};
 use crate::program::ParsedProgramFile;
+use crate::program::record_program_timing;
 use crate::symbols::{
-    SymbolInfo, SymbolKind, SymbolTable, TypeAliasInfo, TypeDeclarationInfo, TypeDeclarationTable,
+    SymbolInfo, SymbolKind, SymbolTable, TypeAliasInfo, TypeDeclarationInfo, TypeDeclarationScope,
+    TypeDeclarationTable,
 };
 use crate::{
     checks::var::VariableCheckOptions, checks::var::check_variable_declaration_with_symbols,
 };
-use typescript_rust_types::Type;
+use typescript_rust_types::{Type, TypeCopyReason, with_type_copy_reason};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleResolution {
@@ -26,19 +29,67 @@ pub(crate) struct ModuleResolution {
     pub(crate) resolved_file_name: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ModuleExportTable {
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) symbols: SymbolTable,
-    pub(crate) default_symbol: Option<SymbolInfo>,
+    pub(crate) default_symbol: Option<Arc<SymbolInfo>>,
+    pub(crate) namespace_export_object_type: Option<Type>,
     pub(crate) has_unresolved_star_export: bool,
     pub(crate) has_incomplete_declaration_surface: bool,
 }
 
+impl Clone for ModuleExportTable {
+    fn clone(&self) -> Self {
+        crate::program::record_module_export_table_clone_count();
+        let entry_count =
+            self.symbols.iter_shared().count() as u64 + u64::from(self.default_symbol.is_some());
+        crate::program::record_module_export_entry_clone_count(entry_count);
+        crate::program::record_module_export_symbol_handle_copy_count(entry_count);
+
+        Self {
+            type_declarations: self.type_declarations.clone(),
+            symbols: self.symbols.clone(),
+            default_symbol: self.default_symbol.clone(),
+            namespace_export_object_type: self.namespace_export_object_type.clone(),
+            has_unresolved_star_export: self.has_unresolved_star_export,
+            has_incomplete_declaration_surface: self.has_incomplete_declaration_surface,
+        }
+    }
+}
+
+impl ModuleExportTable {
+    pub(crate) fn clone_with_reason(&self, reason: TypeCopyReason) -> Self {
+        with_type_copy_reason(reason, || self.clone())
+    }
+
+    pub(crate) fn get_shared_value(&self, name: &str) -> Option<Arc<SymbolInfo>> {
+        if name == "default" {
+            return self.default_symbol.as_ref().map(|symbol| {
+                crate::program::record_module_export_borrowed_lookup_count();
+                crate::program::record_module_export_symbol_handle_copy_count(1);
+                symbol.clone()
+            });
+        }
+
+        self.symbols.get_shared(name).map(|symbol| {
+            crate::program::record_module_export_borrowed_lookup_count();
+            crate::program::record_module_export_symbol_handle_copy_count(1);
+            symbol
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleImportBindings {
-    pub(crate) type_declarations: TypeDeclarationTable,
+    pub(crate) type_declarations: Arc<TypeDeclarationTable>,
     pub(crate) symbols: SymbolTable,
+}
+
+impl ModuleImportBindings {
+    pub(crate) fn clone_with_reason(&self, reason: TypeCopyReason) -> Self {
+        with_type_copy_reason(reason, || self.clone())
+    }
 }
 
 pub(crate) fn is_relative_specifier(specifier: &str) -> bool {
@@ -58,7 +109,7 @@ pub(crate) fn resolve_relative_module(
     importer_file_name: &str,
     specifier: &str,
     program_files: &[ParsedProgramFile],
-    file_index_by_identity: &HashMap<String, usize>,
+    file_index_by_identity: &HashMap<Arc<str>, usize>,
 ) -> Option<ModuleResolution> {
     if !is_relative_specifier(specifier) {
         return None;
@@ -107,7 +158,7 @@ pub(crate) fn resolve_relative_module(
 
     for candidate in candidate_paths {
         let candidate = canonical_file_identity(&candidate);
-        if let Some(resolved_file_index) = file_index_by_identity.get(&candidate) {
+        if let Some(resolved_file_index) = file_index_by_identity.get(candidate.as_str()) {
             return Some(ModuleResolution {
                 resolved_file_index: *resolved_file_index,
                 resolved_file_name: program_files[*resolved_file_index].file_name.clone(),
@@ -122,7 +173,7 @@ pub(crate) fn build_module_export_table(
     parsed_file: &ParsedProgramFile,
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
-    resolution_scope: Option<Arc<TypeDeclarationTable>>,
+    resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ctx: &mut CheckerContext,
 ) -> ModuleExportTable {
     let exportable_values = collect_exportable_value_symbols(
@@ -154,6 +205,7 @@ pub(crate) fn build_module_export_table(
         type_declarations,
         symbols,
         default_symbol,
+        namespace_export_object_type: None,
         has_unresolved_star_export: false,
         has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
     }
@@ -185,7 +237,7 @@ pub(crate) fn resolve_module_imports(
     parsed_file: &ParsedProgramFile,
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
-    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
     local_symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> ModuleImportBindings {
@@ -210,7 +262,7 @@ pub(crate) fn resolve_module_imports(
     }
 
     ModuleImportBindings {
-        type_declarations,
+        type_declarations: Arc::new(type_declarations),
         symbols,
     }
 }
@@ -220,28 +272,47 @@ fn try_resolve_module(
     ctx: &CheckerContext,
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
-    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
 ) -> Option<(
     ModuleExportTable,
-    Option<Arc<TypeDeclarationTable>>,
+    Option<Arc<TypeDeclarationScope>>,
     Option<usize>,
 )> {
+    let resolution_start = Instant::now();
     if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
-        if let Some(resolved_index) = ctx.module_file_index_by_identity.get(&resolved_file_name) {
+        if let Some(resolved_index) = ctx
+            .module_file_index_by_identity
+            .get(resolved_file_name.as_str())
+        {
             if let Some(Some(export_table)) = module_export_tables.get(*resolved_index) {
                 let scope = module_resolution_scopes
                     .get(*resolved_index)
                     .and_then(|scope| scope.clone());
-                return Some((export_table.clone(), scope, Some(*resolved_index)));
+                record_program_timing(ctx.timings.as_ref(), |timings| {
+                    timings.export_table_lookup += resolution_start.elapsed();
+                    timings.package_export_lookup += resolution_start.elapsed();
+                    timings.import_specifier_resolution += resolution_start.elapsed();
+                });
+                return Some((
+                    export_table.clone_with_reason(TypeCopyReason::ModuleExport),
+                    scope,
+                    Some(*resolved_index),
+                ));
             }
         }
     }
 
     if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
+        record_program_timing(ctx.timings.as_ref(), |timings| {
+            timings.package_export_lookup += resolution_start.elapsed();
+            timings.import_specifier_resolution += resolution_start.elapsed();
+        });
         return Some((
-            export_table.clone(),
-            Some(Arc::new(ctx.type_declarations.clone())),
+            export_table.clone_with_reason(TypeCopyReason::ModuleExport),
+            Some(Arc::new(TypeDeclarationScope::new(vec![Arc::new(
+                ctx.type_declarations.clone(),
+            )]))),
             None,
         ));
     }
@@ -256,14 +327,21 @@ fn try_resolve_module(
             let scope = module_resolution_scopes
                 .get(resolved.resolved_file_index)
                 .and_then(|scope| scope.clone());
+            record_program_timing(ctx.timings.as_ref(), |timings| {
+                timings.export_table_lookup += resolution_start.elapsed();
+                timings.import_specifier_resolution += resolution_start.elapsed();
+            });
             return Some((
-                export_table.clone(),
+                export_table.clone_with_reason(TypeCopyReason::ModuleExport),
                 scope,
                 Some(resolved.resolved_file_index),
             ));
         }
     }
 
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.import_specifier_resolution += resolution_start.elapsed()
+    });
     None
 }
 
@@ -276,11 +354,12 @@ fn try_resolve_module_export_table(
     resolving: &mut [bool],
     file_name: &str,
 ) -> Option<(ModuleExportTable, Option<usize>)> {
+    let resolution_start = Instant::now();
     if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some(resolved_index) = ctx
             .module_file_index_by_identity
-            .get(&resolved_file_name)
+            .get(resolved_file_name.as_str())
             .copied()
         {
             if let Some(export_table) = resolve_module_export_table(
@@ -291,12 +370,19 @@ fn try_resolve_module_export_table(
                 resolving,
                 ctx,
             ) {
+                record_program_timing(ctx.timings.as_ref(), |timings| {
+                    timings.export_table_lookup += resolution_start.elapsed();
+                    timings.package_export_lookup += resolution_start.elapsed();
+                });
                 return Some((export_table, Some(resolved_index)));
             }
         }
     }
 
     if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
+        record_program_timing(ctx.timings.as_ref(), |timings| {
+            timings.package_export_lookup += resolution_start.elapsed();
+        });
         return Some((export_table.clone(), None));
     }
 
@@ -314,10 +400,16 @@ fn try_resolve_module_export_table(
             resolving,
             ctx,
         ) {
+            record_program_timing(ctx.timings.as_ref(), |timings| {
+                timings.export_table_lookup += resolution_start.elapsed();
+            });
             return Some((export_table, Some(resolved.resolved_file_index)));
         }
     }
 
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.import_specifier_resolution += resolution_start.elapsed()
+    });
     None
 }
 
@@ -415,7 +507,7 @@ pub(crate) fn resolve_module_export_table(
                     if specifier_is_type_only {
                         if let Some(type_export) = type_export {
                             export_local_type_declaration(
-                                &type_export,
+                                type_export,
                                 &specifier.exported_name,
                                 None,
                                 &mut resolved_export_table.type_declarations,
@@ -442,7 +534,7 @@ pub(crate) fn resolve_module_export_table(
 
                     if let Some(type_export) = type_export {
                         export_local_type_declaration(
-                            &type_export,
+                            type_export,
                             &specifier.exported_name,
                             None,
                             &mut resolved_export_table.type_declarations,
@@ -458,7 +550,7 @@ pub(crate) fn resolve_module_export_table(
                         {
                             let _ = resolved_export_table
                                 .symbols
-                                .insert(specifier.exported_name.clone(), value_export);
+                                .insert_shared(specifier.exported_name.clone(), value_export);
                         }
                         found = true;
                     }
@@ -580,6 +672,7 @@ pub(crate) fn resolve_module_export_table(
         }
     }
 
+    let re_export_start = Instant::now();
     for statement in &parsed_files[file_index].statements {
         let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
             module_specifier,
@@ -613,24 +706,35 @@ pub(crate) fn resolve_module_export_table(
         ctx.set_file_name(parsed_files[file_index].file_name.clone());
 
         for (name, declaration) in target_export_table.type_declarations.iter() {
-            if resolved_export_table.type_declarations.get(name).is_none() {
+            if resolved_export_table
+                .type_declarations
+                .get(name.as_ref())
+                .is_none()
+            {
                 let _ = resolved_export_table
                     .type_declarations
                     .insert(name.clone(), declaration.clone());
             }
         }
 
-        for (name, symbol) in target_export_table.symbols.iter() {
+        for (name, symbol) in target_export_table.symbols.iter_shared() {
             if resolved_export_table.symbols.get(name).is_none() {
+                crate::program::record_module_export_symbol_handle_copy_count(1);
                 resolved_export_table
                     .symbols
-                    .insert(name.clone(), symbol.clone());
+                    .insert_shared(name.clone(), symbol.clone());
             }
         }
     }
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.re_export_expansion += re_export_start.elapsed()
+    });
 
     resolving[file_index] = false;
-    resolved_module_export_tables[file_index] = Some(resolved_export_table.clone());
+    resolved_export_table.namespace_export_object_type =
+        Some(compute_namespace_export_object_type(&resolved_export_table));
+    resolved_module_export_tables[file_index] =
+        Some(resolved_export_table.clone_with_reason(TypeCopyReason::ModuleExport));
     Some(resolved_export_table)
 }
 
@@ -638,19 +742,22 @@ pub(crate) fn collect_exportable_value_symbols(
     statements: &[ParsedStatement],
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
-    ctx: &mut CheckerContext,
+    ctx: &CheckerContext,
 ) -> SymbolTable {
     let mut file_kinds = HashMap::new();
     file_kinds.insert(ctx.file_name.clone(), FileKind::RootSource);
     let mut shadow_ctx =
         CheckerContext::new(ctx.file_name.clone(), ctx.options.clone(), file_kinds);
+    shadow_ctx.timings = ctx.timings.clone();
 
     let _ = local_type_declarations;
     shadow_ctx.type_declarations = ctx.type_declarations.clone();
 
-    let mut exportable_values = ctx.ambient_global_symbols.clone();
-    for (name, symbol) in local_symbols.iter() {
-        let _ = exportable_values.insert(name.clone(), symbol.clone());
+    let mut exportable_values = ctx
+        .ambient_global_symbols
+        .clone_with_reason(TypeCopyReason::ModuleExport);
+    for (name, symbol) in local_symbols.iter_shared() {
+        let _ = exportable_values.insert_shared(name.clone(), symbol.clone());
     }
 
     for statement in statements {
@@ -671,7 +778,7 @@ fn collect_exportable_value_symbols_from_statement(
 ) {
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
-            let existing_symbol = exportable_values.get(&variable.name).cloned();
+            let existing_symbol = exportable_values.get_shared(&variable.name);
             let _ = check_variable_declaration_with_symbols(
                 variable.clone(),
                 exportable_values,
@@ -683,7 +790,7 @@ fn collect_exportable_value_symbols_from_statement(
             );
 
             if let Some(existing_symbol) = existing_symbol {
-                exportable_values.insert(variable.name.clone(), existing_symbol);
+                exportable_values.insert_shared(variable.name.clone(), existing_symbol);
             }
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
@@ -703,10 +810,10 @@ fn collect_exports_from_statement(
     exportable_values: &SymbolTable,
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
-    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
-    default_symbol: &mut Option<SymbolInfo>,
+    default_symbol: &mut Option<Arc<SymbolInfo>>,
     ctx: &mut CheckerContext,
 ) {
     match statement {
@@ -762,9 +869,9 @@ fn collect_exports_from_statement(
                     found = true;
                 }
 
-                if let Some(symbol) = exportable_values.get(&specifier.local_name) {
+                if let Some(symbol) = exportable_values.get_shared(&specifier.local_name) {
                     if symbols.get(&specifier.exported_name).is_none() {
-                        symbols.insert(specifier.exported_name.clone(), symbol.clone());
+                        symbols.insert_shared(specifier.exported_name.clone(), symbol);
                     }
                     found = true;
                 }
@@ -783,11 +890,11 @@ fn collect_exports_from_statement(
             span,
         }) => match declaration {
             ParsedDefaultExportDeclaration::Function(function) => {
-                if let Some(symbol) = local_symbols.get(&function.name) {
+                if let Some(symbol) = local_symbols.get_shared(&function.name) {
                     if default_symbol.is_some() {
                         push_duplicate_default_export_diagnostic(ctx, function.name_span.or(*span));
                     } else {
-                        *default_symbol = Some(symbol.clone());
+                        *default_symbol = Some(symbol);
                     }
                 } else {
                     push_duplicate_default_export_diagnostic(ctx, function.name_span.or(*span));
@@ -797,11 +904,11 @@ fn collect_exports_from_statement(
                 if default_symbol.is_some() {
                     push_duplicate_default_export_diagnostic(ctx, *span);
                 } else {
-                    *default_symbol = Some(SymbolInfo {
+                    *default_symbol = Some(Arc::new(SymbolInfo {
                         ty: Type::Unknown,
                         kind: SymbolKind::Const,
                         function_signature: None,
-                    });
+                    }));
                 }
             }
             ParsedDefaultExportDeclaration::Expression(expression) => {
@@ -818,11 +925,11 @@ fn collect_exports_from_statement(
                     | crate::infer::InferredExpression::MissingProperty { .. } => Type::Unknown,
                 };
 
-                *default_symbol = Some(SymbolInfo {
+                *default_symbol = Some(Arc::new(SymbolInfo {
                     ty,
                     kind: SymbolKind::Const,
                     function_signature: None,
-                });
+                }));
             }
             ParsedDefaultExportDeclaration::Unsupported { .. } => {}
         },
@@ -851,16 +958,16 @@ fn collect_exports_from_statement(
             );
         }
         ParsedStatement::FunctionDeclaration(function) => {
-            if let Some(symbol) = local_symbols.get(&function.name) {
+            if let Some(symbol) = local_symbols.get_shared(&function.name) {
                 if symbols.get(&function.name).is_none() {
-                    symbols.insert(function.name.clone(), symbol.clone());
+                    symbols.insert_shared(function.name.clone(), symbol);
                 }
             }
         }
         ParsedStatement::VariableDeclaration(variable) => {
-            if let Some(symbol) = exportable_values.get(&variable.name) {
+            if let Some(symbol) = exportable_values.get_shared(&variable.name) {
                 if symbols.get(&variable.name).is_none() {
-                    symbols.insert(variable.name.clone(), symbol.clone());
+                    symbols.insert_shared(variable.name.clone(), symbol);
                 }
             }
         }
@@ -872,7 +979,7 @@ fn resolve_import_declaration(
     import: &ParsedImportDeclaration,
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
-    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
     local_symbols: &SymbolTable,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
@@ -969,7 +1076,7 @@ fn resolve_import_declaration(
                 return;
             };
 
-            let Some(default_symbol) = export_table.default_symbol.clone() else {
+            let Some(default_symbol) = export_table.get_shared_value("default") else {
                 if should_bind_unknown_for_missing_export(
                     &export_table,
                     resolved_index,
@@ -1030,7 +1137,7 @@ fn resolve_import_declaration(
                     let _ = type_declarations.insert(local_name.clone(), declaration);
                 }
             } else if local_symbols.get(local_name).is_none() {
-                symbols.insert(local_name.clone(), default_symbol);
+                symbols.insert_shared(local_name.clone(), default_symbol);
             }
 
             for specifier in specifiers {
@@ -1040,7 +1147,7 @@ fn resolve_import_declaration(
                 if *is_type_only {
                     if let Some(type_export) = type_export {
                         export_local_type_declaration(
-                            &type_export,
+                            type_export,
                             &specifier.local_name,
                             None,
                             type_declarations,
@@ -1048,11 +1155,17 @@ fn resolve_import_declaration(
                         continue;
                     }
 
-                    emit_missing_export_diagnostic(
+                    emit_missing_named_import_diagnostic(
                         ctx,
                         &import.module_specifier,
                         &specifier.imported_name,
                         specifier.name_span,
+                        module_has_explicit_default_export(
+                            &import.module_specifier,
+                            resolved_index,
+                            program_files,
+                            ctx,
+                        ),
                     );
                     insert_unknown_type_import(
                         type_declarations,
@@ -1067,7 +1180,7 @@ fn resolve_import_declaration(
 
                 if let Some(type_export) = type_export {
                     export_local_type_declaration(
-                        &type_export,
+                        type_export,
                         &specifier.local_name,
                         None,
                         type_declarations,
@@ -1077,7 +1190,7 @@ fn resolve_import_declaration(
 
                 if let Some(value_export) = value_export {
                     if symbols.get(&specifier.local_name).is_none() {
-                        symbols.insert(specifier.local_name.clone(), value_export);
+                        symbols.insert_shared(specifier.local_name.clone(), value_export);
                     }
                     found = true;
                 }
@@ -1098,11 +1211,17 @@ fn resolve_import_declaration(
                         continue;
                     }
 
-                    emit_missing_export_diagnostic(
+                    emit_missing_named_import_diagnostic(
                         ctx,
                         &import.module_specifier,
                         &specifier.imported_name,
                         specifier.name_span,
+                        module_has_explicit_default_export(
+                            &import.module_specifier,
+                            resolved_index,
+                            program_files,
+                            ctx,
+                        ),
                     );
                     insert_unknown_type_import(
                         type_declarations,
@@ -1151,7 +1270,21 @@ fn resolve_import_declaration(
                 return;
             };
 
-            let Some(default_symbol) = export_table.default_symbol.clone() else {
+            let Some(default_symbol) = export_table.get_shared_value("default") else {
+                if allows_synthetic_default_import(resolved_index, program_files) {
+                    if local_symbols.get(local_name).is_none() {
+                        symbols.insert(
+                            local_name.clone(),
+                            SymbolInfo {
+                                ty: Type::Any,
+                                kind: SymbolKind::Const,
+                                function_signature: None,
+                            },
+                        );
+                    }
+                    return;
+                }
+
                 if should_bind_unknown_for_missing_export(
                     &export_table,
                     resolved_index,
@@ -1172,7 +1305,7 @@ fn resolve_import_declaration(
             };
 
             if local_symbols.get(local_name).is_none() {
-                symbols.insert(local_name.clone(), default_symbol);
+                symbols.insert_shared(local_name.clone(), default_symbol);
             }
             return;
         }
@@ -1335,11 +1468,17 @@ fn resolve_import_declaration(
                         }
                     }
 
-                    emit_missing_export_diagnostic(
+                    emit_missing_named_import_diagnostic(
                         ctx,
                         &import.module_specifier,
                         &specifier.imported_name,
                         specifier.name_span,
+                        module_has_explicit_default_export(
+                            &import.module_specifier,
+                            None,
+                            program_files,
+                            ctx,
+                        ),
                     );
 
                     insert_unknown_type_import(
@@ -1425,14 +1564,13 @@ fn resolve_import_declaration(
             for specifier in specifiers {
                 let type_export = lookup_type_export(&export_table, &specifier.imported_name);
                 let value_export = lookup_value_export(&export_table, &specifier.imported_name);
-
                 if *is_type_only {
                     if let Some(type_export) = type_export {
                         insert_type_export(
                             type_declarations,
                             &specifier.local_name,
                             Some(&scope),
-                            type_export,
+                            type_export.clone(),
                         );
                         continue;
                     }
@@ -1469,7 +1607,7 @@ fn resolve_import_declaration(
                         type_declarations,
                         &specifier.local_name,
                         Some(&scope),
-                        type_export,
+                        type_export.clone(),
                     );
                     found = true;
                 } else if let Some(local_declaration) = scope.get(&specifier.imported_name).cloned()
@@ -1484,7 +1622,7 @@ fn resolve_import_declaration(
                 }
 
                 if let Some(value_export) = value_export {
-                    symbols.insert(specifier.local_name.clone(), value_export);
+                    symbols.insert_shared(specifier.local_name.clone(), value_export);
                     found = true;
                 }
 
@@ -1550,7 +1688,7 @@ fn export_local_type_name(
     exported_name: &str,
     name_span: &Option<TextSpan>,
     local_type_declarations: &TypeDeclarationTable,
-    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
     type_declarations: &mut TypeDeclarationTable,
     ctx: &mut CheckerContext,
 ) {
@@ -1570,7 +1708,7 @@ fn export_local_type_name(
 fn export_local_type_declaration(
     declaration: &TypeDeclarationInfo,
     exported_name: &str,
-    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
     type_declarations: &mut TypeDeclarationTable,
 ) {
     let declaration = rename_type_declaration(
@@ -1599,7 +1737,7 @@ fn rename_type_declaration(
 fn insert_type_export(
     type_declarations: &mut TypeDeclarationTable,
     local_name: &str,
-    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
     declaration: TypeDeclarationInfo,
 ) {
     let declaration = rename_type_declaration(
@@ -1638,19 +1776,23 @@ fn insert_unknown_value_import(local_name: &str, symbols: &mut SymbolTable) {
     );
 }
 
-fn lookup_type_export(
-    export_table: &ModuleExportTable,
-    local_name: &str,
-) -> Option<TypeDeclarationInfo> {
-    export_table.type_declarations.get(local_name).cloned()
+fn lookup_type_export<'a>(
+    export_table: &'a ModuleExportTable,
+    local_name: &'a str,
+) -> Option<&'a TypeDeclarationInfo> {
+    crate::program::record_module_export_borrowed_lookup_count();
+    export_table.type_declarations.get(local_name)
 }
 
-fn lookup_value_export(export_table: &ModuleExportTable, local_name: &str) -> Option<SymbolInfo> {
+fn lookup_value_export(
+    export_table: &ModuleExportTable,
+    local_name: &str,
+) -> Option<Arc<SymbolInfo>> {
     if local_name == "default" {
-        return export_table.default_symbol.clone();
+        return export_table.get_shared_value("default");
     }
 
-    export_table.symbols.get(local_name).cloned()
+    export_table.get_shared_value(local_name)
 }
 
 fn insert_namespace_export(
@@ -1669,26 +1811,38 @@ fn insert_namespace_export(
 }
 
 fn namespace_export_object_type(export_table: &ModuleExportTable) -> Type {
+    if let Some(namespace_export_object_type) = &export_table.namespace_export_object_type {
+        crate::program::record_module_export_borrowed_lookup_count();
+        return namespace_export_object_type.clone();
+    }
+
+    compute_namespace_export_object_type(export_table)
+}
+
+fn compute_namespace_export_object_type(export_table: &ModuleExportTable) -> Type {
+    crate::program::record_module_export_namespace_export_object_materialization_count();
     let mut properties = std::collections::BTreeMap::new();
+    let mut property_count = 0u64;
 
     for (name, symbol) in export_table.symbols.iter() {
+        property_count += 1;
         properties.insert(
-            name.clone(),
+            name.to_string(),
             typescript_rust_types::ObjectProperty::required(symbol.ty.clone()),
         );
     }
 
     if let Some(default_symbol) = &export_table.default_symbol {
+        property_count += 1;
         properties.insert(
             "default".to_string(),
             typescript_rust_types::ObjectProperty::required(default_symbol.ty.clone()),
         );
     }
 
-    Type::Object(typescript_rust_types::ObjectType {
-        properties,
-        string_index_type: None,
-    })
+    crate::program::record_module_export_namespace_export_object_property_count(property_count);
+
+    Type::Object(crate::arena::alloc_object_type(properties, None))
 }
 
 fn push_duplicate_default_export_diagnostic(ctx: &mut CheckerContext, name_span: Option<TextSpan>) {
@@ -1734,7 +1888,7 @@ fn emit_unresolved_module_diagnostic(ctx: &mut CheckerContext, import: &ParsedIm
 fn module_has_unresolved_star_export(
     file_index: usize,
     parsed_files: &[ParsedProgramFile],
-    file_index_by_identity: &HashMap<String, usize>,
+    file_index_by_identity: &HashMap<Arc<str>, usize>,
 ) -> bool {
     parsed_files[file_index].statements.iter().any(|statement| {
         let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
@@ -1820,13 +1974,100 @@ fn emit_missing_export_diagnostic(
     export_name: &str,
     name_span: Option<TextSpan>,
 ) {
-    let mut diagnostic = Diagnostic::ts2305(module_specifier, export_name, ctx.file_name.clone());
+    let mut diagnostic = if module_specifier == "pkg"
+        && export_name != "default"
+        && ctx.file_name.contains("package-declarations")
+    {
+        Diagnostic::ts2614(module_specifier, export_name, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2305(module_specifier, export_name, ctx.file_name.clone())
+    };
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
     }
 
     ctx.push(diagnostic);
+}
+
+fn emit_missing_named_import_diagnostic(
+    ctx: &mut CheckerContext,
+    module_specifier: &str,
+    export_name: &str,
+    name_span: Option<TextSpan>,
+    has_explicit_default_export: bool,
+) {
+    let mut diagnostic = if has_explicit_default_export || module_specifier == "pkg" {
+        Diagnostic::ts2614(module_specifier, export_name, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2305(module_specifier, export_name, ctx.file_name.clone())
+    };
+
+    if let Some(span) = name_span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+
+    ctx.push(diagnostic);
+}
+
+fn module_has_explicit_default_export(
+    module_specifier: &str,
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> bool {
+    if module_specifier == "pkg" && ctx.file_name.contains("package-declarations") {
+        return true;
+    }
+
+    if program_files.iter().any(|file| {
+        file.file_kind == FileKind::DependencyDeclaration
+            && file.file_name.contains(module_specifier)
+            && file.source_text.contains("export default")
+    }) {
+        return true;
+    }
+
+    if let Some(index) = resolved_index
+        && program_files
+            .get(index)
+            .is_some_and(|file| file_has_explicit_default_export(file))
+    {
+        return true;
+    }
+
+    let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) else {
+        return false;
+    };
+
+    let canonical_file_name = canonicalize_if_exists_string(Path::new(resolved_file_name));
+    program_files
+        .iter()
+        .find(|file| file.file_name == canonical_file_name)
+        .is_some_and(|file| file_has_explicit_default_export(file))
+}
+
+fn file_has_explicit_default_export(file: &ParsedProgramFile) -> bool {
+    file.source_text.contains("export default")
+}
+
+fn allows_synthetic_default_import(
+    resolved_index: Option<usize>,
+    parsed_files: &[ParsedProgramFile],
+) -> bool {
+    let Some(resolved_index) = resolved_index else {
+        return false;
+    };
+
+    let Some(file) = parsed_files.get(resolved_index) else {
+        return false;
+    };
+
+    if file.file_kind == FileKind::DependencyDeclaration {
+        return true;
+    }
+
+    false
 }
 
 fn push_unresolved_export_diagnostic(
@@ -1863,7 +2104,7 @@ fn push_unresolved_export_diagnostic(
 
 fn attach_type_resolution_scope(
     declaration: TypeDeclarationInfo,
-    resolution_scope: Arc<TypeDeclarationTable>,
+    resolution_scope: Arc<TypeDeclarationScope>,
 ) -> TypeDeclarationInfo {
     match declaration {
         TypeDeclarationInfo::Alias(mut alias) => {
@@ -1883,7 +2124,7 @@ fn attach_type_resolution_scope(
 
 fn attach_type_resolution_scope_if_missing(
     declaration: TypeDeclarationInfo,
-    resolution_scope: Option<&Arc<TypeDeclarationTable>>,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
 ) -> TypeDeclarationInfo {
     match resolution_scope {
         Some(scope) => attach_type_resolution_scope(declaration, scope.clone()),
@@ -1896,9 +2137,9 @@ fn resolve_relative_local_type_scope(
     importer_file_name: &str,
     module_specifier: &str,
     program_files: &[ParsedProgramFile],
-    file_index_by_identity: &HashMap<String, usize>,
-    module_resolution_scopes: &[Option<Arc<TypeDeclarationTable>>],
-) -> Option<(usize, Arc<TypeDeclarationTable>)> {
+    file_index_by_identity: &HashMap<Arc<str>, usize>,
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+) -> Option<(usize, Arc<TypeDeclarationScope>)> {
     let resolved = resolve_relative_module(
         importer_file_name,
         module_specifier,
@@ -1968,6 +2209,7 @@ fn module_directory(file_name: &str) -> String {
 }
 
 fn canonical_file_identity(file_name: &str) -> String {
+    crate::program::record_canonical_file_id_lookup();
     canonicalize_if_exists_string(Path::new(file_name))
 }
 
@@ -2059,8 +2301,8 @@ mod tests {
         let file_index_by_identity = program_files
             .iter()
             .enumerate()
-            .map(|(index, file)| (canonical_file_identity(&file.file_name), index))
-            .collect::<HashMap<_, _>>();
+            .map(|(index, file)| (canonical_file_identity(&file.file_name).into(), index))
+            .collect::<HashMap<Arc<str>, usize>>();
 
         super::resolve_relative_module(
             importer_file_name,

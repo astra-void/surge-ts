@@ -1007,7 +1007,7 @@ expected_diagnostics = ["TS2448"]
 [[case]]
 name = "property-call-flow-argument-use-before-declaration"
 path = "tests/smoke/property_call_flow_argument_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "property-call-flow-object-declared-unassigned"
@@ -2166,7 +2166,7 @@ expected_diagnostics = []
 [[case]]
 name = "control-flow-assignment-branch-maybe-assigned"
 path = "tests/smoke/control_flow_assignment_branch_maybe_assigned.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2454"]
 
 [[case]]
 name = "control-flow-assignment-both-branches-assigned-valid"
@@ -2176,7 +2176,7 @@ expected_diagnostics = []
 [[case]]
 name = "control-flow-assignment-else-missing-maybe-no-ts2454"
 path = "tests/smoke/control_flow_assignment_else_missing_maybe_no_ts2454.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2454"]
 
 [[case]]
 name = "control-flow-use-before-declaration"
@@ -5992,6 +5992,46 @@ path = "tests/smoke/generic_call_type_arguments_parser_safe.ts"
 expected_diagnostics = []
 
 [[case]]
+name = "generic-call-inference-identity-valid"
+path = "tests/smoke/generic_call_inference_identity_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-call-inference-identity-mismatch"
+path = "tests/smoke/generic_call_inference_identity_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-call-inference-array-element-valid"
+path = "tests/smoke/generic_call_inference_array_element_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-call-inference-array-element-mismatch"
+path = "tests/smoke/generic_call_inference_array_element_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-call-inference-unresolved-argument-no-cascade"
+path = "tests/smoke/generic_call_inference_unresolved_argument_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "generic-call-inference-explicit-type-argument-valid"
+path = "tests/smoke/generic_call_inference_explicit_type_argument_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-call-inference-tuple-return-suppressed"
+path = "tests/smoke/generic_call_inference_tuple_return_suppressed.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-call-inference-tuple-return-explicit-type-argument-valid"
+path = "tests/smoke/generic_call_inference_tuple_return_explicit_type_argument_valid.ts"
+expected_diagnostics = []
+
+[[case]]
 name = "generic-arity-missing-argument"
 path = "tests/smoke/generic_arity_missing_argument.ts"
 expected_diagnostics = ["TS2314"]
@@ -6036,6 +6076,56 @@ files = [
   { file_name = "index.ts", source_text = "import { Internal } from \"./box\";" },
 ]
 expected_diagnostics = []
+
+[[case]]
+name = "generic-indexed-access-alias-string-key-valid"
+path = "tests/smoke/generic_indexed_access_alias_string_key_valid.ts"
+expected_diagnostics = ["TS2536"]
+
+[[case]]
+name = "generic-indexed-access-alias-string-key-mismatch"
+path = "tests/smoke/generic_indexed_access_alias_string_key_mismatch.ts"
+expected_diagnostics = ["TS2536", "TS2322"]
+
+[[case]]
+name = "generic-indexed-access-alias-type-key-valid"
+path = "tests/smoke/generic_indexed_access_alias_type_key_valid.ts"
+expected_diagnostics = ["TS2536"]
+
+[[case]]
+name = "generic-indexed-access-alias-type-key-mismatch"
+path = "tests/smoke/generic_indexed_access_alias_type_key_mismatch.ts"
+expected_diagnostics = ["TS2536", "TS2322"]
+
+[[case]]
+name = "generic-indexed-access-keyof-values-valid"
+path = "tests/smoke/generic_indexed_access_keyof_values_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-indexed-access-keyof-values-mismatch"
+path = "tests/smoke/generic_indexed_access_keyof_values_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-indexed-access-unresolved-receiver-no-cascade"
+path = "tests/smoke/generic_indexed_access_unresolved_receiver_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "generic-indexed-access-unresolved-key-no-cascade"
+path = "tests/smoke/generic_indexed_access_unresolved_key_no_cascade.ts"
+expected_diagnostics = ["TS2304", "TS2538"]
+
+[[case]]
+name = "generic-indexed-access-unknown-receiver-no-cascade"
+path = "tests/smoke/generic_indexed_access_unknown_receiver_no_cascade.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "generic-indexed-access-unknown-key-no-cascade"
+path = "tests/smoke/generic_indexed_access_unknown_key_no_cascade.ts"
+expected_diagnostics = ["TS2538"]
 [[test]]
 file = "external_named_import_reports_ts2307_no_cascade.ts"
 diagnostics = [2307]

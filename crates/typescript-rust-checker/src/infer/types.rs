@@ -8,18 +8,85 @@ use typescript_rust_syntax::{
     ParsedNamedType, ParsedObjectType, ParsedType, ParsedTypeParameter, TextSpan,
 };
 use typescript_rust_types::{
-    FunctionType, NumberLiteralType, ObjectProperty, ObjectType, Type, union_type,
+    NumberLiteralType, ObjectProperty, Type, TypeCopyReason, union_type, with_type_copy_reason,
 };
 
+use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::{
     CheckerContext, DeclarationNamespace, DeclarationResolutionKey, DeclarationResolutionState,
     convert_span,
 };
 use crate::default_lib::is_generated_default_lib_file_name;
 use crate::paths::canonicalize_if_exists_string;
+use crate::program::{
+    record_generic_indexed_access_attempt, record_generic_indexed_access_invalid_key,
+    record_generic_indexed_access_substituted_key,
+    record_generic_indexed_access_substituted_receiver, record_generic_indexed_access_success,
+    record_generic_indexed_access_unknown_fallback,
+};
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
 
-pub(crate) type TypeParameterSubstitution = BTreeMap<String, Type>;
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TypeParameterSubstitution {
+    values: BTreeMap<String, Type>,
+    placeholders: HashSet<String>,
+}
+
+impl TypeParameterSubstitution {
+    pub(crate) fn clone_with_reason(&self, reason: TypeCopyReason) -> Self {
+        with_type_copy_reason(reason, || self.clone())
+    }
+}
+
+impl TypeParameterSubstitution {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn set(&mut self, name: String, ty: Type, placeholder: bool) {
+        self.values.insert(name.clone(), ty);
+        if placeholder {
+            self.placeholders.insert(name);
+        } else {
+            self.placeholders.remove(&name);
+        }
+    }
+
+    pub(crate) fn insert(&mut self, name: String, ty: Type) {
+        self.set(name, ty, false);
+    }
+
+    pub(crate) fn insert_placeholder(&mut self, name: String, ty: Type) {
+        self.set(name, ty, true);
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&Type> {
+        self.values.get(name)
+    }
+
+    pub(crate) fn is_placeholder(&self, name: &str) -> bool {
+        self.placeholders.contains(name)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &Type)> {
+        self.values.iter()
+    }
+
+    pub(crate) fn extend(&mut self, other: Self) {
+        let Self {
+            values,
+            placeholders,
+        } = other;
+
+        for (name, ty) in values {
+            if placeholders.contains(&name) {
+                self.insert_placeholder(name, ty);
+            } else {
+                self.insert(name, ty);
+            }
+        }
+    }
+}
 
 pub(crate) fn report_duplicate_type_parameters(
     type_parameters: &[ParsedTypeParameter],
@@ -50,7 +117,9 @@ struct ResolvedType {
 }
 
 pub(crate) fn map_parsed_type(parsed_type: ParsedType, ctx: &mut CheckerContext) -> Type {
-    map_parsed_type_with_substitution(parsed_type, ctx, &TypeParameterSubstitution::new())
+    with_type_copy_reason(TypeCopyReason::SubstitutionChanged, || {
+        map_parsed_type_with_substitution(parsed_type, ctx, &TypeParameterSubstitution::new())
+    })
 }
 
 pub(crate) fn map_parsed_type_with_substitution(
@@ -59,13 +128,15 @@ pub(crate) fn map_parsed_type_with_substitution(
     substitution: &TypeParameterSubstitution,
 ) -> Type {
     let mut resolving = Vec::new();
-    resolve_parsed_type(
-        parsed_type,
-        ctx,
-        &mut resolving,
-        &merged_type_parameter_substitution(ctx, substitution),
-    )
-    .ty
+    with_type_copy_reason(TypeCopyReason::SubstitutionChanged, || {
+        resolve_parsed_type(
+            parsed_type,
+            ctx,
+            &mut resolving,
+            &merged_type_parameter_substitution(ctx, substitution),
+        )
+        .ty
+    })
 }
 
 fn merged_type_parameter_substitution(
@@ -76,13 +147,11 @@ fn merged_type_parameter_substitution(
 
     for scope in &ctx.type_parameter_scopes {
         for (name, ty) in scope {
-            merged.insert(name.clone(), ty.clone());
+            merged.insert_placeholder(name.clone(), ty.clone());
         }
     }
 
-    for (name, ty) in substitution {
-        merged.insert(name.clone(), ty.clone());
-    }
+    merged.extend(substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged));
 
     merged
 }
@@ -95,11 +164,11 @@ pub(crate) fn validate_local_type_declaration(
         TypeDeclarationInfo::Alias(alias) => {
             let mut substitution = TypeParameterSubstitution::new();
             for type_parameter in &alias.type_parameters {
-                substitution.insert(type_parameter.name.clone(), Type::Unknown);
+                substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
             }
 
             let mut resolving = Vec::new();
-            with_type_declarations(&alias.resolution_scope, ctx, |ctx| {
+            with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &alias.file_name, |ctx| {
                     resolve_parsed_type_with_substitution(
                         alias.ty.clone(),
@@ -113,11 +182,11 @@ pub(crate) fn validate_local_type_declaration(
         TypeDeclarationInfo::Interface(interface) => {
             let mut substitution = TypeParameterSubstitution::new();
             for type_parameter in &interface.type_parameters {
-                substitution.insert(type_parameter.name.clone(), Type::Unknown);
+                substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
             }
 
             let mut resolving = Vec::new();
-            with_type_declarations(&interface.resolution_scope, ctx, |ctx| {
+            with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &interface.file_name, |ctx| {
                     resolve_interface_declaration(
                         &interface.extends,
@@ -252,8 +321,54 @@ fn resolve_parsed_type(
         }
         ParsedType::Mapped(mapped) => resolve_mapped_type(mapped, ctx, resolving, substitution),
         ParsedType::IndexedAccess(indexed_access) => {
+            record_generic_indexed_access_attempt();
+            let object_type_for_placeholder = indexed_access.object_type.clone();
+            let object_placeholder_name =
+                parsed_type_placeholder_name(object_type_for_placeholder.as_ref(), substitution);
+            let index_placeholder_name =
+                parsed_type_placeholder_name(indexed_access.index_type.as_ref(), substitution);
+            let object_is_concrete_substitution = is_concrete_substituted_named_reference(
+                object_type_for_placeholder.as_ref(),
+                substitution,
+            );
+            let index_is_concrete_substitution = is_concrete_substituted_index_reference(
+                indexed_access.index_type.as_ref(),
+                substitution,
+            );
+            let generic_indexed_access = object_placeholder_name.is_some()
+                || index_placeholder_name.is_some()
+                || object_is_concrete_substitution
+                || index_is_concrete_substitution;
+            let index_is_keyof_same_placeholder = matches!(
+                (
+                    object_placeholder_name.as_deref(),
+                    indexed_access.index_type.as_ref()
+                ),
+                (
+                    Some(object_name),
+                    ParsedType::KeyOf(inner)
+                ) if matches!(
+                    inner.as_ref(),
+                    ParsedType::Named(named_type) if named_type.name == object_name
+                )
+            );
+
+            if object_is_concrete_substitution {
+                record_generic_indexed_access_substituted_receiver();
+            }
+            if index_is_concrete_substitution {
+                record_generic_indexed_access_substituted_key();
+            }
+
             let resolved_object =
                 resolve_parsed_type(*indexed_access.object_type, ctx, resolving, substitution);
+            if resolved_object.had_error {
+                if generic_indexed_access {
+                    record_generic_indexed_access_unknown_fallback();
+                }
+                return resolved_object;
+            }
+
             let resolved_index = resolve_parsed_type(
                 *indexed_access.index_type.clone(),
                 ctx,
@@ -261,9 +376,51 @@ fn resolve_parsed_type(
                 substitution,
             );
 
+            if object_placeholder_name.is_some() && index_is_keyof_same_placeholder {
+                if generic_indexed_access {
+                    record_generic_indexed_access_unknown_fallback();
+                }
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: false,
+                };
+            }
+
+            if index_placeholder_name.is_some()
+                || object_placeholder_name.is_some() && !index_is_keyof_same_placeholder
+            {
+                let index_name = index_placeholder_name
+                    .map(str::to_string)
+                    .unwrap_or_else(|| resolved_index.ty.name());
+                let object_name = object_placeholder_name
+                    .map(str::to_string)
+                    .unwrap_or_else(|| resolved_object.ty.name());
+                let mut diagnostic =
+                    Diagnostic::ts2536(&index_name, &object_name, ctx.file_name.clone());
+                if let Some(span) = indexed_access
+                    .index_type
+                    .as_ref()
+                    .span()
+                    .or(indexed_access.span)
+                {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
+                if generic_indexed_access {
+                    record_generic_indexed_access_invalid_key();
+                }
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: false,
+                };
+            }
+
             match (&resolved_object.ty, &resolved_index.ty) {
                 (Type::Object(object_type), Type::StringLiteral(key)) => {
                     if let Some(property_ty) = object_type.get_property_access_type(&key) {
+                        if generic_indexed_access {
+                            record_generic_indexed_access_success();
+                        }
                         ResolvedType {
                             ty: property_ty,
                             had_error: false,
@@ -287,7 +444,7 @@ fn resolve_parsed_type(
                 (Type::Object(object_type), Type::Union(union_ty)) => {
                     let mut types = Vec::new();
                     let mut had_error = false;
-                    for key_ty in &union_ty.types {
+                    for key_ty in union_ty.types() {
                         if let Type::StringLiteral(key) = key_ty {
                             if let Some(property_ty) = object_type.get_property_access_type(key) {
                                 types.push(property_ty);
@@ -320,6 +477,9 @@ fn resolve_parsed_type(
                             had_error: true,
                         }
                     } else {
+                        if generic_indexed_access {
+                            record_generic_indexed_access_success();
+                        }
                         ResolvedType {
                             ty: union_type(types),
                             had_error: false,
@@ -329,6 +489,9 @@ fn resolve_parsed_type(
                 (Type::Tuple(elements), Type::NumberLiteral(num)) => {
                     if let Ok(index) = num.value.parse::<usize>() {
                         if let Some(element_ty) = elements.get(index) {
+                            if generic_indexed_access {
+                                record_generic_indexed_access_success();
+                            }
                             ResolvedType {
                                 ty: element_ty.clone(),
                                 had_error: false,
@@ -357,17 +520,32 @@ fn resolve_parsed_type(
                     }
                 }
                 (Type::Array(element_type), Type::Number) => ResolvedType {
-                    ty: *element_type.clone(),
+                    ty: {
+                        if generic_indexed_access {
+                            record_generic_indexed_access_success();
+                        }
+                        *element_type.clone()
+                    },
                     had_error: false,
                 },
-                (Type::Tuple(elements), Type::Number) => ResolvedType {
-                    ty: union_type(elements.clone()),
-                    had_error: false,
-                },
-                (Type::Any, _) | (_, Type::Any) => ResolvedType {
-                    ty: Type::Any,
-                    had_error: false,
-                },
+                (Type::Tuple(elements), Type::Number) => {
+                    if generic_indexed_access {
+                        record_generic_indexed_access_success();
+                    }
+                    ResolvedType {
+                        ty: union_type(elements.clone()),
+                        had_error: false,
+                    }
+                }
+                (Type::Any, _) | (_, Type::Any) => {
+                    if generic_indexed_access {
+                        record_generic_indexed_access_success();
+                    }
+                    ResolvedType {
+                        ty: Type::Any,
+                        had_error: false,
+                    }
+                }
                 (_, Type::StringLiteral(key)) => {
                     let mut diagnostic =
                         Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
@@ -375,6 +553,9 @@ fn resolve_parsed_type(
                         diagnostic = diagnostic.with_span(convert_span(span));
                     }
                     ctx.push(diagnostic);
+                    if generic_indexed_access {
+                        record_generic_indexed_access_unknown_fallback();
+                    }
                     ResolvedType {
                         ty: Type::Unknown,
                         had_error: true,
@@ -392,6 +573,9 @@ fn resolve_parsed_type(
                             }
                             ctx.push(diagnostic);
                         }
+                        if generic_indexed_access {
+                            record_generic_indexed_access_unknown_fallback();
+                        }
                         return ResolvedType {
                             ty: Type::Unknown,
                             had_error: true,
@@ -403,6 +587,9 @@ fn resolve_parsed_type(
                         diagnostic = diagnostic.with_span(convert_span(span));
                     }
                     ctx.push(diagnostic);
+                    if generic_indexed_access {
+                        record_generic_indexed_access_unknown_fallback();
+                    }
                     ResolvedType {
                         ty: Type::Unknown,
                         had_error: true,
@@ -451,7 +638,7 @@ fn resolve_function_type(
     let mut parameters = Vec::new();
     let mut had_error = false;
 
-    for parameter in function_type.parameters {
+    for parameter in function_type.parameters.iter().cloned() {
         let resolved_parameter =
             resolve_function_type_parameter(parameter, ctx, resolving, &local_substitution);
         had_error |= resolved_parameter.had_error;
@@ -466,12 +653,12 @@ fn resolve_function_type(
     );
     had_error |= return_type.had_error;
     ResolvedType {
-        ty: Type::Function(FunctionType {
+        ty: Type::Function(alloc_function_type(
             parameters,
-            return_type: Box::new(return_type.ty),
-            is_variadic: false,
+            return_type.ty,
+            false,
             required_parameter_count,
-        }),
+        )),
         had_error,
     }
 }
@@ -529,10 +716,7 @@ fn resolve_object_type(
     }
 
     ResolvedType {
-        ty: Type::Object(ObjectType {
-            properties,
-            string_index_type: None,
-        }),
+        ty: Type::Object(alloc_object_type(properties, None)),
         had_error,
     }
 }
@@ -578,16 +762,7 @@ fn resolve_named_type(
         };
     }
 
-    let declaration = ctx
-        .type_declarations
-        .get(&named_type.name)
-        .cloned()
-        .or_else(|| {
-            ctx.ambient_global_type_declarations
-                .get(&named_type.name)
-                .filter(|declaration| is_ambient_type_declaration(declaration))
-                .cloned()
-        });
+    let declaration = ctx.lookup_type_declaration(&named_type.name).cloned();
 
     let Some(declaration) = declaration else {
         emit_unknown_type_name(&named_type, ctx);
@@ -737,19 +912,6 @@ fn cache_named_type_resolution(
     }
 }
 
-fn is_ambient_type_declaration(declaration: &TypeDeclarationInfo) -> bool {
-    let file_name = match declaration {
-        TypeDeclarationInfo::Alias(alias) => &alias.file_name,
-        TypeDeclarationInfo::Interface(interface) => &interface.file_name,
-    };
-
-    let file_name = canonical_declaration_file_name(file_name);
-    file_name == "<built-in>"
-        || file_name.ends_with(".d.ts")
-        || file_name.ends_with(".d.mts")
-        || file_name.ends_with(".d.cts")
-}
-
 fn canonical_declaration_file_name(file_name: &str) -> String {
     canonicalize_if_exists_string(Path::new(file_name))
 }
@@ -809,7 +971,7 @@ fn resolve_type_alias(
         };
     }
 
-    let resolved = with_type_declarations(&alias.resolution_scope, ctx, |ctx| {
+    let resolved = with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &alias.file_name, |ctx| {
             resolve_parsed_type_with_substitution(alias.ty, ctx, resolving, &local_substitution)
         })
@@ -852,15 +1014,12 @@ fn resolve_partial_utility_type(substitution: &TypeParameterSubstitution) -> Res
     };
 
     let mut properties = BTreeMap::new();
-    for (name, property) in object_type.properties {
-        properties.insert(name, ObjectProperty::optional(property.ty));
+    for (name, property) in object_type.properties.iter() {
+        properties.insert(name.clone(), ObjectProperty::optional(property.ty.clone()));
     }
 
     ResolvedType {
-        ty: Type::Object(ObjectType {
-            properties,
-            string_index_type: None,
-        }),
+        ty: Type::Object(alloc_object_type(properties, None)),
         had_error: false,
     }
 }
@@ -875,12 +1034,10 @@ fn resolve_record_utility_type(substitution: &TypeParameterSubstitution) -> Reso
 
     if key_type == Type::String {
         return ResolvedType {
-            ty: Type::Object(ObjectType {
-                properties: BTreeMap::new(),
-                string_index_type: Some(Box::new(
-                    substitution.get("T").cloned().unwrap_or(Type::Unknown),
-                )),
-            }),
+            ty: Type::Object(alloc_object_type(
+                BTreeMap::new(),
+                Some(substitution.get("T").cloned().unwrap_or(Type::Unknown)),
+            )),
             had_error: false,
         };
     }
@@ -900,10 +1057,7 @@ fn resolve_record_utility_type(substitution: &TypeParameterSubstitution) -> Reso
     }
 
     ResolvedType {
-        ty: Type::Object(ObjectType {
-            properties,
-            string_index_type: None,
-        }),
+        ty: Type::Object(alloc_object_type(properties, None)),
         had_error: false,
     }
 }
@@ -962,10 +1116,7 @@ fn resolve_pick_utility_type(
     }
 
     ResolvedType {
-        ty: Type::Object(ObjectType {
-            properties,
-            string_index_type: None,
-        }),
+        ty: Type::Object(alloc_object_type(properties, None)),
         had_error: false,
     }
 }
@@ -1000,19 +1151,16 @@ fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution) -> Resolv
     };
 
     let mut properties = BTreeMap::new();
-    for (key, property) in object_type.properties {
-        if keys.iter().any(|candidate| candidate == &key) {
+    for (key, property) in object_type.properties.iter() {
+        if keys.iter().any(|candidate| candidate == key) {
             continue;
         }
 
-        properties.insert(key, property);
+        properties.insert(key.clone(), property.clone());
     }
 
     ResolvedType {
-        ty: Type::Object(ObjectType {
-            properties,
-            string_index_type: None,
-        }),
+        ty: Type::Object(alloc_object_type(properties, None)),
         had_error: false,
     }
 }
@@ -1033,7 +1181,7 @@ fn resolve_parameters_utility_type(substitution: &TypeParameterSubstitution) -> 
     };
 
     ResolvedType {
-        ty: Type::Tuple(function_type.parameters.clone()),
+        ty: Type::Tuple(function_type.parameters().to_vec()),
         had_error: false,
     }
 }
@@ -1054,7 +1202,7 @@ fn resolve_return_type_utility_type(substitution: &TypeParameterSubstitution) ->
     };
 
     ResolvedType {
-        ty: (*function_type.return_type).clone(),
+        ty: function_type.return_type().clone(),
         had_error: false,
     }
 }
@@ -1064,7 +1212,7 @@ fn string_literal_union_keys(ty: &Type) -> Option<Vec<String>> {
         Type::StringLiteral(value) => Some(vec![value.clone()]),
         Type::Union(union) => {
             let mut keys = Vec::new();
-            for variant in &union.types {
+            for variant in union.types() {
                 match variant {
                     Type::StringLiteral(value) => keys.push(value.clone()),
                     _ => return None,
@@ -1148,7 +1296,7 @@ fn resolve_interface(
         }
     }
 
-    let resolved = with_type_declarations(&interface.resolution_scope, ctx, |ctx| {
+    let resolved = with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &interface.file_name, |ctx| {
             resolve_interface_declaration(
                 &interface.extends,
@@ -1185,8 +1333,8 @@ fn resolve_interface_declaration(
 
         match resolved_base.ty {
             Type::Object(object_type) => {
-                for (name, property) in object_type.properties {
-                    properties.entry(name).or_insert(property);
+                for (name, property) in object_type.properties.iter() {
+                    properties.entry(name.clone()).or_insert(property.clone());
                 }
             }
             Type::Any => {}
@@ -1207,10 +1355,7 @@ fn resolve_interface_declaration(
     }
 
     ResolvedType {
-        ty: Type::Object(ObjectType {
-            properties,
-            string_index_type: None,
-        }),
+        ty: Type::Object(alloc_object_type(properties, None)),
         had_error,
     }
 }
@@ -1219,55 +1364,52 @@ fn generated_default_lib_map_instance_type() -> Type {
     let mut properties = BTreeMap::new();
     properties.insert(
         "get".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::Any],
-            return_type: Box::new(Type::Any),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
+        ObjectProperty::required(Type::Function(alloc_function_type(
+            vec![Type::Any],
+            Type::Any,
+            false,
+            1,
+        ))),
     );
     properties.insert(
         "set".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::Any, Type::Any],
-            return_type: Box::new(Type::Any),
-            is_variadic: false,
-            required_parameter_count: 2,
-        })),
+        ObjectProperty::required(Type::Function(alloc_function_type(
+            vec![Type::Any, Type::Any],
+            Type::Any,
+            false,
+            2,
+        ))),
     );
     properties.insert(
         "has".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::Any],
-            return_type: Box::new(Type::Boolean),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
+        ObjectProperty::required(Type::Function(alloc_function_type(
+            vec![Type::Any],
+            Type::Boolean,
+            false,
+            1,
+        ))),
     );
     properties.insert(
         "delete".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![Type::Any],
-            return_type: Box::new(Type::Boolean),
-            is_variadic: false,
-            required_parameter_count: 1,
-        })),
+        ObjectProperty::required(Type::Function(alloc_function_type(
+            vec![Type::Any],
+            Type::Boolean,
+            false,
+            1,
+        ))),
     );
     properties.insert(
         "clear".to_string(),
-        ObjectProperty::required(Type::Function(FunctionType {
-            parameters: vec![],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 0,
-        })),
+        ObjectProperty::required(Type::Function(alloc_function_type(
+            vec![],
+            Type::Void,
+            false,
+            0,
+        ))),
     );
     properties.insert("size".to_string(), ObjectProperty::required(Type::Number));
 
-    Type::Object(ObjectType {
-        properties,
-        string_index_type: None,
-    })
+    Type::Object(alloc_object_type(properties, None))
 }
 
 fn bind_type_arguments(
@@ -1303,9 +1445,11 @@ fn bind_type_arguments(
                 return None;
             }
 
-            substitution
-                .entry(parameter.name.clone())
-                .or_insert(resolved_argument.ty);
+            if parsed_type_is_placeholder_reference(argument, parent_substitution) {
+                substitution.insert_placeholder(parameter.name.clone(), resolved_argument.ty);
+            } else {
+                substitution.insert(parameter.name.clone(), resolved_argument.ty);
+            }
             continue;
         }
 
@@ -1314,18 +1458,24 @@ fn bind_type_arguments(
             return None;
         };
 
-        let mut effective_substitution = parent_substitution.clone();
-        effective_substitution.extend(substitution.clone());
+        let mut effective_substitution =
+            parent_substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+        effective_substitution
+            .extend(substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged));
 
+        let default_type_is_placeholder =
+            parsed_type_is_placeholder_reference(&default_type, &effective_substitution);
         let resolved_default =
             resolve_parsed_type(default_type, ctx, resolving, &effective_substitution);
         if resolved_default.had_error {
             return None;
         }
 
-        substitution
-            .entry(parameter.name.clone())
-            .or_insert(resolved_default.ty);
+        if default_type_is_placeholder {
+            substitution.insert_placeholder(parameter.name.clone(), resolved_default.ty);
+        } else {
+            substitution.insert(parameter.name.clone(), resolved_default.ty);
+        }
     }
 
     Some(substitution)
@@ -1337,11 +1487,14 @@ fn extend_substitution_with_type_parameters(
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
 ) -> TypeParameterSubstitution {
-    let mut substitution = parent_substitution.clone();
+    let mut substitution =
+        parent_substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
 
     for parameter in type_parameters {
-        let mut effective_substitution = parent_substitution.clone();
-        effective_substitution.extend(substitution.clone());
+        let mut effective_substitution =
+            parent_substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+        effective_substitution
+            .extend(substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged));
 
         let resolved = parameter.default_type.clone().map(|default_type| {
             resolve_parsed_type(default_type, ctx, resolving, &effective_substitution)
@@ -1353,7 +1506,14 @@ fn extend_substitution_with_type_parameters(
             None => Type::Unknown,
         };
 
-        substitution.entry(parameter.name.clone()).or_insert(ty);
+        if let Some(default_type) = parameter.default_type.as_ref() {
+            if parsed_type_is_placeholder_reference(default_type, &effective_substitution) {
+                substitution.insert_placeholder(parameter.name.clone(), ty);
+                continue;
+            }
+        }
+
+        substitution.insert(parameter.name.clone(), ty);
     }
 
     substitution
@@ -1378,9 +1538,9 @@ fn resolve_mapped_type(
         Type::StringLiteral(s) => vec![s],
         Type::Union(union) => {
             let mut keys = Vec::new();
-            for variant in union.types {
+            for variant in union.types() {
                 match variant {
-                    Type::StringLiteral(s) => keys.push(s),
+                    Type::StringLiteral(s) => keys.push(s.clone()),
                     _ => {
                         return ResolvedType {
                             ty: Type::Unknown,
@@ -1403,7 +1563,8 @@ fn resolve_mapped_type(
     let mut had_error = false;
 
     for key in keys {
-        let mut new_substitution = substitution.clone();
+        let mut new_substitution =
+            substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
         new_substitution.insert(mapped.key_name.clone(), Type::StringLiteral(key.clone()));
 
         let resolved_value = resolve_parsed_type(
@@ -1427,10 +1588,7 @@ fn resolve_mapped_type(
     }
 
     ResolvedType {
-        ty: Type::Object(ObjectType {
-            properties,
-            string_index_type: None,
-        }),
+        ty: Type::Object(alloc_object_type(properties, None)),
         had_error,
     }
 }
@@ -1441,7 +1599,77 @@ fn resolve_parsed_type_with_substitution(
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
-    resolve_parsed_type(parsed_type, ctx, resolving, substitution)
+    with_type_copy_reason(TypeCopyReason::SubstitutionChanged, || {
+        resolve_parsed_type(parsed_type, ctx, resolving, substitution)
+    })
+}
+
+fn parsed_type_is_placeholder_reference(
+    parsed_type: &ParsedType,
+    substitution: &TypeParameterSubstitution,
+) -> bool {
+    matches!(
+        parsed_type,
+        ParsedType::Named(named_type) if substitution.is_placeholder(&named_type.name)
+    )
+}
+
+fn parsed_type_placeholder_name<'a>(
+    parsed_type: &'a ParsedType,
+    substitution: &TypeParameterSubstitution,
+) -> Option<&'a str> {
+    match parsed_type {
+        ParsedType::Named(named_type) if substitution.is_placeholder(&named_type.name) => {
+            Some(named_type.name.as_str())
+        }
+        _ => None,
+    }
+}
+
+trait ParsedTypeSpan {
+    fn span(&self) -> Option<TextSpan>;
+}
+
+impl ParsedTypeSpan for ParsedType {
+    fn span(&self) -> Option<TextSpan> {
+        match self {
+            ParsedType::Named(named_type) => named_type.span,
+            ParsedType::TypeOf(type_of) => type_of.name_span,
+            ParsedType::IndexedAccess(indexed_access) => indexed_access.span,
+            ParsedType::Mapped(mapped) => mapped.key_span.or(mapped.span),
+            _ => None,
+        }
+    }
+}
+
+fn is_concrete_substituted_named_reference(
+    parsed_type: &ParsedType,
+    substitution: &TypeParameterSubstitution,
+) -> bool {
+    matches!(
+        parsed_type,
+        ParsedType::Named(named_type)
+            if substitution
+                .get(&named_type.name)
+                .is_some()
+                && !substitution.is_placeholder(&named_type.name)
+    )
+}
+
+fn is_concrete_substituted_index_reference(
+    parsed_type: &ParsedType,
+    substitution: &TypeParameterSubstitution,
+) -> bool {
+    match parsed_type {
+        ParsedType::Named(named_type) => {
+            substitution.get(&named_type.name).is_some()
+                && !substitution.is_placeholder(&named_type.name)
+        }
+        ParsedType::KeyOf(inner) => {
+            is_concrete_substituted_named_reference(inner.as_ref(), substitution)
+        }
+        _ => false,
+    }
 }
 
 fn emit_unknown_type_name(named_type: &ParsedNamedType, ctx: &mut CheckerContext) {
@@ -1512,22 +1740,18 @@ fn with_file_name<R>(
     result
 }
 
-fn with_type_declarations<R>(
-    type_declarations: &Option<Arc<crate::symbols::TypeDeclarationTable>>,
+fn with_type_declaration_scope<R>(
+    type_declaration_scope: &Option<Arc<crate::symbols::TypeDeclarationScope>>,
     ctx: &mut CheckerContext,
     f: impl FnOnce(&mut CheckerContext) -> R,
 ) -> R {
-    let saved_type_declarations = ctx.type_declarations.clone();
+    let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
 
-    if let Some(type_declarations) = type_declarations {
-        let mut merged = saved_type_declarations.clone();
-        for (name, declaration) in type_declarations.iter() {
-            let _ = merged.insert(name.clone(), declaration.clone());
-        }
-        ctx.type_declarations = merged;
+    if let Some(type_declaration_scope) = type_declaration_scope {
+        ctx.type_declaration_scope = Some(type_declaration_scope.clone());
     }
 
     let result = f(ctx);
-    ctx.type_declarations = saved_type_declarations;
+    ctx.type_declaration_scope = saved_type_declaration_scope;
     result
 }

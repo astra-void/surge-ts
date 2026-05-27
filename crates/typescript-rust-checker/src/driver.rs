@@ -9,6 +9,7 @@ use typescript_rust_syntax::{
 
 use crate::checks::{assign, call, expr, function as check_function, var};
 use crate::context::{CheckerContext, DeclarationNamespace, DeclarationResolutionKey, FileKind};
+use crate::default_lib::inject_generated_default_lib_snapshot_for_file_name;
 use crate::infer::{report_duplicate_type_parameters, validate_local_type_declaration};
 use crate::load_default_lib_inputs;
 use crate::paths::canonicalize_if_exists_string;
@@ -62,8 +63,20 @@ pub fn check_source_with_options(
         let _ = merged_sym.insert(k.clone(), v.clone());
     }
     ctx.set_symbols(merged_sym);
+
+    let current_type_declarations = ctx.type_declarations.clone();
+    let current_symbols = ctx.symbols.clone();
+    let validation_symbols = crate::modules::collect_exportable_value_symbols(
+        &parsed.statements,
+        &current_type_declarations,
+        &current_symbols,
+        &mut ctx,
+    );
+    let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);
+
     validate_local_type_declarations(&parsed.statements, &file_name, &mut ctx);
     validate_direct_utility_aliases(&parsed.statements, &mut ctx);
+    ctx.symbols = saved_symbols;
 
     for statement in parsed.statements {
         check_statement(statement, &mut ctx);
@@ -77,136 +90,10 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
     let original_file_name = ctx.file_name.clone();
 
     for input in default_lib_inputs {
-        let parsed = parse_source(&input.source_text, &input.file_name);
-        ctx.set_file_name(parsed.file_name.clone());
-
-        for message in parsed.parser_errors {
-            let diagnostic =
-                Diagnostic::typescript_rust_parser_error(message, parsed.file_name.clone());
-            ctx.push(diagnostic);
-        }
-
-        let saved_type_declarations = std::mem::replace(
-            &mut ctx.type_declarations,
-            crate::symbols::TypeDeclarationTable::new(),
-        );
-        let saved_symbols = std::mem::replace(&mut ctx.symbols, crate::symbols::SymbolTable::new());
-
-        collect_type_declarations(&parsed.statements, ctx);
-        let ambient_td = ctx.type_declarations.clone();
-        for (name, decl) in ambient_td.iter() {
-            let _ = ctx
-                .ambient_global_type_declarations
-                .insert(name.clone(), decl.clone());
-        }
-
-        let mut current_symbols = std::mem::take(&mut ctx.symbols);
-        for statement in &parsed.statements {
-            inject_generated_default_lib_function_signatures_from_statement(
-                statement,
-                &mut current_symbols,
-                ctx,
-            );
-        }
-        ctx.symbols = current_symbols;
-
-        for stmt in &parsed.statements {
-            let var = match stmt {
-                ParsedStatement::VariableDeclaration(var) => Some(var),
-                ParsedStatement::ExportDeclaration(
-                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
-                        declaration, ..
-                    },
-                ) => {
-                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
-                        Some(var)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            if let Some(var) = var {
-                let ty = var
-                    .declared_type
-                    .as_ref()
-                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
-                    .unwrap_or(typescript_rust_types::Type::Unknown);
-                if ctx.ambient_global_symbols.get(&var.name).is_none() {
-                    ctx.ambient_global_symbols.insert(
-                        var.name.clone(),
-                        crate::symbols::SymbolInfo {
-                            ty,
-                            kind: if matches!(
-                                var.kind,
-                                typescript_rust_syntax::ParsedVariableKind::Const
-                            ) {
-                                crate::symbols::SymbolKind::Const
-                            } else {
-                                crate::symbols::SymbolKind::Let
-                            },
-                            function_signature: None,
-                        },
-                    );
-                }
-            }
-        }
-
-        ctx.type_declarations = saved_type_declarations;
-        ctx.symbols = saved_symbols;
+        let _ = inject_generated_default_lib_snapshot_for_file_name(&input.file_name, ctx, None);
     }
 
     ctx.set_file_name(original_file_name);
-}
-
-fn inject_generated_default_lib_function_signatures_from_statement(
-    statement: &ParsedStatement,
-    symbols: &mut crate::symbols::SymbolTable,
-    ctx: &mut CheckerContext,
-) {
-    match statement {
-        ParsedStatement::FunctionDeclaration(function) => {
-            let function_type =
-                check_function::collect_function_declaration_signature(function, symbols, ctx);
-            if ctx.ambient_global_symbols.get(&function.name).is_none() {
-                ctx.ambient_global_symbols.insert(
-                    function.name.clone(),
-                    crate::symbols::SymbolInfo {
-                        ty: typescript_rust_types::Type::Function(function_type),
-                        kind: crate::symbols::SymbolKind::Function,
-                        function_signature: None,
-                    },
-                );
-            }
-        }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-            declaration,
-            ..
-        }) => inject_generated_default_lib_function_signatures_from_statement(
-            declaration.as_ref(),
-            symbols,
-            ctx,
-        ),
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Function(function),
-            ..
-        }) => {
-            let function_type =
-                check_function::collect_function_declaration_signature(function, symbols, ctx);
-            if ctx.ambient_global_symbols.get(&function.name).is_none() {
-                ctx.ambient_global_symbols.insert(
-                    function.name.clone(),
-                    crate::symbols::SymbolInfo {
-                        ty: typescript_rust_types::Type::Function(function_type),
-                        kind: crate::symbols::SymbolKind::Function,
-                        function_signature: None,
-                    },
-                );
-            }
-        }
-        _ => {}
-    }
 }
 
 pub(crate) fn collect_type_declarations(statements: &[ParsedStatement], ctx: &mut CheckerContext) {
@@ -342,12 +229,12 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
 
     let mut properties = BTreeMap::new();
     for (name, symbol) in ctx.ambient_global_symbols.iter() {
-        if name == "globalThis" {
+        if name.as_ref() == "globalThis" {
             continue;
         }
 
         properties.insert(
-            name.clone(),
+            name.to_string(),
             typescript_rust_types::ObjectProperty::required(symbol.ty.clone()),
         );
     }
@@ -355,10 +242,9 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
     ctx.ambient_global_symbols.insert(
         "globalThis".to_string(),
         crate::symbols::SymbolInfo {
-            ty: typescript_rust_types::Type::Object(typescript_rust_types::ObjectType {
-                properties,
-                string_index_type: None,
-            }),
+            ty: typescript_rust_types::Type::Object(crate::arena::alloc_object_type(
+                properties, None,
+            )),
             kind: crate::symbols::SymbolKind::Const,
             function_signature: None,
         },
@@ -499,7 +385,11 @@ fn attach_current_type_scope_if_missing(
     declaration: TypeDeclarationInfo,
     ctx: &CheckerContext,
 ) -> TypeDeclarationInfo {
-    let current_scope = Arc::new(ctx.type_declarations.clone());
+    let current_scope = ctx.type_declaration_scope.clone().unwrap_or_else(|| {
+        Arc::new(crate::symbols::TypeDeclarationScope::new(vec![Arc::new(
+            ctx.type_declarations.clone(),
+        )]))
+    });
 
     match declaration {
         TypeDeclarationInfo::Alias(mut alias) => {

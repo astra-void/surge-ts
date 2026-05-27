@@ -1,3 +1,4 @@
+use std::time::Instant;
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::ParsedAssignment;
 use typescript_rust_types::is_assignable_to;
@@ -5,6 +6,7 @@ use typescript_rust_types::is_assignable_to;
 use super::emit_type_only_as_value_diagnostic;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use crate::context::{CheckerContext, convert_span};
+use crate::program::{record_assignability_check, record_program_timing};
 use crate::symbols::{SymbolKind, SymbolTable};
 
 pub(crate) fn check_assignment(assignment: ParsedAssignment, ctx: &mut CheckerContext) {
@@ -21,7 +23,7 @@ pub(crate) fn check_assignment_with_symbols(
         return;
     };
 
-    let Some(target) = symbols.get(&assignment.target_name).cloned() else {
+    let Some(target) = symbols.get(&assignment.target_name) else {
         if emit_type_only_as_value_diagnostic(&assignment.target_name, Some(target_span), ctx) {
             return;
         }
@@ -50,6 +52,8 @@ pub(crate) fn check_assignment_with_symbols(
 
     match inferred_value {
         crate::infer::InferredExpression::Known(inferred_value_type) => {
+            let assignability_start = Instant::now();
+            record_assignability_check();
             if inferred_value_type != typescript_rust_types::Type::Unknown
                 && !type_contains_unknown(&target.ty)
                 && !type_contains_unknown(&inferred_value_type)
@@ -70,6 +74,9 @@ pub(crate) fn check_assignment_with_symbols(
 
                 ctx.push(diagnostic);
             }
+            record_program_timing(ctx.timings.as_ref(), |timings| {
+                timings.assignability_checking += assignability_start.elapsed()
+            });
         }
         crate::infer::InferredExpression::UnresolvedIdentifier { .. } => {}
         crate::infer::InferredExpression::MissingProperty { .. } => {}
@@ -83,8 +90,8 @@ fn type_contains_unknown(ty: &typescript_rust_types::Type) -> bool {
         typescript_rust_types::Type::Array(element) => type_contains_unknown(element),
         typescript_rust_types::Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         typescript_rust_types::Type::Function(function) => {
-            function.parameters.iter().any(type_contains_unknown)
-                || type_contains_unknown(&function.return_type)
+            function.parameters().iter().any(type_contains_unknown)
+                || type_contains_unknown(function.return_type())
         }
         typescript_rust_types::Type::Object(object) => {
             object
@@ -96,7 +103,9 @@ fn type_contains_unknown(ty: &typescript_rust_types::Type) -> bool {
                     .as_deref()
                     .is_some_and(type_contains_unknown)
         }
-        typescript_rust_types::Type::Union(union) => union.types.iter().any(type_contains_unknown),
+        typescript_rust_types::Type::Union(union) => {
+            union.types().iter().any(type_contains_unknown)
+        }
         _ => false,
     }
 }

@@ -1,13 +1,20 @@
+use std::collections::BTreeMap;
+use std::time::Instant;
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{ParsedExpression, ParsedObjectProperty, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::{ObjectProperty, Type, is_assignable_to};
 
 use super::expr::evaluate_expression;
 use super::function::check_arrow_function_expression_with_expected_type;
+use crate::arena::alloc_object_type;
 use crate::context::CheckerContext;
-use crate::infer::{InferredExpression, infer_expression};
+use crate::infer::InferredExpression;
+use crate::program::{
+    record_assignability_check, record_object_literal_property_check, record_program_timing,
+};
 use crate::spans::{choose_span, diagnostic_with_syntax_span};
 use crate::symbols::SymbolTable;
+use typescript_rust_types::{TypeCopyReason, with_type_copy_reason};
 
 #[derive(Clone, Copy)]
 pub(crate) enum ExpectedTypeDiagnostic {
@@ -32,7 +39,7 @@ pub(crate) fn evaluate_expression_with_expected_type(
         (expected_type, expression)
     {
         let function_type = check_arrow_function_expression_with_expected_type(
-            arrow.as_ref().clone(),
+            with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
             Some(expected_function_type),
             symbols,
             ctx,
@@ -154,7 +161,10 @@ fn evaluate_array_literal_with_expected_type(
         }
     }
 
-    InferredExpression::Known(Type::Array(Box::new(expected_element_type.clone())))
+    InferredExpression::Known(Type::Array(Box::new(with_type_copy_reason(
+        TypeCopyReason::ExpectedType,
+        || expected_element_type.clone(),
+    ))))
 }
 
 fn evaluate_tuple_literal_with_expected_type(
@@ -239,6 +249,8 @@ fn evaluate_object_literal_with_expected_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let object_start = Instant::now();
+    let mut inferred_property_types = BTreeMap::new();
     if !expected_object_type.allows_string_index_access()
         && let Some(property) = properties
             .iter()
@@ -246,7 +258,10 @@ fn evaluate_object_literal_with_expected_type(
     {
         let diagnostic = Diagnostic::ts2353(
             &property.name,
-            &Type::Object(expected_object_type.clone()).name(),
+            &Type::Object(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+                expected_object_type.clone()
+            }))
+            .name(),
             ctx.file_name.clone(),
         );
 
@@ -261,6 +276,7 @@ fn evaluate_object_literal_with_expected_type(
     }
 
     for property in properties {
+        record_object_literal_property_check();
         let expected_property = if let Some(expected_property) =
             expected_object_type.get_property(&property.name).cloned()
         {
@@ -272,11 +288,20 @@ fn evaluate_object_literal_with_expected_type(
             continue;
         };
 
-        let contextual_property_type = expected_property.ty.clone();
-        let expected_property_type = if expected_property.is_optional() {
-            typescript_rust_types::union_type(vec![expected_property.ty.clone(), Type::Undefined])
-        } else {
+        let contextual_property_type = with_type_copy_reason(TypeCopyReason::ExpectedType, || {
             expected_property.ty.clone()
+        });
+        let expected_property_type = if expected_property.is_optional() {
+            typescript_rust_types::union_type(vec![
+                with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+                    expected_property.ty.clone()
+                }),
+                Type::Undefined,
+            ])
+        } else {
+            with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+                expected_property.ty.clone()
+            })
         };
 
         let inferred_property = evaluate_expression_with_expected_type(
@@ -291,9 +316,15 @@ fn evaluate_object_literal_with_expected_type(
         match inferred_property {
             InferredExpression::Known(actual_type) => {
                 if actual_type == Type::Unknown {
+                    inferred_property_types.insert(property.name.clone(), Type::Unknown);
                     continue;
                 }
 
+                inferred_property_types.insert(
+                    property.name.clone(),
+                    with_type_copy_reason(TypeCopyReason::ExpectedType, || actual_type.clone()),
+                );
+                record_assignability_check();
                 if !is_assignable_to(&actual_type, &expected_property_type) {
                     let actual_type_name = actual_type.name();
                     let expected_type_name = expected_property_type.name();
@@ -316,6 +347,7 @@ fn evaluate_object_literal_with_expected_type(
             InferredExpression::UnresolvedIdentifier { .. }
             | InferredExpression::MissingProperty { .. }
             | InferredExpression::Unknown => {
+                inferred_property_types.insert(property.name.clone(), Type::Unknown);
                 return InferredExpression::Unknown;
             }
         }
@@ -330,8 +362,13 @@ fn evaluate_object_literal_with_expected_type(
                     .any(|property| property.name == property_name.as_str())
             })
     {
-        let source_type_name = object_literal_source_type_name(properties, symbols, ctx).name();
-        let target_type_name = Type::Object(expected_object_type.clone()).name();
+        let source_type_name =
+            object_literal_source_type_name(properties, &inferred_property_types).name();
+        let target_type_name =
+            Type::Object(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+                expected_object_type.clone()
+            }))
+            .name();
 
         let diagnostic = match expected_diagnostic {
             ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
@@ -349,31 +386,32 @@ fn evaluate_object_literal_with_expected_type(
         return InferredExpression::Unknown;
     }
 
-    InferredExpression::Known(Type::Object(expected_object_type.clone()))
+    let result = InferredExpression::Known(Type::Object(with_type_copy_reason(
+        TypeCopyReason::ExpectedType,
+        || expected_object_type.clone(),
+    )));
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.object_literal_checking += object_start.elapsed()
+    });
+    result
 }
 
 fn object_literal_source_type_name(
     properties: &[ParsedObjectProperty],
-    symbols: &SymbolTable,
-    ctx: &mut CheckerContext,
+    inferred_property_types: &BTreeMap<String, Type>,
 ) -> Type {
     let properties = properties
         .iter()
         .map(|property| {
-            (
-                property.name.clone(),
-                match infer_expression(&property.value, symbols, ctx) {
-                    InferredExpression::Known(ty) => ObjectProperty::required(ty),
-                    _ => ObjectProperty::required(Type::Unknown),
-                },
-            )
+            let ty = inferred_property_types
+                .get(&property.name)
+                .cloned()
+                .unwrap_or(Type::Unknown);
+            (property.name.clone(), ObjectProperty::required(ty))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
 
-    Type::Object(typescript_rust_types::ObjectType {
-        properties,
-        string_index_type: None,
-    })
+    Type::Object(alloc_object_type(properties, None))
 }
 
 fn evaluate_conditional_expression_with_expected_type(
@@ -463,7 +501,9 @@ fn evaluate_conditional_expression_with_expected_type(
         return InferredExpression::Unknown;
     }
 
-    InferredExpression::Known(expected_type.clone())
+    InferredExpression::Known(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+        expected_type.clone()
+    }))
 }
 
 fn check_conditional_branch_expected_type(

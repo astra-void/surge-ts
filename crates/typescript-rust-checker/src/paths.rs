@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
 
 pub(crate) fn canonicalize_if_exists_string(path: &Path) -> String {
+    crate::program::record_string_path_lookup();
     canonicalize_if_exists(path)
         .to_string_lossy()
         .replace('\\', "/")
 }
 
 pub(crate) fn normalize_path_string(path: &str) -> String {
+    crate::program::record_string_path_lookup();
     normalize_path_buf(Path::new(path))
         .to_string_lossy()
         .replace('\\', "/")

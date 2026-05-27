@@ -1,19 +1,29 @@
-use crate::symbols::{SymbolInfo, SymbolTable};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::program::record_scope_stack_visible_symbol_handle_copy_count;
+use crate::symbols::{SymbolInfo, SymbolInfoHandle, SymbolTable, clone_symbol_info_handle};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ScopeStack {
     frames: Vec<ScopeFrame>,
+    visible_symbols: SymbolTable,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ScopeFrame {
     symbols: SymbolTable,
+    visible_shadows: HashMap<Arc<str>, Option<SymbolInfoHandle>>,
 }
 
 impl ScopeStack {
     pub(crate) fn from_root(root: SymbolTable) -> Self {
         Self {
-            frames: vec![ScopeFrame { symbols: root }],
+            visible_symbols: root.clone(),
+            frames: vec![ScopeFrame {
+                symbols: root,
+                visible_shadows: HashMap::new(),
+            }],
         }
     }
 
@@ -29,20 +39,47 @@ impl ScopeStack {
 
     pub(crate) fn insert_current(
         &mut self,
-        name: impl Into<String>,
+        name: impl Into<Arc<str>>,
         symbol: SymbolInfo,
-    ) -> Option<SymbolInfo> {
-        self.frames
+    ) -> Option<SymbolInfoHandle> {
+        self.insert_current_handle(name, Arc::new(symbol))
+    }
+
+    pub(crate) fn insert_current_handle(
+        &mut self,
+        name: impl Into<Arc<str>>,
+        symbol: SymbolInfoHandle,
+    ) -> Option<SymbolInfoHandle> {
+        let name = name.into();
+        let previous_visible = self.visible_symbols.get_handle(&name);
+        let current_frame = self
+            .frames
             .last_mut()
-            .expect("scope stack must contain at least one frame")
-            .symbols
-            .insert(name, symbol)
+            .expect("scope stack must contain at least one frame");
+        if current_frame.symbols.get(&name).is_none() {
+            current_frame
+                .visible_shadows
+                .insert(name.clone(), previous_visible);
+        }
+
+        record_scope_stack_visible_symbol_handle_copy_count(1);
+        self.visible_symbols
+            .insert_handle(name.clone(), clone_symbol_info_handle(&symbol));
+        current_frame.symbols.insert_handle(name, symbol)
     }
 
     pub(crate) fn update_visible(&mut self, name: &str, symbol: SymbolInfo) -> bool {
+        self.update_visible_handle(name, Arc::new(symbol))
+    }
+
+    pub(crate) fn update_visible_handle(&mut self, name: &str, symbol: SymbolInfoHandle) -> bool {
+        let name: Arc<str> = name.into();
         for frame in self.frames.iter_mut().rev() {
-            if frame.symbols.get(name).is_some() {
-                frame.symbols.insert(name.to_string(), symbol);
+            if frame.symbols.get(&name).is_some() {
+                record_scope_stack_visible_symbol_handle_copy_count(1);
+                self.visible_symbols
+                    .insert_handle(name.clone(), clone_symbol_info_handle(&symbol));
+                frame.symbols.insert_handle(name, symbol);
                 return true;
             }
         }
@@ -65,18 +102,21 @@ impl ScopeStack {
             !self.frames.is_empty(),
             "scope stack must contain at least one frame"
         );
-        self.frames.pop();
-    }
-
-    pub(crate) fn visible_symbols(&self) -> SymbolTable {
-        let mut visible = SymbolTable::new();
-
-        for frame in &self.frames {
-            for (name, symbol) in frame.symbols.iter() {
-                visible.insert(name.clone(), symbol.clone());
+        let frame = self.frames.pop().expect("scope stack must contain a frame");
+        for (name, previous_symbol) in frame.visible_shadows {
+            match previous_symbol {
+                Some(previous_symbol) => {
+                    record_scope_stack_visible_symbol_handle_copy_count(1);
+                    self.visible_symbols.insert_handle(name, previous_symbol);
+                }
+                None => {
+                    self.visible_symbols.remove(&name);
+                }
             }
         }
+    }
 
-        visible
+    pub(crate) fn visible_symbols(&self) -> &SymbolTable {
+        &self.visible_symbols
     }
 }

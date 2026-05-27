@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+oxc_allocator = "0.128.0"
 typescript-rust-diagnostics = { version = "0.1.0", path = "../typescript-rust-diagnostics" }
 typescript-rust-syntax = { version = "0.1.0", path = "../typescript-rust-syntax" }
 typescript-rust-types = { version = "0.1.0", path = "../typescript-rust-types" }

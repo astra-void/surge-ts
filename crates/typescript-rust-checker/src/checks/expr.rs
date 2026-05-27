@@ -1,3 +1,4 @@
+use std::time::Instant;
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{ParsedExpression, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::{NumberLiteralType, Type, is_assignable_to, union_type};
@@ -9,10 +10,13 @@ use super::call::{
 use super::emit_type_only_as_value_diagnostic;
 use super::function::check_arrow_function_expression;
 use super::ops;
+use crate::arena::alloc_object_type;
 use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, infer_expression};
+use crate::program::{record_expression_check, record_program_timing};
 use crate::spans::{choose_span, diagnostic_with_syntax_span};
 use crate::symbols::SymbolTable;
+use typescript_rust_types::{TypeCopyReason, with_type_copy_reason};
 
 fn widen_type(ty: &Type) -> Type {
     match ty {
@@ -21,7 +25,7 @@ fn widen_type(ty: &Type) -> Type {
         Type::BooleanLiteral(_) => Type::Boolean,
         Type::Object(obj) => {
             let mut new_props = std::collections::BTreeMap::new();
-            for (k, v) in &obj.properties {
+            for (k, v) in obj.properties.iter() {
                 new_props.insert(
                     k.clone(),
                     typescript_rust_types::ObjectProperty {
@@ -30,14 +34,11 @@ fn widen_type(ty: &Type) -> Type {
                     },
                 );
             }
-            Type::Object(typescript_rust_types::ObjectType {
-                properties: new_props,
-                string_index_type: None,
-            })
+            Type::Object(alloc_object_type(new_props, None))
         }
         Type::Array(inner) => Type::Array(Box::new(widen_type(inner))),
         Type::Union(types) => {
-            let widened: Vec<_> = types.types.iter().map(widen_type).collect();
+            let widened: Vec<_> = types.types().iter().map(widen_type).collect();
             typescript_rust_types::union_type(widened)
         }
         _ => ty.clone(),
@@ -45,8 +46,13 @@ fn widen_type(ty: &Type) -> Type {
 }
 
 pub(crate) fn check_expression_statement(expression: ParsedExpression, ctx: &mut CheckerContext) {
-    let symbols = ctx.symbols.clone();
+    let start = Instant::now();
+    let symbols = std::mem::take(&mut ctx.symbols);
     let _ = evaluate_expression(&expression, None, &symbols, ctx);
+    ctx.symbols = symbols;
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.expression_statement_checking += start.elapsed()
+    });
 }
 
 pub(crate) fn evaluate_const_expression(
@@ -71,7 +77,11 @@ pub(crate) fn evaluate_const_expression(
                 });
             }
             let result = InferredExpression::Known(Type::Tuple(element_types));
-            report_inferred_expression(result.clone(), fallback_span, ctx);
+            report_inferred_expression(
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || result.clone()),
+                fallback_span,
+                ctx,
+            );
             result
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
@@ -95,12 +105,12 @@ pub(crate) fn evaluate_const_expression(
                     },
                 );
             }
-            let result =
-                InferredExpression::Known(Type::Object(typescript_rust_types::ObjectType {
-                    properties: props,
-                    string_index_type: None,
-                }));
-            report_inferred_expression(result.clone(), fallback_span, ctx);
+            let result = InferredExpression::Known(Type::Object(alloc_object_type(props, None)));
+            report_inferred_expression(
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || result.clone()),
+                fallback_span,
+                ctx,
+            );
             result
         }
         // Primitives just evaluate normally without widening
@@ -114,6 +124,7 @@ pub(crate) fn evaluate_expression(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    record_expression_check();
     match expression {
         ParsedExpression::ArrayLiteral { elements, .. } => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
@@ -127,7 +138,13 @@ pub(crate) fn evaluate_expression(
                 );
             }
 
-            report_inferred_expression(inferred_expression.clone(), fallback_span, ctx);
+            report_inferred_expression(
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                    inferred_expression.clone()
+                }),
+                fallback_span,
+                ctx,
+            );
             inferred_expression
         }
         ParsedExpression::Call {
@@ -381,10 +398,12 @@ pub(crate) fn evaluate_expression(
             target_type,
             target_span: _,
         } => {
-            let temp_symbols = symbols.clone();
+            let temp_symbols = symbols.clone_with_reason(TypeCopyReason::ExpressionInference);
             let saved_symbols = std::mem::replace(&mut ctx.symbols, temp_symbols);
-            // Resolve the target type
-            let resolved_target_type = crate::infer::map_parsed_type(target_type.clone(), ctx);
+            let resolved_target_type =
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                    crate::infer::map_parsed_type(target_type.clone(), ctx)
+                });
             ctx.symbols = saved_symbols;
 
             // Evaluate the left expression contextually against the target type
@@ -417,15 +436,13 @@ pub(crate) fn evaluate_expression(
                 if *actual_type != typescript_rust_types::Type::Unknown
                     && resolved_target_type != typescript_rust_types::Type::Unknown
                 {
-                    let needs_top_level_check = match satisfied_expression.as_ref() {
+                    let needs_top_level_check = !matches!(
+                        satisfied_expression.as_ref(),
                         typescript_rust_syntax::ParsedExpression::ObjectLiteral { .. }
-                        | typescript_rust_syntax::ParsedExpression::ArrayLiteral { .. }
-                        | typescript_rust_syntax::ParsedExpression::ConstAssertion { .. }
-                        | typescript_rust_syntax::ParsedExpression::Conditional { .. } => {
-                            !contextual_failed
-                        }
-                        _ => true,
-                    };
+                            | typescript_rust_syntax::ParsedExpression::ArrayLiteral { .. }
+                            | typescript_rust_syntax::ParsedExpression::ConstAssertion { .. }
+                            | typescript_rust_syntax::ParsedExpression::Conditional { .. }
+                    );
 
                     if needs_top_level_check
                         && !typescript_rust_types::is_assignable_to(
@@ -498,10 +515,11 @@ pub(crate) fn evaluate_expression(
                 ctx,
             );
 
-            let temp_symbols = symbols.clone();
+            let temp_symbols = symbols.clone_with_reason(TypeCopyReason::ExpressionInference);
             let saved_symbols = std::mem::replace(&mut ctx.symbols, temp_symbols);
-            // Resolve the target type
-            let resolved_type = crate::infer::map_parsed_type(ty.clone(), ctx);
+            let resolved_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                crate::infer::map_parsed_type(ty.clone(), ctx)
+            });
             ctx.symbols = saved_symbols;
 
             // If the type is unresolved (e.g. unknown named type), map_parsed_type
@@ -519,8 +537,9 @@ pub(crate) fn evaluate_expression(
             ctx,
         ),
         ParsedExpression::ArrowFunction(arrow_function) => {
-            let function_type =
-                check_arrow_function_expression(arrow_function.as_ref().clone(), symbols, ctx);
+            let function_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                check_arrow_function_expression(arrow_function.as_ref().clone(), symbols, ctx)
+            });
             InferredExpression::Known(Type::Function(function_type))
         }
         ParsedExpression::NonNullAssertion {
@@ -552,7 +571,13 @@ pub(crate) fn evaluate_expression(
         }
         _ => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
-            report_inferred_expression(inferred_expression.clone(), fallback_span, ctx);
+            report_inferred_expression(
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                    inferred_expression.clone()
+                }),
+                fallback_span,
+                ctx,
+            );
             inferred_expression
         }
     }
@@ -615,7 +640,7 @@ fn suggested_unresolved_name(name: &str, ctx: &CheckerContext) -> Option<String>
         .symbols
         .iter()
         .chain(ctx.ambient_global_symbols.iter())
-        .map(|(candidate, _)| candidate.as_str())
+        .map(|(candidate, _)| candidate.as_ref())
         .filter(|candidate| candidate.eq_ignore_ascii_case(name) && *candidate != name);
 
     candidates.next().map(|candidate| candidate.to_string())
@@ -740,7 +765,9 @@ fn evaluate_optional_index_access(
             }
 
             InferredExpression::Known(union_type(vec![
-                element_type.as_ref().clone(),
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                    element_type.as_ref().clone()
+                }),
                 Type::Undefined,
             ]))
         }
@@ -757,7 +784,7 @@ fn evaluate_index_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let Some(symbol) = symbols.get(object_name).cloned() else {
+    let Some(symbol) = symbols.get(object_name) else {
         if emit_type_only_as_value_diagnostic(object_name, object_span, ctx) {
             return InferredExpression::Unknown;
         }
@@ -769,7 +796,7 @@ fn evaluate_index_access(
         return InferredExpression::Unknown;
     };
 
-    match symbol.ty {
+    match &symbol.ty {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown => InferredExpression::Unknown,
         Type::Tuple(elements) => {
@@ -851,7 +878,10 @@ fn evaluate_index_access(
                 return InferredExpression::Unknown;
             }
 
-            InferredExpression::Known((*element_type).clone())
+            InferredExpression::Known(with_type_copy_reason(
+                TypeCopyReason::ExpressionInference,
+                || element_type.as_ref().clone(),
+            ))
         }
         Type::Object(_)
         | Type::Function(_)

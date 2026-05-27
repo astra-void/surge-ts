@@ -1,3 +1,4 @@
+mod arena;
 mod builtins;
 mod checks;
 mod context;

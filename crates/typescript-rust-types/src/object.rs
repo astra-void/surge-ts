@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::{Type, union_type};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ObjectType {
-    pub properties: BTreeMap<String, ObjectProperty>,
-    pub string_index_type: Option<Box<Type>>,
+    pub properties: Arc<BTreeMap<String, ObjectProperty>>,
+    pub string_index_type: Option<Arc<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +37,16 @@ impl ObjectProperty {
 }
 
 impl ObjectType {
+    pub fn new(
+        properties: BTreeMap<String, ObjectProperty>,
+        string_index_type: Option<Type>,
+    ) -> Self {
+        Self {
+            properties: Arc::new(properties),
+            string_index_type: string_index_type.map(Arc::new),
+        }
+    }
+
     pub fn get_property(&self, name: &str) -> Option<&ObjectProperty> {
         self.properties.get(name)
     }
@@ -70,5 +81,14 @@ impl ObjectType {
 
     pub fn optional_properties(&self) -> impl Iterator<Item = (&String, &ObjectProperty)> + '_ {
         self.properties.iter().filter(|entry| entry.1.is_optional())
+    }
+}
+
+impl Clone for ObjectType {
+    fn clone(&self) -> Self {
+        Self {
+            properties: self.properties.clone(),
+            string_index_type: self.string_index_type.clone(),
+        }
     }
 }

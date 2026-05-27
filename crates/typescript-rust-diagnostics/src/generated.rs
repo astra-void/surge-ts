@@ -55,6 +55,16 @@ pub const TS2305: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2614: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2614",
+    number: Some(2614),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from \"{0}\"' instead?",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2306: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2306",
     number: Some(2306),
@@ -312,6 +322,16 @@ pub const TS2493: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Tuple type '{0}' of length '{1}' has no element at index '{2}'.",
     argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2536: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2536",
+    number: Some(2536),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' cannot be used to index type '{1}'.",
+    argument_count: 2,
     support: DiagnosticSupport::Emitted,
 };
 
@@ -671,6 +691,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2304,
     TS2300,
     TS2305,
+    TS2614,
     TS2306,
     TS2307,
     TS2882,
@@ -697,6 +718,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2451,
     TS2454,
     TS2493,
+    TS2536,
     TS2538,
     TS2551,
     TS2552,
@@ -774,6 +796,18 @@ impl Diagnostic {
     pub fn ts2305(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2305,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2614(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2614,
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
@@ -1017,6 +1051,18 @@ impl Diagnostic {
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
                 DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2536(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2536,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
             ],
             file_name,
         )

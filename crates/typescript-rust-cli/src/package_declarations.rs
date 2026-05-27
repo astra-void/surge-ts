@@ -312,7 +312,9 @@ fn resolve_package_entrypoint(
 
         if let Some(resolution) = resolve_package_entrypoint_in_directory(req, &pkg_dir, cache) {
             match resolution.kind {
-                PackageEntrypointKind::Declaration => return Some(resolution),
+                PackageEntrypointKind::Declaration => {
+                    return Some(resolution);
+                }
                 PackageEntrypointKind::RuntimeOnly => {
                     if runtime_fallback.is_none() {
                         runtime_fallback = Some(resolution);
@@ -412,6 +414,57 @@ fn resolve_package_entrypoint_in_directory(
                 if let Some(typings) = json.get("typings").and_then(|t| t.as_str()) {
                     if let Some(resolution) =
                         resolve_declaration_or_runtime_candidate(&pkg_dir.join(typings))
+                    {
+                        match resolution.kind {
+                            PackageEntrypointKind::Declaration => return Some(resolution),
+                            PackageEntrypointKind::RuntimeOnly => {
+                                if runtime_fallback.is_none() {
+                                    runtime_fallback = Some(resolution);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some(module_path) = json.get("module").and_then(|t| t.as_str()) {
+                    if let Some(resolution) =
+                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(module_path))
+                    {
+                        match resolution.kind {
+                            PackageEntrypointKind::Declaration => return Some(resolution),
+                            PackageEntrypointKind::RuntimeOnly => {
+                                if runtime_fallback.is_none() {
+                                    runtime_fallback = Some(resolution);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some(main_path) = json.get("main").and_then(|t| t.as_str()) {
+                    if let Some(resolution) =
+                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(main_path))
+                    {
+                        match resolution.kind {
+                            PackageEntrypointKind::Declaration => return Some(resolution),
+                            PackageEntrypointKind::RuntimeOnly => {
+                                if runtime_fallback.is_none() {
+                                    runtime_fallback = Some(resolution);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for candidate in [
+                    "dist/types/index",
+                    "types/index",
+                    "typings/index",
+                    "dist/esm/index",
+                    "dist/index",
+                ] {
+                    if let Some(resolution) =
+                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(candidate))
                     {
                         match resolution.kind {
                             PackageEntrypointKind::Declaration => return Some(resolution),

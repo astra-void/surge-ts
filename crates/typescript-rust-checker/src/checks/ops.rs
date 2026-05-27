@@ -192,7 +192,7 @@ fn evaluate_add_binary(
 fn is_string_like_for_add(ty: &Type) -> bool {
     match ty {
         Type::String | Type::StringLiteral(_) => true,
-        Type::Union(union) => union.types.iter().all(is_string_like_for_add),
+        Type::Union(union) => union.types().iter().all(is_string_like_for_add),
         _ => false,
     }
 }
@@ -200,7 +200,7 @@ fn is_string_like_for_add(ty: &Type) -> bool {
 fn is_number_like_for_add(ty: &Type) -> bool {
     match ty {
         Type::Number | Type::NumberLiteral(_) => true,
-        Type::Union(union) => union.types.iter().all(is_number_like_for_add),
+        Type::Union(union) => union.types().iter().all(is_number_like_for_add),
         _ => false,
     }
 }
@@ -369,19 +369,19 @@ fn is_comparison_operand_valid(ty: &Type) -> bool {
 fn types_overlap_for_equality(left: &Type, right: &Type) -> bool {
     match (left, right) {
         (Type::Union(left_union), Type::Union(right_union)) => {
-            left_union.types.iter().any(|left_ty| {
+            left_union.types().iter().any(|left_ty| {
                 right_union
-                    .types
+                    .types()
                     .iter()
                     .any(|right_ty| types_overlap_for_equality(left_ty, right_ty))
             })
         }
         (Type::Union(left_union), right_ty) => left_union
-            .types
+            .types()
             .iter()
             .any(|left_ty| types_overlap_for_equality(left_ty, right_ty)),
         (left_ty, Type::Union(right_union)) => right_union
-            .types
+            .types()
             .iter()
             .any(|right_ty| types_overlap_for_equality(left_ty, right_ty)),
         (Type::StringLiteral(left_value), Type::StringLiteral(right_value)) => {

@@ -28,3 +28,9 @@ Limitations:
 - literal union members exist and are used by `keyof`, but full TypeScript literal-union normalization/simplification and narrowing remain unsupported
 - no `null`, `void`, or `never`
 - no exact optional property semantics
+
+Clone accounting:
+
+- handle-copy measurements are attributed through `TypeCopyReason` and
+  reasoned helper methods on callers, but the union-type representation itself
+  remains handle-backed and semantically unchanged

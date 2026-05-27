@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
+use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::CheckerContext;
 use crate::symbols::{SymbolInfo, SymbolKind, TypeAliasInfo, TypeDeclarationInfo};
 use typescript_rust_syntax::{
     ParsedFunctionType, ParsedObjectType, ParsedObjectTypeProperty, ParsedType, ParsedTypeParameter,
 };
-use typescript_rust_types::{FunctionType, ObjectProperty, ObjectType, Type, union_type};
+use typescript_rust_types::{ObjectProperty, Type, union_type};
 
 pub(crate) fn inject_builtins(ctx: &mut CheckerContext) {
     if ctx.options.no_lib {
@@ -45,48 +46,38 @@ fn inject_builtin_values(ctx: &mut CheckerContext) {
     let builtins = vec![
         (
             "Error",
-            Type::Function(FunctionType {
-                parameters: vec![Type::Any],
-                return_type: Box::new(Type::Any),
-                is_variadic: true,
-                required_parameter_count: 1,
-            }),
+            Type::Function(alloc_function_type(vec![Type::Any], Type::Any, true, 1)),
         ),
         ("RegExp", Type::Any),
         (
             "setTimeout",
-            Type::Function(FunctionType {
-                parameters: vec![
-                    Type::Function(FunctionType {
-                        parameters: vec![],
-                        return_type: Box::new(Type::Void),
-                        is_variadic: false,
-                        required_parameter_count: 0,
-                    }),
+            Type::Function(alloc_function_type(
+                vec![
+                    Type::Function(alloc_function_type(vec![], Type::Void, false, 0)),
                     Type::Number,
                 ],
-                return_type: Box::new(Type::Number),
-                is_variadic: true,
-                required_parameter_count: 2,
-            }),
+                Type::Number,
+                true,
+                2,
+            )),
         ),
         (
             "clearTimeout",
-            Type::Function(FunctionType {
-                parameters: vec![Type::Number],
-                return_type: Box::new(Type::Void),
-                is_variadic: false,
-                required_parameter_count: 1,
-            }),
+            Type::Function(alloc_function_type(
+                vec![Type::Number],
+                Type::Void,
+                false,
+                1,
+            )),
         ),
         (
             "parseInt",
-            Type::Function(FunctionType {
-                parameters: vec![Type::String],
-                return_type: Box::new(Type::Number),
-                is_variadic: true,
-                required_parameter_count: 1,
-            }),
+            Type::Function(alloc_function_type(
+                vec![Type::String],
+                Type::Number,
+                true,
+                1,
+            )),
         ),
         ("document", Type::Any),
     ];
@@ -148,21 +139,18 @@ fn inject_configured_values(ctx: &mut CheckerContext) {
         let mut props = BTreeMap::new();
         props.insert(
             "from".to_string(),
-            ObjectProperty::required(Type::Function(FunctionType {
-                parameters: vec![Type::Any, Type::Any],
-                return_type: Box::new(Type::Any),
-                is_variadic: true,
-                required_parameter_count: 1,
-            })),
+            ObjectProperty::required(Type::Function(alloc_function_type(
+                vec![Type::Any, Type::Any],
+                Type::Any,
+                true,
+                1,
+            ))),
         );
 
         ctx.ambient_global_symbols.insert(
             "Buffer".to_string(),
             SymbolInfo {
-                ty: Type::Object(ObjectType {
-                    properties: props,
-                    string_index_type: None,
-                }),
+                ty: Type::Object(alloc_object_type(props, None)),
                 kind: SymbolKind::Const,
                 function_signature: None,
             },
@@ -173,19 +161,16 @@ fn inject_configured_values(ctx: &mut CheckerContext) {
         let mut process_props = BTreeMap::new();
         process_props.insert(
             "env".to_string(),
-            ObjectProperty::required(Type::Object(ObjectType {
-                properties: BTreeMap::new(),
-                string_index_type: Some(Box::new(union_type(vec![Type::String, Type::Undefined]))),
-            })),
+            ObjectProperty::required(Type::Object(alloc_object_type(
+                BTreeMap::new(),
+                Some(union_type(vec![Type::String, Type::Undefined])),
+            ))),
         );
 
         ctx.ambient_global_symbols.insert(
             "process".to_string(),
             SymbolInfo {
-                ty: Type::Object(ObjectType {
-                    properties: process_props,
-                    string_index_type: None,
-                }),
+                ty: Type::Object(alloc_object_type(process_props, None)),
                 kind: SymbolKind::Const,
                 function_signature: None,
             },

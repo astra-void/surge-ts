@@ -41,6 +41,14 @@ message = "Module '{0}' has no exported member '{1}'."
 arity = 2
 
 [[diagnostic]]
+code = "TS2614"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from \"{0}\"' instead?"
+arity = 2
+
+[[diagnostic]]
 code = "TS2306"
 category = "Error"
 source = "typescript"
@@ -247,6 +255,14 @@ source = "typescript"
 support = "emitted"
 message = "Tuple type '{0}' of length '{1}' has no element at index '{2}'."
 arity = 3
+
+[[diagnostic]]
+code = "TS2536"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' cannot be used to index type '{1}'."
+arity = 2
 
 [[diagnostic]]
 code = "TS2538"

@@ -5,7 +5,10 @@ use typescript_rust_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
 use typescript_rust_syntax::{ParsedTypeParameter, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::Type;
 
-use crate::symbols::{SymbolTable, TypeDeclarationTable};
+use crate::program::ProgramTimings;
+use crate::symbols::{
+    SymbolTable, TypeDeclarationInfo, TypeDeclarationScope, TypeDeclarationTable,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DiagnosticProfile {
@@ -95,13 +98,15 @@ pub(crate) struct CheckerContext {
     pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
+    pub(crate) type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
     pub(crate) resolved_named_types:
         Arc<Mutex<HashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
-    pub(crate) module_file_index_by_identity: HashMap<String, usize>,
+    pub(crate) module_file_index_by_identity: HashMap<Arc<str>, usize>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
+    pub(crate) timings: Option<std::sync::Arc<std::sync::Mutex<ProgramTimings>>>,
     file_kinds: HashMap<String, FileKind>,
 }
 
@@ -125,12 +130,14 @@ impl CheckerContext {
             utility_diagnostic_keys: HashSet::new(),
             symbols: SymbolTable::new(),
             type_declarations: TypeDeclarationTable::new(),
+            type_declaration_scope: None,
             resolved_named_types: Arc::new(Mutex::new(HashMap::new())),
             ambient_modules: std::collections::HashMap::new(),
             ambient_global_symbols: SymbolTable::new(),
             ambient_global_type_declarations: TypeDeclarationTable::new(),
             module_file_index_by_identity: HashMap::new(),
             type_parameter_scopes: Vec::new(),
+            timings: None,
             file_kinds,
         }
     }
@@ -168,9 +175,26 @@ impl CheckerContext {
         self.symbols = symbols;
     }
 
+    pub(crate) fn lookup_type_declaration(&self, name: &str) -> Option<&TypeDeclarationInfo> {
+        if let Some(declaration) = self.type_declarations.get(name) {
+            crate::program::record_type_declaration_lookup(1);
+            return Some(declaration);
+        }
+
+        if let Some(scope) = self.type_declaration_scope.as_ref() {
+            if let Some(declaration) = scope.get(name) {
+                crate::program::record_type_declaration_lookup(2);
+                return Some(declaration);
+            }
+        }
+
+        crate::program::record_type_declaration_lookup(3);
+        self.ambient_global_type_declarations.get(name)
+    }
+
     pub(crate) fn set_module_file_index_by_identity(
         &mut self,
-        module_file_index_by_identity: HashMap<String, usize>,
+        module_file_index_by_identity: HashMap<Arc<str>, usize>,
     ) {
         self.module_file_index_by_identity = module_file_index_by_identity;
     }

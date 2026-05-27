@@ -20,8 +20,10 @@ Limitations:
 
 - `void` is intentionally minimal and only models the current checker surface
 - function-type parameter lists may carry parsed type parameters, defaults, and
-  constraints, but there is no generic inference or instantiation-lite for
-  function-type parameters
+  constraints, but the checker only performs narrow call-site instantiation for
+  simple direct calls; full generic inference, overload resolution, callback
+  contextual inference, higher-order inference, and tuple-valued implicit
+  generic returns remain unsupported
 - no optional, rest, or default parameters
 - no `this` parameters
 - no methods or call signatures
@@ -29,3 +31,9 @@ Limitations:
 - no property call expressions
 - unions containing function types are allowed as types, but callable union semantics are not implemented yet
 - no strict TypeScript variance fidelity yet
+
+Clone accounting:
+
+- handle-copy measurements are attributed through `TypeCopyReason` and
+  reasoned helper methods on callers, but the function-type representation
+  itself remains handle-backed and semantically unchanged

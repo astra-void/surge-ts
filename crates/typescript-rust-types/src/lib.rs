@@ -1,12 +1,14 @@
 //! Core TypeScript-like type representation and assignability helpers.
 
 mod assignability;
+mod clone_reason;
 mod function;
 mod object;
 mod ty;
 mod union;
 
 pub use assignability::*;
+pub use clone_reason::{TypeCopyReason, with_type_copy_reason};
 pub use function::*;
 pub use object::*;
 pub use ty::*;
@@ -22,10 +24,7 @@ mod tests {
         let mut properties = BTreeMap::new();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
-        let ty = Type::Object(ObjectType {
-            properties,
-            string_index_type: None,
-        });
+        let ty = Type::Object(ObjectType::new(properties, None));
 
         assert_eq!(ty.name(), "{ name: string; }");
         assert!(is_assignable_to(&Type::String, &Type::Any));
@@ -36,10 +35,7 @@ mod tests {
         let mut properties = BTreeMap::new();
         properties.insert("name".to_string(), ObjectProperty::optional(Type::String));
 
-        let ty = ObjectType {
-            properties,
-            string_index_type: None,
-        };
+        let ty = ObjectType::new(properties, None);
 
         assert_eq!(
             ty.get_property_access_type("name"),

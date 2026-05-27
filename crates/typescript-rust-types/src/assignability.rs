@@ -46,19 +46,19 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
             .iter()
             .all(|source_ty| is_assignable_to(source_ty, target)),
         (Type::Union(from_union), Type::Union(to_union)) => {
-            from_union.types.iter().all(|from_ty| {
+            from_union.types().iter().all(|from_ty| {
                 to_union
-                    .types
+                    .types()
                     .iter()
                     .any(|to_ty| is_assignable_to(from_ty, to_ty))
             })
         }
         (Type::Union(from_union), to_ty) => from_union
-            .types
+            .types()
             .iter()
             .all(|from_ty| is_assignable_to(from_ty, to_ty)),
         (from_ty, Type::Union(to_union)) => to_union
-            .types
+            .types()
             .iter()
             .any(|to_ty| is_assignable_to(from_ty, to_ty)),
         (Type::Object(_), Type::Object(_)) => object_assignability_failure(from, to).is_none(),
@@ -67,19 +67,21 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
 }
 
 fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bool {
-    if source.parameters.len() != target.parameters.len() {
+    if source.parameters().len() != target.parameters().len() {
         return false;
     }
 
-    let parameters_compatible = source.parameters.iter().zip(target.parameters.iter()).all(
-        |(source_parameter, target_parameter)| {
+    let parameters_compatible = source
+        .parameters()
+        .iter()
+        .zip(target.parameters().iter())
+        .all(|(source_parameter, target_parameter)| {
             source_parameter == target_parameter
                 || (is_assignable_to(source_parameter, target_parameter)
                     && is_assignable_to(target_parameter, source_parameter))
-        },
-    );
+        });
 
-    parameters_compatible && is_assignable_to(&source.return_type, &target.return_type)
+    parameters_compatible && is_assignable_to(source.return_type(), target.return_type())
 }
 
 pub fn object_assignability_failure(
@@ -90,8 +92,8 @@ pub fn object_assignability_failure(
         return None;
     };
 
-    for (property_name, target_property) in &target.properties {
-        let source_property = source.properties.get(property_name);
+    for (property_name, target_property) in target.properties.iter() {
+        let source_property = source.properties.get(property_name.as_str());
         let source_property_ty = source_property
             .map(|property| &property.ty)
             .or_else(|| source.string_index_type.as_deref());
@@ -132,6 +134,20 @@ mod tests {
     use super::*;
     use crate::{FunctionType, NumberLiteralType, ObjectProperty, ObjectType, union_type};
     use std::collections::BTreeMap;
+
+    fn function_type(
+        parameters: Vec<Type>,
+        return_type: Type,
+        is_variadic: bool,
+        required_parameter_count: usize,
+    ) -> Type {
+        Type::Function(FunctionType::new(
+            parameters,
+            return_type,
+            is_variadic,
+            required_parameter_count,
+        ))
+    }
 
     #[test]
     fn string_literal_assignable_to_string() {
@@ -224,14 +240,8 @@ mod tests {
         target_properties.insert("kind".to_string(), ObjectProperty::required(Type::String));
 
         assert!(is_assignable_to(
-            &Type::Object(ObjectType {
-                properties: source_properties,
-                string_index_type: None,
-            }),
-            &Type::Object(ObjectType {
-                properties: target_properties,
-                string_index_type: None,
-            })
+            &Type::Object(ObjectType::new(source_properties, None)),
+            &Type::Object(ObjectType::new(target_properties, None))
         ));
     }
 
@@ -285,162 +295,92 @@ mod tests {
 
     #[test]
     fn function_type_assignable_same_signature() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Number),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Number),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
+        let source = function_type(vec![Type::String], Type::Number, false, 1);
+        let target = function_type(vec![Type::String], Type::Number, false, 1);
 
         assert!(is_assignable_to(&source, &target));
     }
 
     #[test]
     fn function_type_not_assignable_different_arity() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Number),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![Type::String, Type::Number],
-            return_type: Box::new(Type::Number),
-            is_variadic: false,
-            required_parameter_count: 2,
-        });
+        let source = function_type(vec![Type::String], Type::Number, false, 1);
+        let target = function_type(vec![Type::String, Type::Number], Type::Number, false, 2);
 
         assert!(!is_assignable_to(&source, &target));
     }
 
     #[test]
     fn function_type_not_assignable_parameter_mismatch() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![Type::Number],
-            return_type: Box::new(Type::Number),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Number),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
+        let source = function_type(vec![Type::Number], Type::Number, false, 1);
+        let target = function_type(vec![Type::String], Type::Number, false, 1);
 
         assert!(!is_assignable_to(&source, &target));
     }
 
     #[test]
     fn function_type_not_assignable_return_mismatch() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::String),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Number),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
+        let source = function_type(vec![Type::String], Type::String, false, 1);
+        let target = function_type(vec![Type::String], Type::Number, false, 1);
 
         assert!(!is_assignable_to(&source, &target));
     }
 
     #[test]
     fn function_type_return_covariance_basic() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::StringLiteral("ok".to_string())),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::String),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
+        let source = function_type(
+            vec![Type::String],
+            Type::StringLiteral("ok".to_string()),
+            false,
+            1,
+        );
+        let target = function_type(vec![Type::String], Type::String, false, 1);
 
         assert!(is_assignable_to(&source, &target));
     }
 
     #[test]
     fn function_type_literal_parameter_conservative() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![Type::StringLiteral("ok".to_string())],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
+        let source = function_type(
+            vec![Type::StringLiteral("ok".to_string())],
+            Type::Void,
+            false,
+            1,
+        );
+        let target = function_type(vec![Type::String], Type::Void, false, 1);
 
         assert!(!is_assignable_to(&source, &target));
     }
 
     #[test]
     fn function_type_union_parameter_compatible_when_same() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![union_type(vec![Type::String, Type::Number])],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![union_type(vec![Type::String, Type::Number])],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
+        let source = function_type(
+            vec![union_type(vec![Type::String, Type::Number])],
+            Type::Void,
+            false,
+            1,
+        );
+        let target = function_type(
+            vec![union_type(vec![Type::String, Type::Number])],
+            Type::Void,
+            false,
+            1,
+        );
 
         assert!(is_assignable_to(&source, &target));
     }
 
     #[test]
     fn function_type_void_return_assignable_to_void_return() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
+        let source = function_type(vec![Type::String], Type::Void, false, 1);
+        let target = function_type(vec![Type::String], Type::Void, false, 1);
 
         assert!(is_assignable_to(&source, &target));
     }
 
     #[test]
     fn function_type_void_return_not_assignable_to_string_return() {
-        let source = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::Void),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
-        let target = Type::Function(FunctionType {
-            parameters: vec![Type::String],
-            return_type: Box::new(Type::String),
-            is_variadic: false,
-            required_parameter_count: 1,
-        });
+        let source = function_type(vec![Type::String], Type::Void, false, 1);
+        let target = function_type(vec![Type::String], Type::String, false, 1);
 
         assert!(!is_assignable_to(&source, &target));
     }
@@ -474,13 +414,7 @@ mod tests {
     #[test]
     fn array_type_name_function() {
         assert_eq!(
-            Type::Array(Box::new(Type::Function(FunctionType {
-                parameters: vec![],
-                return_type: Box::new(Type::String),
-                is_variadic: false,
-                required_parameter_count: 0
-            })))
-            .name(),
+            Type::Array(Box::new(function_type(vec![], Type::String, false, 0))).name(),
             "(() => string)[]"
         );
     }
@@ -564,36 +498,21 @@ mod tests {
     #[test]
     fn array_function_element_assignability_valid() {
         assert!(is_assignable_to(
-            &Type::Array(Box::new(Type::Function(FunctionType {
-                parameters: vec![],
-                return_type: Box::new(Type::Void),
-                is_variadic: false,
-                required_parameter_count: 0
-            }))),
-            &Type::Array(Box::new(Type::Function(FunctionType {
-                parameters: vec![],
-                return_type: Box::new(Type::Void),
-                is_variadic: false,
-                required_parameter_count: 0
-            })))
+            &Type::Array(Box::new(function_type(vec![], Type::Void, false, 0))),
+            &Type::Array(Box::new(function_type(vec![], Type::Void, false, 0)))
         ));
     }
 
     #[test]
     fn array_function_element_assignability_mismatch() {
         assert!(!is_assignable_to(
-            &Type::Array(Box::new(Type::Function(FunctionType {
-                parameters: vec![Type::String],
-                return_type: Box::new(Type::Void),
-                is_variadic: false,
-                required_parameter_count: 1
-            }))),
-            &Type::Array(Box::new(Type::Function(FunctionType {
-                parameters: vec![],
-                return_type: Box::new(Type::Void),
-                is_variadic: false,
-                required_parameter_count: 0
-            })))
+            &Type::Array(Box::new(function_type(
+                vec![Type::String],
+                Type::Void,
+                false,
+                1
+            ))),
+            &Type::Array(Box::new(function_type(vec![], Type::Void, false, 0)))
         ));
     }
 
@@ -639,12 +558,7 @@ mod tests {
     fn tuple_type_name_function_element() {
         assert_eq!(
             Type::Tuple(vec![
-                Type::Function(FunctionType {
-                    parameters: vec![],
-                    return_type: Box::new(Type::Void),
-                    is_variadic: false,
-                    required_parameter_count: 0
-                }),
+                function_type(vec![], Type::Void, false, 0),
                 Type::String,
             ])
             .name(),
@@ -659,10 +573,7 @@ mod tests {
 
         assert_eq!(
             Type::Tuple(vec![
-                Type::Object(ObjectType {
-                    properties,
-                    string_index_type: None,
-                }),
+                Type::Object(ObjectType::new(properties, None)),
                 Type::Number
             ])
             .name(),

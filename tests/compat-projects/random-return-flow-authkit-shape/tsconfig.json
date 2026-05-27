@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "strict": true,
+    "types": ["node"],
     "noEmit": true
   },
   "include": ["src/**/*.ts"]
