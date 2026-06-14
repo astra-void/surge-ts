@@ -5,6 +5,33 @@ not a claim that large TypeScript packages pass. `v0.60` adds a TypeScript
 oracle comparison harness on top of that baseline so we can measure the current
 checker against a pinned compiler without changing the checker to chase parity.
 
+v1.2.5 is a performance pass after v1.2.4, not a new TypeScript semantic phase.
+No new TypeScript surface was added and, on the latest auth-kit measurement,
+exact diagnostics remain 0 and raw oracle match stays yes. Four changes land:
+(1) path canonicalization is memoized per run in both `typescript-rust-checker`
+and `typescript-rust-config` so the repeated `std::fs::canonicalize` (realpath)
+syscalls in type/module resolution and the project-discovery import-graph
+fixpoint are paid once instead of every probe; (2) the instrumentation counters
+that funnel through a single global `Mutex<ProgramCounters>` are gated behind
+`--timings`, removing that lock from the hot symbol-lookup and table-clone paths
+in normal runs (counters are still exact when `--timings` is set, which is how
+the measurement harness collects them); (3) `SymbolTable` is now copy-on-write
+(`Arc<HashMap<..>>` with `Arc::make_mut` on insert/remove), so the multi-pass
+module-binding fixpoint's table clones share their map and only deep-copy on the
+rare mutate-while-shared path, taking `symbol_table_entry_handle_copy_count`
+from `86782` to `27698` and `symbol_info_handle_copy_count` from `92072` to
+`32988` while the fixpoint logic is left untouched; and (4) relative-module
+resolution is memoized per run (cleared at check start), so fixpoint passes after
+the first reuse the resolved index instead of rebuilding and canonicalizing
+candidate paths. The measured auth-kit medians improve from v1.2.4's `0.80s` /
+`0.78s` to roughly `0.20s` / `0.19s` for `jobs=1` / `jobs=4` (stable floor near
+`0.18s`), now ahead of `tsgo` and well ahead of `tsc`. Profiling showed the
+dominant pre-fix cost was uncached `realpath`, not type-payload cloning; the
+remaining hot cost is the multi-pass binding/resolution recompute itself, which
+is left for a future, correctness-sensitive fixpoint-reduction pass. No hot
+allocator mutex was introduced and the prior handle-backed migrations are
+preserved.
+
 v1.2.4 is a performance recovery / stabilization pass after v1.2.3, not a new
 TypeScript semantic phase. No new TypeScript surface was added. v1.2.3
 `SymbolInfo` shared-handle storage is preserved while function-local variable

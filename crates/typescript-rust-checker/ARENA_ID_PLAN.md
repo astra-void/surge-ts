@@ -21,11 +21,11 @@ Reviewers should inspect these files together:
 - `crates/typescript-rust-checker/Cargo.toml`
 - `crates/typescript-rust-checker/src/arena.rs`
 - `crates/typescript-rust-checker/src/lib.rs`
-- `crates/typescript-rust-checker/src/modules.rs`
+- `crates/typescript-rust-checker/src/modules/` (split into `mod.rs`, `imports.rs`, `exports.rs`, `resolution.rs`, `diagnostics.rs`)
 - `crates/typescript-rust-checker/src/symbols/scopes.rs`
 - `crates/typescript-rust-checker/src/symbols/values.rs`
 - `crates/typescript-rust-checker/src/symbols/type_declarations.rs`
-- `crates/typescript-rust-checker/src/program.rs`
+- `crates/typescript-rust-checker/src/program/` (split into `mod.rs`, `binding.rs`, `statements.rs`, `globals.rs`, `ambient.rs`)
 - `crates/typescript-rust-checker/REAL_PROJECT_COMPAT.md`
 - `REAL_PROJECT_COMPAT.md`
 - `.bench/auth-kit-measurement.md`
@@ -133,6 +133,47 @@ Reviewers should inspect these files together:
 - `TypeDeclarationTable` arena-backed: yes
 - no hot allocator mutex
 
+## v1.2.5 Caching / Copy-On-Write Evidence
+
+v1.2.5 is a performance pass that does not add TypeScript semantics and does not
+start a new type-IR arena migration. It reduces redundant work around the
+existing arena/handle model rather than expanding it. Four changes land:
+
+- Path canonicalization is memoized per run (thread-local, cleared at check
+  start) in both `crates/typescript-rust-checker/src/paths.rs` and
+  `crates/typescript-rust-config/src/paths.rs`. Profiling with `/usr/bin/sample`
+  showed uncached `std::fs::canonicalize` (`realpath`) as the single largest
+  self-time cost; the multi-pass module-binding/resolution fixpoint and the CLI
+  import-graph discovery loop canonicalize the same paths repeatedly. This was
+  the dominant win.
+- Instrumentation counters (`record_program_counter`) are gated behind a
+  `COUNTERS_ENABLED` flag set only when `--timings` is requested, so the single
+  global `Mutex<ProgramCounters>` is no longer locked on every `SymbolTable::get`
+  and table clone in normal runs. Counts stay exact under `--timings`.
+- `SymbolTable` is copy-on-write: `symbols: Arc<HashMap<Arc<str>, SymbolInfoHandle>>`,
+  `clone` is an `Arc` bump, and `insert`/`insert_handle`/`remove` route through a
+  `symbols_mut` helper that `Arc::make_mut`s and records the entry/handle copies
+  only when a shared table is actually mutated.
+- `resolve_relative_module` is memoized per run via a thread-local
+  `(importer, specifier) -> Option<ModuleResolution>` cache, cleared at check
+  start because resolved indices are run-specific.
+
+Evidence:
+
+- `symbol_table_clone_count=9143` (unchanged; clones are now `Arc` bumps)
+- `symbol_table_entry_handle_copy_count=27698` (was `86782`)
+- `symbol_info_handle_copy_count=32988` (was `92072`)
+- `ts-rust` auth-kit median: `~0.20s` at `jobs=1`, `~0.19s` at `jobs=4`
+  (stable floor near `0.18s`), down from v1.2.4's `0.80s`/`0.78s`
+- exact diagnostics `0`, raw oracle match: yes
+- `TypeDeclarationTable` arena-backed: yes
+- `ObjectType`/`FunctionType`/`UnionType` handle-backed: yes
+- no hot allocator mutex; the counter mutex is now gated off the hot path
+- The remaining hot cost is the multi-pass binding/resolution recompute itself,
+  not allocation. The one untaken arena slice is sharing `TypeDeclarationInfo`
+  payloads (`InterfaceInfo`/`TypeAliasInfo`) as handles to avoid deep-cloning
+  declarations when they move between tables (see Next Slice).
+
 ## v1.2.4 Symbol/Scope Recovery Evidence
 
 v1.2.4 is a performance recovery / stabilization pass after v1.2.3. It does
@@ -211,6 +252,8 @@ of rebuilding the flat visible map.
 - `UnionType` member payloads.
 - `SymbolInfo` payloads stored in checker `SymbolTable` and `ScopeStack`
   visible snapshots.
+- The `SymbolTable` map itself, as of v1.2.5, is `Arc<HashMap<..>>` copy-on-write:
+  clones share the map and only deep-copy on the rare mutate-while-shared path.
 
 ## What Remains Heap / Value Based
 
@@ -220,5 +263,18 @@ of rebuilding the flat visible map.
 
 ## Next Slice
 
-No new arena slice starts beyond the v0.99 union-payload handle landing.
-This remains a handle-backed slice, not a full type-arena migration.
+No new type-IR arena slice has started beyond the v0.99 union-payload handle
+landing. v1.2.5 stayed in the existing model: it added per-run caching
+(canonicalization, relative-module resolution), gated the counter mutex, and
+made `SymbolTable` copy-on-write, but did not migrate new payloads into the
+arena.
+
+The one identified, untaken arena slice is sharing `TypeDeclarationInfo`
+payloads as handles. Today `InterfaceInfo`/`TypeAliasInfo` are deep-cloned when
+a declaration moves between tables (export-table build, import bindings, and the
+fixpoint), which profiling attributes to a few percent of run time. Making the
+payloads `Arc<TypeDeclarationInfo>` (or otherwise reference-shared) would turn
+those moves into pointer copies, but it touches the unsafe per-table arena
+storage and ~13 call sites, so it is deferred until the larger,
+correctness-sensitive multi-pass fixpoint reduction is scoped — that recompute,
+not allocation, is the dominant remaining cost.

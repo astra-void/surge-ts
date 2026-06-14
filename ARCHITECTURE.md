@@ -6,6 +6,8 @@ v0.68.1 hardens diagnostic coverage metadata, ensuring that `support = "emitted"
 
 v0.48 introduced the crate-level module split across types, diagnostics, config, syntax, and checker. v0.48.1 finishes the checker/config/syntax hardening pass by moving the remaining internals into focused submodules while keeping the public crate-root APIs stable.
 
+v1.2.5 continues that direction inside `typescript-rust-checker` by decomposing the largest checker internals from single files into directory submodules, with no public-API change: `checks/call/` (`mod`, `builtins`, `property`, `instantiate`), `checks/function/` (`mod`, `signature`, `body`, `narrowing`), `infer/expression/` (`mod`, `literals`, `operators`, `access`, `functions`), `infer/types/` (`mod`, `resolve`, `interface`, `utility`, `cache`, `diagnostics`), `modules/` (`mod`, `imports`, `exports`, `resolution`, `diagnostics`), `program/` (`mod`, `binding`, `statements`, `globals`, `ambient`), and `flow/` (`mod`, `branch`, `expr`, `facts`). Counter instrumentation also moved into a dedicated `metrics` module gated behind `--timings`.
+
 | Crate | Responsibility |
 | --- | --- |
 | `typescript-rust-syntax` | Parse TypeScript source into a simplified AST |

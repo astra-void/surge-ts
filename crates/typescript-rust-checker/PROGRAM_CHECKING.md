@@ -55,7 +55,16 @@ Program mode treats the input files as one shared global script:
   materialization by borrowing visible symbols for function-local variable
   checks, lazily cloning function-parameter scope tables only when parameter
   initializers need them, and restoring `ScopeStack` visible-symbol shadows on
-  pop instead of rebuilding the whole flat visible map.
+  pop instead of rebuilding the whole flat visible map. v1.2.5 makes the
+  `SymbolTable` map itself copy-on-write (`Arc<HashMap<..>>` with `Arc::make_mut`
+  on mutation), so the multi-pass module-binding fixpoint's table clones share
+  one map and only deep-copy when a shared table is actually mutated.
+- v1.2.5 also adds per-run memoization for path canonicalization and relative
+  module resolution, and gates the instrumentation-counter mutex behind
+  `--timings`. These caches are thread-local and cleared at the start of each
+  `check_program` run, so they never leak resolved indices or canonical paths
+  across runs. They are pure performance changes with no effect on emitted
+  diagnostics.
 - `SymbolInfo` entries are treated as immutable once shared. Narrowing or
   assignment-style updates create a replacement `SymbolInfo` and swap the table
   handle instead of mutating a shared payload in place.

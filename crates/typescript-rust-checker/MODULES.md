@@ -27,6 +27,8 @@ Namespace imports bind a single value symbol whose object type is built from the
 
 v1.2.2 keeps module export lookup read-only by sharing exported symbol handles and caching the namespace object materialization per module, so repeated export resolution no longer deep-clones exported payloads.
 
+v1.2.5 memoizes relative module resolution per run: `resolve_relative_module` caches `(importer, specifier) -> resolved module` in a thread-local map that is cleared at the start of each check (resolved indices are run-specific). This is a pure performance change with no semantic effect — the multi-pass binding/resolution fixpoint resolves the same specifiers several times, so passes after the first reuse the resolved index instead of rebuilding and canonicalizing candidate paths. The resolution order and outcomes below are unchanged.
+
 ## Current Policy
 
 - Script files still share top-level `type` aliases, `interface` declarations, and function declarations across files.

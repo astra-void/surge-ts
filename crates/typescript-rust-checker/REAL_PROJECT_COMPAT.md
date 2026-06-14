@@ -5,6 +5,38 @@ Its compatibility surfaces are raw measurements, not root-cause classifiers.
 
 ## Current coverage
 
+- v1.2.5 is a performance pass after v1.2.4, not a new TypeScript semantic
+  phase. No new TypeScript surface was added; exact diagnostics remain 0 and raw
+  oracle match stays yes. Four changes land. (1) Path canonicalization is
+  memoized per run in both `typescript-rust-checker` (`paths.rs`,
+  `canonicalize_if_exists_string`) and `typescript-rust-config` (`paths.rs`,
+  `canonicalize_if_exists`), so the repeated `std::fs::canonicalize` (realpath)
+  syscalls in type/module resolution and the project-discovery import-graph
+  fixpoint are paid once per distinct path instead of on every probe; the caches
+  are thread-local and cleared at the start of each check. (2) The
+  instrumentation counters that funnel through one global
+  `Mutex<ProgramCounters>` are gated behind `--timings`, removing that lock from
+  the hot `SymbolTable::get` and clone paths in normal runs while keeping the
+  counts exact when `--timings` collects them. (3) `SymbolTable` is now
+  copy-on-write: the inner map is held as `Arc<HashMap<..>>`, `clone` is an `Arc`
+  bump, and the mutating methods go through a `symbols_mut` helper that
+  `Arc::make_mut`s and records the entry/handle copies only when a shared table
+  is actually mutated. This makes the multi-pass module-binding fixpoint's ~9143
+  table clones cheap without touching the fixpoint logic, taking
+  `symbol_table_entry_handle_copy_count` from `86782` to `27698` and
+  `symbol_info_handle_copy_count` from `92072` to `32988`. (4)
+  `resolve_relative_module` is memoized per run via a thread-local
+  `(importer, specifier) -> Option<ModuleResolution>` cache (cleared at check
+  start, since resolved indices are run-specific), so fixpoint passes after the
+  first reuse the resolved index instead of rebuilding and canonicalizing
+  candidate paths. The measured auth-kit medians improve from v1.2.4's `0.80s` /
+  `0.78s` to roughly `0.20s` / `0.19s` for `jobs=1` / `jobs=4` (stable floor near
+  `0.18s`). Profiling (`/usr/bin/sample`) showed the dominant pre-fix cost was
+  uncached `realpath`, not type-payload cloning; the remaining hot cost is the
+  multi-pass binding/resolution recompute itself, deferred to a future
+  correctness-sensitive fixpoint-reduction pass. No hot allocator mutex was
+  introduced and the prior handle-backed migrations are preserved.
+
 - v1.2.4 is a performance recovery / stabilization pass after v1.2.3, not a
   new TypeScript semantic phase. No new TypeScript surface was added. v1.2.3
   `SymbolInfo` shared-handle storage is preserved while function-local variable
