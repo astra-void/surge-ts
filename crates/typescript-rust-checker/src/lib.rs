@@ -6,6 +6,7 @@ mod default_lib;
 mod driver;
 mod flow;
 mod infer;
+mod metrics;
 mod modules;
 mod paths;
 mod program;

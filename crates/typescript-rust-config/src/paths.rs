@@ -1,7 +1,18 @@
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     env,
     path::{Path, PathBuf},
 };
+
+thread_local! {
+    // `std::fs::canonicalize` issues a `realpath()` syscall on every call.
+    // Project discovery (config loading, package-entrypoint resolution, the
+    // import-graph fixpoint) canonicalizes the same paths repeatedly, and
+    // profiling showed the syscall as a top cost. The filesystem is stable for
+    // the duration of a run, so memoizing per thread is safe.
+    static CANONICALIZE_CACHE: RefCell<HashMap<PathBuf, PathBuf>> = RefCell::new(HashMap::new());
+}
 
 pub fn resolve_project_path(project: &Path) -> (PathBuf, PathBuf) {
     let project = absolutize(project);
@@ -58,11 +69,18 @@ pub fn absolutize(path: &Path) -> PathBuf {
 }
 
 pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
-    if let Ok(canonical) = std::fs::canonicalize(path) {
-        normalize_path_buf(&canonical)
-    } else {
-        normalize_path_buf(path)
-    }
+    CANONICALIZE_CACHE.with(|cache| {
+        if let Some(cached) = cache.borrow().get(path) {
+            return cached.clone();
+        }
+        let result = if let Ok(canonical) = std::fs::canonicalize(path) {
+            normalize_path_buf(&canonical)
+        } else {
+            normalize_path_buf(path)
+        };
+        cache.borrow_mut().insert(path.to_path_buf(), result.clone());
+        result
+    })
 }
 
 #[allow(dead_code)]

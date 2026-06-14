@@ -1,10 +1,40 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+thread_local! {
+    // `std::fs::canonicalize` issues a `realpath()` syscall on every call, and
+    // type/module resolution canonicalizes the same handful of paths over and
+    // over within a single check. Profiling showed this syscall as the single
+    // largest self-time cost. The filesystem and cwd are stable for the
+    // duration of a check, so memoizing the result per thread is safe. Worker
+    // threads are spawned fresh per run (via `thread::scope`), so their caches
+    // never outlive a run; the main thread's cache is cleared at the start of
+    // each program check.
+    static CANONICALIZE_CACHE: RefCell<HashMap<PathBuf, String>> = RefCell::new(HashMap::new());
+}
+
+/// Clears the per-thread path canonicalization cache. Called at the start of a
+/// program check so a long-lived process (e.g. a test binary running many
+/// checks) never observes a stale canonicalization across runs.
+pub(crate) fn clear_canonicalize_cache() {
+    CANONICALIZE_CACHE.with(|cache| cache.borrow_mut().clear());
+}
 
 pub(crate) fn canonicalize_if_exists_string(path: &Path) -> String {
     crate::program::record_string_path_lookup();
-    canonicalize_if_exists(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    CANONICALIZE_CACHE.with(|cache| {
+        if let Some(cached) = cache.borrow().get(path) {
+            return cached.clone();
+        }
+        let result = canonicalize_if_exists(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        cache
+            .borrow_mut()
+            .insert(path.to_path_buf(), result.clone());
+        result
+    })
 }
 
 pub(crate) fn normalize_path_string(path: &str) -> String {

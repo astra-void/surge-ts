@@ -39,18 +39,22 @@ pub(crate) struct FunctionSignatureInfo {
 
 #[derive(Debug, Default)]
 pub(crate) struct SymbolTable {
-    symbols: HashMap<Arc<str>, SymbolInfoHandle>,
+    // Copy-on-write: clones share this map through `Arc` and only pay for a
+    // deep copy if a *shared* table is later mutated. The multi-pass
+    // module-binding fixpoint clones symbol tables thousands of times but
+    // mutates almost none of those clones, so sharing makes the clones
+    // effectively free and the deep copy is deferred to the rare mutate path.
+    symbols: Arc<HashMap<Arc<str>, SymbolInfoHandle>>,
 }
 
 impl Clone for SymbolTable {
     fn clone(&self) -> Self {
-        let entry_count = self.symbols.len() as u64;
         record_symbol_table_clone_count();
-        record_symbol_table_entry_handle_copy_count(entry_count);
-        record_symbol_info_handle_copy_count(entry_count);
-
+        // Handle/entry copies are now recorded only when a shared table is
+        // actually mutated (see `symbols_mut`), since the clone itself copies
+        // nothing.
         Self {
-            symbols: self.symbols.clone(),
+            symbols: Arc::clone(&self.symbols),
         }
     }
 }
@@ -75,6 +79,19 @@ impl SymbolTable {
         Self::default()
     }
 
+    /// Returns a uniquely-owned mutable view of the underlying map, performing
+    /// the copy-on-write deep copy only if this table currently shares its map
+    /// with a clone. The deep copy is what the per-entry handle-copy counters
+    /// now measure.
+    fn symbols_mut(&mut self) -> &mut HashMap<Arc<str>, SymbolInfoHandle> {
+        if Arc::strong_count(&self.symbols) > 1 {
+            let entry_count = self.symbols.len() as u64;
+            record_symbol_table_entry_handle_copy_count(entry_count);
+            record_symbol_info_handle_copy_count(entry_count);
+        }
+        Arc::make_mut(&mut self.symbols)
+    }
+
     pub(crate) fn get(&self, name: &str) -> Option<&SymbolInfo> {
         record_type_name_lookup_string_count(1);
         self.symbols.get(name).map(Arc::as_ref)
@@ -97,7 +114,7 @@ impl SymbolTable {
         name: impl Into<Arc<str>>,
         symbol: SymbolInfo,
     ) -> Option<SymbolInfoHandle> {
-        self.symbols.insert(name.into(), Arc::new(symbol))
+        self.symbols_mut().insert(name.into(), Arc::new(symbol))
     }
 
     pub(crate) fn insert_handle(
@@ -105,7 +122,7 @@ impl SymbolTable {
         name: impl Into<Arc<str>>,
         symbol: SymbolInfoHandle,
     ) -> Option<SymbolInfoHandle> {
-        self.symbols.insert(name.into(), symbol)
+        self.symbols_mut().insert(name.into(), symbol)
     }
 
     pub(crate) fn insert_shared(
@@ -117,7 +134,7 @@ impl SymbolTable {
     }
 
     pub(crate) fn remove(&mut self, name: &str) -> Option<SymbolInfoHandle> {
-        self.symbols.remove(name)
+        self.symbols_mut().remove(name)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&Arc<str>, &SymbolInfo)> {
