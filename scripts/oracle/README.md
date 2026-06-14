@@ -126,10 +126,17 @@ pnpm run oracle:test
 - Diagnostic fingerprints used in tests can also include message text when needed for deterministic equality checks.
 - Compares code counts first, then `(fileName, code)` counts, then
   `(fileName, code, line)` where both sides have line data.
+- Reports message parity: diagnostics that share an exact
+  `(fileName, code, line, column)` are paired, and any remaining message-text
+  difference is listed with the `tsc` and `typescript-rust` text side by side.
+  Pairs whose spans differ are left to the span-level levels, so this section
+  isolates pure message-text drift.
 
 ## What it does not do
 
-- It does not require exact message parity.
+- It does not require exact message parity by default. Message differences are
+  reported and informational unless you pass `--strictMessages`, which exits
+  with code 1 when any same-location message text differs from `tsc`.
 - It does not require exact span parity.
 - It does not add full package resolution, `paths` /
   `baseUrl`, full declaration-file semantics, `lib.d.ts`, `@types`,
@@ -159,6 +166,8 @@ single source file. This prevents TypeScript from treating `.ts` files as
 - Level 1: by code
 - Level 2: by file and code
 - Level 3: by file, code, and line when available
+- Message parity: by file, code, line, and column, comparing message text
 
-The default comparison prints all three levels when possible. Mismatches are
-informational unless you pass `--failOnMismatch` or `--strictCodes`.
+The default comparison prints all levels when possible. Code/file mismatches are
+informational unless you pass `--failOnMismatch` or `--strictCodes`; message-text
+mismatches are informational unless you pass `--strictMessages`.

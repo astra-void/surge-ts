@@ -3179,6 +3179,99 @@ fn cli_package_types_scoped_at_types_fallback_basic_resolves_scoped_package() {
 }
 
 #[test]
+fn cli_package_types_export_equals_import_require_valid_binds_value() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-export-equals-import-require-valid/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    assert!(
+        json_diagnostic_codes(&parsed).is_empty(),
+        "{:?}",
+        json_diagnostic_codes(&parsed)
+    );
+}
+
+#[test]
+fn cli_package_types_export_equals_property_call_valid_resolves_method() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-export-equals-property-call-valid/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    assert!(
+        json_diagnostic_codes(&parsed).is_empty(),
+        "{:?}",
+        json_diagnostic_codes(&parsed)
+    );
+}
+
+#[test]
+fn cli_package_types_export_equals_property_call_argument_mismatch_reports_ts2345() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-export-equals-property-call-argument-mismatch/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(codes.contains(&"TS2345".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"TS2304".to_string()), "{codes:?}");
+    assert!(json_diagnostic_lines(&parsed, "TS2345").contains(&Some(3)));
+}
+
+#[test]
+fn cli_package_types_export_equals_missing_export_target_no_cascade() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-export-equals-missing-export-target-no-cascade/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    // The package's `export = missingValue` target is undefined; the consumer
+    // binds an unknown value and must not cascade name/property errors.
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(!codes.contains(&"TS2304".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"TS2339".to_string()), "{codes:?}");
+}
+
+#[test]
+fn cli_package_types_import_require_missing_package_reports_ts2307() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-import-require-missing-package/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(codes.contains(&"TS2307".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"TS2304".to_string()), "{codes:?}");
+}
+
+#[test]
+fn cli_package_types_import_require_subpath_valid_binds_value() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-types-import-require-subpath-valid/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    assert!(
+        json_diagnostic_codes(&parsed).is_empty(),
+        "{:?}",
+        json_diagnostic_codes(&parsed)
+    );
+}
+
+#[test]
 fn cli_no_implicit_any_uninitialized_let_basic_matches_typescript() {
     let parsed = run_cli_json(&[
         "--project",

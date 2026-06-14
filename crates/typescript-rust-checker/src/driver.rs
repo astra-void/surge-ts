@@ -709,6 +709,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             }
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Equals { .. }) => {}
         ParsedStatement::DeclareModuleDeclaration(_) => {}
         ParsedStatement::UnsupportedDeclaration { span } => {
             let mut diag =

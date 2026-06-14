@@ -110,6 +110,7 @@ pub(crate) fn check_program_statement(
         },
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Equals { .. }) => {}
         ParsedStatement::DeclareModuleDeclaration(_) => {}
         ParsedStatement::UnsupportedDeclaration { span } => {
             emit_unsupported_declaration_diagnostic(ctx, span);

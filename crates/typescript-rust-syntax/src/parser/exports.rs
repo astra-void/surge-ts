@@ -1,6 +1,7 @@
 use oxc_ast::ast::{
     Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind,
-    ExportNamedDeclaration, ExportSpecifier, ImportOrExportKind, ModuleExportName,
+    ExportNamedDeclaration, ExportSpecifier, Expression, ImportOrExportKind, ModuleExportName,
+    TSExportAssignment,
 };
 use oxc_span::GetSpan;
 
@@ -193,6 +194,29 @@ pub(crate) fn parse_export_default_declaration(
     Some(vec![ParsedStatement::ExportDeclaration(
         ParsedExportDeclaration::Default {
             declaration: parsed_declaration,
+            span,
+        },
+    )])
+}
+
+pub(crate) fn parse_export_assignment(
+    declaration: &TSExportAssignment<'_>,
+) -> Option<Vec<ParsedStatement>> {
+    let span = Some(text_span_from_oxc_span(declaration.span));
+
+    // Declaration-lite `export = identifier`. Any non-identifier target
+    // (`export = require(...)`, object literals, member access, etc.) stays
+    // unsupported.
+    let Expression::Identifier(identifier) = &declaration.expression else {
+        return Some(vec![ParsedStatement::ExportDeclaration(
+            ParsedExportDeclaration::Unsupported { span },
+        )]);
+    };
+
+    Some(vec![ParsedStatement::ExportDeclaration(
+        ParsedExportDeclaration::Equals {
+            exported_name: identifier.name.to_string(),
+            exported_name_span: Some(text_span_from_oxc_span(identifier.span)),
             span,
         },
     )])

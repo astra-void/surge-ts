@@ -10,6 +10,7 @@ Supported surface:
 - optional numeric literal index access like `tuple?.[0]` returning `T | undefined`
 - tuple numeric indexed access types like `Tuple[0]`
 - non-literal number index access returns the union of tuple element types
+- the `.length` property reads as `number` (no exact tuple-length literal type)
 - tuple values are assignable to compatible arrays
 - arrays are not assignable to tuples
 - tuple-valued implicit generic call returns are intentionally suppressed for now; explicit type arguments still preserve tuple returns
@@ -22,7 +23,8 @@ Limitations:
 - no labeled tuple elements
 - no variadic tuples
 - no tuple destructuring
-- no tuple methods or length property
+- no tuple methods (only the `.length` property read is supported)
+- no exact tuple-length literal type (e.g. `2`); `.length` widens to `number`
 - no property index access
 - no nested index access
 - no unresolved generic indexed access types; narrow post-substitution generic indexed access is supported in the checker's general type-operator surface, not as tuple-specific syntax

@@ -4,11 +4,13 @@ use super::*;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use typescript_rust_syntax::{ParsedCallArgument, ParsedObjectType, ParsedType};
+use typescript_rust_diagnostics::Diagnostic;
+use typescript_rust_syntax::{ParsedCallArgument, ParsedObjectType, ParsedType, TextSpan};
 use typescript_rust_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
 use crate::arena::{alloc_function_type, alloc_object_type};
-use crate::context::CheckerContext;
+use crate::context::{CheckerContext, convert_span};
+use crate::infer::string_literal_union_keys;
 use crate::infer::{InferredExpression, infer_expression};
 use crate::infer::{TypeParameterSubstitution, map_parsed_type_with_substitution};
 use crate::program::{
@@ -23,6 +25,7 @@ pub(crate) fn instantiate_function_type<'a>(
     function_type: &'a FunctionType,
     function_signature: Option<&FunctionSignatureInfo>,
     type_arguments: &[ParsedType],
+    type_argument_span: Option<TextSpan>,
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -41,6 +44,24 @@ pub(crate) fn instantiate_function_type<'a>(
         record_generic_call_inference_explicit_type_args_skip();
         let substitution =
             explicit_type_argument_substitution(function_signature, type_arguments, ctx);
+
+        // A type argument that failed to resolve, or one that violates a
+        // `K extends keyof T` constraint, must not cascade into the `T[K]`
+        // return type; fall back to the declared (generic) return type instead.
+        let has_unresolved_argument = substitution
+            .iter()
+            .any(|(_, candidate)| type_contains_unknown(candidate));
+        let constraint_violation = enforce_explicit_keyof_constraints(
+            function_signature,
+            type_arguments,
+            &substitution,
+            type_argument_span,
+            ctx,
+        );
+        if has_unresolved_argument || constraint_violation {
+            return Cow::Borrowed(function_type);
+        }
+
         return instantiate_function_type_with_substitution(
             function_type,
             function_signature,
@@ -123,6 +144,7 @@ pub(crate) fn instantiate_function_return_type_for_call(
     function_type: &FunctionType,
     function_signature: Option<&FunctionSignatureInfo>,
     type_arguments: &[ParsedType],
+    type_argument_span: Option<TextSpan>,
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -132,6 +154,7 @@ pub(crate) fn instantiate_function_return_type_for_call(
             function_type,
             function_signature,
             type_arguments,
+            type_argument_span,
             arguments,
             symbols,
             ctx,
@@ -162,6 +185,86 @@ pub(crate) fn explicit_type_argument_substitution(
         );
     }
     substitution
+}
+
+/// Validate explicit type arguments against `K extends keyof T` constraints when
+/// both `T` (a concrete object) and `K` (concrete string-literal keys) are
+/// resolved. Emits TS2344 for keys that are not members of `T` and reports
+/// whether any constraint was violated so the caller can avoid a cascading
+/// `T[K]` diagnostic. Other constraint forms are intentionally left untouched.
+pub(crate) fn enforce_explicit_keyof_constraints(
+    function_signature: &FunctionSignatureInfo,
+    type_arguments: &[ParsedType],
+    substitution: &TypeParameterSubstitution,
+    type_argument_span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let mut violated = false;
+
+    for type_parameter in &function_signature.type_parameters {
+        let Some(ParsedType::KeyOf(inner)) = &type_parameter.constraint else {
+            continue;
+        };
+        let ParsedType::Named(constraint_target) = inner.as_ref() else {
+            continue;
+        };
+
+        let Some(Type::Object(object_type)) = substitution.get(&constraint_target.name).cloned()
+        else {
+            continue;
+        };
+        let Some(key_type) = substitution.get(&type_parameter.name).cloned() else {
+            continue;
+        };
+        let Some(keys) = string_literal_union_keys(&key_type) else {
+            continue;
+        };
+
+        let all_keys_present = keys
+            .iter()
+            .all(|key| object_type.get_property_access_type(key).is_some());
+        if all_keys_present {
+            continue;
+        }
+
+        violated = true;
+        let constraint_name = format!(
+            "keyof {}",
+            constraint_target_display(
+                function_signature,
+                type_arguments,
+                &constraint_target.name,
+                &object_type
+            )
+        );
+        let mut diagnostic =
+            Diagnostic::ts2344(&key_type.name(), &constraint_name, ctx.file_name.clone());
+        if let Some(span) = type_argument_span {
+            diagnostic = diagnostic.with_span(convert_span(span));
+        }
+        ctx.push_utility_diagnostic_once(diagnostic);
+    }
+
+    violated
+}
+
+fn constraint_target_display(
+    function_signature: &FunctionSignatureInfo,
+    type_arguments: &[ParsedType],
+    target_name: &str,
+    resolved_object: &typescript_rust_types::ObjectType,
+) -> String {
+    let target_argument = function_signature
+        .type_parameters
+        .iter()
+        .position(|type_parameter| type_parameter.name == target_name)
+        .and_then(|index| type_arguments.get(index));
+
+    if let Some(ParsedType::Named(named)) = target_argument {
+        return named.name.clone();
+    }
+
+    Type::Object(resolved_object.clone()).name()
 }
 
 pub(crate) fn infer_type_argument_substitution(

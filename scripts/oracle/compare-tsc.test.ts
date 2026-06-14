@@ -7,6 +7,7 @@ import {
   buildTypeScriptCommand,
   buildTypeScriptRustCommand,
   compareDiagnostics,
+  compareMessages,
   countDiagnostics,
   extractTs2304Identifier,
   extractTs2305ModuleExport,
@@ -29,6 +30,8 @@ function run(): void {
   resolves_project_and_file_inputs();
   builds_commands();
   compares_raw_fingerprints();
+  compares_message_parity();
+  renders_message_parity();
   renders_raw_sections();
 }
 
@@ -223,6 +226,59 @@ function compares_raw_fingerprints(): void {
     }),
     'src/right.ts:1:1 TS2322 1 Type mismatch',
   );
+}
+
+function compares_message_parity(): void {
+  const parity = compareMessages(
+    [
+      // Same location, message text differs (widened vs literal type).
+      { source: 'typescript', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type 'number' is not assignable to parameter of type 'string'." },
+      // Same location, identical message.
+      { source: 'typescript', code: 'TS2554', fileName: 'src/a.ts', line: 6, column: 1, message: 'Expected 1 arguments, but got 2.' },
+      // Location only on the TypeScript side (different column) -> not message-compared.
+      { source: 'typescript', code: 'TS2322', fileName: 'src/a.ts', line: 9, column: 5, message: "Type 'number' is not assignable to type 'string'." },
+    ],
+    [
+      { source: 'typescript-rust', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type '1' is not assignable to parameter of type 'string'." },
+      { source: 'typescript-rust', code: 'TS2554', fileName: 'src/a.ts', line: 6, column: 1, message: 'Expected 1 arguments, but got 2.' },
+      { source: 'typescript-rust', code: 'TS2322', fileName: 'src/a.ts', line: 9, column: 26, message: "Type '1' is not assignable to type 'string'." },
+    ],
+  );
+
+  // Two locations share an exact (file, code, line, column): TS2345 and TS2554.
+  assert.equal(parity.comparedLocations, 2);
+  assert.equal(parity.matches, 1);
+  assert.equal(parity.mismatches.length, 1);
+  assert.deepEqual(parity.mismatches[0], {
+    fileName: 'src/a.ts',
+    code: 'TS2345',
+    line: 7,
+    column: 7,
+    typescript: "Argument of type 'number' is not assignable to parameter of type 'string'.",
+    typescriptRust: "Argument of type '1' is not assignable to parameter of type 'string'.",
+  });
+}
+
+function renders_message_parity(): void {
+  const comparison = compareDiagnostics(
+    'project',
+    'tests/compat-projects/sample/tsconfig.json',
+    [
+      { source: 'typescript', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type 'number' is not assignable to parameter of type 'string'." },
+    ],
+    [
+      { source: 'typescript-rust', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type '1' is not assignable to parameter of type 'string'." },
+    ],
+  );
+
+  assert.equal(comparison.summary.messageMatch, false);
+  assert.equal(comparison.messageParity.mismatches.length, 1);
+
+  const rendered = renderComparisonText(comparison);
+  assert.ok(rendered.includes('Message match: no'));
+  assert.ok(rendered.includes('Message parity (same file/code/line/column, message text differs):'));
+  assert.ok(rendered.includes("tsc : Argument of type 'number'"));
+  assert.ok(rendered.includes("rust: Argument of type '1'"));
 }
 
 function renders_raw_sections(): void {

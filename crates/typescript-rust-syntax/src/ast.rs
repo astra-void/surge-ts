@@ -105,6 +105,12 @@ pub struct ParsedFunctionTypeParameter {
     pub name_span: Option<TextSpan>,
     pub ty: ParsedType,
     pub optional: bool,
+    /// A `this: T` fake parameter. It carries typing metadata but is not a real
+    /// call parameter, so it is excluded from arity and argument matching.
+    pub is_this: bool,
+    /// A `...rest: T[]` parameter. Its annotation is the array type; lowering
+    /// stores the element type and marks the signature variadic.
+    pub rest: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,6 +204,14 @@ pub enum ParsedImportKind {
         name_span: Option<TextSpan>,
         is_type_only: bool,
     },
+    /// `import local = require("specifier")` — declaration-lite CommonJS import
+    /// equals against a package/module entrypoint. Only the
+    /// `require(...)` (external module reference) form is represented here;
+    /// entity-name references (`import x = a.b`) remain `Unsupported`.
+    Equals {
+        local_name: String,
+        name_span: Option<TextSpan>,
+    },
     SideEffect,
     Unsupported,
 }
@@ -239,6 +253,14 @@ pub enum ParsedExportDeclaration {
         span: Option<TextSpan>,
     },
     Empty {
+        span: Option<TextSpan>,
+    },
+    /// `export = identifier` — declaration-lite CommonJS export assignment.
+    /// Only a bare identifier target is represented here; any other expression
+    /// target remains `Unsupported`.
+    Equals {
+        exported_name: String,
+        exported_name_span: Option<TextSpan>,
         span: Option<TextSpan>,
     },
     Unsupported {
@@ -424,6 +446,10 @@ pub struct ParsedObjectProperty {
     pub value: ParsedExpression,
     pub value_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
+    /// True when this property originates from method shorthand (`{ foo(arg): R { ... } }`).
+    /// The `value` is lowered to an arrow function so it reuses arrow checking, but the
+    /// declared parameter/return types must be honored when inferring the property type.
+    pub is_method: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -36,6 +36,7 @@ pub(crate) fn build_module_export_table(
     let mut type_declarations = TypeDeclarationTable::new();
     let mut symbols = SymbolTable::new();
     let mut default_symbol = None;
+    let mut export_assignment_symbol = None;
 
     for statement in &parsed_file.statements {
         collect_exports_from_statement(
@@ -47,6 +48,7 @@ pub(crate) fn build_module_export_table(
             &mut type_declarations,
             &mut symbols,
             &mut default_symbol,
+            &mut export_assignment_symbol,
             ctx,
         );
     }
@@ -55,6 +57,7 @@ pub(crate) fn build_module_export_table(
         type_declarations,
         symbols,
         default_symbol,
+        export_assignment_symbol,
         namespace_export_object_type: None,
         has_unresolved_star_export: false,
         has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
@@ -552,6 +555,7 @@ pub(crate) fn collect_exports_from_statement(
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     default_symbol: &mut Option<Arc<SymbolInfo>>,
+    export_assignment_symbol: &mut Option<Arc<SymbolInfo>>,
     ctx: &mut CheckerContext,
 ) {
     match statement {
@@ -567,8 +571,21 @@ pub(crate) fn collect_exports_from_statement(
             type_declarations,
             symbols,
             default_symbol,
+            export_assignment_symbol,
             ctx,
         ),
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Equals {
+            exported_name,
+            ..
+        }) => {
+            // `export = identifier` binds the module's single export-assignment
+            // value to the named local value symbol. An unresolved target binds
+            // nothing and emits no diagnostic here, leaving consumers to bind an
+            // unknown placeholder rather than cascade (`import x = require(...)`).
+            if let Some(symbol) = exportable_values.get_shared(exported_name) {
+                *export_assignment_symbol = Some(symbol);
+            }
+        }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
             is_type_only,
             specifiers,

@@ -52,6 +52,7 @@ impl Type {
         match self {
             Type::Object(object) => object.get_property_access_type(name),
             Type::Array(element) => array_property_access_type(name, element.as_ref()),
+            Type::Tuple(_) => tuple_property_access_type(name),
             Type::String | Type::StringLiteral(_) => string_property_access_type(name),
             Type::Number | Type::NumberLiteral(_) => number_property_access_type(name),
             _ => None,
@@ -223,6 +224,13 @@ fn number_property_access_type(name: &str) -> Option<Type> {
     }
 }
 
+fn tuple_property_access_type(name: &str) -> Option<Type> {
+    match name {
+        "length" => Some(Type::Number),
+        _ => None,
+    }
+}
+
 fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
@@ -308,6 +316,30 @@ mod tests {
     #[test]
     fn array_type_name_string() {
         assert_eq!(Type::Array(Box::new(Type::String)).name(), "string[]");
+    }
+
+    #[test]
+    fn array_length_property_is_number() {
+        assert_eq!(
+            Type::Array(Box::new(Type::String)).get_property_access_type("length"),
+            Some(Type::Number)
+        );
+    }
+
+    #[test]
+    fn tuple_length_property_is_number() {
+        assert_eq!(
+            Type::Tuple(vec![Type::String, Type::Number]).get_property_access_type("length"),
+            Some(Type::Number)
+        );
+    }
+
+    #[test]
+    fn tuple_unknown_property_is_unsupported() {
+        assert_eq!(
+            Type::Tuple(vec![Type::String, Type::Number]).get_property_access_type("push"),
+            None
+        );
     }
 
     #[test]

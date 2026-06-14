@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use typescript_rust_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
-use typescript_rust_syntax::{ParsedTypeParameter, TextSpan as SyntaxTextSpan};
+use typescript_rust_syntax::{ParsedType, ParsedTypeParameter, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::Type;
 
 use crate::program::ProgramTimings;
@@ -106,6 +106,10 @@ pub(crate) struct CheckerContext {
     pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
     pub(crate) module_file_index_by_identity: HashMap<Arc<str>, usize>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
+    // Parallel to `type_parameter_scopes`: the declared constraint (if any) for
+    // each in-scope type parameter, used to recognize `K extends keyof T` so a
+    // generic `T[K]` is not falsely reported as an invalid index (TS2536).
+    pub(crate) type_parameter_constraint_scopes: Vec<HashMap<String, ParsedType>>,
     pub(crate) timings: Option<std::sync::Arc<std::sync::Mutex<ProgramTimings>>>,
     file_kinds: HashMap<String, FileKind>,
 }
@@ -137,6 +141,7 @@ impl CheckerContext {
             ambient_global_type_declarations: TypeDeclarationTable::new(),
             module_file_index_by_identity: HashMap::new(),
             type_parameter_scopes: Vec::new(),
+            type_parameter_constraint_scopes: Vec::new(),
             timings: None,
             file_kinds,
         }
@@ -148,18 +153,43 @@ impl CheckerContext {
         substitution: Option<HashMap<String, Type>>,
     ) {
         let mut scope = substitution.unwrap_or_default();
+        let mut constraint_scope = HashMap::new();
         for type_parameter in type_parameters {
             scope
                 .entry(type_parameter.name.clone())
                 .or_insert(Type::Unknown);
+            if let Some(constraint) = type_parameter.constraint.clone() {
+                constraint_scope.insert(type_parameter.name.clone(), constraint);
+            }
         }
         self.type_parameter_scopes.push(scope);
+        self.type_parameter_constraint_scopes.push(constraint_scope);
     }
 
     pub(crate) fn pop_type_parameter_scope(&mut self) {
         self.type_parameter_scopes
             .pop()
             .expect("type parameter scope stack must not underflow");
+        self.type_parameter_constraint_scopes
+            .pop()
+            .expect("type parameter constraint scope stack must not underflow");
+    }
+
+    /// When the in-scope type parameter `name` is declared as `name extends keyof X`,
+    /// return the referenced type-parameter name `X`. Used to keep generic `T[K]`
+    /// indexed access valid when `K extends keyof T`.
+    pub(crate) fn type_parameter_keyof_constraint_target(&self, name: &str) -> Option<&str> {
+        for scope in self.type_parameter_constraint_scopes.iter().rev() {
+            if let Some(constraint) = scope.get(name) {
+                if let ParsedType::KeyOf(inner) = constraint
+                    && let ParsedType::Named(named) = inner.as_ref()
+                {
+                    return Some(named.name.as_str());
+                }
+                return None;
+            }
+        }
+        None
     }
 
     pub(crate) fn set_file_name(&mut self, file_name: String) {

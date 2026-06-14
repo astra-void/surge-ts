@@ -137,6 +137,8 @@ span_tests = [
 status = "emitted"
 fixtures = [
   "tests/compat-projects/utility-types-basic/src/index.ts",
+  "tests/smoke/generic_keyof_constraint_explicit_key_mismatch.ts",
+  "tests/smoke/generic_keyof_constraint_explicit_union_key_mismatch.ts",
 ]
 span_tests = [
   "crates/typescript-rust-checker/tests/generics_spans.rs",

@@ -18,7 +18,11 @@ use crate::spans::{choose_span, diagnostic_with_syntax_span};
 use crate::symbols::SymbolTable;
 use typescript_rust_types::{TypeCopyReason, with_type_copy_reason};
 
-fn widen_type(ty: &Type) -> Type {
+/// Recursively widens fresh literal types to their base primitive, descending
+/// into object properties, array elements, and union members. This matches the
+/// type tsc infers for `let`/`var` bindings (e.g. `let o = { a: 1 }` widens to
+/// `{ a: number }`).
+pub(crate) fn widen_type(ty: &Type) -> Type {
     match ty {
         Type::StringLiteral(_) => Type::String,
         Type::NumberLiteral(_) => Type::Number,
@@ -43,6 +47,35 @@ fn widen_type(ty: &Type) -> Type {
         }
         _ => ty.clone(),
     }
+}
+
+/// `true` if `ty` is a literal type or a union containing one. tsc keeps the
+/// source literal in assignability messages when the target is literal-like.
+fn type_contains_literal(ty: &Type) -> bool {
+    match ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => true,
+        Type::Union(types) => types.types().iter().any(type_contains_literal),
+        _ => false,
+    }
+}
+
+/// Type name for the SOURCE side of an assignment/argument diagnostic, matching
+/// tsc: a fresh literal source is widened (`g(1)` to `string` -> `'number'`)
+/// unless the target is literal-like, where tsc keeps the literal (`f("b")` to
+/// `"a"` -> `'"b"'`).
+pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
+    if type_contains_literal(target) {
+        source.name()
+    } else {
+        widen_type(source).name()
+    }
+}
+
+/// Type name for an operand of an operator diagnostic (TS2365/TS2367), matching
+/// tsc, which always widens fresh literal operands for display (e.g.
+/// `1 === "string"` -> `'number'` and `'string'`).
+pub(crate) fn operand_display_name(ty: &Type) -> String {
+    widen_type(ty).name()
 }
 
 pub(crate) fn check_expression_statement(expression: ParsedExpression, ctx: &mut CheckerContext) {

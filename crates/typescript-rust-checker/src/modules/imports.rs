@@ -175,6 +175,15 @@ pub(crate) fn resolve_import_declaration(
             symbols,
             ctx,
         ),
+        ParsedImportKind::Equals { .. } => resolve_import_equals(
+            import,
+            program_files,
+            module_export_tables,
+            module_resolution_scopes,
+            local_symbols,
+            symbols,
+            ctx,
+        ),
         ParsedImportKind::SideEffect => {
             if ctx.ambient_modules.contains_key(&import.module_specifier) {
                 return;
@@ -304,8 +313,40 @@ fn resolve_default_and_named_import(
         return;
     };
 
-    let Some(default_symbol) = export_table.get_shared_value("default") else {
-        if should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files) {
+    // Bind the default specifier through the same default-import resolution it
+    // would take on its own. A missing default emits TS2305 (unless the module
+    // is an incomplete declaration surface) and binds an unknown placeholder,
+    // but never returns early: the named specifiers below must still bind so a
+    // missing default does not cascade into TS2304 on their usages.
+    match export_table.get_shared_value("default") {
+        Some(default_symbol) => {
+            if *is_type_only {
+                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
+                    name: local_name.clone(),
+                    file_name: ctx.file_name.clone(),
+                    name_span: *name_span,
+                    type_parameters: vec![],
+                    ty: ParsedType::Unknown,
+                    resolution_scope: None,
+                });
+                if type_declarations.get(local_name).is_none() {
+                    let _ = type_declarations.insert(local_name.clone(), declaration);
+                }
+            } else if local_symbols.get(local_name).is_none() {
+                symbols.insert_shared(local_name.clone(), default_symbol);
+            }
+        }
+        None => {
+            if !should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files)
+            {
+                emit_missing_export_diagnostic(
+                    ctx,
+                    &import.module_specifier,
+                    "default",
+                    *name_span,
+                );
+            }
+
             if *is_type_only {
                 let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
                     name: local_name.clone(),
@@ -321,47 +362,14 @@ fn resolve_default_and_named_import(
             } else {
                 insert_unknown_value_import(local_name, symbols);
             }
-            return;
         }
-
-        emit_missing_export_diagnostic(ctx, &import.module_specifier, "default", *name_span);
-        if *is_type_only {
-            let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-                name: local_name.clone(),
-                file_name: ctx.file_name.clone(),
-                name_span: *name_span,
-                type_parameters: vec![],
-                ty: ParsedType::Unknown,
-                resolution_scope: None,
-            });
-            if type_declarations.get(local_name).is_none() {
-                let _ = type_declarations.insert(local_name.clone(), declaration);
-            }
-        } else {
-            insert_unknown_value_import(local_name, symbols);
-        }
-        return;
-    };
-
-    if *is_type_only {
-        let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-            name: local_name.clone(),
-            file_name: ctx.file_name.clone(),
-            name_span: *name_span,
-            type_parameters: vec![],
-            ty: ParsedType::Unknown,
-            resolution_scope: None,
-        });
-        if type_declarations.get(local_name).is_none() {
-            let _ = type_declarations.insert(local_name.clone(), declaration);
-        }
-    } else if local_symbols.get(local_name).is_none() {
-        symbols.insert_shared(local_name.clone(), default_symbol);
     }
 
     for specifier in specifiers {
-        let type_export = lookup_type_export(&export_table, &specifier.local_name);
-        let value_export = lookup_value_export(&export_table, &specifier.local_name);
+        // Named specifiers resolve against the module export by their imported
+        // name; the local name is only the binding target (e.g. `helper as h`).
+        let type_export = lookup_type_export(&export_table, &specifier.imported_name);
+        let value_export = lookup_value_export(&export_table, &specifier.imported_name);
 
         if *is_type_only {
             if let Some(type_export) = type_export {
@@ -523,6 +531,55 @@ fn resolve_default_import(
         symbols.insert_shared(local_name.clone(), default_symbol);
     }
     return;
+}
+
+fn resolve_import_equals(
+    import: &ParsedImportDeclaration,
+    program_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+    local_symbols: &SymbolTable,
+    symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedImportKind::Equals { local_name, .. } = &import.kind else {
+        return;
+    };
+
+    let Some((export_table, _, _resolved_index)) = try_resolve_module(
+        &import.module_specifier,
+        ctx,
+        program_files,
+        module_export_tables,
+        module_resolution_scopes,
+    ) else {
+        if resolve_relative_module(
+            &ctx.file_name,
+            &import.module_specifier,
+            program_files,
+            &ctx.module_file_index_by_identity,
+        )
+        .is_none()
+            && !(ctx.options.stub_external_modules
+                && is_external_specifier(&import.module_specifier))
+        {
+            emit_unresolved_module_diagnostic(ctx, import);
+        }
+        insert_unknown_value_import(local_name, symbols);
+        return;
+    };
+
+    // A resolved module that exposes a supported `export = identifier` binds the
+    // local name to that value. Otherwise bind an unknown placeholder without a
+    // diagnostic so an unsupported/unresolved export target does not cascade.
+    match export_table.export_assignment_symbol.clone() {
+        Some(symbol) => {
+            if local_symbols.get(local_name).is_none() {
+                symbols.insert_shared(local_name.clone(), symbol);
+            }
+        }
+        None => insert_unknown_value_import(local_name, symbols),
+    }
 }
 
 fn resolve_namespace_import(

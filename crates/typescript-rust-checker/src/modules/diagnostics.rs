@@ -16,6 +16,21 @@ use crate::context::{CheckerContext, FileKind, convert_span};
 use crate::paths::canonicalize_if_exists_string;
 use crate::program::ParsedProgramFile;
 
+/// Wraps a module specifier in double quotes so TS2305 matches tsc, which
+/// renders the specifier from its source text and therefore keeps the quotes
+/// (e.g. `Module '"./user"'`). If the specifier is already quoted it is left
+/// untouched.
+fn quoted_module_specifier(module_specifier: &str) -> String {
+    if module_specifier.len() >= 2
+        && ((module_specifier.starts_with('"') && module_specifier.ends_with('"'))
+            || (module_specifier.starts_with('\'') && module_specifier.ends_with('\'')))
+    {
+        return module_specifier.to_string();
+    }
+
+    format!("\"{module_specifier}\"")
+}
+
 pub(crate) fn push_duplicate_default_export_diagnostic(
     ctx: &mut CheckerContext,
     name_span: Option<TextSpan>,
@@ -157,7 +172,14 @@ pub(crate) fn emit_missing_export_diagnostic(
     {
         Diagnostic::ts2614(module_specifier, export_name, ctx.file_name.clone())
     } else {
-        Diagnostic::ts2305(module_specifier, export_name, ctx.file_name.clone())
+        // tsc renders the module specifier using its source text, which keeps the
+        // surrounding quotes (e.g. Module '"./user"'). The checker stores the
+        // specifier unquoted, so re-wrap it here to match.
+        Diagnostic::ts2305(
+            quoted_module_specifier(module_specifier),
+            export_name,
+            ctx.file_name.clone(),
+        )
     };
 
     if let Some(span) = name_span {
@@ -177,7 +199,12 @@ pub(crate) fn emit_missing_named_import_diagnostic(
     let mut diagnostic = if has_explicit_default_export || module_specifier == "pkg" {
         Diagnostic::ts2614(module_specifier, export_name, ctx.file_name.clone())
     } else {
-        Diagnostic::ts2305(module_specifier, export_name, ctx.file_name.clone())
+        // See emit_missing_export_diagnostic: tsc keeps the specifier's quotes.
+        Diagnostic::ts2305(
+            quoted_module_specifier(module_specifier),
+            export_name,
+            ctx.file_name.clone(),
+        )
     };
 
     if let Some(span) = name_span {

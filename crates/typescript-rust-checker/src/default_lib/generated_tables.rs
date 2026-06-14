@@ -1217,6 +1217,8 @@ fn fn_param(ty: ParsedType, optional: bool) -> ParsedFunctionTypeParameter {
         name_span: None,
         ty,
         optional,
+        is_this: false,
+        rest: false,
     }
 }
 

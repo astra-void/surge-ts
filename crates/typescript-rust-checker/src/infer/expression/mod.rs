@@ -218,7 +218,7 @@ pub(crate) fn infer_expression(
         } => InferredExpression::Known(map_parsed_type(ty.clone(), ctx)),
         ParsedExpression::Call {
             callee_name,
-            callee_span: _,
+            callee_span,
             type_arguments,
             arguments,
             ..
@@ -230,6 +230,7 @@ pub(crate) fn infer_expression(
                             function_type,
                             symbol.function_signature.as_ref(),
                             type_arguments,
+                            *callee_span,
                             arguments,
                             symbols,
                             ctx,

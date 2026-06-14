@@ -2045,6 +2045,110 @@ fn module_mixed_default_named_import_parser_safe() {
 }
 
 #[test]
+fn mixed_default_named_relative_valid() {
+    let diagnostics = program(&[
+        (
+            "thing.ts",
+            "export default function makeThing(): string { return \"Ada\"; }\nexport function helper(): number { return 1; }",
+        ),
+        (
+            "index.ts",
+            "import DefaultThing, { helper } from \"./thing\";\nlet name: string = DefaultThing();\nlet count: number = helper();",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn mixed_default_named_relative_missing_default() {
+    let diagnostics = program(&[
+        ("thing.ts", "export function helper(): number { return 1; }"),
+        (
+            "index.ts",
+            "import DefaultThing, { helper } from \"./thing\";\nlet count: number = helper();",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn mixed_default_named_relative_missing_named() {
+    let diagnostics = program(&[
+        (
+            "thing.ts",
+            "export default function makeThing(): string { return \"Ada\"; }",
+        ),
+        (
+            "index.ts",
+            "import DefaultThing, { helper } from \"./thing\";\nlet name: string = DefaultThing();",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2614"]);
+}
+
+#[test]
+fn mixed_default_type_named_relative_valid() {
+    let diagnostics = program(&[
+        (
+            "thing.ts",
+            "export default function makeThing(): string { return \"Ada\"; }\nexport interface User { name: string; }",
+        ),
+        (
+            "index.ts",
+            "import DefaultThing, { type User } from \"./thing\";\nlet user: User = { name: DefaultThing() };",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn mixed_default_named_relative_renamed_valid() {
+    let diagnostics = program(&[
+        (
+            "thing.ts",
+            "export default function makeThing(): string { return \"Ada\"; }\nexport function helper(): number { return 1; }",
+        ),
+        (
+            "index.ts",
+            "import DefaultThing, { helper as h } from \"./thing\";\nlet name: string = DefaultThing();\nlet count: number = h();",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn mixed_default_named_relative_no_cascade() {
+    let diagnostics = program(&[
+        ("thing.ts", "export function helper(): number { return 1; }"),
+        (
+            "index.ts",
+            "import DefaultThing, { helper } from \"./thing\";\nlet count: number = helper();\nlet made = DefaultThing();",
+        ),
+    ]);
+
+    // The default export is missing (TS2305), but the named `helper` binds and
+    // the unknown default binding must not cascade into TS2304 on `DefaultThing()`.
+    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+}
+
+#[test]
+fn mixed_default_named_relative_missing_module_no_cascade() {
+    let diagnostics = program(&[(
+        "index.ts",
+        "import DefaultThing, { helper } from \"./missing\";\nlet count = helper();\nlet made = DefaultThing();",
+    )]);
+
+    // The module itself is unresolved (TS2307); both the default and named
+    // bindings fall back to unknown so usages must not cascade into TS2304.
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
+}
+
+#[test]
 fn module_export_default_expression_parser_safe() {
     let diagnostics = program(&[
         ("user.ts", "export default 123;"),
@@ -3327,21 +3431,70 @@ fn declaration_file_global_augmentation_is_supported() {
 }
 
 #[test]
-fn declaration_file_unsupported_export_equals_still_reports() {
+fn declaration_file_export_equals_unresolved_target_no_cascade() {
+    // `export = identifier` is a supported declaration-lite form. An unresolved
+    // target binds nothing and emits no diagnostic (no cascade), rather than the
+    // old unsupported-declaration report.
     let diagnostics = native_program(&[("types/globals.d.ts", "export = Foo;")]);
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-declaration"]
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn export_equals_import_require_binds_value_and_property_call() {
+    let diagnostics = native_program(&[
+        (
+            "pkg.d.ts",
+            "declare const auth: { sign(input: string): string };\nexport = auth;",
+        ),
+        (
+            "consumer.ts",
+            "import auth = require(\"./pkg\");\nconst token: string = auth.sign(\"x\");",
+        ),
+    ]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn export_equals_import_require_property_call_argument_mismatch() {
+    let diagnostics = native_program(&[
+        (
+            "pkg.d.ts",
+            "declare const auth: { sign(input: string): string };\nexport = auth;",
+        ),
+        (
+            "consumer.ts",
+            "import auth = require(\"./pkg\");\nconst token: string = auth.sign(123);",
+        ),
+    ]);
+    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+}
+
+#[test]
+fn export_equals_unresolved_target_import_require_no_cascade() {
+    // The exported identifier is undefined in the package surface; the consumer
+    // binds an unknown value and must not cascade name/property errors.
+    let diagnostics = native_program(&[
+        ("pkg.d.ts", "export = missingValue;"),
+        (
+            "consumer.ts",
+            "import api = require(\"./pkg\");\nconst result = api.whatever();",
+        ),
+    ]);
+    assert!(
+        !codes(&diagnostics)
+            .iter()
+            .any(|code| code == "TS2304" || code == "TS2339" || code == "TS2571"),
+        "unexpected cascade: {:?}",
+        codes(&diagnostics)
     );
 }
 
 #[test]
-fn declaration_file_unsupported_import_equals_still_reports() {
+fn declaration_file_import_equals_missing_module_reports_ts2307() {
+    // `import x = require("specifier")` is supported; a missing module surfaces
+    // the existing missing-module diagnostic instead of unsupported-declaration.
     let diagnostics = native_program(&[("types/globals.d.ts", "import Foo = require(\"foo\");")]);
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-declaration"]
-    );
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
 }
 
 #[test]

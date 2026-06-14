@@ -4,6 +4,7 @@ use typescript_rust_syntax::{
 };
 use typescript_rust_types::{Type, union_type};
 
+use crate::checks::expr::operand_display_name;
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::InferredExpression;
 
@@ -183,7 +184,12 @@ fn evaluate_add_binary(
     let file_name = ctx.file_name.clone();
     push_diagnostic(
         ctx,
-        Diagnostic::ts2365("+", &left_type.name(), &right_type.name(), file_name),
+        Diagnostic::ts2365(
+            "+",
+            &operand_display_name(&left_type),
+            &operand_display_name(&right_type),
+            file_name,
+        ),
         fallback_span,
     );
     InferredExpression::Unknown
@@ -287,8 +293,8 @@ fn evaluate_comparison_binary(
                     ctx,
                     Diagnostic::ts2365(
                         operator_text,
-                        &left_type.name(),
-                        &right_type.name(),
+                        &operand_display_name(&left_type),
+                        &operand_display_name(&right_type),
                         file_name,
                     ),
                     fallback_span,
@@ -302,8 +308,8 @@ fn evaluate_comparison_binary(
             ctx,
             Diagnostic::ts2365(
                 operator_text,
-                &left_type.name(),
-                &right_type.name(),
+                &operand_display_name(&left_type),
+                &operand_display_name(&right_type),
                 file_name,
             ),
             fallback_span,
@@ -337,7 +343,11 @@ fn evaluate_equality_binary(
         let file_name = ctx.file_name.clone();
         push_diagnostic(
             ctx,
-            Diagnostic::ts2367(&left_type.name(), &right_type.name(), file_name),
+            Diagnostic::ts2367(
+                &operand_display_name(left_type),
+                &operand_display_name(right_type),
+                file_name,
+            ),
             fallback_span,
         );
     }

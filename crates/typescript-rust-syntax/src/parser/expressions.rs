@@ -705,8 +705,12 @@ pub(crate) fn parse_object_properties(
                 return None;
             };
 
-            if property.kind != PropertyKind::Init || property.method || property.computed {
+            if property.kind != PropertyKind::Init || property.computed {
                 return None;
+            }
+
+            if property.method {
+                return parse_object_method_shorthand(key, property);
             }
 
             let (value, value_span) = parse_expression(&property.value);
@@ -717,9 +721,58 @@ pub(crate) fn parse_object_properties(
                 value,
                 value_span: Some(text_span_from_oxc_span(value_span)),
                 span: Some(text_span_from_oxc_span(property.span)),
+                is_method: false,
             })
         })
         .collect()
+}
+
+/// Lowers object literal method shorthand (`{ foo(arg): R { ... } }`) into a property whose
+/// value is an arrow function, so it reuses the existing arrow-function checking path while
+/// honoring the declared parameter and return types.
+fn parse_object_method_shorthand(
+    key: &oxc_ast::ast::IdentifierName<'_>,
+    property: &oxc_ast::ast::ObjectProperty<'_>,
+) -> Option<ParsedObjectProperty> {
+    let Expression::FunctionExpression(function) = &property.value else {
+        return None;
+    };
+
+    let parameters = function
+        .params
+        .items
+        .iter()
+        .filter_map(parse_function_parameter)
+        .collect::<Vec<_>>();
+
+    let return_type = function
+        .return_type
+        .as_ref()
+        .and_then(|annotation| parse_type_annotation(annotation));
+
+    let body = function
+        .body
+        .as_ref()
+        .map(|body| parse_statement_list_as_function_body(&body.statements))
+        .unwrap_or_default();
+
+    let arrow = ParsedArrowFunction {
+        type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
+        parameters,
+        return_type,
+        is_async: function.r#async,
+        body: ParsedArrowFunctionBody::Block(body),
+        span: Some(text_span_from_oxc_span(function.span)),
+    };
+
+    Some(ParsedObjectProperty {
+        name: key.name.to_string(),
+        name_span: Some(text_span_from_oxc_span(key.span)),
+        value: ParsedExpression::ArrowFunction(Box::new(arrow)),
+        value_span: Some(text_span_from_oxc_span(function.span)),
+        span: Some(text_span_from_oxc_span(property.span)),
+        is_method: true,
+    })
 }
 
 pub(crate) fn parse_array_expression(
@@ -827,6 +880,39 @@ fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<Pars
 fn parse_computed_member_expression(
     member_expression: &ComputedMemberExpression<'_>,
 ) -> Option<ParsedExpression> {
+    // String-literal bracket access (`obj["key"]`, `obj?.["key"]`) lowers to the
+    // same (optional) property-access nodes as dot access so it reuses identical
+    // property-lookup, optional-widening, and missing-property behavior.
+    //
+    // Purely numeric keys (e.g. `arr["0"]`) are left on the index-access path so
+    // existing array/tuple numeric-index behavior is preserved unchanged.
+    if let Expression::StringLiteral(string_literal) = &member_expression.expression {
+        let key = string_literal.value.as_str();
+        let is_numeric_index = !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_digit());
+
+        if !is_numeric_index {
+            let (object, object_span) = parse_expression(&member_expression.object);
+            let property_name = string_literal.value.to_string();
+            let property_span = Some(text_span_from_oxc_span(string_literal.span));
+
+            if member_expression.optional {
+                return Some(ParsedExpression::OptionalPropertyAccess {
+                    object: Box::new(object),
+                    object_span: Some(text_span_from_oxc_span(object_span)),
+                    property_name,
+                    property_span,
+                });
+            }
+
+            return Some(ParsedExpression::PropertyAccess {
+                object: Box::new(object),
+                object_span: Some(text_span_from_oxc_span(object_span)),
+                property_name,
+                property_span,
+            });
+        }
+    }
+
     if member_expression.optional {
         let (object, object_span) = parse_expression(&member_expression.object);
         let (index, index_span) = parse_expression(&member_expression.expression);

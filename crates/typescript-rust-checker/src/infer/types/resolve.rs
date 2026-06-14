@@ -182,15 +182,38 @@ pub(crate) fn resolve_function_type(
         resolving,
     );
 
-    let required_parameter_count = required_parameter_count(&function_type.parameters);
+    let value_parameters = function_type
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this)
+        .cloned()
+        .collect::<Vec<_>>();
+    let required_parameter_count = required_parameter_count(&value_parameters);
+    let is_variadic = value_parameters
+        .last()
+        .is_some_and(|parameter| parameter.rest);
     let mut parameters = Vec::new();
     let mut had_error = false;
 
     for parameter in function_type.parameters.iter().cloned() {
+        let is_this = parameter.is_this;
+        let is_rest = parameter.rest;
         let resolved_parameter =
             resolve_function_type_parameter(parameter, ctx, resolving, &local_substitution);
         had_error |= resolved_parameter.had_error;
-        parameters.push(resolved_parameter.ty);
+        // The `this` parameter is resolved so an unresolved `this` type still
+        // reports once (and propagates `had_error` to avoid a cascade), but it is
+        // not a real call parameter, so it is excluded from arity and arguments.
+        if is_this {
+            continue;
+        }
+        // A rest parameter is written as the array type but checked element-wise,
+        // so store its element type to match variadic call/argument checking.
+        if is_rest {
+            parameters.push(rest_element_type(resolved_parameter.ty));
+        } else {
+            parameters.push(resolved_parameter.ty);
+        }
     }
 
     let return_type = resolve_parsed_type(
@@ -204,10 +227,17 @@ pub(crate) fn resolve_function_type(
         ty: Type::Function(alloc_function_type(
             parameters,
             return_type.ty,
-            false,
+            is_variadic,
             required_parameter_count,
         )),
         had_error,
+    }
+}
+
+fn rest_element_type(ty: Type) -> Type {
+    match ty {
+        Type::Array(element) => *element,
+        other => other,
     }
 }
 
@@ -218,7 +248,7 @@ pub(crate) fn required_parameter_count(
 
     while required > 0 {
         let parameter = &parameters[required - 1];
-        if parameter.optional {
+        if parameter.optional || parameter.rest {
             required -= 1;
         } else {
             break;
@@ -682,6 +712,19 @@ fn resolve_indexed_access_type(
             ParsedType::Named(named_type) if named_type.name == object_name
         )
     );
+    // `K extends keyof T` makes the generic `T[K]` a valid index even though
+    // neither side is concrete yet, so it must not cascade into TS2536.
+    let index_constraint_satisfies_object = match (
+        object_placeholder_name.as_deref(),
+        index_placeholder_name.as_deref(),
+    ) {
+        (Some(object_name), Some(index_name)) => {
+            ctx.type_parameter_keyof_constraint_target(index_name) == Some(object_name)
+        }
+        _ => false,
+    };
+    let index_is_valid_generic_key =
+        index_is_keyof_same_placeholder || index_constraint_satisfies_object;
 
     if object_is_concrete_substitution {
         record_generic_indexed_access_substituted_receiver();
@@ -706,7 +749,7 @@ fn resolve_indexed_access_type(
         substitution,
     );
 
-    if object_placeholder_name.is_some() && index_is_keyof_same_placeholder {
+    if object_placeholder_name.is_some() && index_is_valid_generic_key {
         if generic_indexed_access {
             record_generic_indexed_access_unknown_fallback();
         }
@@ -716,8 +759,8 @@ fn resolve_indexed_access_type(
         };
     }
 
-    if index_placeholder_name.is_some()
-        || object_placeholder_name.is_some() && !index_is_keyof_same_placeholder
+    if !index_is_valid_generic_key
+        && (index_placeholder_name.is_some() || object_placeholder_name.is_some())
     {
         let index_name = index_placeholder_name
             .map(str::to_string)

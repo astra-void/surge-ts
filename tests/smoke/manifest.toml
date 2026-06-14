@@ -2708,7 +2708,7 @@ expected_diagnostics = []
 [[case]]
 name = "array-literal-let-widening-when-assigned-to-let"
 path = "tests/smoke/array_literal_let_widening_when_assigned_to_let.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "array-contextual-variable-valid"
@@ -2833,7 +2833,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "array-index-access-literal-element-valid"
 path = "tests/smoke/array_index_access_literal_element_valid.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "array-index-access-union-element-valid"
@@ -4963,7 +4963,7 @@ expected_diagnostics = []
 [[case]]
 name = "literal-conditional-different-literals-infers-literal-union"
 path = "tests/smoke/literal_conditional_different_literals_infers_literal_union.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "literal-conditional-literal-union-assignable-valid"
@@ -5164,6 +5164,46 @@ expected_diagnostics = ["TS2322"]
 name = "function-type-property-access-preserves-function-type"
 path = "tests/smoke/function_type_property_access_preserves_function_type.ts"
 expected_diagnostics = []
+
+[[case]]
+name = "method-interface-call-valid"
+path = "tests/smoke/method_interface_call_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "method-interface-argument-mismatch"
+path = "tests/smoke/method_interface_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "method-interface-return-mismatch"
+path = "tests/smoke/method_interface_return_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "method-object-type-call-valid"
+path = "tests/smoke/method_object_type_call_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "method-object-literal-shorthand-valid"
+path = "tests/smoke/method_object_literal_shorthand_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "method-object-literal-shorthand-argument-mismatch"
+path = "tests/smoke/method_object_literal_shorthand_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "method-property-access-preserves-function-type"
+path = "tests/smoke/method_property_access_preserves_function_type.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "method-unresolved-parameter-type-no-cascade"
+path = "tests/smoke/method_unresolved_parameter_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
 
 [[case]]
 name = "function-type-literal-parameter-valid"
@@ -5459,6 +5499,54 @@ name = "function-type-union-call-not-supported-or-non-callable"
 path = "tests/smoke/function_type_union_call_not_supported_or_non_callable.ts"
 expected_diagnostics = ["TS2349"]
 
+# Phase 1 callable unions: every member is a function with one shared call
+# signature (identical arity, mutually-assignable parameters). Return types may
+# differ and unify into the result. Non-identical-signature unions stay pinned.
+[[case]]
+name = "callable-union-identical-signature-call-valid"
+path = "tests/smoke/callable_union_identical_signature_call_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "callable-union-identical-signature-argument-mismatch"
+path = "tests/smoke/callable_union_identical_signature_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "callable-union-identical-signature-return-assignment-valid"
+path = "tests/smoke/callable_union_identical_signature_return_assignment_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "callable-union-compatible-return-types-call-valid"
+path = "tests/smoke/callable_union_compatible_return_types_call_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "callable-union-compatible-return-types-return-assignment-mismatch"
+path = "tests/smoke/callable_union_compatible_return_types_return_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "callable-union-different-arity-still-non-callable-or-pinned"
+path = "tests/smoke/callable_union_different_arity_still_non_callable_or_pinned.ts"
+expected_diagnostics = ["TS2349"]
+
+[[case]]
+name = "callable-union-different-parameter-type-still-non-callable-or-pinned"
+path = "tests/smoke/callable_union_different_parameter_type_still_non_callable_or_pinned.ts"
+expected_diagnostics = ["TS2349"]
+
+[[case]]
+name = "callable-union-function-or-undefined-still-non-callable"
+path = "tests/smoke/callable_union_function_or_undefined_still_non_callable.ts"
+expected_diagnostics = ["TS2349"]
+
+[[case]]
+name = "callable-union-unresolved-member-no-cascade"
+path = "tests/smoke/callable_union_unresolved_member_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
 [[case]]
 name = "function-type-conditional-same-function-types-valid"
 path = "tests/smoke/function_type_conditional_same_function_types_valid.ts"
@@ -5606,10 +5694,82 @@ name = "module-default-import-non-relative-unsupported"
 path = "tests/smoke/module_default_import_non_relative_unsupported.ts"
 expected_diagnostics = ["TS2307"]
 
+# Single-file `check_source` mode never loads relative modules, so a relative
+# import here is an intentionally unsupported subcase outside the mixed
+# default + named relative-import slice (which covers already-loaded modules).
 [[case]]
 name = "module-default-import-mixed-named-parser-safe-or-pinned"
 path = "tests/smoke/module_default_import_mixed_named_parser_safe_or_pinned.ts"
 expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+
+# Mixed default + named relative imports against already-loaded modules.
+[[case]]
+name = "mixed-default-named-relative-valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/thing.ts"
+source_text = "export default function makeThing(): string { return \"Ada\"; }\nexport function helper(): number { return 1; }"
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import DefaultThing, { helper } from \"./thing\";\nlet name: string = DefaultThing();\nlet count: number = helper();"
+
+[[case]]
+name = "mixed-default-named-relative-renamed-valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/thing.ts"
+source_text = "export default function makeThing(): string { return \"Ada\"; }\nexport function helper(): number { return 1; }"
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import DefaultThing, { helper as h } from \"./thing\";\nlet name: string = DefaultThing();\nlet count: number = h();"
+
+[[case]]
+name = "mixed-default-type-named-relative-valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "src/thing.ts"
+source_text = "export default function makeThing(): string { return \"Ada\"; }\nexport interface User { name: string; }"
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import DefaultThing, { type User } from \"./thing\";\nlet user: User = { name: DefaultThing() };"
+
+[[case]]
+name = "mixed-default-named-relative-missing-default"
+expected_diagnostics = ["TS2305"]
+
+[[case.files]]
+file_name = "src/thing.ts"
+source_text = "export function helper(): number { return 1; }"
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import DefaultThing, { helper } from \"./thing\";\nlet count: number = helper();"
+
+[[case]]
+name = "mixed-default-named-relative-missing-named"
+expected_diagnostics = ["TS2614"]
+
+[[case.files]]
+file_name = "src/thing.ts"
+source_text = "export default function makeThing(): string { return \"Ada\"; }"
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import DefaultThing, { helper } from \"./thing\";\nlet name: string = DefaultThing();"
+
+[[case]]
+name = "mixed-default-named-relative-missing-module-no-cascade"
+expected_diagnostics = ["TS2307"]
+
+[[case.files]]
+file_name = "src/index.ts"
+source_text = "import DefaultThing, { helper } from \"./missing\";\nlet count = helper();\nlet made = DefaultThing();"
 
 [[case]]
 name = "module-namespace-import-non-relative-unsupported"
@@ -6126,6 +6286,236 @@ expected_diagnostics = ["TS2339"]
 name = "generic-indexed-access-unknown-key-no-cascade"
 path = "tests/smoke/generic_indexed_access_unknown_key_no_cascade.ts"
 expected_diagnostics = ["TS2538"]
+
+[[case]]
+name = "generic-keyof-constraint-explicit-key-valid"
+path = "tests/smoke/generic_keyof_constraint_explicit_key_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-keyof-constraint-explicit-key-mismatch"
+path = "tests/smoke/generic_keyof_constraint_explicit_key_mismatch.ts"
+expected_diagnostics = ["TS2344"]
+
+[[case]]
+name = "generic-keyof-constraint-explicit-union-keys-valid"
+path = "tests/smoke/generic_keyof_constraint_explicit_union_keys_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-keyof-constraint-explicit-union-key-mismatch"
+path = "tests/smoke/generic_keyof_constraint_explicit_union_key_mismatch.ts"
+expected_diagnostics = ["TS2344"]
+
+[[case]]
+name = "generic-keyof-constraint-t-indexed-access-return-valid"
+path = "tests/smoke/generic_keyof_constraint_t_indexed_access_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "generic-keyof-constraint-unresolved-receiver-no-cascade"
+path = "tests/smoke/generic_keyof_constraint_unresolved_receiver_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "generic-keyof-constraint-unresolved-key-no-cascade"
+path = "tests/smoke/generic_keyof_constraint_unresolved_key_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "array-property-length-valid"
+path = "tests/smoke/array_property_length_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-property-length-assignment-mismatch"
+path = "tests/smoke/array_property_length_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "array-property-length-return-valid"
+path = "tests/smoke/array_property_length_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-property-length-call-argument-valid"
+path = "tests/smoke/array_property_length_call_argument_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "readonly-array-property-length-valid"
+path = "tests/smoke/readonly_array_property_length_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-property-length-valid"
+path = "tests/smoke/tuple_property_length_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "tuple-property-length-assignment-mismatch"
+path = "tests/smoke/tuple_property_length_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "tuple-property-length-union-undefined-policy-pinned"
+path = "tests/smoke/tuple_property_length_union_undefined_policy_pinned.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-property-unknown-method-still-unsupported"
+path = "tests/smoke/array_property_unknown_method_still_unsupported.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "bracket-property-string-literal-interface-valid"
+path = "tests/smoke/bracket_property_string_literal_interface_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "bracket-property-string-literal-interface-missing"
+path = "tests/smoke/bracket_property_string_literal_interface_missing.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "bracket-property-string-literal-type-alias-valid"
+path = "tests/smoke/bracket_property_string_literal_type_alias_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "bracket-property-string-literal-object-literal-valid"
+path = "tests/smoke/bracket_property_string_literal_object_literal_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "bracket-property-string-literal-optional-read-widens"
+path = "tests/smoke/bracket_property_string_literal_optional_read_widens.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "bracket-property-string-literal-assignment-mismatch"
+path = "tests/smoke/bracket_property_string_literal_assignment_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "bracket-property-string-literal-unresolved-object-no-cascade"
+path = "tests/smoke/bracket_property_string_literal_unresolved_object_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "bracket-property-string-literal-dynamic-key-unsupported-or-pinned"
+path = "tests/smoke/bracket_property_string_literal_dynamic_key_unsupported_or_pinned.ts"
+expected_diagnostics = ["TS2339"]
+
+[[case]]
+name = "bracket-property-string-literal-optional-chain-valid"
+path = "tests/smoke/bracket_property_string_literal_optional_chain_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "export-equals-import-require-valid"
+expected_diagnostics = []
+
+[[case.files]]
+file_name = "pkg.d.ts"
+source_text = "declare const auth: { sign(input: string): string };\nexport = auth;"
+
+[[case.files]]
+file_name = "index.ts"
+source_text = "import auth = require(\"./pkg\");\nconst token: string = auth.sign(\"x\");\nvoid token;"
+
+[[case]]
+name = "export-equals-import-require-property-call-argument-mismatch"
+expected_diagnostics = ["TS2345"]
+
+[[case.files]]
+file_name = "pkg.d.ts"
+source_text = "declare const auth: { sign(input: string): string };\nexport = auth;"
+
+[[case.files]]
+file_name = "index.ts"
+source_text = "import auth = require(\"./pkg\");\nconst token: string = auth.sign(123);\nvoid token;"
+
+[[case]]
+name = "import-require-missing-module"
+path = "tests/smoke/import_require_missing_module.ts"
+expected_diagnostics = ["TS2307"]
+
+[[case]]
+name = "function-type-optional-parameter-call-no-args-valid"
+path = "tests/smoke/function_type_optional_parameter_call_no_args_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-optional-parameter-call-one-arg-valid"
+path = "tests/smoke/function_type_optional_parameter_call_one_arg_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-optional-parameter-argument-mismatch"
+path = "tests/smoke/function_type_optional_parameter_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "function-type-optional-parameter-assignability-valid"
+path = "tests/smoke/function_type_optional_parameter_assignability_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-optional-parameter-assignability-mismatch"
+path = "tests/smoke/function_type_optional_parameter_assignability_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "function-type-rest-parameter-call-valid"
+path = "tests/smoke/function_type_rest_parameter_call_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-rest-parameter-argument-mismatch"
+path = "tests/smoke/function_type_rest_parameter_argument_mismatch.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "function-type-rest-parameter-return-valid"
+path = "tests/smoke/function_type_rest_parameter_return_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-rest-parameter-unresolved-type-no-cascade"
+path = "tests/smoke/function_type_rest_parameter_unresolved_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-type-this-parameter-parser-safe-valid"
+path = "tests/smoke/function_type_this_parameter_parser_safe_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-this-parameter-not-counted-in-arity"
+path = "tests/smoke/function_type_this_parameter_not_counted_in_arity.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-type-this-parameter-argument-mismatch-still-checks-real-arg"
+path = "tests/smoke/function_type_this_parameter_argument_mismatch_still_checks_real_arg.ts"
+expected_diagnostics = ["TS2345"]
+
+[[case]]
+name = "function-type-this-parameter-unresolved-type-no-cascade"
+path = "tests/smoke/function_type_this_parameter_unresolved_type_no_cascade.ts"
+expected_diagnostics = ["TS2304"]
+
+[[case]]
+name = "function-declaration-this-parameter-parser-safe-valid"
+path = "tests/smoke/function_declaration_this_parameter_parser_safe_valid.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "function-declaration-this-parameter-not-visible-as-value-parameter"
+path = "tests/smoke/function_declaration_this_parameter_not_visible_as_value_parameter.ts"
+expected_diagnostics = []
+
 [[test]]
 file = "external_named_import_reports_ts2307_no_cascade.ts"
 diagnostics = [2307]

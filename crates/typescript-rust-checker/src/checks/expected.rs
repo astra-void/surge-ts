@@ -4,7 +4,7 @@ use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{ParsedExpression, ParsedObjectProperty, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::{ObjectProperty, Type, is_assignable_to};
 
-use super::expr::evaluate_expression;
+use super::expr::{evaluate_expression, source_display_name};
 use super::function::check_arrow_function_expression_with_expected_type;
 use crate::arena::alloc_object_type;
 use crate::context::CheckerContext;
@@ -552,7 +552,7 @@ fn push_expected_type_mismatch(
     diagnostic_kind: ExpectedTypeDiagnostic,
     ctx: &mut CheckerContext,
 ) {
-    let source_type_name = source_type.name();
+    let source_type_name = source_display_name(source_type, expected_type);
     let expected_type_name = expected_type.name();
     let diagnostic = match diagnostic_kind {
         ExpectedTypeDiagnostic::TypeNotAssignable => Diagnostic::ts2322(

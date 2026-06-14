@@ -78,7 +78,9 @@ pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
         } else {
             normalize_path_buf(path)
         };
-        cache.borrow_mut().insert(path.to_path_buf(), result.clone());
+        cache
+            .borrow_mut()
+            .insert(path.to_path_buf(), result.clone());
         result
     })
 }

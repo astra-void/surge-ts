@@ -46,16 +46,26 @@ export type DiagnosticFingerprintCountEntry = DiagnosticFingerprint & {
   count: number;
 };
 
-export type TsconfigPathMapping = {
-  pattern: string;
-  substitutions: string[];
-};
-
 export type DiagnosticTotals = {
   total: number;
   byCode: CountEntry[];
   byFileCode: CountEntry[];
   byFileCodeLine: CountEntry[];
+};
+
+export type MessageMismatch = {
+  fileName: string;
+  code: string;
+  line: number | null;
+  column: number | null;
+  typescript: string;
+  typescriptRust: string;
+};
+
+export type MessageParity = {
+  comparedLocations: number;
+  matches: number;
+  mismatches: MessageMismatch[];
 };
 
 export type ComparisonResult = {
@@ -87,10 +97,12 @@ export type ComparisonResult = {
     onlyTypeScriptFileCodeLine: CountBucket[];
     onlyTypeScriptRustFileCodeLine: CountBucket[];
   };
+  messageParity: MessageParity;
   summary: {
     byCodeMatch: boolean;
     byFileCodeMatch: boolean;
     byFileCodeLineMatch: boolean | null;
+    messageMatch: boolean | null;
   };
   details?: {
     onlyTypeScriptRust?: {
@@ -110,6 +122,7 @@ export type ParsedArgs = {
   fileInput?: string;
   json: boolean;
   failOnMismatch: boolean;
+  strictMessages: boolean;
   maxDiagnostics?: number;
   ignoreConfig?: boolean;
   stubExternalModules?: boolean;
@@ -198,7 +211,8 @@ export function main(argv = process.argv.slice(2)): void {
   }
 
   const hasMismatch = !comparison.summary.byCodeMatch || !comparison.summary.byFileCodeMatch;
-  if (args.failOnMismatch && hasMismatch) {
+  const hasMessageMismatch = comparison.summary.messageMatch === false;
+  if ((args.failOnMismatch && hasMismatch) || (args.strictMessages && hasMessageMismatch)) {
     process.exitCode = 1;
   }
 }
@@ -207,6 +221,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     json: false,
     failOnMismatch: false,
+    strictMessages: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -246,6 +261,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       parsed.rustJobs = parsedValue;
     } else if (arg === '--failOnMismatch' || arg === '--strictCodes') {
       parsed.failOnMismatch = true;
+    } else if (arg === '--strictMessages') {
+      parsed.strictMessages = true;
     } else if (arg === '--maxDiagnostics') {
       const value = argv[++index];
       if (!value) {
@@ -276,8 +293,7 @@ export function resolveOracleMode(args: ParsedArgs): OracleMode {
 
   if (hasProject) {
     if (args.ignoreConfig) {
-      console.error('error: --ignoreConfig is only supported with --file in the oracle.');
-      process.exit(1);
+      throw new Error('--ignoreConfig is only supported with --file in the oracle.');
     }
     const projectInput = args.projectInput as string;
     const resolvedTsconfig = resolveProjectPresetOrPath(projectInput);
@@ -372,10 +388,6 @@ export function resolveFilePath(fileInput: string): string {
 
   const extension = path.extname(fileInput).toLowerCase();
   if (extension !== '.ts') {
-    if (isSourceFilePath(fileInput)) {
-      throw new Error(`--file currently supports .ts source files only. Received ${fileInput}.`);
-    }
-
     throw new Error(`--file currently supports .ts source files only. Received ${fileInput}.`);
   }
 
@@ -385,10 +397,6 @@ export function resolveFilePath(fileInput: string): string {
   }
 
   return resolvedFile;
-}
-
-export function resolveProjectInput(projectInput: string): string {
-  return resolveProjectPresetOrPath(projectInput);
 }
 
 export function compareProject(
@@ -473,14 +481,18 @@ export function runTypeScriptRust(
     '--',
   ];
 
+  // Argument order mirrors buildTypeScriptRustCommand so the printed command
+  // matches what actually runs. The positional source file must come last.
   if (mode.kind === 'project') {
-    args.push('--project', mode.resolvedTsconfig);
-    args.push('--format', 'json');
+    args.push('--project', mode.resolvedTsconfig, '--format', 'json');
     if (mode.stubExternalModules) {
       args.push('--stubExternalModules');
     }
     if (rustJobs !== undefined) {
       args.push('--jobs', String(rustJobs));
+    }
+    if (maxDiagnostics !== undefined) {
+      args.push('--maxDiagnostics', String(maxDiagnostics));
     }
   } else {
     args.push('--format', 'json');
@@ -494,25 +506,6 @@ export function runTypeScriptRust(
       args.push('--maxDiagnostics', String(maxDiagnostics));
     }
     args.push(mode.resolvedFile);
-    const result = spawnSync('cargo', args, {
-      cwd: workspaceRoot,
-      encoding: 'utf8',
-      maxBuffer: subprocessMaxBuffer,
-    });
-
-    if (result.error) {
-      throw new Error(`failed to run typescript-rust-cli: ${result.error.message}`);
-    }
-
-    return {
-      exitCode: result.status,
-      stdout: result.stdout ?? '',
-      stderr: result.stderr ?? '',
-    };
-  }
-
-  if (maxDiagnostics !== undefined) {
-    args.push('--maxDiagnostics', String(maxDiagnostics));
   }
 
   const result = spawnSync('cargo', args, {
@@ -684,10 +677,6 @@ export function normalizeDiagnostic(diagnostic: NormalizedDiagnostic): Diagnosti
   };
 }
 
-export function normalizeDiagnostics(diagnostics: NormalizedDiagnostic[]): DiagnosticFingerprint[] {
-  return diagnostics.map(normalizeDiagnostic);
-}
-
 export function compareDiagnostics(
   mode: 'project' | 'file',
   targetDisplay: string,
@@ -711,6 +700,7 @@ export function compareDiagnostics(
   );
   const onlyTypeScriptDiagnostics = onlyDiagnostics.onlyLeft;
   const onlyTypeScriptRustDiagnostics = onlyDiagnostics.onlyRight;
+  const messageParity = compareMessages(typescript, typescriptRust);
 
   return {
     mode,
@@ -747,6 +737,7 @@ export function compareDiagnostics(
       onlyTypeScriptFileCodeLine: byFileCodeLine.onlyTypeScript,
       onlyTypeScriptRustFileCodeLine: byFileCodeLine.onlyTypeScriptRust,
     },
+    messageParity,
     summary: {
       byCodeMatch: byCode.onlyTypeScript.length === 0 && byCode.onlyTypeScriptRust.length === 0,
       byFileCodeMatch:
@@ -758,6 +749,8 @@ export function compareDiagnostics(
           ? byFileCodeLine.onlyTypeScript.length === 0 &&
             byFileCodeLine.onlyTypeScriptRust.length === 0
           : null,
+      messageMatch:
+        messageParity.comparedLocations === 0 ? null : messageParity.mismatches.length === 0,
     },
     details: {
       onlyTypeScript: {
@@ -783,6 +776,108 @@ export function compareDiagnostics(
       },
     },
   };
+}
+
+/**
+ * Pairs diagnostics that share an exact location and code (fileName, code,
+ * line, column) and reports where only the message text differs. Span-level
+ * differences are deliberately left to the byFileCodeLine dimension: a pair is
+ * only message-compared when its location matches exactly, so the output
+ * isolates pure message-text drift (literal vs widened types, alias names,
+ * quoting) from span defects.
+ */
+export function compareMessages(
+  typescript: NormalizedDiagnostic[],
+  typescriptRust: NormalizedDiagnostic[],
+): MessageParity {
+  const typeScriptByLocation = groupByLocation(typescript);
+  const typeScriptRustByLocation = groupByLocation(typescriptRust);
+
+  let comparedLocations = 0;
+  let matches = 0;
+  const mismatches: MessageMismatch[] = [];
+
+  const sharedKeys = [...typeScriptByLocation.keys()]
+    .filter((key) => typeScriptRustByLocation.has(key))
+    .sort((leftKey, rightKey) => leftKey.localeCompare(rightKey));
+
+  for (const key of sharedKeys) {
+    comparedLocations += 1;
+    const typeScriptList = typeScriptByLocation.get(key) ?? [];
+    const typeScriptRustList = typeScriptRustByLocation.get(key) ?? [];
+
+    const typeScriptRustRemaining = new Map<string, number>();
+    for (const diagnostic of typeScriptRustList) {
+      const message = diagnostic.message ?? '';
+      typeScriptRustRemaining.set(message, (typeScriptRustRemaining.get(message) ?? 0) + 1);
+    }
+
+    // Consume exact message matches first; whatever is left on each side is a
+    // genuine text difference at the same location.
+    const typeScriptUnmatched: string[] = [];
+    for (const diagnostic of typeScriptList) {
+      const message = diagnostic.message ?? '';
+      const remaining = typeScriptRustRemaining.get(message) ?? 0;
+      if (remaining > 0) {
+        typeScriptRustRemaining.set(message, remaining - 1);
+        matches += 1;
+      } else {
+        typeScriptUnmatched.push(message);
+      }
+    }
+
+    const typeScriptRustUnmatched: string[] = [];
+    for (const [message, count] of typeScriptRustRemaining) {
+      for (let index = 0; index < count; index += 1) {
+        typeScriptRustUnmatched.push(message);
+      }
+    }
+
+    typeScriptUnmatched.sort((left, right) => left.localeCompare(right));
+    typeScriptRustUnmatched.sort((left, right) => left.localeCompare(right));
+
+    const representative = typeScriptList[0] ?? typeScriptRustList[0];
+    const pairCount = Math.min(typeScriptUnmatched.length, typeScriptRustUnmatched.length);
+    for (let index = 0; index < pairCount; index += 1) {
+      mismatches.push({
+        fileName: representative.fileName,
+        code: representative.code,
+        line: representative.line ?? null,
+        column: representative.column ?? null,
+        typescript: typeScriptUnmatched[index],
+        typescriptRust: typeScriptRustUnmatched[index],
+      });
+    }
+  }
+
+  mismatches.sort(
+    (left, right) =>
+      left.fileName.localeCompare(right.fileName) ||
+      (left.line ?? -1) - (right.line ?? -1) ||
+      (left.column ?? -1) - (right.column ?? -1) ||
+      left.code.localeCompare(right.code),
+  );
+
+  return { comparedLocations, matches, mismatches };
+}
+
+function groupByLocation(diagnostics: NormalizedDiagnostic[]): Map<string, NormalizedDiagnostic[]> {
+  const byLocation = new Map<string, NormalizedDiagnostic[]>();
+  for (const diagnostic of diagnostics) {
+    const key = keyByFullLocation(diagnostic);
+    const existing = byLocation.get(key);
+    if (existing) {
+      existing.push(diagnostic);
+    } else {
+      byLocation.set(key, [diagnostic]);
+    }
+  }
+
+  return byLocation;
+}
+
+export function keyByFullLocation(diagnostic: NormalizedDiagnostic): string {
+  return `${diagnostic.fileName} :: ${diagnostic.code} :: line=${diagnostic.line ?? 'n/a'} :: column=${diagnostic.column ?? 'n/a'}`;
 }
 
 export function buildTypeScriptCommand(mode: 'project' | 'file', targetDisplay: string, ignoreConfig?: boolean): string {
@@ -938,13 +1033,6 @@ export function subtractDiagnosticsByKey(
   }
 
   return { onlyLeft, onlyRight };
-}
-
-export function groupDiagnosticsByKey(
-  diagnostics: NormalizedDiagnostic[],
-  keyFn: (diagnostic: NormalizedDiagnostic) => string,
-): CountEntry[] {
-  return countEntriesFromCounts(countDiagnostics(diagnostics, keyFn));
 }
 
 export function groupDiagnosticsByExtractor(
@@ -1122,7 +1210,17 @@ export function renderComparisonText(comparison: ComparisonResult): string {
           : 'no'
     }`,
   );
+  lines.push(
+    `  Message match: ${
+      comparison.summary.messageMatch === null
+        ? 'n/a'
+        : comparison.summary.messageMatch
+          ? 'yes'
+          : 'no'
+    }`,
+  );
   lines.push('');
+  appendMessageParitySection(lines, comparison.messageParity);
   lines.push('Raw message extraction, not root-cause classification:');
   if (comparison.details?.onlyTypeScriptRust?.rawTs2305ModuleExports?.length) {
     lines.push('  TS2305 module/export:');
@@ -1211,6 +1309,29 @@ function buildComparisonWarnings(
   return warnings;
 }
 
+export function appendMessageParitySection(lines: string[], messageParity: MessageParity): void {
+  lines.push('Message parity (same file/code/line/column, message text differs):');
+  if (messageParity.comparedLocations === 0) {
+    lines.push('  (no diagnostics share an exact location on both sides)');
+    lines.push('');
+    return;
+  }
+
+  lines.push(
+    `  Compared locations: ${messageParity.comparedLocations}  matches: ${messageParity.matches}  mismatches: ${messageParity.mismatches.length}`,
+  );
+  for (const mismatch of messageParity.mismatches.slice(0, 20)) {
+    const location = `${mismatch.fileName}:${mismatch.line ?? 'n/a'}:${mismatch.column ?? 'n/a'}`;
+    lines.push(`  ${location} ${mismatch.code}`);
+    lines.push(`    tsc : ${mismatch.typescript}`);
+    lines.push(`    rust: ${mismatch.typescriptRust}`);
+  }
+  if (messageParity.mismatches.length > 20) {
+    lines.push(`  ... and ${messageParity.mismatches.length - 20} more`);
+  }
+  lines.push('');
+}
+
 export function appendBucketSection(
   lines: string[],
   matches: CountBucket[],
@@ -1258,11 +1379,6 @@ export function formatBucketKey(key: string): string {
   return `${parts[0]} ${parts[1]} ${parts[2]}`;
 }
 
-export function displayProjectPath(tsconfigPath: string): string {
-  const relative = path.relative(workspaceRoot, tsconfigPath);
-  return relative.startsWith('..') ? normalizePathForDisplay(tsconfigPath) : normalizePathForDisplay(relative);
-}
-
 function printHelpAndExit(): never {
   process.stdout.write(
     [
@@ -1278,6 +1394,7 @@ function printHelpAndExit(): never {
       '  --json                    Emit machine-readable comparison output.',
       '  --failOnMismatch          Exit with code 1 when code/file mismatches exist.',
       '  --strictCodes             Alias for --failOnMismatch.',
+      '  --strictMessages          Exit with code 1 when any same-location message text differs from tsc.',
       '  --rustJobs <n>            Pass a deterministic project-checking job count to typescript-rust.',
       '',
       'Known presets:',
@@ -1308,46 +1425,6 @@ function readPinnedTypeScriptVersion(): string {
   };
 
   return packageJson.devDependencies?.typescript ?? 'unknown';
-}
-
-export function readTsconfigPathsMappings(tsconfigPath: string): TsconfigPathMapping[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(tsconfigPath, 'utf8')) as unknown;
-  } catch {
-    return [];
-  }
-
-  const compilerOptions = (parsed as { compilerOptions?: unknown }).compilerOptions;
-  if (!compilerOptions || typeof compilerOptions !== 'object') {
-    return [];
-  }
-
-  const paths = (compilerOptions as { paths?: unknown }).paths;
-  if (!paths || typeof paths !== 'object') {
-    return [];
-  }
-
-  const mappings: TsconfigPathMapping[] = [];
-  for (const [pattern, substitutions] of Object.entries(paths as Record<string, unknown>)) {
-    if (typeof pattern !== 'string') {
-      continue;
-    }
-
-    const entries = Array.isArray(substitutions)
-      ? substitutions.filter((substitution): substitution is string => typeof substitution === 'string')
-      : typeof substitutions === 'string'
-        ? [substitutions]
-        : [];
-
-    if (entries.length === 0) {
-      continue;
-    }
-
-    mappings.push({ pattern, substitutions: entries });
-  }
-
-  return mappings;
 }
 
 function looksLikePath(value: string): boolean {
@@ -1406,10 +1483,6 @@ function executeComparison(
 }
 
 export function displayComparisonTargetPath(targetPath: string): string {
-  return displayPath(targetPath);
-}
-
-function displayPath(targetPath: string): string {
   const relative = path.relative(workspaceRoot, targetPath);
   return relative.startsWith('..') ? normalizePathForDisplay(targetPath) : normalizePathForDisplay(relative);
 }

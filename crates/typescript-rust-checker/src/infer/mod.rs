@@ -4,7 +4,7 @@ mod types;
 pub(crate) use expression::{infer_expression, tuple_index_value};
 pub(crate) use types::{
     TypeParameterSubstitution, map_parsed_type, map_parsed_type_with_substitution,
-    report_duplicate_type_parameters, validate_local_type_declaration,
+    report_duplicate_type_parameters, string_literal_union_keys, validate_local_type_declaration,
 };
 
 use typescript_rust_syntax::TextSpan;

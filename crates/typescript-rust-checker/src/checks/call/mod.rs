@@ -4,12 +4,13 @@ use typescript_rust_syntax::{
     ParsedCall, ParsedCallArgument, ParsedExpression, ParsedType, TextSpan as SyntaxTextSpan,
 };
 use typescript_rust_types::{
-    FunctionType, Type, TypeCopyReason, is_assignable_to, union_type, with_type_copy_reason,
+    FunctionType, Type, TypeCopyReason, UnionType, is_assignable_to, union_type,
+    with_type_copy_reason,
 };
 
 use super::emit_type_only_as_value_diagnostic;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
-use crate::checks::expr::evaluate_expression;
+use crate::checks::expr::{evaluate_expression, source_display_name};
 use crate::context::CheckerContext;
 use crate::infer::InferredExpression;
 use crate::program::{record_call_resolution, record_program_timing};
@@ -65,7 +66,73 @@ pub(crate) fn check_call_like(
         return None;
     }
 
-    let Type::Function(function_type) = &symbol.ty else {
+    let result = match &symbol.ty {
+        Type::Function(function_type) => {
+            with_type_copy_reason(TypeCopyReason::CallResolution, || {
+                let function_type = instantiate_function_type(
+                    function_type,
+                    symbol.function_signature.as_ref(),
+                    type_arguments,
+                    callee_span,
+                    arguments,
+                    symbols,
+                    ctx,
+                );
+
+                check_function_type_call(
+                    function_type.as_ref(),
+                    callee_span,
+                    call_span,
+                    type_arguments,
+                    arguments,
+                    symbols,
+                    ctx,
+                )
+            })
+        }
+        Type::Union(union) => check_callable_union_call(
+            union,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ),
+        _ => {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2349(ctx.file_name.clone()),
+                callee_span,
+            ));
+            None
+        }
+    };
+
+    record_program_timing(ctx.timings.as_ref(), |timings| {
+        timings.call_expression_checking += call_start.elapsed()
+    });
+    result
+}
+
+/// Phase 1 callable-union calls: a union is callable when every member is a
+/// function type sharing one call signature (identical arity and pairwise
+/// mutually-assignable parameters). Return types may differ and are unified into
+/// the call result. An unresolved member already reported upstream suppresses the
+/// call cascade; any other non-callable union is pinned as TS2349.
+fn check_callable_union_call(
+    union: &UnionType,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if union.types().iter().any(|ty| matches!(ty, Type::Unknown)) {
+        return None;
+    }
+
+    let Some(members) = shared_signature_function_members(union) else {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2349(ctx.file_name.clone()),
             callee_span,
@@ -73,32 +140,56 @@ pub(crate) fn check_call_like(
         return None;
     };
 
-    let (function_type, result) = with_type_copy_reason(TypeCopyReason::CallResolution, || {
-        let function_type = instantiate_function_type(
-            function_type,
-            symbol.function_signature.as_ref(),
-            type_arguments,
-            arguments,
-            symbols,
-            ctx,
-        );
+    let representative = members[0];
+    let return_types = members
+        .iter()
+        .map(|member| member.return_type().clone())
+        .collect::<Vec<_>>();
 
-        let result = check_function_type_call(
-            function_type.as_ref(),
+    with_type_copy_reason(TypeCopyReason::CallResolution, || {
+        check_function_type_call(
+            representative,
             callee_span,
             call_span,
             type_arguments,
             arguments,
             symbols,
             ctx,
-        );
-        (function_type, result)
+        )
+        .map(|_| union_type(return_types))
+    })
+}
+
+/// Returns the function members of a union when every member is a function type
+/// that shares one Phase 1 call signature, or `None` when the union is not
+/// callable under Phase 1 rules (a non-function member, mismatched arity, or
+/// parameters that are not mutually assignable). Return-type differences are
+/// permitted and unified by the caller.
+fn shared_signature_function_members(union: &UnionType) -> Option<Vec<&FunctionType>> {
+    let mut members = Vec::with_capacity(union.types().len());
+    for ty in union.types() {
+        match ty {
+            Type::Function(function_type) => members.push(function_type),
+            _ => return None,
+        }
+    }
+
+    let first = members.first()?;
+    let shares_signature = members.iter().all(|member| {
+        member.parameters().len() == first.parameters().len()
+            && member.required_parameter_count() == first.required_parameter_count()
+            && member.is_variadic() == first.is_variadic()
+            && member
+                .parameters()
+                .iter()
+                .zip(first.parameters().iter())
+                .all(|(member_parameter, first_parameter)| {
+                    is_assignable_to(member_parameter, first_parameter)
+                        && is_assignable_to(first_parameter, member_parameter)
+                })
     });
-    record_program_timing(ctx.timings.as_ref(), |timings| {
-        timings.call_expression_checking += call_start.elapsed()
-    });
-    let _ = function_type;
-    result
+
+    shares_signature.then_some(members)
 }
 
 pub(crate) fn check_new_like(
@@ -248,7 +339,7 @@ pub(crate) fn check_function_type_call(
                     && !type_contains_unknown(&argument_type)
                     && !is_assignable_to(&argument_type, parameter_type)
                 {
-                    let argument_type_name = argument_type.name();
+                    let argument_type_name = source_display_name(&argument_type, parameter_type);
                     let parameter_type_name = parameter_type.name();
                     let diagnostic = Diagnostic::ts2345(
                         &argument_type_name,

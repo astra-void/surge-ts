@@ -157,18 +157,31 @@ pub(crate) fn parse_import_declaration(
 pub(crate) fn parse_import_equals_declaration(
     declaration: &TSImportEqualsDeclaration<'_>,
 ) -> Option<ParsedImportDeclaration> {
-    let module_specifier = match &declaration.module_reference {
-        TSModuleReference::ExternalModuleReference(reference) => {
-            reference.expression.value.to_string()
-        }
-        _ => String::new(),
+    let span = Some(text_span_from_oxc_span(declaration.span));
+
+    // Only the `require("specifier")` form participates in the declaration-lite
+    // slice. Entity-name references (`import x = a.b`) stay unsupported.
+    let TSModuleReference::ExternalModuleReference(reference) = &declaration.module_reference
+    else {
+        return Some(ParsedImportDeclaration {
+            kind: ParsedImportKind::Unsupported,
+            module_specifier: String::new(),
+            module_specifier_span: span,
+            span,
+        });
     };
 
+    let module_specifier = reference.expression.value.to_string();
+    let module_specifier_span = Some(text_span_from_oxc_span(reference.expression.span));
+
     Some(ParsedImportDeclaration {
-        kind: ParsedImportKind::Unsupported,
+        kind: ParsedImportKind::Equals {
+            local_name: declaration.id.name.to_string(),
+            name_span: Some(text_span_from_oxc_span(declaration.id.span)),
+        },
         module_specifier,
-        module_specifier_span: Some(text_span_from_oxc_span(declaration.span)),
-        span: Some(text_span_from_oxc_span(declaration.span)),
+        module_specifier_span,
+        span,
     })
 }
 

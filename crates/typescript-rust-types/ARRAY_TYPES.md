@@ -6,6 +6,7 @@ Supported surface:
 - array literals like `[]` and `["Ada", "Grace"]`
 - numeric index access like `values[0]` on simple identifier receivers
 - optional numeric index access like `values?.[0]` returning `T | undefined`
+- the `.length` property reads as `number` for both `T[]` and `ReadonlyArray<T>`
 - array literal inference that preserves literal element types and unions
 - contextual checking of array literal elements against `T[]`
 - `any` array elements collapse inference to `any[]`

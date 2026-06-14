@@ -237,6 +237,62 @@ fn object_literal_excess_property_uses_first_source_order_property() {
 }
 
 #[test]
+fn argument_literal_widens_to_base_for_non_literal_target() {
+    let source = "declare function g(x: string): void; g(1);";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2345"]);
+    assert!(
+        diagnostics[0].message.contains("Argument of type 'number'"),
+        "expected widened source type in TS2345 message: {rendered}"
+    );
+}
+
+#[test]
+fn argument_literal_kept_for_literal_target() {
+    let source = "declare function f(x: \"a\"): void; f(\"b\");";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2345"]);
+    assert!(
+        diagnostics[0].message.contains("Argument of type '\"b\"'"),
+        "expected literal source kept against literal target in TS2345 message: {rendered}"
+    );
+}
+
+#[test]
+fn assignment_literal_kept_for_literal_target() {
+    let source = "let y: 2 = 1;";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2322"]);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("Type '1' is not assignable to type '2'"),
+        "expected literal source kept against literal target in TS2322 message: {rendered}"
+    );
+}
+
+#[test]
+fn equality_operands_widen_for_display() {
+    let source = "let r = (1 === \"string\");";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2367"]);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("types 'number' and 'string'"),
+        "expected widened operands in TS2367 message: {rendered}"
+    );
+}
+
+#[test]
 fn object_literal_missing_property_uses_first_target_order_property() {
     let source = "let user: { name: string; alpha: number } = {};";
     let diagnostics = check_source(source, "example.ts");

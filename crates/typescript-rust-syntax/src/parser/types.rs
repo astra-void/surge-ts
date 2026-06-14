@@ -1,19 +1,20 @@
 use oxc_ast::ast::{
     PropertyKey, TSIndexedAccessType, TSLiteral, TSLiteralType, TSMappedType,
-    TSMappedTypeModifierOperator, TSPropertySignature, TSSignature, TSTupleElement, TSTupleType,
-    TSType, TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeOperator,
-    TSTypeOperatorOperator, TSTypeParameter, TSTypeParameterDeclaration,
-    TSTypeParameterInstantiation, TSTypeQuery, TSTypeQueryExprName, TSTypeReference, TSUnionType,
+    TSMappedTypeModifierOperator, TSMethodSignature, TSMethodSignatureKind, TSPropertySignature,
+    TSSignature, TSTupleElement, TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral,
+    TSTypeName, TSTypeOperator, TSTypeOperatorOperator, TSTypeParameter,
+    TSTypeParameterDeclaration, TSTypeParameterInstantiation, TSTypeQuery, TSTypeQueryExprName,
+    TSTypeReference, TSUnionType,
 };
 use oxc_span::GetSpan;
 
 use crate::{
-    ParsedIndexedAccessType, ParsedMappedType, ParsedNamedType, ParsedObjectType,
-    ParsedObjectTypeProperty, ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType,
-    ParsedTypeParameter,
+    ParsedFunctionType, ParsedIndexedAccessType, ParsedMappedType, ParsedNamedType,
+    ParsedObjectType, ParsedObjectTypeProperty, ParsedType, ParsedTypeAliasDeclaration,
+    ParsedTypeOfType, ParsedTypeParameter,
 };
 
-use super::function_types::parse_function_type;
+use super::function_types::{parse_function_type, parse_function_type_parameter};
 use super::spans::text_span_from_oxc_span;
 
 pub(crate) fn parse_type_annotation(
@@ -187,11 +188,17 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
 
     for member in &type_literal.members {
-        let TSSignature::TSPropertySignature(property_signature) = member else {
-            return ParsedType::Unknown;
+        let property = match member {
+            TSSignature::TSPropertySignature(property_signature) => {
+                parse_type_property_signature(property_signature)
+            }
+            TSSignature::TSMethodSignature(method_signature) => {
+                parse_type_method_signature(method_signature)
+            }
+            _ => return ParsedType::Unknown,
         };
 
-        let Some(property) = parse_type_property_signature(property_signature) else {
+        let Some(property) = property else {
             return ParsedType::Unknown;
         };
 
@@ -199,6 +206,44 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     }
 
     ParsedType::Object(ParsedObjectType { properties })
+}
+
+/// Lowers a method signature (`foo(arg: A): R`) into a property whose type is a
+/// [`ParsedType::Function`], so method calls reuse the existing function-type property
+/// checking. Shared by interface and object-type-literal parsing.
+pub(crate) fn parse_type_method_signature(
+    method_signature: &TSMethodSignature<'_>,
+) -> Option<ParsedObjectTypeProperty> {
+    if method_signature.kind != TSMethodSignatureKind::Method || method_signature.computed {
+        return None;
+    }
+
+    let PropertyKey::StaticIdentifier(key) = &method_signature.key else {
+        return None;
+    };
+
+    let parameters = method_signature
+        .params
+        .items
+        .iter()
+        .map(parse_function_type_parameter)
+        .collect::<Option<Vec<_>>>()?;
+
+    let return_type = method_signature
+        .return_type
+        .as_ref()
+        .and_then(|annotation| parse_type_annotation(annotation.as_ref()))?;
+
+    Some(ParsedObjectTypeProperty {
+        name: key.name.to_string(),
+        name_span: Some(text_span_from_oxc_span(key.span)),
+        ty: ParsedType::Function(ParsedFunctionType {
+            parameters,
+            return_type: Box::new(return_type),
+            type_parameters: parse_type_parameters(method_signature.type_parameters.as_deref()),
+        }),
+        optional: method_signature.optional,
+    })
 }
 
 pub(crate) fn parse_type_parameters(

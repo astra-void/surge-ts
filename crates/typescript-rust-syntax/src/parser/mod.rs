@@ -21,7 +21,9 @@ mod spans;
 mod types;
 
 use self::exports::parse_export_named_declaration;
-use self::exports::{parse_export_all_declaration, parse_export_default_declaration};
+use self::exports::{
+    parse_export_all_declaration, parse_export_assignment, parse_export_default_declaration,
+};
 use self::expressions::{
     parse_call_expression, parse_conditional_expression, parse_expression,
     parse_static_member_expression, parse_unary_expression,
@@ -61,13 +63,7 @@ fn parse_module_declaration(
             parse_export_default_declaration(export)
         }
         ModuleDeclaration::ExportAllDeclaration(export) => parse_export_all_declaration(export),
-        ModuleDeclaration::TSExportAssignment(export) => {
-            Some(vec![ParsedStatement::ExportDeclaration(
-                ParsedExportDeclaration::Unsupported {
-                    span: Some(text_span_from_oxc_span(export.span)),
-                },
-            )])
-        }
+        ModuleDeclaration::TSExportAssignment(export) => parse_export_assignment(export),
         ModuleDeclaration::TSNamespaceExportDeclaration(export) => {
             Some(vec![ParsedStatement::ExportDeclaration(
                 ParsedExportDeclaration::Unsupported {

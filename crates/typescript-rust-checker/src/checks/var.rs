@@ -5,7 +5,7 @@ use typescript_rust_syntax::ParsedVariableDeclaration;
 use typescript_rust_types::{Type, is_assignable_to};
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
-use super::expr::evaluate_expression;
+use super::expr::{evaluate_expression, widen_type};
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::symbols::{SymbolInfo, SymbolInfoHandle, SymbolKind, SymbolTable, map_symbol_kind};
@@ -149,7 +149,10 @@ pub(crate) fn check_variable_declaration_against_symbols(
 
 pub(crate) fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, ty: &Type) -> Type {
     if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var) {
-        ty.base_primitive().unwrap_or_else(|| ty.clone())
+        // tsc deep-widens `let`/`var` initializers, so object properties and
+        // array/union members widen too (e.g. `let o = { a: 1 }` -> `{ a: number }`),
+        // not just a top-level primitive literal.
+        widen_type(ty)
     } else {
         ty.clone()
     }

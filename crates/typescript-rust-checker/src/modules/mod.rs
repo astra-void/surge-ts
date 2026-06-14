@@ -31,6 +31,11 @@ pub(crate) struct ModuleExportTable {
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) symbols: SymbolTable,
     pub(crate) default_symbol: Option<Arc<SymbolInfo>>,
+    /// The value bound by a declaration-lite `export = identifier`. Consumed by
+    /// `import local = require("specifier")` to bind `local`. Kept distinct from
+    /// `default_symbol` so plain ESM default imports do not resolve through it
+    /// (no synthetic default / `esModuleInterop`).
+    pub(crate) export_assignment_symbol: Option<Arc<SymbolInfo>>,
     pub(crate) namespace_export_object_type: Option<Type>,
     pub(crate) has_unresolved_star_export: bool,
     pub(crate) has_incomplete_declaration_surface: bool,
@@ -48,6 +53,7 @@ impl Clone for ModuleExportTable {
             type_declarations: self.type_declarations.clone(),
             symbols: self.symbols.clone(),
             default_symbol: self.default_symbol.clone(),
+            export_assignment_symbol: self.export_assignment_symbol.clone(),
             namespace_export_object_type: self.namespace_export_object_type.clone(),
             has_unresolved_star_export: self.has_unresolved_star_export,
             has_incomplete_declaration_surface: self.has_incomplete_declaration_surface,
