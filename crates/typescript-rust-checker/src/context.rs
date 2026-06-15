@@ -134,6 +134,12 @@ pub(crate) struct CheckerContext {
     // generic `T[K]` is not falsely reported as an invalid index (TS2536).
     pub(crate) type_parameter_constraint_scopes: Vec<HashMap<String, ParsedType>>,
     pub(crate) timings: Option<std::sync::Arc<std::sync::Mutex<ProgramTimings>>>,
+    /// Nonzero while resolving the body of a namespace-qualified type member
+    /// (e.g. `React.ComponentProps`). Unresolved names encountered here are
+    /// internal references into a namespace surface we only partially model, so
+    /// they resolve to `unknown` without a TS2304 cascade — tsc resolves them
+    /// against the full `@types/*`/generated namespace and reports nothing.
+    pub(crate) namespace_member_resolution_depth: usize,
     file_kinds: HashMap<String, FileKind>,
 }
 
@@ -167,8 +173,16 @@ impl CheckerContext {
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
+            namespace_member_resolution_depth: 0,
             file_kinds,
         }
+    }
+
+    /// Whether unresolved type names should be silently treated as `unknown`
+    /// rather than emitting TS2304 — true while expanding a namespace-qualified
+    /// member body. See [`Self::namespace_member_resolution_depth`].
+    pub(crate) fn suppress_unknown_type_name(&self) -> bool {
+        self.namespace_member_resolution_depth > 0
     }
 
     pub(crate) fn push_type_parameter_scope(

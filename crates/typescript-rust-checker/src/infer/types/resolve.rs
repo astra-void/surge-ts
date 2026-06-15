@@ -660,7 +660,13 @@ pub(crate) fn resolve_named_type(
     let declaration = ctx.lookup_type_declaration(&named_type.name).cloned();
 
     let Some(declaration) = declaration else {
-        emit_unknown_type_name(&named_type, ctx);
+        // A qualified reference (`React.Foo`, `Prisma.Bar`) we cannot resolve is
+        // treated as no-cascade: tsc resolves these against the full namespace
+        // surface and reports nothing, so emitting TS2304 here would be a false
+        // positive against `@types/*` and generated namespace clients.
+        if !named_type.name.contains('.') {
+            emit_unknown_type_name(&named_type, ctx);
+        }
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,

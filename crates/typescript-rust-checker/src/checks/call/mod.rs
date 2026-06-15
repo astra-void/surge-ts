@@ -341,6 +341,17 @@ pub(crate) fn check_optional_call_like(
     }
 }
 
+/// The element type a variadic rest parameter accepts per argument. A rest
+/// parameter is declared as an array (`...inputs: string[]`); each supplied
+/// argument is checked against the element (`string`). Non-array types (e.g. an
+/// unresolved `any`) are kept as-is.
+fn rest_parameter_element_type(parameter_type: &Type) -> Type {
+    match parameter_type {
+        Type::Array(element) => element.as_ref().clone(),
+        other => other.clone(),
+    }
+}
+
 pub(crate) fn check_function_type_call(
     function_type: &FunctionType,
     callee_span: Option<SyntaxTextSpan>,
@@ -369,18 +380,22 @@ pub(crate) fn check_function_type_call(
     }
 
     for (i, argument) in arguments.iter().enumerate() {
-        let parameter_type = if i < expected {
-            &function_type.parameters()[i]
-        } else if function_type.is_variadic() && expected > 0 {
-            &function_type.parameters()[expected - 1]
+        // For a variadic signature the trailing rest parameter (declared as an
+        // array) matches each remaining argument against its *element* type, not
+        // the array itself — `cn(...inputs: string[])` accepts `cn("a", "b")`.
+        let is_rest_position = function_type.is_variadic() && expected > 0 && i >= expected - 1;
+        let parameter_type: Type = if is_rest_position {
+            rest_parameter_element_type(&function_type.parameters()[expected - 1])
+        } else if i < expected {
+            function_type.parameters()[i].clone()
         } else {
-            &Type::Any
+            Type::Any
         };
 
         let inferred_argument = evaluate_expression_with_expected_type(
             &argument.expression,
             argument.span,
-            Some(parameter_type),
+            Some(&parameter_type),
             ExpectedTypeDiagnostic::ArgumentNotAssignable,
             symbols,
             ctx,
@@ -392,11 +407,11 @@ pub(crate) fn check_function_type_call(
                     continue;
                 }
 
-                if !type_contains_unknown(parameter_type)
+                if !type_contains_unknown(&parameter_type)
                     && !type_contains_unknown(&argument_type)
-                    && !is_assignable_to(&argument_type, parameter_type)
+                    && !is_assignable_to(&argument_type, &parameter_type)
                 {
-                    let argument_type_name = source_display_name(&argument_type, parameter_type);
+                    let argument_type_name = source_display_name(&argument_type, &parameter_type);
                     let parameter_type_name = parameter_type.name();
                     let diagnostic = Diagnostic::ts2345(
                         &argument_type_name,

@@ -6,6 +6,9 @@ use typescript_rust_syntax::{ParsedNamedType, TextSpan};
 use crate::context::{CheckerContext, convert_span};
 
 pub(crate) fn emit_unknown_type_name(named_type: &ParsedNamedType, ctx: &mut CheckerContext) {
+    if ctx.suppress_unknown_type_name() {
+        return;
+    }
     let diagnostic =
         if named_type.name == "Buffer" && !ctx.options.types.iter().any(|ty| ty == "node") {
             if ctx.options.types_uses_wildcard() {

@@ -17,7 +17,8 @@ use crate::{
 use super::spans::text_span_from_oxc_span;
 use super::types::{parse_type_annotation, parse_type_arguments, parse_type_parameters};
 use super::{
-    functions::parse_function_parameter, functions::parse_statement_list_as_function_body,
+    functions::parse_function_parameter, functions::parse_rest_function_parameter,
+    functions::parse_statement_list_as_function_body,
 };
 
 pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression, Span) {
@@ -773,12 +774,17 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
 fn parse_arrow_function_expression(
     arrow_expression: &ArrowFunctionExpression<'_>,
 ) -> Option<ParsedArrowFunction> {
-    let parameters = arrow_expression
+    let mut parameters = arrow_expression
         .params
         .items
         .iter()
         .filter_map(parse_function_parameter)
         .collect::<Vec<_>>();
+    if let Some(rest) = arrow_expression.params.rest.as_deref() {
+        if let Some(rest_parameter) = parse_rest_function_parameter(rest) {
+            parameters.push(rest_parameter);
+        }
+    }
     let return_type = arrow_expression
         .return_type
         .as_ref()

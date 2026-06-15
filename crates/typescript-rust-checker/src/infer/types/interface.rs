@@ -103,6 +103,10 @@ pub(crate) fn resolve_interface(
         };
     }
 
+    let is_namespace_member = interface.name.contains('.');
+    if is_namespace_member {
+        ctx.namespace_member_resolution_depth += 1;
+    }
     let resolved = with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &interface.file_name, |ctx| {
             resolve_interface_declaration(
@@ -115,6 +119,9 @@ pub(crate) fn resolve_interface(
             )
         })
     });
+    if is_namespace_member {
+        ctx.namespace_member_resolution_depth -= 1;
+    }
     resolving.pop();
 
     resolved

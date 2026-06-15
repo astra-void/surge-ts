@@ -190,9 +190,7 @@ fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
 }
 
 fn parse_type_reference(type_reference: &TSTypeReference<'_>) -> Option<ParsedType> {
-    let TSTypeName::IdentifierReference(identifier) = &type_reference.type_name else {
-        return None;
-    };
+    let (name, span) = flatten_type_name(&type_reference.type_name)?;
 
     let type_arguments = match type_reference.type_arguments.as_deref() {
         Some(type_arguments) => parse_type_arguments(type_arguments)?,
@@ -200,10 +198,27 @@ fn parse_type_reference(type_reference: &TSTypeReference<'_>) -> Option<ParsedTy
     };
 
     Some(ParsedType::Named(ParsedNamedType {
-        name: identifier.name.to_string(),
-        span: Some(text_span_from_oxc_span(identifier.span)),
+        name,
+        span: Some(span),
         type_arguments,
     }))
+}
+
+/// Flatten a (possibly qualified) type name into a dotted string and the span of
+/// the head identifier, e.g. `React.ComponentProps` -> `"React.ComponentProps"`.
+/// Mirrors how namespace members are registered under qualified keys.
+fn flatten_type_name(type_name: &TSTypeName<'_>) -> Option<(String, crate::TextSpan)> {
+    match type_name {
+        TSTypeName::IdentifierReference(identifier) => Some((
+            identifier.name.to_string(),
+            text_span_from_oxc_span(identifier.span),
+        )),
+        TSTypeName::QualifiedName(qualified) => {
+            let (left_name, left_span) = flatten_type_name(&qualified.left)?;
+            Some((format!("{}.{}", left_name, qualified.right.name), left_span))
+        }
+        _ => None,
+    }
 }
 
 fn parse_literal_type(literal_type: &TSLiteralType<'_>) -> ParsedType {

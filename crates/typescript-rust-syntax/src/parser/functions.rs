@@ -22,12 +22,17 @@ pub(crate) fn parse_function_declaration(
     function: &Function<'_>,
 ) -> Option<ParsedFunctionDeclaration> {
     let id = function.id.as_ref()?;
-    let parameters = function
+    let mut parameters: Vec<_> = function
         .params
         .items
         .iter()
         .filter_map(parse_function_parameter)
         .collect();
+    if let Some(rest) = function.params.rest.as_deref() {
+        if let Some(rest_parameter) = parse_rest_function_parameter(rest) {
+            parameters.push(rest_parameter);
+        }
+    }
     let return_type = function
         .return_type
         .as_ref()
@@ -404,6 +409,10 @@ fn parse_object_binding_pattern(object_pattern: &ObjectPattern<'_>) -> ParsedObj
             .iter()
             .filter_map(parse_object_binding_element)
             .collect(),
+        rest: object_pattern
+            .rest
+            .as_deref()
+            .map(|rest| Box::new(parse_binding_name(&rest.argument))),
         span: Some(text_span_from_oxc_span(object_pattern.span)),
     }
 }

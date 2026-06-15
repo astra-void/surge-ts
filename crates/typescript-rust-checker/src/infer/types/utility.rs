@@ -68,11 +68,18 @@ pub(crate) fn resolve_type_alias(
         };
     }
 
+    let is_namespace_member = alias.name.contains('.');
+    if is_namespace_member {
+        ctx.namespace_member_resolution_depth += 1;
+    }
     let resolved = with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &alias.file_name, |ctx| {
             resolve_parsed_type_with_substitution(alias.ty, ctx, resolving, &local_substitution)
         })
     });
+    if is_namespace_member {
+        ctx.namespace_member_resolution_depth -= 1;
+    }
     resolving.pop();
 
     resolved

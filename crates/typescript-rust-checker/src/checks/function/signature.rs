@@ -65,6 +65,8 @@ pub(crate) fn emit_object_binding_pattern_diagnostics(
     for element in &pattern.elements {
         emit_object_binding_element_diagnostic(element, ctx);
     }
+    // The `...rest` binding gets an (empty) object type, not implicit `any`, so
+    // tsc emits no TS7031 for it even when the surrounding pattern is untyped.
 }
 
 pub(crate) fn emit_object_binding_element_diagnostic(
@@ -150,6 +152,16 @@ pub(crate) fn insert_object_binding_pattern_bindings(
     for element in &pattern.elements {
         insert_object_binding_element_binding(
             element,
+            with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone()),
+            scopes,
+        );
+    }
+    // `{ a, ...rest }` binds `rest` to the remaining properties. The exact
+    // `Omit<T, ...>` shape is not modelled; binding it to the source type keeps
+    // `rest` in scope (and spreadable via `{...rest}`) without a TS2304 cascade.
+    if let Some(rest) = &pattern.rest {
+        insert_binding_name(
+            rest,
             with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone()),
             scopes,
         );

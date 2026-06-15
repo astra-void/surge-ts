@@ -272,6 +272,18 @@ fn parse_object_pattern_declarations(
         ));
     }
 
+    // `const { a, ...rest } = obj` binds `rest` to the remaining properties.
+    if let Some(rest) = object_pattern.rest.as_deref() {
+        declarations.extend(parse_binding_pattern_declarations(
+            &rest.argument,
+            Some(initializer),
+            initializer_span,
+            is_declare,
+            kind,
+            None,
+        ));
+    }
+
     declarations
 }
 

@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use typescript_rust_syntax::{
-    ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedStatement, ParsedType, TextSpan,
+    ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedNamespaceDeclaration,
+    ParsedStatement, ParsedType, TextSpan,
 };
 use typescript_rust_types::{Type, TypeCopyReason};
 
@@ -562,8 +563,70 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
             exportable_values,
             ctx,
         ),
+        ParsedStatement::NamespaceDeclaration(namespace) => {
+            if exportable_values.get(&namespace.name).is_none() {
+                let _ = exportable_values.insert(
+                    namespace.name.clone(),
+                    SymbolInfo {
+                        ty: namespace_value_object_type(namespace),
+                        kind: SymbolKind::Const,
+                        function_signature: None,
+                    },
+                );
+            }
+        }
         _ => {}
     }
+}
+
+/// The value-side object type of a `declare namespace`: one property per value
+/// member (functions, consts, classes, nested namespaces). Member types are kept
+/// permissive (functions accept any arguments, everything else is `any`) so the
+/// namespace's member *set* is precise — enabling TS2339 on real typos — without
+/// re-resolving a partially modelled surface and cascading. Used to bind an
+/// `export = <namespace>` value so `import * as Ns` exposes `Ns.member`.
+fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
+    use typescript_rust_types::{FunctionType, ObjectProperty};
+
+    let mut properties = std::collections::BTreeMap::new();
+    for statement in &namespace.statements {
+        let inner = match statement {
+            ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+                declaration,
+                ..
+            }) => declaration.as_ref(),
+            other => other,
+        };
+
+        match inner {
+            ParsedStatement::FunctionDeclaration(function) => {
+                properties.insert(
+                    function.name.clone(),
+                    ObjectProperty::required(Type::Function(FunctionType::new(
+                        vec![],
+                        Type::Any,
+                        true,
+                        0,
+                    ))),
+                );
+            }
+            ParsedStatement::VariableDeclaration(variable) => {
+                properties.insert(variable.name.clone(), ObjectProperty::required(Type::Any));
+            }
+            ParsedStatement::ClassDeclaration(class) => {
+                properties.insert(class.name.clone(), ObjectProperty::required(Type::Any));
+            }
+            ParsedStatement::NamespaceDeclaration(inner_namespace) => {
+                properties.insert(
+                    inner_namespace.name.clone(),
+                    ObjectProperty::required(namespace_value_object_type(inner_namespace)),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    Type::Object(crate::arena::alloc_object_type(properties, None))
 }
 
 pub(crate) fn collect_exports_from_statement(
@@ -604,6 +667,17 @@ pub(crate) fn collect_exports_from_statement(
             // unknown placeholder rather than cascade (`import x = require(...)`).
             if let Some(symbol) = exportable_values.get_shared(exported_name) {
                 *export_assignment_symbol = Some(symbol);
+            }
+
+            // When the export target is a `declare namespace <name>`, its type
+            // members were collected under `<name>.<member>` keys. Carry them into
+            // the export table so a namespace import (`import * as React`) can
+            // re-expose them as qualified types (`React.ComponentProps<...>`).
+            let prefix = format!("{exported_name}.");
+            for (key, declaration) in local_type_declarations.iter() {
+                if key.as_str().starts_with(&prefix) {
+                    let _ = type_declarations.insert(key.as_str(), declaration.clone());
+                }
             }
         }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
@@ -921,6 +995,19 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
             "default".to_string(),
             typescript_rust_types::ObjectProperty::required(default_symbol.ty.clone()),
         );
+    }
+
+    // `export = <namespace>` exposes the namespace object as the module's shape;
+    // surface its members (e.g. `React.createContext`) on the namespace import.
+    if let Some(export_assignment_symbol) = &export_table.export_assignment_symbol {
+        if let Type::Object(object) = &export_assignment_symbol.ty {
+            for (name, property) in object.properties.iter() {
+                property_count += 1;
+                properties
+                    .entry(name.clone())
+                    .or_insert_with(|| property.clone());
+            }
+        }
     }
 
     crate::program::record_module_export_namespace_export_object_property_count(property_count);

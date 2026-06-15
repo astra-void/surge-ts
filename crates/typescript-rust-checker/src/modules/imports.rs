@@ -619,41 +619,66 @@ fn resolve_namespace_import(
         return;
     }
 
-    let namespace_type = if let Some((export_table, _, resolved_index)) = try_resolve_module(
-        &import.module_specifier,
-        ctx,
-        program_files,
-        module_export_tables,
-        module_resolution_scopes,
-    ) {
-        let namespace_type = namespace_export_object_type(&export_table);
-        // tsc displays a namespace import object as `typeof import("<path>")`
-        // (absolute, without the source extension) rather than the structural
-        // shape. Tag the object with that display form when we know the file.
-        match resolved_index.and_then(|index| program_files.get(index)) {
-            Some(resolved_file) => {
-                tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
-            }
-            None => namespace_type,
-        }
-    } else {
-        if resolve_relative_module(
-            &ctx.file_name,
+    let (namespace_type, namespace_export_table, namespace_scope) =
+        if let Some((export_table, scope, resolved_index)) = try_resolve_module(
             &import.module_specifier,
+            ctx,
             program_files,
-            &ctx.module_file_index_by_identity,
-        )
-        .is_none()
-        {
-            if !(ctx.options.stub_external_modules
-                && is_external_specifier(&import.module_specifier))
+            module_export_tables,
+            module_resolution_scopes,
+        ) {
+            let namespace_type = namespace_export_object_type(&export_table);
+            // tsc displays a namespace import object as `typeof import("<path>")`
+            // (absolute, without the source extension) rather than the structural
+            // shape. Tag the object with that display form when we know the file.
+            let namespace_type = match resolved_index.and_then(|index| program_files.get(index)) {
+                Some(resolved_file) => {
+                    tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
+                }
+                None => namespace_type,
+            };
+            (namespace_type, Some(export_table), scope)
+        } else {
+            if resolve_relative_module(
+                &ctx.file_name,
+                &import.module_specifier,
+                program_files,
+                &ctx.module_file_index_by_identity,
+            )
+            .is_none()
             {
-                emit_unresolved_module_diagnostic(ctx, import);
+                if !(ctx.options.stub_external_modules
+                    && is_external_specifier(&import.module_specifier))
+                {
+                    emit_unresolved_module_diagnostic(ctx, import);
+                }
+            }
+            insert_unknown_value_import(local_name, symbols);
+            return;
+        };
+
+    // Re-expose the module's exported types under the namespace alias so qualified
+    // type references resolve (`React.ComponentProps<...>`, `M.SomeType`). Members
+    // of an `export = <namespace>` keep their `<ns>.<member>` keys here; the first
+    // segment is replaced with the local alias. Plain named type exports gain an
+    // `<alias>.<name>` entry. Only namespace-qualified access reaches these.
+    if let Some(export_table) = &namespace_export_table {
+        for (key, declaration) in export_table.type_declarations.iter() {
+            let member = match key.as_str().split_once('.') {
+                Some((_namespace, rest)) => rest,
+                None => key.as_str(),
+            };
+            let local_key = format!("{local_name}.{member}");
+            if type_declarations.get(&local_key).is_none() {
+                crate::modules::exports::insert_type_export(
+                    type_declarations,
+                    &local_key,
+                    namespace_scope.as_ref(),
+                    declaration.clone(),
+                );
             }
         }
-        insert_unknown_value_import(local_name, symbols);
-        return;
-    };
+    }
 
     if local_symbols.get(local_name).is_none() {
         symbols.insert(
@@ -665,7 +690,6 @@ fn resolve_namespace_import(
             },
         );
     }
-    return;
 }
 
 fn resolve_named_import(

@@ -170,6 +170,9 @@ pub enum ParsedBindingName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedObjectBindingPattern {
     pub elements: Vec<ParsedObjectBindingElement>,
+    /// The `...rest` binding of an object destructuring pattern, if present.
+    /// `{ a, ...rest }` binds `rest` to the remaining properties.
+    pub rest: Option<Box<ParsedBindingName>>,
     pub span: Option<TextSpan>,
 }
 
