@@ -141,6 +141,9 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         }
         Expression::JSXElement(jsx_element) => parse_jsx_element(jsx_element),
         Expression::JSXFragment(jsx_fragment) => parse_jsx_fragment(jsx_fragment),
+        Expression::ThisExpression(this_expression) => ParsedExpression::This {
+            span: Some(text_span_from_oxc_span(this_expression.span)),
+        },
         _ => ParsedExpression::Unknown,
     };
 

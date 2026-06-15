@@ -121,6 +121,10 @@ pub(crate) struct CheckerContext {
     pub(crate) resolved_named_types:
         Arc<Mutex<HashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
+    /// Module augmentations (`declare module "x"` in a file that is itself a
+    /// module). Unlike ambient module declarations, these only merge into an
+    /// already-resolved target; they do not make `"x"` resolvable on their own.
+    pub(crate) module_augmentations: std::collections::HashMap<String, ModuleExportTable>,
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
     pub(crate) module_file_index_by_identity: HashMap<Arc<str>, usize>,
@@ -156,6 +160,7 @@ impl CheckerContext {
             type_declaration_scope: None,
             resolved_named_types: Arc::new(Mutex::new(HashMap::new())),
             ambient_modules: std::collections::HashMap::new(),
+            module_augmentations: std::collections::HashMap::new(),
             ambient_global_symbols: SymbolTable::new(),
             ambient_global_type_declarations: TypeDeclarationTable::new(),
             module_file_index_by_identity: HashMap::new(),

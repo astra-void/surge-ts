@@ -1,0 +1,11 @@
+{
+  "name": "app",
+  "exports": {
+    ".": {
+      "types": "./types/public.d.ts"
+    },
+    "./server": {
+      "types": "./types/server.d.ts"
+    }
+  }
+}

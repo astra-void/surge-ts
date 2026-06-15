@@ -1,0 +1,9 @@
+{
+  "name": "app",
+  "imports": {
+    "#internal": {
+      "types": "./types/internal.d.ts",
+      "default": "./src/internal.js"
+    }
+  }
+}

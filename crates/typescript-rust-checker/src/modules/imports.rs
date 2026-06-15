@@ -78,11 +78,11 @@ pub(crate) fn try_resolve_module(
                     timings.package_export_lookup += resolution_start.elapsed();
                     timings.import_specifier_resolution += resolution_start.elapsed();
                 });
-                return Some((
-                    export_table.clone_with_reason(TypeCopyReason::ModuleExport),
-                    scope,
-                    Some(*resolved_index),
-                ));
+                let mut export_table = export_table.clone_with_reason(TypeCopyReason::ModuleExport);
+                if let Some(augmentation) = ctx.module_augmentations.get(module_specifier) {
+                    crate::program::apply_module_augmentation(&mut export_table, augmentation);
+                }
+                return Some((export_table, scope, Some(*resolved_index)));
             }
         }
     }
@@ -92,8 +92,12 @@ pub(crate) fn try_resolve_module(
             timings.package_export_lookup += resolution_start.elapsed();
             timings.import_specifier_resolution += resolution_start.elapsed();
         });
+        let mut export_table = export_table.clone_with_reason(TypeCopyReason::ModuleExport);
+        if let Some(augmentation) = ctx.module_augmentations.get(module_specifier) {
+            crate::program::apply_module_augmentation(&mut export_table, augmentation);
+        }
         return Some((
-            export_table.clone_with_reason(TypeCopyReason::ModuleExport),
+            export_table,
             Some(Arc::new(TypeDeclarationScope::new(vec![Arc::new(
                 ctx.type_declarations.clone(),
             )]))),

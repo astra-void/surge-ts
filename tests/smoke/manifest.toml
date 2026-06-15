@@ -4181,14 +4181,14 @@ path = "tests/smoke/interface_interface_inside_union_alias_valid.ts"
 expected_diagnostics = []
 
 [[case]]
-name = "interface-duplicate-interface-ts2300"
-path = "tests/smoke/interface_duplicate_interface_ts2300.ts"
-expected_diagnostics = ["TS2300"]
+name = "interface-merge-interface-no-error"
+path = "tests/smoke/interface_merge_interface_no_error.ts"
+expected_diagnostics = []
 
 [[case]]
-name = "interface-duplicate-interface-first-wins"
-path = "tests/smoke/interface_duplicate_interface_first_wins.ts"
-expected_diagnostics = ["TS2300"]
+name = "interface-merge-interface-missing-member"
+path = "tests/smoke/interface_merge_interface_missing_member.ts"
+expected_diagnostics = ["TS2741"]
 
 [[case]]
 name = "interface-duplicate-alias-then-interface-first-wins"
@@ -4271,9 +4271,9 @@ path = "tests/smoke/interface_duplicate_interface_then_alias_no_cascade.ts"
 expected_diagnostics = ["TS2300"]
 
 [[case]]
-name = "interface-duplicate-interface-first-wins-property-mismatch"
-path = "tests/smoke/interface_duplicate_interface_first_wins_property_mismatch.ts"
-expected_diagnostics = ["TS2300", "TS2322"]
+name = "interface-merge-interface-property-conflict"
+path = "tests/smoke/interface_merge_interface_property_conflict.ts"
+expected_diagnostics = ["TS2717", "TS2322"]
 
 [[case]]
 name = "interface-duplicate-alias-first-wins-property-mismatch"

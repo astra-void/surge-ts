@@ -1,5 +1,6 @@
 mod import_graph;
 mod package_declarations;
+mod package_resolution;
 mod path_mapping;
 mod report;
 
@@ -449,6 +450,13 @@ fn run_project_mode(
     let mut package_resolution_cache =
         package_declarations::PackageDeclarationResolverCache::default();
 
+    let resolver_options = package_resolution::ResolverOptions {
+        module_resolution: loaded.compiler_options.module_resolution,
+        resolve_exports: loaded.compiler_options.resolve_package_json_exports,
+        resolve_imports: loaded.compiler_options.resolve_package_json_imports,
+        custom_conditions: loaded.compiler_options.custom_conditions.clone(),
+    };
+
     let type_package_resolution = package_declarations::resolve_type_packages(
         &mut inputs,
         &mut sources,
@@ -481,6 +489,7 @@ fn run_project_mode(
                 &mut inputs,
                 &mut sources,
                 &loaded.root_dir,
+                &resolver_options,
                 &mut package_resolution_cache,
             );
         if timings_enabled {

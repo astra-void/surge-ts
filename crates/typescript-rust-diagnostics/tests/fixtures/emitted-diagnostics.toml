@@ -38,6 +38,16 @@ span_tests = [
   "crates/typescript-rust-checker/tests/program.rs",
 ]
 
+[TS2717]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+  "tests/compat-projects/interface-merging-conflict-basic/tsconfig.json",
+]
+oracle = [
+  "tests/compat-projects/interface-merging-conflict-basic/tsconfig.json",
+]
+
 [TS2305]
 status = "emitted"
 fixtures = [
@@ -317,6 +327,15 @@ fixtures = [
 span_tests = [
   "crates/typescript-rust-checker/tests/spans.rs",
   "crates/typescript-rust-checker/tests/program.rs",
+]
+
+[TS2576]
+status = "emitted"
+span_tests = [
+  "crates/typescript-rust-checker/tests/program.rs",
+]
+oracle = [
+  "tests/compat-projects/class-instance-static-separation-basic",
 ]
 
 [TS2588]

@@ -3360,13 +3360,13 @@ fn parse_export_default_function() {
 }
 
 #[test]
-fn parse_export_default_class_unsupported_no_panic() {
+fn parse_export_default_class_no_panic() {
     let parsed = parse_source("export default class Foo {}", "example.ts");
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Class { .. },
+            declaration: ParsedDefaultExportDeclaration::Class(_),
             ..
         })
     ));

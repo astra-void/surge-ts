@@ -125,9 +125,11 @@ pub(crate) fn collect_global_augmentations_from_statements(
         collect_type_declarations(&module.statements, ctx);
         let ambient_td = ctx.type_declarations.clone();
         for (name, decl) in ambient_td.iter() {
-            let _ = ctx
-                .ambient_global_type_declarations
-                .insert(name.clone(), decl.clone());
+            crate::symbols::merge_type_declaration_into_table(
+                &mut ctx.ambient_global_type_declarations,
+                name.as_ref(),
+                decl,
+            );
         }
 
         let mut local_function_signatures = HashMap::new();
@@ -412,10 +414,19 @@ fn collect_type_declarations_from_statement(statement: &ParsedStatement, ctx: &m
         ParsedStatement::InterfaceDeclaration(interface) => {
             collect_interface(interface, ctx);
         }
+        ParsedStatement::ClassDeclaration(class) => {
+            crate::program::collect_class(class, ctx);
+        }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
             declaration,
             ..
         }) => collect_type_declarations_from_statement(declaration.as_ref(), ctx),
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Class(class),
+            ..
+        }) => {
+            crate::program::collect_class(class, ctx);
+        }
         ParsedStatement::NamespaceDeclaration(namespace) => {
             collect_namespace_type_declarations(namespace, ctx);
         }
@@ -499,6 +510,9 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         }
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
+        ParsedStatement::ClassDeclaration(class) => {
+            crate::program::check_class_declaration(&class, ctx);
+        }
         ParsedStatement::ImportDeclaration(import) => {
             if crate::modules::is_external_specifier(&import.module_specifier) {
                 let suppress_unresolved_diagnostic =
@@ -728,7 +742,9 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             ParsedDefaultExportDeclaration::Function(function) => {
                 check_function::check_function_declaration(function, ctx);
             }
-            ParsedDefaultExportDeclaration::Class { .. } => {}
+            ParsedDefaultExportDeclaration::Class(class) => {
+                crate::program::check_class_declaration(&class, ctx);
+            }
             ParsedDefaultExportDeclaration::Expression(expression) => {
                 expr::check_expression_statement(expression, ctx);
             }
@@ -899,17 +915,101 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         resolution_scope: None,
     };
 
-    if ctx
-        .type_declarations
-        .insert(interface.name.clone(), TypeDeclarationInfo::Interface(info))
-        .is_some()
-    {
-        let mut diagnostic = Diagnostic::ts2300(&interface.name, ctx.file_name.clone());
+    enum Existing {
+        None,
+        NonInterface,
+        Interface(Box<InterfaceInfo>),
+    }
 
-        if let Some(span) = interface.name_span {
-            diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+    let existing = match ctx.type_declarations.get(&interface.name) {
+        None => Existing::None,
+        Some(TypeDeclarationInfo::Interface(existing)) => {
+            Existing::Interface(Box::new(existing.clone()))
+        }
+        Some(_) => Existing::NonInterface,
+    };
+
+    match existing {
+        Existing::None => {
+            let _ = ctx
+                .type_declarations
+                .insert(interface.name.clone(), TypeDeclarationInfo::Interface(info));
+        }
+        Existing::Interface(existing) => {
+            let incoming = filter_conflicting_interface_members(&existing, info, ctx);
+            let merged = crate::symbols::merge_interface_infos(&existing, &incoming);
+            ctx.type_declarations.upsert(
+                interface.name.clone(),
+                TypeDeclarationInfo::Interface(merged),
+            );
+        }
+        Existing::NonInterface => {
+            let mut diagnostic = Diagnostic::ts2300(&interface.name, ctx.file_name.clone());
+
+            if let Some(span) = interface.name_span {
+                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            }
+
+            ctx.push(diagnostic);
+        }
+    }
+}
+
+/// Drop members of a later interface declaration whose property type conflicts
+/// with the existing declaration and report TS2717 for each. The earlier
+/// declaration's type wins (matching TypeScript), so assignability still checks
+/// against the first-declared type. Same-named methods are kept as overloads.
+fn filter_conflicting_interface_members(
+    existing: &InterfaceInfo,
+    mut incoming: InterfaceInfo,
+    ctx: &mut CheckerContext,
+) -> InterfaceInfo {
+    incoming.members.retain(|member| {
+        let Some(previous) = existing.members.iter().find(|m| m.name == member.name) else {
+            return true;
+        };
+
+        let is_method = |ty: &ParsedType| matches!(ty, ParsedType::Function(_));
+        if is_method(&previous.ty) || is_method(&member.ty) || previous.ty == member.ty {
+            return true;
         }
 
-        ctx.push(diagnostic);
-    }
+        if let (Some(expected), Some(actual)) = (
+            parsed_type_display(&previous.ty),
+            parsed_type_display(&member.ty),
+        ) {
+            let mut diagnostic =
+                Diagnostic::ts2717(&member.name, expected, actual, ctx.file_name.clone());
+            if let Some(span) = member.name_span {
+                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            }
+            ctx.push(diagnostic);
+        }
+
+        false
+    });
+
+    incoming
+}
+
+/// A best-effort TypeScript-style rendering of a parsed type for conflict
+/// messages. Returns `None` for shapes whose display would not match the
+/// compiler exactly; the caller then keeps the first declaration silently.
+fn parsed_type_display(ty: &ParsedType) -> Option<String> {
+    let rendered = match ty {
+        ParsedType::String => "string".to_string(),
+        ParsedType::Number => "number".to_string(),
+        ParsedType::Boolean => "boolean".to_string(),
+        ParsedType::Undefined => "undefined".to_string(),
+        ParsedType::Void => "void".to_string(),
+        ParsedType::Any => "any".to_string(),
+        ParsedType::Unknown => "unknown".to_string(),
+        ParsedType::Never => "never".to_string(),
+        ParsedType::StringLiteral(value) => format!("\"{value}\""),
+        ParsedType::NumberLiteral(value) => value.clone(),
+        ParsedType::BooleanLiteral(value) => value.to_string(),
+        ParsedType::Named(named) if named.type_arguments.is_empty() => named.name.clone(),
+        _ => return None,
+    };
+    Some(rendered)
 }

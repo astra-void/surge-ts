@@ -33,6 +33,14 @@ message = "Duplicate identifier '{0}'."
 arity = 1
 
 [[diagnostic]]
+code = "TS2717"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Subsequent property declarations must have the same type.  Property '{0}' must be of type '{1}', but here has type '{2}'."
+arity = 3
+
+[[diagnostic]]
 code = "TS2305"
 category = "Error"
 source = "typescript"
@@ -295,6 +303,14 @@ source = "typescript"
 support = "emitted"
 message = "Expected {0} arguments, but got {1}."
 arity = 2
+
+[[diagnostic]]
+code = "TS2576"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' does not exist on type '{1}'. Did you mean to access the static member '{2}.{0}' instead?"
+arity = 3
 
 [[diagnostic]]
 code = "TS2588"

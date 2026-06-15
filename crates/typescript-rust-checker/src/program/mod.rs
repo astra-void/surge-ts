@@ -24,11 +24,13 @@ use crate::symbols::{
 
 mod ambient;
 mod binding;
+mod classes;
 mod globals;
 mod statements;
 
 pub(crate) use ambient::*;
 pub(crate) use binding::*;
+pub(crate) use classes::*;
 pub(crate) use globals::*;
 pub(crate) use statements::*;
 

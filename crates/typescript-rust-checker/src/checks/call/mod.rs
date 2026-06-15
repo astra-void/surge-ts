@@ -246,7 +246,15 @@ pub(crate) fn check_new_like(
     let callee_result = evaluate_expression(callee, callee_span, symbols, ctx);
     let callee_type = match callee_result {
         InferredExpression::Known(ty) => ty,
-        _ => return None,
+        // The constructor target is unresolved (e.g. `new Missing(...)`). The
+        // missing-name diagnostic is already reported; still evaluate the
+        // arguments so their own errors surface, but do not cascade a result.
+        _ => {
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            return None;
+        }
     };
 
     match callee_type {
@@ -259,6 +267,23 @@ pub(crate) fn check_new_like(
             symbols,
             ctx,
         ),
+        // A class value (static side) carries a construct signature. Check the
+        // constructor arguments against it and yield the instance type.
+        Type::Object(object) if object.construct_signature().is_some() => {
+            let construct_signature = object
+                .construct_signature()
+                .expect("construct signature present")
+                .clone();
+            check_function_type_call(
+                &construct_signature,
+                callee_span,
+                call_span,
+                type_arguments,
+                arguments,
+                symbols,
+                ctx,
+            )
+        }
         Type::Any => Some(Type::Any),
         Type::Unknown => None,
         _ => {

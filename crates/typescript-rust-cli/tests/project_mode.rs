@@ -3403,6 +3403,114 @@ fn cli_package_types_import_require_subpath_valid_binds_value() {
     );
 }
 
+/// Run a compat-project fixture and assert the diagnostic codes match the tsc
+/// oracle exactly, with each code landing on the expected line. Oracle-backed:
+/// the expectations mirror `tsc --noEmit` on the same fixture (TypeScript 6.0.3).
+fn assert_fixture_codes_at_lines(fixture: &str, expected: &[(&str, u64)]) {
+    let project = format!("../../tests/compat-projects/{fixture}/tsconfig.json");
+    let parsed = run_cli_json(&["--project", &project, "--format", "json"]);
+
+    let mut got: Vec<(String, Option<u64>)> = json_diagnostics(&parsed)
+        .iter()
+        .map(|d| (d["code"].as_str().unwrap().to_string(), d["line"].as_u64()))
+        .collect();
+    got.sort();
+
+    let mut want: Vec<(String, Option<u64>)> = expected
+        .iter()
+        .map(|(code, line)| (code.to_string(), Some(*line)))
+        .collect();
+    want.sort();
+
+    assert_eq!(got, want, "fixture {fixture}");
+}
+
+#[test]
+fn cli_package_exports_conditional_types_basic_resolves_types_condition() {
+    assert_fixture_codes_at_lines("package-exports-conditional-types-basic", &[("TS2322", 4)]);
+}
+
+#[test]
+fn cli_package_exports_subpath_basic_resolves_subpath_types() {
+    assert_fixture_codes_at_lines("package-exports-subpath-basic", &[("TS2322", 4)]);
+}
+
+#[test]
+fn cli_package_exports_pattern_basic_resolves_wildcard_subpath() {
+    assert_fixture_codes_at_lines("package-exports-pattern-basic", &[("TS2322", 4)]);
+}
+
+#[test]
+fn cli_package_exports_custom_condition_basic_selects_development_branch() {
+    assert_fixture_codes_at_lines("package-exports-custom-condition-basic", &[("TS2322", 4)]);
+}
+
+#[test]
+fn cli_package_typesversions_basic_rewrites_root_types() {
+    assert_fixture_codes_at_lines("package-typesversions-basic", &[("TS2322", 4)]);
+}
+
+#[test]
+fn cli_package_typesversions_subpath_basic_rewrites_exact_and_pattern() {
+    assert_fixture_codes_at_lines(
+        "package-typesversions-subpath-basic",
+        &[("TS2322", 5), ("TS2322", 7)],
+    );
+}
+
+#[test]
+fn cli_package_imports_field_basic_resolves_internal_alias() {
+    assert_fixture_codes_at_lines("package-imports-field-basic", &[("TS2322", 4)]);
+}
+
+#[test]
+fn cli_package_imports_pattern_basic_resolves_alias_wildcard() {
+    assert_fixture_codes_at_lines("package-imports-pattern-basic", &[("TS2322", 4)]);
+}
+
+#[test]
+fn cli_package_self_name_import_basic_resolves_own_exports() {
+    assert_fixture_codes_at_lines(
+        "package-self-name-import-basic",
+        &[("TS2322", 5), ("TS2322", 7)],
+    );
+}
+
+#[test]
+fn cli_package_exports_unresolved_no_cascade_reports_ts2307_only() {
+    assert_fixture_codes_at_lines("package-exports-unresolved-no-cascade", &[("TS2307", 1)]);
+}
+
+#[test]
+fn cli_package_exports_missing_export_basic_reports_ts2305() {
+    assert_fixture_codes_at_lines("package-exports-missing-export-basic", &[("TS2305", 1)]);
+}
+
+#[test]
+fn cli_package_exports_stub_external_preserved_basic_default_reports_ts2307_and_ts2322() {
+    assert_fixture_codes_at_lines(
+        "package-exports-stub-external-preserved-basic",
+        &[("TS2307", 1), ("TS2322", 4)],
+    );
+}
+
+#[test]
+fn cli_package_exports_stub_external_preserved_basic_stub_suppresses_only_unresolved() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/package-exports-stub-external-preserved-basic/tsconfig.json",
+        "--stubExternalModules",
+        "--format",
+        "json",
+    ]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    // Unresolved external package is suppressed under stub mode...
+    assert!(!codes.contains(&"TS2307".to_string()), "{codes:?}");
+    // ...but errors inside the resolved package declaration are preserved.
+    assert!(codes.contains(&"TS2322".to_string()), "{codes:?}");
+}
+
 #[test]
 fn cli_no_implicit_any_uninitialized_let_basic_matches_typescript() {
     let parsed = run_cli_json(&[
@@ -3707,4 +3815,106 @@ fn cli_type_roots_with_types_filter_loads_only_listed() {
     ]);
     let codes = json_diagnostic_codes(&parsed);
     assert_eq!(codes, vec!["TS2304".to_string()]);
+}
+
+fn run_compat_fixture_codes(fixture: &str) -> Vec<String> {
+    let project = compat_project_root(fixture).join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    json_diagnostic_codes(&parsed)
+}
+
+#[test]
+fn project_mode_interface_merging_same_scope() {
+    assert_eq!(
+        run_compat_fixture_codes("interface-merging-basic"),
+        vec!["TS2741", "TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_interface_merging_across_files() {
+    assert_eq!(
+        run_compat_fixture_codes("interface-merging-across-files-basic"),
+        vec!["TS2741", "TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_interface_merging_property_conflict() {
+    // Incompatible property types across merged interfaces report TS2717 once;
+    // the first declaration's type wins, so the assignment does not cascade.
+    assert_eq!(
+        run_compat_fixture_codes("interface-merging-conflict-basic"),
+        vec!["TS2717"]
+    );
+}
+
+#[test]
+fn project_mode_declare_global_interface_merging() {
+    assert_eq!(
+        run_compat_fixture_codes("declare-global-interface-basic"),
+        vec!["TS2741", "TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_declare_global_window_physical_lib() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    assert_eq!(
+        run_physical_fixture_codes("declare-global-window-physical-lib-basic"),
+        vec!["TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_module_augmentation_package_interface() {
+    assert_eq!(
+        run_compat_fixture_codes("module-augmentation-package-interface-basic"),
+        vec!["TS2741", "TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_module_augmentation_add_export() {
+    assert_eq!(
+        run_compat_fixture_codes("module-augmentation-add-export-basic"),
+        vec!["TS2322", "TS2345"]
+    );
+}
+
+#[test]
+fn project_mode_ambient_module_reopen_merge() {
+    assert_eq!(
+        run_compat_fixture_codes("ambient-module-reopen-merge-basic"),
+        vec!["TS2741"]
+    );
+}
+
+#[test]
+fn project_mode_module_augmentation_unresolved_no_cascade() {
+    // Augmenting an unresolved module is reported once as TS2307 with no
+    // downstream cascade from the unresolved import binding.
+    assert_eq!(
+        run_compat_fixture_codes("module-augmentation-unresolved-no-cascade"),
+        vec!["TS2307"]
+    );
+}
+
+#[test]
+fn project_mode_interface_method_merge() {
+    assert_eq!(
+        run_compat_fixture_codes("interface-method-merge-basic"),
+        vec!["TS2322", "TS2345"]
+    );
+}
+
+#[test]
+fn project_mode_class_interface_merge_instance_members() {
+    // Class/interface merging contributes the interface's instance members to
+    // the class type, matching tsc (no diagnostics for this fixture).
+    assert!(run_compat_fixture_codes("class-interface-merge-policy-pinned").is_empty());
 }

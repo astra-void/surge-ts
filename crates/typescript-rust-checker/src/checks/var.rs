@@ -53,9 +53,16 @@ pub(crate) fn check_variable_declaration_against_symbols(
     ctx: &mut CheckerContext,
     options: VariableCheckOptions,
 ) -> Option<SymbolInfoHandle> {
-    let declared_type = variable
-        .declared_type
-        .map(|declared_type| map_parsed_type(declared_type, ctx));
+    // Resolve the declared type against the in-scope value symbols so a
+    // `typeof <value>` annotation can see locals/globals. The variable checker
+    // moves `ctx.symbols` out into `symbols`, so without this the typeof lookup
+    // would run against an empty table and spuriously report TS2304.
+    let declared_type = variable.declared_type.map(|declared_type| {
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+        let resolved = map_parsed_type(declared_type, ctx);
+        ctx.symbols = saved_symbols;
+        resolved
+    });
 
     let symbol_kind = map_symbol_kind(variable.kind);
 

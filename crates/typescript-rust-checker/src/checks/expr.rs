@@ -66,6 +66,50 @@ fn type_contains_literal(ty: &Type) -> bool {
 /// tsc: a fresh literal source is widened (`g(1)` to `string` -> `'number'`)
 /// unless the target is literal-like, where tsc keeps the literal (`f("b")` to
 /// `"a"` -> `'"b"'`).
+/// Builds the diagnostic for a missing property access. When the object is a
+/// class instance whose static side declares the property, tsc emits TS2576
+/// ("Did you mean to access the static member ...") instead of the plain TS2339.
+pub(crate) fn missing_property_diagnostic(
+    property_name: &str,
+    object_type: &Type,
+    symbols: &SymbolTable,
+    file_name: String,
+) -> Diagnostic {
+    let object_type_name = object_type.name();
+    if let Some(class_name) =
+        static_member_owner_for_missing_instance_property(property_name, object_type, symbols)
+    {
+        return Diagnostic::ts2576(property_name, &object_type_name, &class_name, file_name);
+    }
+
+    Diagnostic::ts2339(property_name, &object_type_name, file_name)
+}
+
+/// Returns the class name when `object_type` is a class instance (an object
+/// tagged with the class name) and the class's static side declares
+/// `property_name`, so the access should be reported as a static-member mixup.
+fn static_member_owner_for_missing_instance_property(
+    property_name: &str,
+    object_type: &Type,
+    symbols: &SymbolTable,
+) -> Option<String> {
+    let Type::Object(instance) = object_type else {
+        return None;
+    };
+    let class_name = instance.alias_name.as_deref()?;
+    let symbol = symbols.get(class_name)?;
+    let Type::Object(static_side) = &symbol.ty else {
+        return None;
+    };
+    if static_side.construct_signature().is_some()
+        && static_side.get_property(property_name).is_some()
+    {
+        Some(class_name.to_string())
+    } else {
+        None
+    }
+}
+
 pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
     if type_contains_literal(target) {
         source.name()
@@ -116,6 +160,7 @@ pub(crate) fn evaluate_const_expression(
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || result.clone()),
                 fallback_span,
+                symbols,
                 ctx,
             );
             result
@@ -145,6 +190,7 @@ pub(crate) fn evaluate_const_expression(
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || result.clone()),
                 fallback_span,
+                symbols,
                 ctx,
             );
             result
@@ -179,6 +225,7 @@ pub(crate) fn evaluate_expression(
                     inferred_expression.clone()
                 }),
                 fallback_span,
+                symbols,
                 ctx,
             );
             inferred_expression
@@ -392,9 +439,14 @@ pub(crate) fn evaluate_expression(
                 span,
             } = &inferred_expression
             {
-                let object_type_name = object_type.name();
+                let diagnostic = missing_property_diagnostic(
+                    property_name,
+                    object_type,
+                    symbols,
+                    ctx.file_name.clone(),
+                );
                 ctx.push(diagnostic_with_syntax_span(
-                    Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone()),
+                    diagnostic,
                     choose_span(*span, fallback_span),
                 ));
             }
@@ -643,6 +695,7 @@ pub(crate) fn evaluate_expression(
                     inferred_expression.clone()
                 }),
                 fallback_span,
+                symbols,
                 ctx,
             );
             inferred_expression
@@ -675,6 +728,7 @@ fn evaluate_jsx_child(
 pub(crate) fn report_inferred_expression(
     inferred_expression: InferredExpression,
     fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     match inferred_expression {
@@ -719,9 +773,14 @@ pub(crate) fn report_inferred_expression(
             object_type,
             span,
         } => {
-            let object_type_name = object_type.name();
+            let diagnostic = missing_property_diagnostic(
+                &property_name,
+                &object_type,
+                symbols,
+                ctx.file_name.clone(),
+            );
             ctx.push(diagnostic_with_syntax_span(
-                Diagnostic::ts2339(&property_name, &object_type_name, ctx.file_name.clone()),
+                diagnostic,
                 choose_span(span, fallback_span),
             ));
         }

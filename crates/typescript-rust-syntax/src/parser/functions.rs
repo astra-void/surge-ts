@@ -1,8 +1,8 @@
 use oxc_ast::ast::{
-    BindingPattern, BindingProperty, BlockStatement, CatchClause, Declaration, Expression,
-    ExpressionStatement, ForOfStatement, ForStatementLeft, FormalParameter, Function, IfStatement,
-    ObjectPattern, PropertyKey, Statement, SwitchCase, SwitchStatement, ThrowStatement,
-    TryStatement, VariableDeclaration, WhileStatement,
+    AssignmentOperator, AssignmentTarget, BindingPattern, BindingProperty, BlockStatement,
+    CatchClause, Declaration, Expression, ExpressionStatement, ForOfStatement, ForStatementLeft,
+    FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey, Statement, SwitchCase,
+    SwitchStatement, ThrowStatement, TryStatement, VariableDeclaration, WhileStatement,
 };
 use oxc_span::GetSpan;
 
@@ -10,8 +10,8 @@ use crate::{
     ParsedBindingName, ParsedExpression, ParsedForOfStatement, ParsedFunctionBodyStatement,
     ParsedFunctionDeclaration, ParsedFunctionParameter, ParsedIfStatement,
     ParsedObjectBindingElement, ParsedObjectBindingPattern, ParsedReturnStatement,
-    ParsedSwitchCase, ParsedSwitchStatement, ParsedThrowStatement, ParsedTryStatement,
-    ParsedWhileStatement,
+    ParsedSwitchCase, ParsedSwitchStatement, ParsedThisPropertyAssignment, ParsedThrowStatement,
+    ParsedTryStatement, ParsedWhileStatement,
 };
 
 use super::expressions::parse_expression;
@@ -131,6 +131,12 @@ fn parse_expression_statement_as_function_body(
 ) -> Option<Vec<ParsedFunctionBodyStatement>> {
     match &expression_statement.expression {
         Expression::AssignmentExpression(assignment) => {
+            if let Some(this_assignment) = parse_this_property_assignment(assignment) {
+                return Some(vec![ParsedFunctionBodyStatement::ThisPropertyAssignment(
+                    this_assignment,
+                )]);
+            }
+
             super::parse_assignment_expression(assignment)
                 .map(|assignment| vec![ParsedFunctionBodyStatement::Assignment(assignment)])
         }
@@ -144,6 +150,31 @@ fn parse_expression_statement_as_function_body(
             Some(vec![ParsedFunctionBodyStatement::Expression(expression)])
         }
     }
+}
+
+fn parse_this_property_assignment(
+    assignment: &oxc_ast::ast::AssignmentExpression<'_>,
+) -> Option<ParsedThisPropertyAssignment> {
+    if assignment.operator != AssignmentOperator::Assign {
+        return None;
+    }
+
+    let AssignmentTarget::StaticMemberExpression(member) = &assignment.left else {
+        return None;
+    };
+
+    if !matches!(&member.object, Expression::ThisExpression(_)) {
+        return None;
+    }
+
+    let (value, value_span) = parse_expression(&assignment.right);
+
+    Some(ParsedThisPropertyAssignment {
+        property_name: member.property.name.to_string(),
+        property_span: Some(text_span_from_oxc_span(member.property.span)),
+        value,
+        value_span: Some(text_span_from_oxc_span(value_span)),
+    })
 }
 
 fn parse_variable_declaration_as_function_body(

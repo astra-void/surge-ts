@@ -208,6 +208,17 @@ const fixturePresets: Record<string, string> = {
   'type-roots-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-basic/tsconfig.json'),
   'type-roots-ignore-default-node-modules-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-ignore-default-node-modules-basic/tsconfig.json'),
   'type-roots-with-types-filter-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-with-types-filter-basic/tsconfig.json'),
+  'interface-merging-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-merging-basic/tsconfig.json'),
+  'interface-merging-across-files-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-merging-across-files-basic/tsconfig.json'),
+  'interface-merging-conflict-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-merging-conflict-basic/tsconfig.json'),
+  'declare-global-interface-basic': path.join(workspaceRoot, 'tests/compat-projects/declare-global-interface-basic/tsconfig.json'),
+  'declare-global-window-physical-lib-basic': path.join(workspaceRoot, 'tests/compat-projects/declare-global-window-physical-lib-basic/tsconfig.json'),
+  'module-augmentation-package-interface-basic': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-package-interface-basic/tsconfig.json'),
+  'module-augmentation-add-export-basic': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-add-export-basic/tsconfig.json'),
+  'ambient-module-reopen-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-reopen-merge-basic/tsconfig.json'),
+  'module-augmentation-unresolved-no-cascade': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-unresolved-no-cascade/tsconfig.json'),
+  'interface-method-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-method-merge-basic/tsconfig.json'),
+  'class-interface-merge-policy-pinned': path.join(workspaceRoot, 'tests/compat-projects/class-interface-merge-policy-pinned/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

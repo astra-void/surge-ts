@@ -109,6 +109,17 @@ pub(crate) fn collect_function_signature_from_statement(
                 function_type,
             );
         }
+        ParsedStatement::ClassDeclaration(class) => {
+            let symbol = super::build_class_value_symbol(class, ctx);
+            symbols.insert(class.name.clone(), symbol);
+        }
+        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
+            declaration: ParsedDefaultExportDeclaration::Class(class),
+            ..
+        }) => {
+            let symbol = super::build_class_value_symbol(class, ctx);
+            symbols.insert(class.name.clone(), symbol);
+        }
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
             declaration,
             ..

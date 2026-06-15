@@ -15,6 +15,7 @@ pub enum ParsedStatement {
     Expression(ParsedExpression),
     TypeAliasDeclaration(ParsedTypeAliasDeclaration),
     InterfaceDeclaration(ParsedInterfaceDeclaration),
+    ClassDeclaration(ParsedClassDeclaration),
     ImportDeclaration(ParsedImportDeclaration),
     ExportDeclaration(ParsedExportDeclaration),
     DeclareModuleDeclaration(ParsedDeclareModuleDeclaration),
@@ -219,6 +220,57 @@ pub struct ParsedInterfaceMember {
     pub ty: ParsedType,
 }
 
+/// A `class` declaration. The instance side (fields + methods) is modelled as a
+/// type; the constructor/static side is modelled as a value. Unsupported members
+/// (getters/setters, index signatures, static blocks) are dropped during parsing
+/// rather than causing a fatal parse error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedClassDeclaration {
+    pub is_declare: bool,
+    pub name: String,
+    pub name_span: Option<TextSpan>,
+    pub type_parameters: Vec<ParsedTypeParameter>,
+    pub members: Vec<ParsedClassMember>,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedClassMember {
+    Property(ParsedClassProperty),
+    Method(ParsedClassMethod),
+    Constructor(ParsedClassConstructor),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedClassProperty {
+    pub name: String,
+    pub name_span: Option<TextSpan>,
+    pub is_static: bool,
+    pub optional: bool,
+    pub readonly: bool,
+    pub declared_type: Option<ParsedType>,
+    pub initializer: Option<ParsedExpression>,
+    pub initializer_span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedClassMethod {
+    pub name: String,
+    pub name_span: Option<TextSpan>,
+    pub is_static: bool,
+    pub type_parameters: Vec<ParsedTypeParameter>,
+    pub parameters: Vec<ParsedFunctionParameter>,
+    pub return_type: Option<ParsedType>,
+    pub body: Vec<ParsedFunctionBodyStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedClassConstructor {
+    pub parameters: Vec<ParsedFunctionParameter>,
+    pub body: Vec<ParsedFunctionBodyStatement>,
+    pub span: Option<TextSpan>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedImportDeclaration {
     pub kind: ParsedImportKind,
@@ -323,7 +375,7 @@ pub struct ParsedExportSpecifier {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedDefaultExportDeclaration {
     Function(ParsedFunctionDeclaration),
-    Class { span: Option<TextSpan> },
+    Class(ParsedClassDeclaration),
     Expression(ParsedExpression),
     Unsupported { span: Option<TextSpan> },
 }
@@ -350,6 +402,12 @@ pub enum ParsedExpression {
     NullLiteral,
     Identifier {
         name: String,
+        span: Option<TextSpan>,
+    },
+    /// The `this` keyword. Resolves to the enclosing class instance (in instance
+    /// methods/constructors) or static side (in static methods); elsewhere it is
+    /// typed conservatively rather than reported as an unresolved identifier.
+    This {
         span: Option<TextSpan>,
     },
     ObjectLiteral {
@@ -639,6 +697,9 @@ pub enum ParsedFunctionBodyStatement {
     Return(ParsedReturnStatement),
     Throw(ParsedThrowStatement),
     Assignment(ParsedAssignment),
+    /// A `this.<property> = <value>` assignment inside a class method or
+    /// constructor body. Checked against the instance property's declared type.
+    ThisPropertyAssignment(ParsedThisPropertyAssignment),
     Expression(ParsedExpression),
     Block(Vec<ParsedFunctionBodyStatement>),
     If(ParsedIfStatement),
@@ -685,6 +746,14 @@ pub struct ParsedCatchClause {
     pub declared_type: Option<ParsedType>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedThisPropertyAssignment {
+    pub property_name: String,
+    pub property_span: Option<TextSpan>,
+    pub value: ParsedExpression,
+    pub value_span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

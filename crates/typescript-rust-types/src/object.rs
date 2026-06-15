@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::{Type, union_type};
+use crate::{FunctionType, Type, union_type};
 
 #[derive(Debug)]
 pub struct ObjectType {
@@ -12,6 +12,11 @@ pub struct ObjectType {
     /// expansion). Deliberately excluded from equality so assignability and
     /// structural comparisons stay name-agnostic.
     pub alias_name: Option<Arc<str>>,
+    /// Construct signature for a class value (static side). When present, the
+    /// object is callable with `new`, producing the signature's return type (the
+    /// instance type). Static members live in `properties`. Excluded from
+    /// equality, like `alias_name`, so structural comparisons stay shape-based.
+    pub construct_signature: Option<Arc<FunctionType>>,
 }
 
 impl PartialEq for ObjectType {
@@ -58,6 +63,7 @@ impl ObjectType {
             properties: Arc::new(properties),
             string_index_type: string_index_type.map(Arc::new),
             alias_name: None,
+            construct_signature: None,
         }
     }
 
@@ -66,6 +72,17 @@ impl ObjectType {
     pub fn with_alias_name(mut self, alias_name: impl Into<Arc<str>>) -> Self {
         self.alias_name = Some(alias_name.into());
         self
+    }
+
+    /// Returns a copy carrying a construct signature, marking this object as the
+    /// static/value side of a class that can be invoked with `new`.
+    pub fn with_construct_signature(mut self, construct_signature: FunctionType) -> Self {
+        self.construct_signature = Some(Arc::new(construct_signature));
+        self
+    }
+
+    pub fn construct_signature(&self) -> Option<&FunctionType> {
+        self.construct_signature.as_deref()
     }
 
     pub fn get_property(&self, name: &str) -> Option<&ObjectProperty> {
@@ -111,6 +128,7 @@ impl Clone for ObjectType {
             properties: self.properties.clone(),
             string_index_type: self.string_index_type.clone(),
             alias_name: self.alias_name.clone(),
+            construct_signature: self.construct_signature.clone(),
         }
     }
 }

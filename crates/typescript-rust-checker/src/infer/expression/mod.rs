@@ -104,6 +104,17 @@ pub(crate) fn infer_expression(
                 name: name.clone(),
                 span: *span,
             }),
+        ParsedExpression::This { .. } => symbols
+            .get("this")
+            .map(|symbol| {
+                InferredExpression::Known(clone_type_with_metrics(
+                    &symbol.ty,
+                    CopySource::Identifier,
+                ))
+            })
+            // Outside a class body `this` has no instance type here; stay
+            // conservative rather than emitting an unresolved-identifier error.
+            .unwrap_or(InferredExpression::Unknown),
         ParsedExpression::ObjectLiteral { properties, .. } => {
             InferredExpression::Known(infer_object_literal(properties, symbols, ctx))
         }

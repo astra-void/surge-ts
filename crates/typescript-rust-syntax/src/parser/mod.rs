@@ -10,6 +10,7 @@ use crate::{
     ParsedNamespaceDeclaration, ParsedStatement, ParsedVariableDeclaration, ParsedVariableKind,
 };
 
+mod classes;
 mod entry;
 mod exports;
 mod expressions;
@@ -20,6 +21,7 @@ mod interfaces;
 mod spans;
 mod types;
 
+use self::classes::parse_class_declaration;
 use self::exports::parse_export_named_declaration;
 use self::exports::{
     parse_export_all_declaration, parse_export_assignment, parse_export_default_declaration,
@@ -85,6 +87,8 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
             .map(|type_alias| vec![ParsedStatement::TypeAliasDeclaration(type_alias)]),
         Declaration::TSInterfaceDeclaration(interface) => parse_interface_declaration(interface)
             .map(|interface| vec![ParsedStatement::InterfaceDeclaration(interface)]),
+        Declaration::ClassDeclaration(class) => parse_class_declaration(class)
+            .map(|class| vec![ParsedStatement::ClassDeclaration(class)]),
         Declaration::TSModuleDeclaration(module) => Some(parse_ts_module_declaration(module)),
         Declaration::TSGlobalDeclaration(global) => Some(parse_ts_global_declaration(global)),
         Declaration::TSImportEqualsDeclaration(import_equals) => {

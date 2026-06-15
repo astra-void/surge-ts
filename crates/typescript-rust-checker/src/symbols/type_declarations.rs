@@ -77,6 +77,89 @@ impl Clone for TypeDeclarationInfo {
     }
 }
 
+/// Merge two interface declarations following TypeScript declaration merging:
+/// the existing members come first, then the incoming members. `extends` clauses
+/// concatenate. Same-named method members are preserved (overloads); a property
+/// already declared by the existing interface wins (matching TypeScript, which
+/// keeps the first declaration's type), so a later conflicting property is
+/// dropped here. Property conflict *reporting* is the caller's responsibility.
+pub(crate) fn merge_interface_infos(
+    existing: &InterfaceInfo,
+    incoming: &InterfaceInfo,
+) -> InterfaceInfo {
+    let is_method = |member: &ParsedInterfaceMember| matches!(member.ty, ParsedType::Function(_));
+    let existing_property_names: std::collections::HashSet<&str> = existing
+        .members
+        .iter()
+        .filter(|member| !is_method(member))
+        .map(|member| member.name.as_str())
+        .collect();
+
+    let mut members = existing.members.clone();
+    for member in &incoming.members {
+        if !is_method(member) && existing_property_names.contains(member.name.as_str()) {
+            continue;
+        }
+        members.push(member.clone());
+    }
+    let mut extends = existing.extends.clone();
+    extends.extend(incoming.extends.iter().cloned());
+    let type_parameters = if existing.type_parameters.is_empty() {
+        incoming.type_parameters.clone()
+    } else {
+        existing.type_parameters.clone()
+    };
+    InterfaceInfo {
+        name: existing.name.clone(),
+        file_name: existing.file_name.clone(),
+        name_span: existing.name_span,
+        type_parameters,
+        extends,
+        members,
+        string_index_type: existing
+            .string_index_type
+            .clone()
+            .or_else(|| incoming.string_index_type.clone()),
+        resolution_scope: existing
+            .resolution_scope
+            .clone()
+            .or_else(|| incoming.resolution_scope.clone()),
+    }
+}
+
+/// Insert `incoming` into `table`, merging into an existing interface of the same
+/// name (declaration merging) rather than dropping the later declaration.
+/// Non-interface collisions keep the first declaration (first-wins), matching a
+/// `var`/interface pair where the interface supplies the type.
+pub(crate) fn merge_type_declaration_into_table(
+    table: &mut TypeDeclarationTable,
+    name: &str,
+    incoming: &TypeDeclarationInfo,
+) {
+    enum Action {
+        Merge(Box<InterfaceInfo>),
+        KeepFirst,
+        Insert,
+    }
+
+    let action = match (table.get(name), incoming) {
+        (
+            Some(TypeDeclarationInfo::Interface(existing)),
+            TypeDeclarationInfo::Interface(incoming),
+        ) => Action::Merge(Box::new(merge_interface_infos(existing, incoming))),
+        (Some(_), _) => Action::KeepFirst,
+        (None, _) => Action::Insert,
+    };
+
+    match action {
+        Action::Merge(merged) => table.upsert(name, TypeDeclarationInfo::Interface(*merged)),
+        Action::KeepFirst => {}
+        Action::Insert => {
+            let _ = table.insert(name, incoming.clone());
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TypeDeclarationScope {
     layers: Vec<Arc<TypeDeclarationTable>>,

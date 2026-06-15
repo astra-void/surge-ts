@@ -1621,21 +1621,16 @@ fn span_module_re_export_star_as_points_to_export_span_or_module_specifier() {
 }
 
 #[test]
-fn span_unsupported_declare_class_points_to_keyword_or_statement() {
+fn declare_class_is_supported_and_reports_no_diagnostic() {
+    // `declare class` now contributes a global value/type instead of being
+    // pinned as an unsupported declaration.
     let source = "declare class Foo {}";
     let diagnostics = native_program(vec![typescript_rust_checker::SourceFileInput {
         file_name: "example.d.ts".to_string(),
         source_text: source.to_string(),
     }]);
 
-    assert_eq!(
-        diagnostic_tuples(&diagnostics),
-        vec![(
-            "typescript-rust::unsupported-declaration".to_string(),
-            "example.d.ts".to_string(),
-            Some(span(source, source)),
-        )]
-    );
+    assert!(diagnostics.is_empty());
 }
 
 #[test]

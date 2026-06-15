@@ -7,8 +7,8 @@ use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode};
 use typescript_rust_syntax::{
     ParsedAssignment, ParsedBindingName, ParsedExpression, ParsedForOfStatement,
     ParsedFunctionBodyStatement, ParsedIfStatement, ParsedReturnStatement, ParsedSwitchStatement,
-    ParsedTryStatement, ParsedType, ParsedVariableDeclaration, ParsedVariableKind,
-    ParsedWhileStatement,
+    ParsedThisPropertyAssignment, ParsedTryStatement, ParsedType, ParsedVariableDeclaration,
+    ParsedVariableKind, ParsedWhileStatement,
 };
 use typescript_rust_types::{
     Type, TypeCopyReason, is_assignable_to, union_type, with_type_copy_reason,
@@ -161,6 +161,13 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::Assignment(assignment) => {
             let start = Instant::now();
             check_function_assignment(assignment, statement_index, scopes, flow_state, ctx);
+            record_program_timing(ctx.timings.as_ref(), |timings| {
+                timings.assignability_checking += start.elapsed()
+            });
+        }
+        ParsedFunctionBodyStatement::ThisPropertyAssignment(assignment) => {
+            let start = Instant::now();
+            check_this_property_assignment(assignment, scopes, ctx);
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.assignability_checking += start.elapsed()
             });
@@ -825,6 +832,58 @@ pub(crate) fn check_function_assignment(
 
     if !target_blocked.is_blocked() && flow_state.tracked_local_count() > 0 {
         mark_assignment_state(&target_name, flow_state);
+    }
+}
+
+/// Checks a `this.<property> = <value>` assignment against the instance
+/// property's declared type. The `this` symbol is bound to the class instance
+/// type for the duration of the method/constructor body. When `this` or the
+/// property cannot be resolved, no diagnostic is emitted so unsupported class
+/// shapes do not cascade.
+pub(crate) fn check_this_property_assignment(
+    assignment: ParsedThisPropertyAssignment,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let visible_symbols = visible_symbols(scopes);
+
+    let Some(this_symbol) = visible_symbols.get("this") else {
+        return;
+    };
+
+    let Some(property_type) = this_symbol
+        .ty
+        .get_property_access_type(&assignment.property_name)
+    else {
+        return;
+    };
+
+    let inferred_value = evaluate_expression(
+        &assignment.value,
+        assignment.value_span,
+        &visible_symbols,
+        ctx,
+    );
+
+    let InferredExpression::Known(value_type) = inferred_value else {
+        return;
+    };
+
+    if value_type == Type::Unknown || property_type == Type::Unknown {
+        return;
+    }
+
+    if !is_assignable_to(&value_type, &property_type) {
+        let diagnostic = Diagnostic::ts2322(
+            &crate::checks::expr::source_display_name(&value_type, &property_type),
+            &property_type.name(),
+            ctx.file_name.clone(),
+        );
+        let diagnostic = match assignment.value_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
     }
 }
 

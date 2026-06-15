@@ -41,10 +41,25 @@ Program mode treats the input files as one shared global script:
 - Ambient modules and resolved packages resolve before package import stubbing fallback.
 - Default exports, namespace imports, named re-exports, type-only re-exports, and star re-exports inside exact ambient modules and resolved package modules are pinned in this phase.
 - Duplicate ambient modules and duplicate ambient globals are first-wins / pinned rather than merged.
-- Full package resolution remains unsupported.
 - Only declaration-oriented `node_modules` lookup is supported, and declaration files can still act as symbol sources even when `skipLibCheck` suppresses their diagnostics.
-- Exact package declaration subpaths are supported; wildcard/runtime subpaths are not.
-- Only exact `exports["."].types` / `exports["./x"].types` declaration targets are supported; full exports maps are not.
+- Project mode supports focused declaration-side package resolution for package
+  `types`/`typings`, full and pattern `exports` type targets (conditional
+  objects, nested conditions, and a single `*` wildcard), `typesVersions`
+  patterns, package-local `imports` (`#alias`), and package self-name imports.
+  Condition selection follows package-author key order with the active set
+  `import`/`require` (per importer module format; bundler is always `import`),
+  `types`, `node` (node16/nodenext only), then `customConditions`. When `exports`
+  is present it is authoritative: a non-matching subpath is blocked (TS2307)
+  rather than falling back to file probing, matching node16/nodenext/bundler.
+  `resolvePackageJsonExports: false` / `resolvePackageJsonImports: false` bypass
+  the respective field.
+- Targets are probed for declaration variants (`.d.ts`/`.d.mts`/`.d.cts`,
+  including extension substitution around `.js`/`.mjs`/`.cjs`) and rejected if
+  they escape the package root. Runtime JavaScript resolution and full Node
+  loader parity remain out of scope; declaration-only entrypoints are found.
+- Multiple `*` wildcards in a single `exports`/`imports`/`typesVersions` key are
+  not supported; `typesVersions` version ranges are matched against the pinned
+  TypeScript 6.0.
 
 ## What is shared
 

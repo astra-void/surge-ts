@@ -4,11 +4,18 @@ use typescript_rust_checker::SourceFileInput;
 use typescript_rust_config::canonicalize_if_exists_string;
 use typescript_rust_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
 
+use crate::package_resolution::{
+    ResolverOptions, select_export_target, select_import_target, types_versions_candidates,
+};
+
 pub struct PackageDeclarationRequest {
     pub specifier: String,
     pub package_name: String,
     pub subpath: Option<String>,
     pub importer_dir: PathBuf,
+    pub importer_file: PathBuf,
+    /// `#alias` specifier resolved through the importer's own `imports` field.
+    pub is_imports: bool,
 }
 
 #[derive(Debug, Default)]
@@ -22,6 +29,8 @@ struct PackageEntrypointCacheKey {
     importer_dir: String,
     package_name: String,
     subpath: Option<String>,
+    is_imports: bool,
+    importer_is_esm: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -69,138 +78,26 @@ fn parse_package_specifier(specifier: &str) -> Option<(String, Option<String>)> 
 }
 
 #[allow(dead_code)]
-fn resolve_exports_types(exports: &serde_json::Value, subpath_key: &str) -> Option<String> {
-    if subpath_key.contains('*') {
-        return None;
-    }
-
-    match exports {
-        serde_json::Value::String(s) => {
-            if is_declaration_file_path_str(s) {
-                Some(s.clone())
-            } else {
-                None
-            }
-        }
-        serde_json::Value::Array(items) => items
-            .iter()
-            .find_map(|item| resolve_exports_types(item, subpath_key)),
-        serde_json::Value::Object(map) => {
-            if let Some(val) = map.get(subpath_key) {
-                if let Some(types) = resolve_types_condition_value(val) {
-                    return Some(types);
-                }
-            }
-
-            if subpath_key == "." {
-                if let Some(types) = map.get("types").and_then(resolve_types_condition_value) {
-                    return Some(types);
-                }
-            }
-
-            None
-        }
-        _ => None,
-    }
-}
-
-fn resolve_exports_entrypoint(exports: &serde_json::Value, subpath_key: &str) -> Option<String> {
-    if subpath_key.contains('*') {
-        return None;
-    }
-
-    match exports {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .find_map(|item| resolve_exports_entrypoint(item, subpath_key)),
-        serde_json::Value::Object(map) => {
-            if let Some(val) = map.get(subpath_key) {
-                if let Some(path) = resolve_export_entrypoint_condition_value(val) {
-                    return Some(path);
-                }
-            }
-
-            if subpath_key == "." {
-                if let Some(path) = resolve_export_entrypoint_condition_value(exports) {
-                    return Some(path);
-                }
-            }
-
-            None
-        }
-        _ => None,
-    }
-}
-
-fn resolve_export_entrypoint_condition_value(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .find_map(resolve_export_entrypoint_condition_value),
-        serde_json::Value::Object(map) => {
-            if let Some(types) = map
-                .get("types")
-                .and_then(resolve_export_entrypoint_condition_value)
-            {
-                return Some(types);
-            }
-
-            for value in map.values() {
-                if let Some(path) = resolve_export_entrypoint_condition_value(value) {
-                    return Some(path);
-                }
-            }
-
-            None
-        }
-        _ => None,
-    }
-}
-
-#[allow(dead_code)]
-fn resolve_types_condition_value(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(s) => {
-            if is_declaration_file_path_str(s) {
-                Some(s.clone())
-            } else {
-                None
-            }
-        }
-        serde_json::Value::Array(items) => items.iter().find_map(resolve_types_condition_value),
-        serde_json::Value::Object(map) => {
-            if let Some(types) = map.get("types").and_then(resolve_types_condition_value) {
-                return Some(types);
-            }
-
-            for value in map.values() {
-                if let Some(types) = resolve_types_condition_value(value) {
-                    return Some(types);
-                }
-            }
-
-            None
-        }
-        _ => None,
-    }
-}
-
-#[allow(dead_code)]
 pub fn resolve_package_declaration_entrypoints(
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
     root_dir: &Path,
 ) -> HashMap<String, String> {
     let mut cache = PackageDeclarationResolverCache::default();
-    resolve_package_declaration_entrypoints_with_cache(inputs, sources, root_dir, &mut cache)
+    resolve_package_declaration_entrypoints_with_cache(
+        inputs,
+        sources,
+        root_dir,
+        &ResolverOptions::default(),
+        &mut cache,
+    )
 }
 
 pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
     root_dir: &Path,
+    opts: &ResolverOptions,
     cache: &mut PackageDeclarationResolverCache,
 ) -> HashMap<String, String> {
     let mut packages_to_resolve: VecDeque<PackageDeclarationRequest> = VecDeque::new();
@@ -217,6 +114,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
             source_text,
             &file_path.to_string_lossy(),
             &importer_dir,
+            opts,
             &mut packages_to_resolve,
             &mut queued_specifiers,
         );
@@ -234,16 +132,19 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
             continue;
         }
 
+        let importer_is_esm = importer_is_esm(&req.importer_file, opts, cache);
         let cache_key = PackageEntrypointCacheKey {
             importer_dir: canonicalize_if_exists_string(&req.importer_dir),
             package_name: req.package_name.clone(),
             subpath: req.subpath.clone(),
+            is_imports: req.is_imports,
+            importer_is_esm,
         };
 
         let resolution = if let Some(cached) = cache.entrypoint_cache.get(&cache_key) {
             cached.clone()
         } else {
-            let resolved = resolve_package_entrypoint(&req, cache, root_dir);
+            let resolved = resolve_package_entrypoint(&req, opts, importer_is_esm, cache, root_dir);
             cache.entrypoint_cache.insert(cache_key, resolved.clone());
             resolved
         };
@@ -282,6 +183,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                         &source_text,
                         &normalized_file_name,
                         &new_importer_dir,
+                        opts,
                         &mut packages_to_resolve,
                         &mut queued_specifiers,
                     );
@@ -544,7 +446,8 @@ fn resolve_at_types_package_entrypoint(
             }
 
             if let Some(exports) = json.get("exports") {
-                if let Some(types_path) = resolve_exports_types(exports, ".") {
+                let conditions = ResolverOptions::default().active_conditions(true);
+                if let Some(types_path) = select_export_target(exports, ".", &conditions) {
                     if let Some(path) = resolve_declaration_candidate(&pkg_dir.join(types_path)) {
                         return Some(path);
                     }
@@ -558,16 +461,31 @@ fn resolve_at_types_package_entrypoint(
 
 fn resolve_package_entrypoint(
     req: &PackageDeclarationRequest,
+    opts: &ResolverOptions,
+    importer_is_esm: bool,
     cache: &mut PackageDeclarationResolverCache,
     root_dir: &Path,
 ) -> Option<PackageEntrypointResolution> {
+    // `#alias` imports resolve against the importer's own enclosing package.
+    if req.is_imports {
+        return resolve_imports_entrypoint(req, opts, importer_is_esm, cache);
+    }
+
+    // Package self-name imports: an enclosing package whose `name` matches takes
+    // priority over external `node_modules` lookup, mirroring TypeScript.
+    if let Some(resolution) = resolve_self_name_entrypoint(req, opts, importer_is_esm, cache) {
+        return Some(resolution);
+    }
+
     let mut current_dir = req.importer_dir.clone();
     let mut runtime_fallback = None;
 
     loop {
         let pkg_dir = current_dir.join("node_modules").join(&req.package_name);
 
-        if let Some(resolution) = resolve_package_entrypoint_in_directory(req, &pkg_dir, cache) {
+        if let Some(resolution) =
+            resolve_package_entrypoint_in_directory(req, &pkg_dir, opts, importer_is_esm, cache)
+        {
             match resolution.kind {
                 PackageEntrypointKind::Declaration => {
                     return Some(resolution);
@@ -595,38 +513,115 @@ fn resolve_package_entrypoint(
     runtime_fallback
 }
 
+/// Resolve a `#alias` import against the nearest enclosing `package.json` with an
+/// `imports` field. Blocked or unresolved aliases yield `None` (→ TS2307).
+fn resolve_imports_entrypoint(
+    req: &PackageDeclarationRequest,
+    opts: &ResolverOptions,
+    importer_is_esm: bool,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PackageEntrypointResolution> {
+    if !opts.resolve_imports {
+        return None;
+    }
+
+    let (pkg_dir, json) = nearest_package_json(&req.importer_dir, cache)?;
+    let imports = json.get("imports")?;
+    let conditions = opts.active_conditions(importer_is_esm);
+    let target = select_import_target(imports, &req.specifier, &conditions)?;
+    resolve_target_in_package(&pkg_dir, &target)
+}
+
+/// Resolve a bare package import through an enclosing package whose `name`
+/// matches `req.package_name` (package self-reference).
+fn resolve_self_name_entrypoint(
+    req: &PackageDeclarationRequest,
+    opts: &ResolverOptions,
+    importer_is_esm: bool,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PackageEntrypointResolution> {
+    if !opts.resolve_exports {
+        return None;
+    }
+
+    let (pkg_dir, json) = nearest_package_json(&req.importer_dir, cache)?;
+    let name = json.get("name").and_then(|n| n.as_str())?;
+    if name != req.package_name {
+        return None;
+    }
+    // Self-name only works through the package's own `exports` map.
+    let exports = json.get("exports")?;
+    let subpath_key = subpath_key(req);
+    let conditions = opts.active_conditions(importer_is_esm);
+    let target = select_export_target(exports, &subpath_key, &conditions)?;
+    resolve_target_in_package(&pkg_dir, &target)
+}
+
 fn resolve_package_entrypoint_in_directory(
     req: &PackageDeclarationRequest,
     pkg_dir: &Path,
+    opts: &ResolverOptions,
+    importer_is_esm: bool,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PackageEntrypointResolution> {
-    let mut runtime_fallback = None;
     let pkg_json_path = pkg_dir.join("package.json");
+    let json = if pkg_json_path.is_file() {
+        read_package_json(&pkg_json_path, cache)
+    } else {
+        None
+    };
 
-    if pkg_json_path.exists() && pkg_json_path.is_file() {
-        if let Some(json) = read_package_json(&pkg_json_path, cache) {
-            if let Some(subpath) = &req.subpath {
-                let subpath_key = format!("./{}", subpath);
+    if let Some(json) = &json {
+        // Modern `exports` is authoritative: when present (and honored), a
+        // non-matching subpath is blocked rather than falling back to file
+        // probing, matching TypeScript's node16/nodenext/bundler behavior.
+        if opts.resolve_exports {
+            if let Some(exports) = json.get("exports") {
+                let subpath_key = subpath_key(req);
+                let conditions = opts.active_conditions(importer_is_esm);
+                return select_export_target(exports, &subpath_key, &conditions)
+                    .and_then(|target| resolve_target_in_package(pkg_dir, &target));
+            }
+        }
 
-                if let Some(exports) = json.get("exports") {
-                    if let Some(path_str) = resolve_exports_entrypoint(exports, &subpath_key) {
-                        let path = pkg_dir.join(path_str);
-                        if let Some(resolution) = resolve_declaration_or_runtime_candidate(&path) {
-                            match resolution.kind {
-                                PackageEntrypointKind::Declaration => return Some(resolution),
-                                PackageEntrypointKind::RuntimeOnly => {
-                                    if runtime_fallback.is_none() {
-                                        runtime_fallback = Some(resolution);
-                                    }
-                                }
-                            }
+        return resolve_legacy_entrypoint_in_directory(req, pkg_dir, json);
+    }
+
+    // No `package.json`: legacy file probing only.
+    resolve_legacy_file_probe(req, pkg_dir)
+}
+
+/// Legacy (`node10`-style) entrypoint resolution for a package without a usable
+/// `exports` field: `typesVersions`, then `types`/`typings`/`module`/`main`,
+/// then conventional `index` locations.
+fn resolve_legacy_entrypoint_in_directory(
+    req: &PackageDeclarationRequest,
+    pkg_dir: &Path,
+    json: &serde_json::Value,
+) -> Option<PackageEntrypointResolution> {
+    let mut runtime_fallback = None;
+    let types_versions = json.get("typesVersions");
+
+    macro_rules! try_candidate {
+        ($path:expr) => {
+            if let Some(resolution) = resolve_declaration_or_runtime_candidate($path) {
+                match resolution.kind {
+                    PackageEntrypointKind::Declaration => return Some(resolution),
+                    PackageEntrypointKind::RuntimeOnly => {
+                        if runtime_fallback.is_none() {
+                            runtime_fallback = Some(resolution);
                         }
                     }
                 }
+            }
+        };
+    }
 
-                if let Some(resolution) =
-                    resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath))
-                {
+    if let Some(subpath) = &req.subpath {
+        // `typesVersions` rewrites the subpath before file probing.
+        if let Some(types_versions) = types_versions {
+            for target in types_versions_candidates(types_versions, subpath) {
+                if let Some(resolution) = resolve_target_in_package(pkg_dir, &target) {
                     match resolution.kind {
                         PackageEntrypointKind::Declaration => return Some(resolution),
                         PackageEntrypointKind::RuntimeOnly => {
@@ -636,93 +631,18 @@ fn resolve_package_entrypoint_in_directory(
                         }
                     }
                 }
-            } else {
-                if let Some(exports) = json.get("exports") {
-                    if let Some(path_str) = resolve_exports_entrypoint(exports, ".") {
-                        let path = pkg_dir.join(path_str);
-                        if let Some(resolution) = resolve_declaration_or_runtime_candidate(&path) {
-                            match resolution.kind {
-                                PackageEntrypointKind::Declaration => return Some(resolution),
-                                PackageEntrypointKind::RuntimeOnly => {
-                                    if runtime_fallback.is_none() {
-                                        runtime_fallback = Some(resolution);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            }
+        }
 
-                if let Some(types) = json.get("types").and_then(|t| t.as_str()) {
-                    if let Some(resolution) =
-                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(types))
-                    {
-                        match resolution.kind {
-                            PackageEntrypointKind::Declaration => return Some(resolution),
-                            PackageEntrypointKind::RuntimeOnly => {
-                                if runtime_fallback.is_none() {
-                                    runtime_fallback = Some(resolution);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if let Some(typings) = json.get("typings").and_then(|t| t.as_str()) {
-                    if let Some(resolution) =
-                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(typings))
-                    {
-                        match resolution.kind {
-                            PackageEntrypointKind::Declaration => return Some(resolution),
-                            PackageEntrypointKind::RuntimeOnly => {
-                                if runtime_fallback.is_none() {
-                                    runtime_fallback = Some(resolution);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if let Some(module_path) = json.get("module").and_then(|t| t.as_str()) {
-                    if let Some(resolution) =
-                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(module_path))
-                    {
-                        match resolution.kind {
-                            PackageEntrypointKind::Declaration => return Some(resolution),
-                            PackageEntrypointKind::RuntimeOnly => {
-                                if runtime_fallback.is_none() {
-                                    runtime_fallback = Some(resolution);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if let Some(main_path) = json.get("main").and_then(|t| t.as_str()) {
-                    if let Some(resolution) =
-                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(main_path))
-                    {
-                        match resolution.kind {
-                            PackageEntrypointKind::Declaration => return Some(resolution),
-                            PackageEntrypointKind::RuntimeOnly => {
-                                if runtime_fallback.is_none() {
-                                    runtime_fallback = Some(resolution);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                for candidate in [
-                    "dist/types/index",
-                    "types/index",
-                    "typings/index",
-                    "dist/esm/index",
-                    "dist/index",
-                ] {
-                    if let Some(resolution) =
-                        resolve_declaration_or_runtime_candidate(&pkg_dir.join(candidate))
-                    {
+        try_candidate!(&pkg_dir.join(subpath));
+        try_candidate!(&pkg_dir.join(subpath).join("index"));
+    } else {
+        // Root: apply `typesVersions` to the declared types field, then fall back
+        // to `index`.
+        if let Some(types_versions) = types_versions {
+            for base in root_types_version_bases(json) {
+                for target in types_versions_candidates(types_versions, &base) {
+                    if let Some(resolution) = resolve_target_in_package(pkg_dir, &target) {
                         match resolution.kind {
                             PackageEntrypointKind::Declaration => return Some(resolution),
                             PackageEntrypointKind::RuntimeOnly => {
@@ -734,23 +654,26 @@ fn resolve_package_entrypoint_in_directory(
                     }
                 }
             }
+        }
+
+        for field in ["types", "typings", "module", "main"] {
+            if let Some(value) = json.get(field).and_then(|t| t.as_str()) {
+                try_candidate!(&pkg_dir.join(value));
+            }
+        }
+
+        for candidate in [
+            "dist/types/index",
+            "types/index",
+            "typings/index",
+            "dist/esm/index",
+            "dist/index",
+        ] {
+            try_candidate!(&pkg_dir.join(candidate));
         }
     }
 
-    if let Some(subpath) = &req.subpath {
-        if let Some(resolution) = resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath)) {
-            match resolution.kind {
-                PackageEntrypointKind::Declaration => return Some(resolution),
-                PackageEntrypointKind::RuntimeOnly => {
-                    if runtime_fallback.is_none() {
-                        runtime_fallback = Some(resolution);
-                    }
-                }
-            }
-        }
-    } else if let Some(resolution) =
-        resolve_declaration_or_runtime_candidate(&pkg_dir.join("index"))
-    {
+    if let Some(resolution) = resolve_legacy_file_probe(req, pkg_dir) {
         match resolution.kind {
             PackageEntrypointKind::Declaration => return Some(resolution),
             PackageEntrypointKind::RuntimeOnly => {
@@ -762,6 +685,129 @@ fn resolve_package_entrypoint_in_directory(
     }
 
     runtime_fallback
+}
+
+/// Bare `subpath`/`index` probing for a package directory with no usable
+/// `package.json` metadata.
+fn resolve_legacy_file_probe(
+    req: &PackageDeclarationRequest,
+    pkg_dir: &Path,
+) -> Option<PackageEntrypointResolution> {
+    if let Some(subpath) = &req.subpath {
+        if let Some(resolution) = resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath)) {
+            return Some(resolution);
+        }
+        resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath).join("index"))
+    } else {
+        resolve_declaration_or_runtime_candidate(&pkg_dir.join("index"))
+    }
+}
+
+/// The `exports`/self-name subpath key for a request: `"."` for the package root,
+/// `"./<subpath>"` otherwise.
+fn subpath_key(req: &PackageDeclarationRequest) -> String {
+    match &req.subpath {
+        Some(subpath) => format!("./{}", subpath),
+        None => ".".to_string(),
+    }
+}
+
+/// Package-relative base paths a root `typesVersions` mapping is applied to: the
+/// declared `types`/`typings` field (without the leading `./`) and the
+/// conventional `index.d.ts`.
+fn root_types_version_bases(json: &serde_json::Value) -> Vec<String> {
+    let mut bases = Vec::new();
+    for field in ["types", "typings"] {
+        if let Some(value) = json.get(field).and_then(|t| t.as_str()) {
+            bases.push(value.trim_start_matches("./").to_string());
+        }
+    }
+    bases.push("index.d.ts".to_string());
+    bases
+}
+
+/// Join an `exports`/`imports`/`typesVersions` target against the package root,
+/// rejecting paths that escape the package, then probe declaration variants.
+fn resolve_target_in_package(pkg_dir: &Path, target: &str) -> Option<PackageEntrypointResolution> {
+    let relative = target.trim_start_matches("./");
+    let joined = pkg_dir.join(relative);
+    if !path_is_within(pkg_dir, &joined) {
+        return None;
+    }
+    resolve_declaration_or_runtime_candidate(&joined)
+}
+
+/// Whether `candidate` stays within `base` after resolving `..` segments
+/// lexically (no filesystem access). Guards against `exports` targets escaping
+/// the package root.
+fn path_is_within(base: &Path, candidate: &Path) -> bool {
+    use std::path::Component;
+    let mut depth: i32 = 0;
+    for component in candidate
+        .strip_prefix(base)
+        .unwrap_or(candidate)
+        .components()
+    {
+        match component {
+            Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            Component::CurDir => {}
+            _ => depth += 1,
+        }
+    }
+    true
+}
+
+/// Find the nearest enclosing `package.json` walking up from `start_dir`,
+/// returning the package directory and its parsed contents.
+fn nearest_package_json(
+    start_dir: &Path,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<(PathBuf, serde_json::Value)> {
+    let mut current = Some(start_dir.to_path_buf());
+    while let Some(dir) = current {
+        // Never cross a `node_modules` boundary upward into an unrelated package.
+        let pkg_json_path = dir.join("package.json");
+        if pkg_json_path.is_file() {
+            if let Some(json) = read_package_json(&pkg_json_path, cache) {
+                return Some((dir, json));
+            }
+        }
+        current = dir.parent().map(|p| p.to_path_buf());
+    }
+    None
+}
+
+/// Whether the importing file is treated as ESM for condition selection. Bundler
+/// always behaves as ESM; node16/nodenext consult the file extension and the
+/// nearest `package.json` `"type"`.
+fn importer_is_esm(
+    importer_file: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+) -> bool {
+    use typescript_rust_config::ModuleResolutionKind;
+    if opts.module_resolution == ModuleResolutionKind::Bundler {
+        return true;
+    }
+
+    let lower = importer_file.to_string_lossy().to_ascii_lowercase();
+    if lower.ends_with(".mts") || lower.ends_with(".mjs") || lower.ends_with(".d.mts") {
+        return true;
+    }
+    if lower.ends_with(".cts") || lower.ends_with(".cjs") || lower.ends_with(".d.cts") {
+        return false;
+    }
+
+    let start = importer_file.parent().unwrap_or(importer_file);
+    match nearest_package_json(start, cache) {
+        Some((_, json)) => json.get("type").and_then(|t| t.as_str()) == Some("module"),
+        None => false,
+    }
 }
 
 fn resolve_at_types_fallback_in_directory(
@@ -934,27 +980,15 @@ fn extract_packages_from_source(
     source_text: &str,
     file_name: &str,
     importer_dir: &Path,
+    opts: &ResolverOptions,
     packages_to_resolve: &mut VecDeque<PackageDeclarationRequest>,
     queued_specifiers: &mut HashSet<String>,
 ) {
+    let importer_file = PathBuf::from(file_name);
     let parsed = parse_source(source_text, file_name);
     for statement in parsed.statements {
-        match statement {
-            ParsedStatement::ImportDeclaration(import) => {
-                if is_external_specifier(&import.module_specifier)
-                    && !queued_specifiers.contains(&import.module_specifier)
-                    && let Some((package_name, subpath)) =
-                        parse_package_specifier(&import.module_specifier)
-                {
-                    queued_specifiers.insert(import.module_specifier.clone());
-                    packages_to_resolve.push_back(PackageDeclarationRequest {
-                        specifier: import.module_specifier.clone(),
-                        package_name,
-                        subpath,
-                        importer_dir: importer_dir.to_path_buf(),
-                    });
-                }
-            }
+        let specifier = match statement {
+            ParsedStatement::ImportDeclaration(import) => Some(import.module_specifier),
             ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
                 module_specifier: Some(module_specifier),
                 ..
@@ -962,23 +996,71 @@ fn extract_packages_from_source(
             | ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
                 module_specifier,
                 ..
-            }) => {
-                if is_external_specifier(&module_specifier)
-                    && !queued_specifiers.contains(&module_specifier)
-                    && let Some((package_name, subpath)) =
-                        parse_package_specifier(&module_specifier)
-                {
-                    queued_specifiers.insert(module_specifier.clone());
-                    packages_to_resolve.push_back(PackageDeclarationRequest {
-                        specifier: module_specifier.clone(),
-                        package_name,
-                        subpath,
-                        importer_dir: importer_dir.to_path_buf(),
-                    });
-                }
-            }
-            _ => {}
+            }) => Some(module_specifier),
+            _ => None,
+        };
+
+        let Some(specifier) = specifier else {
+            continue;
+        };
+
+        queue_specifier(
+            &specifier,
+            importer_dir,
+            &importer_file,
+            opts,
+            packages_to_resolve,
+            queued_specifiers,
+        );
+    }
+}
+
+/// Queue a module specifier for package resolution. Handles `#alias` imports and
+/// bare/scoped package specifiers; relative specifiers are ignored (handled by
+/// the import-graph expander).
+fn queue_specifier(
+    specifier: &str,
+    importer_dir: &Path,
+    importer_file: &Path,
+    opts: &ResolverOptions,
+    packages_to_resolve: &mut VecDeque<PackageDeclarationRequest>,
+    queued_specifiers: &mut HashSet<String>,
+) {
+    if queued_specifiers.contains(specifier) {
+        return;
+    }
+
+    if let Some(rest) = specifier.strip_prefix('#') {
+        // `#` alone or `#/...` is not a valid imports key.
+        if rest.is_empty() || !opts.resolve_imports {
+            return;
         }
+        queued_specifiers.insert(specifier.to_string());
+        packages_to_resolve.push_back(PackageDeclarationRequest {
+            specifier: specifier.to_string(),
+            package_name: specifier.to_string(),
+            subpath: None,
+            importer_dir: importer_dir.to_path_buf(),
+            importer_file: importer_file.to_path_buf(),
+            is_imports: true,
+        });
+        return;
+    }
+
+    if !is_external_specifier(specifier) {
+        return;
+    }
+
+    if let Some((package_name, subpath)) = parse_package_specifier(specifier) {
+        queued_specifiers.insert(specifier.to_string());
+        packages_to_resolve.push_back(PackageDeclarationRequest {
+            specifier: specifier.to_string(),
+            package_name,
+            subpath,
+            importer_dir: importer_dir.to_path_buf(),
+            importer_file: importer_file.to_path_buf(),
+            is_imports: false,
+        });
     }
 }
 
@@ -1017,91 +1099,12 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_exports_types() {
-        let exports = serde_json::json!({
-            ".": { "types": "./dist/index.d.ts" },
-            "./feature": { "types": "./dist/feature.d.ts" },
-            "./nested/path": { "types": "./dist/nested/path.d.ts" },
-            "./string-dts": "./dist/string-dts.d.ts",
-            "./runtime-only": "./dist/runtime.js",
-            "./feature-nested": { "import": { "types": "./dist/feature.d.ts" } },
-            "./wild/*": { "types": "./dist/*.d.ts" }
-        });
-
-        assert_eq!(
-            resolve_exports_types(&exports, "."),
-            Some("./dist/index.d.ts".to_string())
-        );
-        assert_eq!(
-            resolve_exports_types(&exports, "./feature"),
-            Some("./dist/feature.d.ts".to_string())
-        );
-        assert_eq!(
-            resolve_exports_types(&exports, "./nested/path"),
-            Some("./dist/nested/path.d.ts".to_string())
-        );
-        assert_eq!(
-            resolve_exports_types(&exports, "./string-dts"),
-            Some("./dist/string-dts.d.ts".to_string())
-        );
-        assert_eq!(resolve_exports_types(&exports, "./runtime-only"), None);
-        assert_eq!(
-            resolve_exports_types(&exports, "./feature-nested"),
-            Some("./dist/feature.d.ts".to_string())
-        );
-        assert_eq!(resolve_exports_types(&exports, "./wild/*"), None);
-        assert_eq!(resolve_exports_types(&exports, "./wild/feature"), None);
-        assert_eq!(resolve_exports_types(&exports, "./missing"), None);
-    }
-
-    #[test]
-    fn test_resolve_exports_types_nested_conditions() {
-        let exports = serde_json::json!({
-            ".": {
-                "import": {
-                    "types": "./dist/index.d.ts"
-                }
-            },
-            "./subpath": {
-                "default": {
-                    "types": "./dist/subpath.d.ts"
-                }
-            }
-        });
-
-        assert_eq!(
-            resolve_exports_types(&exports, "."),
-            Some("./dist/index.d.ts".to_string())
-        );
-        assert_eq!(
-            resolve_exports_types(&exports, "./subpath"),
-            Some("./dist/subpath.d.ts".to_string())
-        );
-    }
-
-    #[test]
-    fn test_resolve_exports_entrypoint_prefers_types_then_runtime() {
-        let exports = serde_json::json!({
-            ".": {
-                "import": "./dist/index.js",
-                "types": "./dist/index.d.ts"
-            },
-            "./feature": {
-                "default": {
-                    "require": "./dist/feature.cjs",
-                    "import": "./dist/feature.js"
-                }
-            }
-        });
-
-        assert_eq!(
-            resolve_exports_entrypoint(&exports, "."),
-            Some("./dist/index.d.ts".to_string())
-        );
-        assert_eq!(
-            resolve_exports_entrypoint(&exports, "./feature"),
-            Some("./dist/feature.js".to_string())
-        );
+    fn test_path_is_within_rejects_escape() {
+        let base = Path::new("/pkg");
+        assert!(path_is_within(base, &base.join("dist/index.d.ts")));
+        assert!(path_is_within(base, &base.join("a/../b/index.d.ts")));
+        assert!(!path_is_within(base, &base.join("../outside.d.ts")));
+        assert!(!path_is_within(base, &base.join("a/../../escape.d.ts")));
     }
 
     #[test]

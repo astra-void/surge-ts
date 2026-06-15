@@ -411,6 +411,17 @@ pub(crate) fn infer_new_expression(
         InferredExpression::Known(Type::Function(function_type)) => {
             InferredExpression::Known(function_type.return_type().clone())
         }
+        InferredExpression::Known(Type::Object(object))
+            if object.construct_signature().is_some() =>
+        {
+            InferredExpression::Known(
+                object
+                    .construct_signature()
+                    .expect("construct signature present")
+                    .return_type()
+                    .clone(),
+            )
+        }
         InferredExpression::Known(Type::Any) => InferredExpression::Known(Type::Any),
         InferredExpression::UnresolvedIdentifier { name, span } => {
             InferredExpression::UnresolvedIdentifier { name, span }

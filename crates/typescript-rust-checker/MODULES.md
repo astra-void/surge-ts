@@ -32,6 +32,9 @@ v1.2.5 memoizes relative module resolution per run: `resolve_relative_module` ca
 ## Current Policy
 
 - Script files still share top-level `type` aliases, `interface` declarations, and function declarations across files.
+- Duplicate `interface` declarations merge across script files and within a single module file; a conflicting property type reports TS2717 and the first declaration's type wins.
+- A `declare module "pkg"` block in a module file augments an already-resolved target: its exported interfaces merge and new exported functions/types are added on import. Reopened ambient `declare module "pkg"` blocks in script files merge the same way.
+- Augmenting an unresolved module specifier does not make it resolvable; the import still reports TS2307 with no downstream cascade.
 - Module files keep their own top-level declarations local to the file.
 - Module files do not contribute to the global script namespace.
 - Module files do not see script globals under the isolated-module policy.
@@ -69,22 +72,19 @@ Default mode for unresolved packages:
 
 These forms remain intentionally out of scope for v0.70.1:
 
-- full package resolution remains unsupported
-- only exact `exports.types` declaration targets are supported; full exports maps are not
-- exact package declaration subpaths are supported; wildcard/runtime subpaths are not
+- Modern package declaration resolution is supported on the declaration side: conditional and pattern `exports`, the `imports` field, `typesVersions`, package self-name imports, and exact subpaths. Full runtime/JS entrypoint resolution and `main` parity remain out of scope.
 - explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
 - `baseUrl` resolution remains unsupported/deprecated
-- v0.85 introduces a generated default-lib foundation alongside the loaded-module surface. It does not load the full official TypeScript lib files at runtime; instead it generates a small supported subset from the local TypeScript package and loads those generated declarations as ambient default libs. `noLib: true` disables the generated default libs. Full lib.d.ts parity, Node, and `@types` discovery remain out of scope.
+- A generated default-lib foundation loads a small supported subset from the local TypeScript package as ambient default libs; an opt-in physical `lib*.d.ts` loader can load the real lib files. `noLib: true` disables the generated default libs. `@types` discovery is supported through configured `compilerOptions.types`/`typeRoots`; full automatic `@types` discovery and full lib.d.ts/Node parity remain out of scope.
 - The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.
   - Ambient modules and resolved package entrypoints resolve before package stubbing.
   - Default import, namespace import, named re-export, type-only re-export, and star re-export behavior inside exact ambient modules is pinned.
-  - Duplicate ambient module declarations are first-wins / pinned, not full merging.
+  - Reopened ambient module declarations and module augmentations merge their exported interfaces (declaration merging) within the supported subset; full namespace/enum/overload-ordering merging is out of scope.
   - Exact specifier only.
   - No wildcard ambient module support.
 - `import = require(...)`
 - `export =`
 - Mixed default + named imports
-- Default class exports
 - CommonJS semantics
 
 ## Notes
@@ -92,7 +92,7 @@ These forms remain intentionally out of scope for v0.70.1:
 - Exported generic aliases and interfaces still use the relative module-resolution-lite pass, with explicit type arguments substituted when the imported declaration is instantiated and trailing defaults applied when callers omit type arguments.
 - Constraints remain parser-only metadata in this phase.
 - Private helper types stay visible through the current module-resolution-lite pass so imported declarations can still resolve them.
-- The next phase should continue from compatibility-report output. Likely follow-ups are `@types` / `lib.d.ts` foundational support.
+- The next phase should continue from compatibility-report output.
 
 ## Ambient Modules
 

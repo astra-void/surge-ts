@@ -434,7 +434,8 @@ pub(crate) fn check_expression_flow_impl(
             FlowCheck::Clear
         }
         ParsedExpression::ArrowFunction(_) => FlowCheck::Clear,
-        ParsedExpression::StringLiteral(_)
+        ParsedExpression::This { .. }
+        | ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)
         | ParsedExpression::BooleanLiteral(_)
         | ParsedExpression::UndefinedLiteral

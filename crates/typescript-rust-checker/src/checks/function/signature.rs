@@ -397,6 +397,34 @@ pub(crate) fn check_function_body_with_signature(
     has_explicit_return_type: bool,
     ctx: &mut CheckerContext,
 ) {
+    check_function_body_with_signature_and_this(
+        name,
+        parameters,
+        body,
+        function_type,
+        type_parameters,
+        function_signature,
+        has_explicit_return_type,
+        None,
+        ctx,
+    );
+}
+
+/// Like [`check_function_body_with_signature`], but optionally binds a `this`
+/// symbol (the class instance or static side) into the body scope so class
+/// method and constructor bodies can resolve `this.<member>` references.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn check_function_body_with_signature_and_this(
+    name: String,
+    parameters: Vec<ParsedFunctionParameter>,
+    body: Vec<ParsedFunctionBodyStatement>,
+    function_type: &FunctionType,
+    type_parameters: &[ParsedTypeParameter],
+    function_signature: Option<FunctionSignatureInfo>,
+    has_explicit_return_type: bool,
+    this_type: Option<Type>,
+    ctx: &mut CheckerContext,
+) {
     let body_flow = analyze_function_body_flow(&body);
     let flow_facts = collect_function_flow_facts(&body);
 
@@ -412,6 +440,16 @@ pub(crate) fn check_function_body_with_signature(
             function_signature,
         },
     );
+    if let Some(this_type) = this_type {
+        scopes.insert_current(
+            "this".to_string(),
+            SymbolInfo {
+                ty: this_type,
+                kind: SymbolKind::Const,
+                function_signature: None,
+            },
+        );
+    }
     scopes.push_child();
     let mut flow_state = FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,

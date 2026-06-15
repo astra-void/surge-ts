@@ -655,15 +655,15 @@ pub(crate) fn collect_exports_from_statement(
                     push_duplicate_default_export_diagnostic(ctx, function.name_span.or(*span));
                 }
             }
-            ParsedDefaultExportDeclaration::Class { .. } => {
-                if default_symbol.is_some() {
-                    push_duplicate_default_export_diagnostic(ctx, *span);
+            ParsedDefaultExportDeclaration::Class(class) => {
+                if let Some(symbol) = local_symbols.get_shared(&class.name) {
+                    if default_symbol.is_some() {
+                        push_duplicate_default_export_diagnostic(ctx, class.name_span.or(*span));
+                    } else {
+                        *default_symbol = Some(symbol);
+                    }
                 } else {
-                    *default_symbol = Some(Arc::new(SymbolInfo {
-                        ty: Type::Unknown,
-                        kind: SymbolKind::Const,
-                        function_signature: None,
-                    }));
+                    push_duplicate_default_export_diagnostic(ctx, class.name_span.or(*span));
                 }
             }
             ParsedDefaultExportDeclaration::Expression(expression) => {
@@ -716,6 +716,22 @@ pub(crate) fn collect_exports_from_statement(
             if let Some(symbol) = local_symbols.get_shared(&function.name) {
                 if symbols.get(&function.name).is_none() {
                     symbols.insert_shared(function.name.clone(), symbol);
+                }
+            }
+        }
+        ParsedStatement::ClassDeclaration(class) => {
+            // A class exports both an instance type and a constructor/static value.
+            if let Some(type_declaration) = local_type_declarations.get(&class.name) {
+                export_local_type_declaration(
+                    type_declaration,
+                    &class.name,
+                    resolution_scope,
+                    type_declarations,
+                );
+            }
+            if let Some(symbol) = local_symbols.get_shared(&class.name) {
+                if symbols.get(&class.name).is_none() {
+                    symbols.insert_shared(class.name.clone(), symbol);
                 }
             }
         }

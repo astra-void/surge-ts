@@ -96,9 +96,12 @@ pub(crate) fn parse_export_default_declaration(
 
             ParsedDefaultExportDeclaration::Function(function)
         }
-        ExportDefaultDeclarationKind::ClassDeclaration(_) => {
-            ParsedDefaultExportDeclaration::Class {
-                span: Some(text_span_from_oxc_span(declaration.span)),
+        ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+            match super::classes::parse_class_declaration(class) {
+                Some(class) => ParsedDefaultExportDeclaration::Class(class),
+                None => ParsedDefaultExportDeclaration::Unsupported {
+                    span: Some(text_span_from_oxc_span(declaration.span)),
+                },
             }
         }
         ExportDefaultDeclarationKind::BooleanLiteral(boolean_literal) => {
@@ -270,6 +273,8 @@ fn parse_exported_declaration(
             .map(|type_alias| vec![ParsedStatement::TypeAliasDeclaration(type_alias)])?,
         Declaration::TSInterfaceDeclaration(interface) => parse_interface_declaration(interface)
             .map(|interface| vec![ParsedStatement::InterfaceDeclaration(interface)])?,
+        Declaration::ClassDeclaration(class) => super::classes::parse_class_declaration(class)
+            .map(|class| vec![ParsedStatement::ClassDeclaration(class)])?,
         _ => return None,
     };
 

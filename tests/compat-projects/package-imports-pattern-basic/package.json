@@ -1,0 +1,8 @@
+{
+  "name": "app",
+  "imports": {
+    "#features/*": {
+      "types": "./types/features/*.d.ts"
+    }
+  }
+}

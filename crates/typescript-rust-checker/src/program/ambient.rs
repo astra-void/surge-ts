@@ -12,9 +12,7 @@ use crate::context::{CheckerContext, FileKind};
 use crate::default_lib::inject_generated_default_lib_snapshot_for_file_name;
 use crate::driver::collect_type_declarations;
 use crate::modules::{ModuleExportTable, build_module_export_table};
-use crate::symbols::{
-    InterfaceInfo, SymbolTable, TypeDeclarationInfo, TypeDeclarationScope, TypeDeclarationTable,
-};
+use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AmbientModuleEntry {
@@ -78,22 +76,16 @@ pub(crate) fn collect_ambient_globals(
             }
         });
 
-        let is_physical_lib = parsed_file.file_kind == FileKind::PhysicalDefaultLib;
+        // Declaration merging across global declaration files: the same
+        // interface (a default lib's `Window`, or a project's split global
+        // `interface Env`) contributes members from every declaration rather
+        // than being dropped first-wins.
         for (name, decl) in ambient_td.iter() {
-            if is_physical_lib {
-                // Default libs rely on declaration merging: the same interface
-                // (e.g. `PromiseConstructor`, `Array<T>`, DOM `Window`) is split
-                // across many lib files. Merge members rather than first-wins.
-                merge_physical_lib_type_declaration(
-                    &mut ctx.ambient_global_type_declarations,
-                    name.as_ref(),
-                    decl,
-                );
-            } else {
-                let _ = ctx
-                    .ambient_global_type_declarations
-                    .insert(name.clone(), decl.clone());
-            }
+            crate::symbols::merge_type_declaration_into_table(
+                &mut ctx.ambient_global_type_declarations,
+                name.as_ref(),
+                decl,
+            );
         }
 
         let mut local_function_signatures = HashMap::new();
@@ -186,64 +178,37 @@ pub(crate) fn collect_ambient_globals(
             }
         }
 
+        // `declare class` contributes a global constructor/static value. The
+        // instance interface is already in `ambient_global_type_declarations`
+        // above, so the value's construct signature and member types resolve.
+        for stmt in &parsed_file.statements {
+            let class = match stmt {
+                ParsedStatement::ClassDeclaration(class) => Some(class),
+                ParsedStatement::ExportDeclaration(
+                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    },
+                ) => {
+                    if let ParsedStatement::ClassDeclaration(class) = declaration.as_ref() {
+                        Some(class)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(class) = class {
+                if ctx.ambient_global_symbols.get(&class.name).is_none() {
+                    let symbol = super::build_class_value_symbol(class, ctx);
+                    ctx.ambient_global_symbols
+                        .insert(class.name.clone(), symbol);
+                }
+            }
+        }
+
         ctx.type_declarations = saved_type_declarations;
         ctx.type_declaration_scope = saved_type_declaration_scope;
-    }
-}
-
-/// Merge a physical default-lib type declaration into the ambient global table.
-///
-/// When both the existing and incoming declarations are interfaces, their
-/// members and `extends` clauses are concatenated (TypeScript interface
-/// declaration merging). Otherwise the first declaration wins, matching how a
-/// `var` + interface pair (e.g. `Promise`) keeps the interface as the type.
-fn merge_physical_lib_type_declaration(
-    table: &mut TypeDeclarationTable,
-    name: &str,
-    incoming: &TypeDeclarationInfo,
-) {
-    let merged = match (table.get(name), incoming) {
-        (
-            Some(TypeDeclarationInfo::Interface(existing)),
-            TypeDeclarationInfo::Interface(incoming),
-        ) => {
-            let mut members = existing.members.clone();
-            members.extend(incoming.members.iter().cloned());
-            let mut extends = existing.extends.clone();
-            extends.extend(incoming.extends.iter().cloned());
-            let type_parameters = if existing.type_parameters.is_empty() {
-                incoming.type_parameters.clone()
-            } else {
-                existing.type_parameters.clone()
-            };
-            Some(InterfaceInfo {
-                name: existing.name.clone(),
-                file_name: existing.file_name.clone(),
-                name_span: existing.name_span,
-                type_parameters,
-                extends,
-                members,
-                string_index_type: existing
-                    .string_index_type
-                    .clone()
-                    .or_else(|| incoming.string_index_type.clone()),
-                resolution_scope: existing
-                    .resolution_scope
-                    .clone()
-                    .or_else(|| incoming.resolution_scope.clone()),
-            })
-        }
-        // Existing non-interface, or incoming non-interface: first declaration
-        // wins (e.g. an alias already present, or a `var`/interface pair).
-        (Some(_), _) => return,
-        (None, _) => {
-            let _ = table.insert(name, incoming.clone());
-            return;
-        }
-    };
-
-    if let Some(merged) = merged {
-        table.upsert(name, TypeDeclarationInfo::Interface(merged));
     }
 }
 
@@ -389,7 +354,18 @@ pub(crate) fn collect_ambient_modules(
             ctx.type_declarations = current_type_declarations;
             ctx.symbols = current_symbols;
 
-            if let Some(existing_index) = ambient_module_indexes
+            if parsed_file.is_module {
+                // `declare module "x"` inside a module file augments an existing
+                // module rather than declaring a new ambient one. It is merged
+                // into the resolved target on import, never made resolvable here.
+                match ctx.module_augmentations.get_mut(&module.module_specifier) {
+                    Some(existing) => merge_module_export_tables(existing, &raw_export_table),
+                    None => {
+                        ctx.module_augmentations
+                            .insert(module.module_specifier.clone(), raw_export_table);
+                    }
+                }
+            } else if let Some(existing_index) = ambient_module_indexes
                 .get(&module.module_specifier)
                 .copied()
             {
@@ -462,6 +438,30 @@ pub(crate) fn collect_ambient_modules(
     });
 }
 
+/// Merge a module augmentation into an already-resolved target export table.
+///
+/// Augmented interfaces merge their members into the target's existing exports
+/// (declaration merging); new exported values and types are added. The target's
+/// namespace export shape is preserved, since the augmentation only extends it.
+pub(crate) fn apply_module_augmentation(
+    base: &mut ModuleExportTable,
+    augmentation: &ModuleExportTable,
+) {
+    for (name, declaration) in augmentation.type_declarations.iter() {
+        crate::symbols::merge_type_declaration_into_table(
+            &mut base.type_declarations,
+            name.as_ref(),
+            declaration,
+        );
+    }
+
+    for (name, symbol) in augmentation.symbols.iter_shared() {
+        if base.symbols.get(name).is_none() {
+            let _ = base.symbols.insert_shared(name.clone(), symbol.clone());
+        }
+    }
+}
+
 pub(crate) fn merge_module_export_tables(
     target: &mut ModuleExportTable,
     source: &ModuleExportTable,
@@ -472,11 +472,11 @@ pub(crate) fn merge_module_export_tables(
         TableMergeKind::General,
     );
     for (name, declaration) in source.type_declarations.iter() {
-        if target.type_declarations.get(name.as_ref()).is_none() {
-            let _ = target
-                .type_declarations
-                .insert(name.clone(), declaration.clone());
-        }
+        crate::symbols::merge_type_declaration_into_table(
+            &mut target.type_declarations,
+            name.as_ref(),
+            declaration,
+        );
     }
 
     for (name, symbol) in source.symbols.iter_shared() {

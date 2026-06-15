@@ -67,6 +67,9 @@ pub(crate) fn check_program_statement(
         }
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
+        ParsedStatement::ClassDeclaration(class) => {
+            super::check_class_declaration(&class, ctx);
+        }
         ParsedStatement::ImportDeclaration(_) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
             declaration,
@@ -96,7 +99,9 @@ pub(crate) fn check_program_statement(
             ParsedDefaultExportDeclaration::Expression(expression) => {
                 expr::check_expression_statement(expression, ctx);
             }
-            ParsedDefaultExportDeclaration::Class { .. } => {}
+            ParsedDefaultExportDeclaration::Class(class) => {
+                super::check_class_declaration(&class, ctx);
+            }
             ParsedDefaultExportDeclaration::Unsupported { span } => {
                 let mut diagnostic =
                     Diagnostic::typescript_rust_unsupported_module_syntax(ctx.file_name.clone());

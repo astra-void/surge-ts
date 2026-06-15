@@ -167,13 +167,15 @@ fn program_duplicate_type_alias_across_files_ts2300() {
 }
 
 #[test]
-fn program_duplicate_interface_across_files_ts2300() {
+fn program_merge_interface_across_files_conflict_ts2717() {
+    // Global interfaces with the same name merge across files; a conflicting
+    // property type is reported once as TS2717 on the later declaration.
     let diagnostics = program(&[
         ("a.ts", "interface User { name: string; }"),
         ("b.ts", "interface User { name: number; }"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2300"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2717"]);
     assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
 }
 
@@ -1612,13 +1614,15 @@ fn program_module_duplicate_type_alias_same_module_file_ts2300() {
 }
 
 #[test]
-fn program_module_duplicate_interface_same_module_file_ts2300() {
+fn program_module_merge_interface_same_module_file_conflict_ts2717() {
+    // Interfaces with the same name in one module file merge; a conflicting
+    // property type is reported once as TS2717 rather than a duplicate-identifier.
     let diagnostics = program(&[(
         "a.ts",
         "export {};\ninterface User { name: string; }\ninterface User { name: number; }",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2300"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2717"]);
     assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
 }
 
@@ -3274,6 +3278,9 @@ fn ambient_module_duplicate_default_export_policy_pinned() {
 
 #[test]
 fn ambient_module_duplicate_type_export_policy_pinned() {
+    // Reopened ambient module blocks merge their exported interfaces; on a
+    // conflicting property the first declaration wins and no diagnostic is
+    // surfaced for the ambient declaration file (pinned, low-cascade policy).
     let diagnostics = program(&[
         (
             "src/index.ts",
@@ -3397,13 +3404,44 @@ fn declaration_file_declare_const_no_initializer_valid() {
 }
 
 #[test]
-fn declaration_file_unsupported_syntax_still_reports() {
+fn declaration_file_declare_class_valid() {
+    // `declare class` is now supported: it contributes a global value/type and
+    // should not produce an unsupported-declaration diagnostic.
     let diagnostics = native_program(&[("types/globals.d.ts", "declare class Foo {}")]);
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(
-        codes(&diagnostics)[0],
-        "typescript-rust::unsupported-declaration"
-    ); // Pinned unsupported diagnostic
+    assert_eq!(diagnostics.len(), 0);
+}
+
+#[test]
+fn class_new_expression_checks_constructor_args_and_returns_instance() {
+    let diagnostics = program(&[(
+        "example.ts",
+        "class User { id: string; constructor(id: string) { this.id = id; } }\n\
+         const ok = new User(\"a\");\n\
+         const okId: string = ok.id;\n\
+         const bad = new User(123);",
+    )]);
+    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+}
+
+#[test]
+fn class_instance_access_of_static_member_reports_ts2576() {
+    let diagnostics = program(&[(
+        "example.ts",
+        "class User { id: string; static version: string; constructor(id: string) { this.id = id; } }\n\
+         const user = new User(\"a\");\n\
+         user.version;",
+    )]);
+    assert_eq!(codes(&diagnostics), vec!["TS2576"]);
+}
+
+#[test]
+fn class_static_access_of_instance_member_reports_ts2339() {
+    let diagnostics = program(&[(
+        "example.ts",
+        "class User { id: string; static version: string; constructor(id: string) { this.id = id; } }\n\
+         User.id;",
+    )]);
+    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
 }
 
 #[test]

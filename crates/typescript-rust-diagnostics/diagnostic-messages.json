@@ -32,6 +32,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2717",
+    "category": "Error",
+    "message": "Subsequent property declarations must have the same type.  Property '{0}' must be of type '{1}', but here has type '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS2305",
     "category": "Error",
     "message": "Module '{0}' has no exported member '{1}'.",
@@ -293,6 +301,14 @@
     "message": "Expected {0} arguments, but got {1}.",
     "source": "typescript",
     "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2576",
+    "category": "Error",
+    "message": "Property '{0}' does not exist on type '{1}'. Did you mean to access the static member '{2}.{0}' instead?",
+    "source": "typescript",
+    "arity": 3,
     "support": "emitted"
   },
   {
