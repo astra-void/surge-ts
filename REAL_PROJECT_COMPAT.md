@@ -142,7 +142,11 @@ v0.82 is a project visibility and file-discovery hardening phase. It does not
 claim full real-project parity. The goal is to make silent zero-file project
 comparisons impossible, especially when `tsc` sees `.tsx`, `.mts`, `.cts`,
 `.d.ts`, and nested `examples/**` inputs that the Rust loader might otherwise
-miss. `.tsx` visibility is not the same as JSX or React type support.
+miss. `.tsx` visibility is not the same as JSX or React type support. A later
+parser-safe JSX slice adds JSX element/fragment/attribute parsing and a
+conservative `JSX.Element` inference (walking `{...}` containers and component
+tags for ordinary diagnostics) without `JSX` namespace resolution, intrinsic
+prop validation, React globals, or the JSX transform.
 
 v0.97.1 stabilizes the v0.97 object-slice landing instead of starting a new
 arena/type-IR phase. `contextual-callback-object-properties-basic` and
