@@ -60,7 +60,7 @@ pub const TS2614: DiagnosticDescriptor = DiagnosticDescriptor {
     number: Some(2614),
     source: DiagnosticSource::TypeScript,
     category: DiagnosticCategory::Error,
-    message_template: "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from \"{0}\"' instead?",
+    message_template: "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from {0}' instead?",
     argument_count: 2,
     support: DiagnosticSupport::Emitted,
 };
@@ -395,6 +395,16 @@ pub const TS2591: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2688: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2688",
+    number: Some(2688),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot find type definition file for '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2693: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2693",
     number: Some(2693),
@@ -725,6 +735,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2554,
     TS2588,
     TS2591,
+    TS2688,
     TS2693,
     TS2741,
     TS2749,
@@ -1132,6 +1143,15 @@ impl Diagnostic {
     pub fn ts2591(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2591,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2688(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2688,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

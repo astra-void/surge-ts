@@ -373,6 +373,15 @@ fn run_project_mode(
     let mut resolved_modules = std::collections::HashMap::new();
     let mut package_resolution_cache =
         package_declarations::PackageDeclarationResolverCache::default();
+
+    let missing_configured_types = package_declarations::resolve_configured_type_declarations(
+        &mut inputs,
+        &mut sources,
+        &loaded.root_dir,
+        &loaded.compiler_options.types,
+        &mut package_resolution_cache,
+    );
+
     loop {
         let files_before = inputs.len();
 
@@ -428,10 +437,15 @@ fn run_project_mode(
     };
 
     let result = check_program_with_stats_and_jobs(inputs, checker_options, jobs);
-    let diagnostics = apply_project_no_lib_compatibility_diagnostics(
+    let mut diagnostics = apply_project_no_lib_compatibility_diagnostics(
         result.diagnostics,
         loaded.compiler_options.no_lib,
         diagnostic_profile,
+    );
+    diagnostics.extend(
+        missing_configured_types
+            .iter()
+            .map(|type_name| Diagnostic::ts2688(type_name, String::new())),
     );
     let exit_code = render_project_mode_output(
         &loaded,

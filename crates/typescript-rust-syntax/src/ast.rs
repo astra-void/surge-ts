@@ -45,6 +45,7 @@ pub enum ParsedType {
     Void,
     Any,
     Unknown,
+    Never,
     StringLiteral(String),
     NumberLiteral(String),
     BooleanLiteral(bool),
@@ -58,6 +59,31 @@ pub enum ParsedType {
     KeyOf(Box<ParsedType>),
     IndexedAccess(ParsedIndexedAccessType),
     Mapped(ParsedMappedType),
+    Conditional(ParsedConditionalType),
+    TemplateLiteral(ParsedTemplateLiteralType),
+}
+
+/// A template literal type in type position, e.g. `` `/${Entity}/${Action}` ``.
+///
+/// `quasis` holds the literal string segments and always has exactly one more
+/// element than `interpolations` (the head, the text between each
+/// interpolation, and the tail). `interpolations[i]` sits between `quasis[i]`
+/// and `quasis[i + 1]`. A template with no interpolations (`` `hello` ``) has a
+/// single quasi and no interpolations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedTemplateLiteralType {
+    pub quasis: Vec<String>,
+    pub interpolations: Vec<ParsedType>,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedConditionalType {
+    pub check_type: Box<ParsedType>,
+    pub extends_type: Box<ParsedType>,
+    pub true_type: Box<ParsedType>,
+    pub false_type: Box<ParsedType>,
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,8 +461,56 @@ pub enum ParsedExpression {
         expression: Box<ParsedExpression>,
         span: Option<TextSpan>,
     },
+    /// A JSX element such as `<div id="x">child</div>` or `<Button />`. Parsed in
+    /// `.tsx` mode only; the checker types it conservatively (see [`ParsedJsxChild`]).
+    JsxElement {
+        /// The tag name exactly as written, e.g. `div`, `Button`, `UI.Button`.
+        /// Used for diagnostics/debugging only.
+        tag_name: String,
+        tag_name_span: Option<TextSpan>,
+        /// Set when the tag refers to a value that must resolve in scope: the head
+        /// identifier of a component (`Button`) or member tag (`UI.Button`).
+        /// `None` for intrinsic lowercase elements (`div`), which are not value
+        /// references.
+        component_name: Option<String>,
+        component_span: Option<TextSpan>,
+        attributes: Vec<ParsedJsxAttribute>,
+        children: Vec<ParsedJsxChild>,
+        span: Option<TextSpan>,
+    },
+    /// A JSX fragment, `<>...</>`.
+    JsxFragment {
+        children: Vec<ParsedJsxChild>,
+        span: Option<TextSpan>,
+    },
     ArrowFunction(Box<ParsedArrowFunction>),
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedJsxAttribute {
+    /// Attribute name, e.g. `id`. Empty for a `{...spread}` attribute.
+    pub name: String,
+    pub name_span: Option<TextSpan>,
+    /// The expression inside a `{...}` attribute value, a JSX element value, or the
+    /// argument of a `{...spread}` attribute. `None` for string-literal values
+    /// (`id="x"`) and boolean shorthand (`enabled`), which carry nothing to check.
+    pub value: Option<ParsedExpression>,
+    pub value_span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedJsxChild {
+    /// Plain text content; nothing to type-check.
+    Text,
+    /// A `{expression}` (or `{...spread}`) container child. An empty `{}` container
+    /// carries `None`.
+    Expression {
+        expression: Option<ParsedExpression>,
+        span: Option<TextSpan>,
+    },
+    /// A nested JSX element or fragment (itself a [`ParsedExpression`]).
+    Element(ParsedExpression),
 }
 
 #[derive(Debug, Clone, PartialEq)]

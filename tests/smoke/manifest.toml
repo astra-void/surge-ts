@@ -6516,6 +6516,26 @@ name = "function-declaration-this-parameter-not-visible-as-value-parameter"
 path = "tests/smoke/function_declaration_this_parameter_not_visible_as_value_parameter.ts"
 expected_diagnostics = []
 
+[[case]]
+name = "conditional-type-concrete-mismatch"
+path = "tests/smoke/conditional_type_concrete_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "conditional-type-distributive-mismatch"
+path = "tests/smoke/conditional_type_distributive_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "template-literal-type-literal-mismatch"
+path = "tests/smoke/template_literal_type_literal_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "template-literal-type-union-expansion-mismatch"
+path = "tests/smoke/template_literal_type_union_expansion_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
 [[test]]
 file = "external_named_import_reports_ts2307_no_cascade.ts"
 diagnostics = [2307]

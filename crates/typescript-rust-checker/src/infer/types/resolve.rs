@@ -6,11 +6,13 @@ use std::collections::BTreeMap;
 
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
-    ParsedFunctionType, ParsedFunctionTypeParameter, ParsedIndexedAccessType, ParsedMappedType,
-    ParsedNamedType, ParsedObjectType, ParsedType, ParsedTypeParameter, TextSpan,
+    ParsedConditionalType, ParsedFunctionType, ParsedFunctionTypeParameter,
+    ParsedIndexedAccessType, ParsedMappedType, ParsedNamedType, ParsedObjectType,
+    ParsedTemplateLiteralType, ParsedType, ParsedTypeParameter, TextSpan,
 };
 use typescript_rust_types::{
-    NumberLiteralType, ObjectProperty, Type, TypeCopyReason, union_type, with_type_copy_reason,
+    NumberLiteralType, ObjectProperty, Type, TypeCopyReason, is_assignable_to, union_type,
+    with_type_copy_reason,
 };
 
 use crate::arena::{alloc_function_type, alloc_object_type};
@@ -52,6 +54,10 @@ pub(crate) fn resolve_parsed_type(
         },
         ParsedType::Unknown => ResolvedType {
             ty: Type::Unknown,
+            had_error: false,
+        },
+        ParsedType::Never => ResolvedType {
+            ty: Type::Never,
             had_error: false,
         },
         ParsedType::StringLiteral(value) => ResolvedType {
@@ -145,7 +151,206 @@ pub(crate) fn resolve_parsed_type(
         ParsedType::IndexedAccess(indexed_access) => {
             resolve_indexed_access_type(indexed_access, ctx, resolving, substitution)
         }
+        ParsedType::Conditional(conditional) => {
+            resolve_conditional_type(conditional, ctx, resolving, substitution)
+        }
+        ParsedType::TemplateLiteral(template) => {
+            resolve_template_literal_type(template, ctx, resolving, substitution)
+        }
     }
+}
+
+/// Maximum number of string-literal members a finite template expansion may
+/// produce. Beyond this we fall back to broad `string` rather than materialise a
+/// huge union (a defensive bound; real fixtures stay tiny).
+const TEMPLATE_LITERAL_EXPANSION_LIMIT: usize = 10_000;
+
+/// Evaluates a narrow subset of template literal types.
+///
+/// When every interpolation resolves to a finite set of string/number/boolean
+/// literal members, the template expands to the cartesian product of its parts
+/// as a deduped string-literal union (e.g. `` `/${"a"|"b"}/${"c"}` `` becomes
+/// `"/a/c" | "/b/c"`). If any interpolation is a broad primitive (`string`,
+/// `number`, …) or otherwise unresolved, the whole template degrades to broad
+/// `string` so callers stay conservative and never cascade. This means a broad
+/// template like `` `id:${string}` `` accepts any string — tsc is stricter, but
+/// the mismatch is silent rather than a false positive.
+pub(crate) fn resolve_template_literal_type(
+    template: ParsedTemplateLiteralType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let ParsedTemplateLiteralType {
+        quasis,
+        interpolations,
+        ..
+    } = template;
+
+    // The head is always present; interpolation i is followed by quasi i + 1.
+    let mut combinations: Vec<String> = vec![quasis.first().cloned().unwrap_or_default()];
+    let mut had_error = false;
+
+    for (index, interpolation) in interpolations.into_iter().enumerate() {
+        let resolved = resolve_parsed_type(interpolation, ctx, resolving, substitution);
+        had_error |= resolved.had_error;
+
+        let Some(parts) = finite_literal_strings(&resolved.ty) else {
+            // Broad or unresolved interpolation: degrade to `string`.
+            return ResolvedType {
+                ty: Type::String,
+                had_error,
+            };
+        };
+
+        let suffix = quasis.get(index + 1).cloned().unwrap_or_default();
+        if combinations.len().saturating_mul(parts.len()) > TEMPLATE_LITERAL_EXPANSION_LIMIT {
+            return ResolvedType {
+                ty: Type::String,
+                had_error,
+            };
+        }
+
+        let mut next = Vec::with_capacity(combinations.len() * parts.len());
+        for prefix in &combinations {
+            for part in &parts {
+                next.push(format!("{prefix}{part}{suffix}"));
+            }
+        }
+        combinations = next;
+    }
+
+    let members: Vec<Type> = combinations.into_iter().map(Type::StringLiteral).collect();
+
+    ResolvedType {
+        ty: union_type(members),
+        had_error,
+    }
+}
+
+/// Returns the finite set of literal string renderings for `ty` if it is a
+/// string/number/boolean literal (or a union of such literals), or `None` if it
+/// is a broad primitive or anything else that cannot be enumerated. Rendering
+/// matches how each literal participates in a template literal: numbers by their
+/// literal text and booleans as `true`/`false`.
+fn finite_literal_strings(ty: &Type) -> Option<Vec<String>> {
+    match ty {
+        Type::StringLiteral(value) => Some(vec![value.clone()]),
+        Type::NumberLiteral(value) => Some(vec![value.value.clone()]),
+        Type::BooleanLiteral(value) => Some(vec![value.to_string()]),
+        Type::Union(union) => {
+            let mut parts = Vec::new();
+            for member in union.types().iter() {
+                parts.extend(finite_literal_strings(member)?);
+            }
+            Some(parts)
+        }
+        _ => None,
+    }
+}
+
+/// Evaluates a narrow subset of conditional types `Check extends Extends ? True
+/// : False`.
+///
+/// Two shapes are supported:
+/// - **Distributive**: when the check type is a naked type parameter (a `Named`
+///   reference that the current substitution has bound to a concrete type), the
+///   conditional distributes over each member of the substituted union. This is
+///   what backs `Exclude`, `Extract`, and `NonNullable`.
+/// - **Concrete**: when the check type is not a naked parameter but resolves to a
+///   concrete type, a single assignability test selects the branch.
+///
+/// Anything outside this subset (an unresolved generic check type, or a branch
+/// that already failed to resolve) degrades to `Unknown` so callers do not
+/// cascade.
+pub(crate) fn resolve_conditional_type(
+    conditional: ParsedConditionalType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let distributive_parameter = match conditional.check_type.as_ref() {
+        ParsedType::Named(named) => substitution
+            .get(&named.name)
+            .filter(|_| !substitution.is_placeholder(&named.name))
+            .map(|_| named.name.clone()),
+        _ => None,
+    };
+
+    let resolved_extends =
+        resolve_parsed_type(*conditional.extends_type, ctx, resolving, substitution);
+    if resolved_extends.had_error {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
+    let resolved_check = resolve_parsed_type(
+        (*conditional.check_type).clone(),
+        ctx,
+        resolving,
+        substitution,
+    );
+    if resolved_check.had_error {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
+    if let Some(parameter_name) = distributive_parameter {
+        let members = match &resolved_check.ty {
+            Type::Union(union) => union.types().to_vec(),
+            Type::Never => Vec::new(),
+            other => vec![other.clone()],
+        };
+
+        let mut results = Vec::new();
+        let mut had_error = false;
+        for member in members {
+            let mut member_substitution =
+                substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+            member_substitution.insert(parameter_name.clone(), member.clone());
+
+            let branch = if is_assignable_to(&member, &resolved_extends.ty) {
+                (*conditional.true_type).clone()
+            } else {
+                (*conditional.false_type).clone()
+            };
+
+            let resolved_branch = resolve_parsed_type(branch, ctx, resolving, &member_substitution);
+            had_error |= resolved_branch.had_error;
+            results.push(resolved_branch.ty);
+        }
+
+        return ResolvedType {
+            ty: if results.is_empty() {
+                Type::Never
+            } else {
+                union_type(results)
+            },
+            had_error,
+        };
+    }
+
+    // Non-distributive: only evaluate when the check type is concrete enough for a
+    // meaningful assignability test. An unresolved generic parameter resolves to
+    // `Unknown`, which we treat as "cannot decide" and degrade.
+    if matches!(resolved_check.ty, Type::Unknown) || matches!(resolved_extends.ty, Type::Unknown) {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    }
+
+    let branch = if is_assignable_to(&resolved_check.ty, &resolved_extends.ty) {
+        *conditional.true_type
+    } else {
+        *conditional.false_type
+    };
+
+    resolve_parsed_type(branch, ctx, resolving, substitution)
 }
 
 pub(crate) fn resolve_tuple_type(
@@ -395,6 +600,9 @@ pub(crate) fn resolve_named_type(
                 substitution,
             ),
         };
+        // tsc displays a non-generic interface/type-alias by its name in
+        // diagnostics (e.g. `'StrictObj'`, not the structural expansion).
+        let resolved = attach_object_alias_name(resolved, &named_type.name);
         cache_named_type_resolution(ctx, &cache_key, &resolved);
         return resolved;
     }
@@ -417,6 +625,26 @@ pub(crate) fn resolve_named_type(
         ),
     };
     resolved
+}
+
+/// Tags a resolved object type with the interface/type-alias name it came from
+/// so diagnostics display the name (tsc behaviour). Non-object resolutions and
+/// errored resolutions pass through unchanged.
+fn attach_object_alias_name(resolved: ResolvedType, name: &str) -> ResolvedType {
+    if resolved.had_error {
+        return resolved;
+    }
+
+    match resolved.ty {
+        Type::Object(object) => ResolvedType {
+            ty: Type::Object(object.with_alias_name(name)),
+            had_error: false,
+        },
+        ty => ResolvedType {
+            ty,
+            had_error: false,
+        },
+    }
 }
 
 pub(crate) fn resolve_mapped_type(

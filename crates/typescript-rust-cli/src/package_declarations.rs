@@ -299,6 +299,112 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
     resolved_packages
 }
 
+/// Resolve `compilerOptions.types` entries to `@types/*` declaration entrypoints
+/// and load them into the project file set as dependency declaration files.
+///
+/// This is intentionally narrow: each configured name is mapped to
+/// `node_modules/@types/<mangled>` (searching upward from the project root), and
+/// only `types` / `typings` / exact `exports["."].types` / `index.d.ts` are
+/// consulted. It does not implement general package resolution. Names that
+/// cannot be resolved anywhere up the tree are returned so the caller can emit a
+/// TS2688 diagnostic.
+pub(crate) fn resolve_configured_type_declarations(
+    inputs: &mut Vec<SourceFileInput>,
+    sources: &mut Vec<(PathBuf, String, String)>,
+    root_dir: &Path,
+    types: &[String],
+    cache: &mut PackageDeclarationResolverCache,
+) -> Vec<String> {
+    let mut missing = Vec::new();
+    let mut known_file_names: HashSet<String> = inputs
+        .iter()
+        .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
+        .collect();
+
+    for type_name in types {
+        let mangled = types_package_name(type_name);
+        let Some(path) = resolve_configured_type_entrypoint(&mangled, root_dir, cache) else {
+            missing.push(type_name.clone());
+            continue;
+        };
+
+        let canonical_path = path.canonicalize().unwrap_or(path);
+        let normalized_file_name = canonicalize_if_exists_string(&canonical_path);
+        if !known_file_names.insert(normalized_file_name.clone()) {
+            continue;
+        }
+
+        let Ok(source_text) = std::fs::read_to_string(&canonical_path) else {
+            continue;
+        };
+
+        inputs.push(SourceFileInput {
+            file_name: normalized_file_name.clone(),
+            source_text: source_text.clone(),
+        });
+        sources.push((canonical_path, normalized_file_name, source_text));
+    }
+
+    missing
+}
+
+fn resolve_configured_type_entrypoint(
+    mangled: &str,
+    root_dir: &Path,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PathBuf> {
+    let mut current_dir = root_dir.to_path_buf();
+
+    loop {
+        let pkg_dir = current_dir
+            .join("node_modules")
+            .join("@types")
+            .join(mangled);
+        if let Some(path) = resolve_at_types_package_entrypoint(&pkg_dir, cache) {
+            return Some(path);
+        }
+
+        let Some(parent) = current_dir.parent() else {
+            break;
+        };
+        current_dir = parent.to_path_buf();
+    }
+
+    None
+}
+
+fn resolve_at_types_package_entrypoint(
+    pkg_dir: &Path,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PathBuf> {
+    let pkg_json_path = pkg_dir.join("package.json");
+    if pkg_json_path.is_file() {
+        if let Some(json) = read_package_json(&pkg_json_path, cache) {
+            if let Some(types) = json.get("types").and_then(|t| t.as_str()) {
+                if let Some(path) = resolve_declaration_candidate(&pkg_dir.join(types)) {
+                    return Some(path);
+                }
+            }
+
+            if let Some(typings) = json.get("typings").and_then(|t| t.as_str()) {
+                if let Some(path) = resolve_declaration_candidate(&pkg_dir.join(typings)) {
+                    return Some(path);
+                }
+            }
+
+            if let Some(exports) = json.get("exports") {
+                if let Some(types_path) = resolve_exports_types(exports, ".") {
+                    if let Some(path) = resolve_declaration_candidate(&pkg_dir.join(types_path)) {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+
+    resolve_declaration_candidate(&pkg_dir.join("index"))
+}
+
 fn resolve_package_entrypoint(
     req: &PackageDeclarationRequest,
     cache: &mut PackageDeclarationResolverCache,

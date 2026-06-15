@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "types": ["configured-types-missing-pkg"],
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"]
+}

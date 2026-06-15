@@ -188,6 +188,10 @@ const fixturePresets: Record<string, string> = {
   'function-body-local-visibility-basic': path.join(workspaceRoot, 'tests/compat-projects/function-body-local-visibility-basic/tsconfig.json'),
   'import-graph-dependency-js-not-source': path.join(workspaceRoot, 'tests/compat-projects/import-graph-dependency-js-not-source/tsconfig.json'),
   'parallel-ordering-basic': path.join(workspaceRoot, 'tests/compat-projects/parallel-ordering-basic/tsconfig.json'),
+  'tsx-jsx-basic': path.join(workspaceRoot, 'tests/compat-projects/tsx-jsx-basic/tsconfig.json'),
+  'tsx-jsx-expression-diagnostics-basic': path.join(workspaceRoot, 'tests/compat-projects/tsx-jsx-expression-diagnostics-basic/tsconfig.json'),
+  'tsx-jsx-attributes-basic': path.join(workspaceRoot, 'tests/compat-projects/tsx-jsx-attributes-basic/tsconfig.json'),
+  'tsx-generic-angle-regression-basic': path.join(workspaceRoot, 'tests/compat-projects/tsx-generic-angle-regression-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

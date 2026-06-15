@@ -1,5 +1,5 @@
 use oxc_ast::ast::{
-    PropertyKey, TSIndexedAccessType, TSLiteral, TSLiteralType, TSMappedType,
+    PropertyKey, TSConditionalType, TSIndexedAccessType, TSLiteral, TSLiteralType, TSMappedType,
     TSMappedTypeModifierOperator, TSMethodSignature, TSMethodSignatureKind, TSPropertySignature,
     TSSignature, TSTupleElement, TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral,
     TSTypeName, TSTypeOperator, TSTypeOperatorOperator, TSTypeParameter,
@@ -9,9 +9,9 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 
 use crate::{
-    ParsedFunctionType, ParsedIndexedAccessType, ParsedMappedType, ParsedNamedType,
-    ParsedObjectType, ParsedObjectTypeProperty, ParsedType, ParsedTypeAliasDeclaration,
-    ParsedTypeOfType, ParsedTypeParameter,
+    ParsedConditionalType, ParsedFunctionType, ParsedIndexedAccessType, ParsedMappedType,
+    ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedTemplateLiteralType,
+    ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType, ParsedTypeParameter,
 };
 
 use super::function_types::{parse_function_type, parse_function_type_parameter};
@@ -34,6 +34,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSVoidKeyword(_) => Some(ParsedType::Void),
         TSType::TSAnyKeyword(_) => Some(ParsedType::Any),
         TSType::TSUnknownKeyword(_) => Some(ParsedType::Unknown),
+        TSType::TSNeverKeyword(_) => Some(ParsedType::Never),
         TSType::TSLiteralType(literal_type) => Some(parse_literal_type(literal_type)),
         TSType::TSTypeLiteral(type_literal) => Some(parse_type_literal(type_literal)),
         TSType::TSArrayType(array_type) => {
@@ -52,8 +53,73 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSTypeOperatorType(type_operator) => parse_type_operator(type_operator),
         TSType::TSIndexedAccessType(indexed_access) => parse_indexed_access_type(indexed_access),
         TSType::TSMappedType(mapped_type) => parse_mapped_type(mapped_type),
+        TSType::TSConditionalType(conditional_type) => parse_conditional_type(conditional_type),
+        TSType::TSTemplateLiteralType(template_literal) => {
+            parse_template_literal_type(template_literal)
+        }
         _ => None,
     }
+}
+
+/// Lowers a type-position template literal `` `a${X}b${Y}c` `` into its literal
+/// segments plus the interpolated types. The `quasis` are the cooked string
+/// pieces (always one more than the interpolation count). If any interpolation
+/// uses a construct we cannot model, the whole template degrades to `Unknown`
+/// so a reference to it resolves conservatively instead of vanishing and
+/// cascading into `TS2304`.
+///
+/// This is distinct from expression-position template literals (parsed in
+/// `parser/expressions.rs`); only `TSTemplateLiteralType` reaches here.
+fn parse_template_literal_type(
+    template_literal: &oxc_ast::ast::TSTemplateLiteralType<'_>,
+) -> Option<ParsedType> {
+    let mut quasis = Vec::with_capacity(template_literal.quasis.len());
+    for quasi in &template_literal.quasis {
+        let text = quasi
+            .value
+            .cooked
+            .as_ref()
+            .map(|cooked| cooked.to_string())
+            .unwrap_or_else(|| quasi.value.raw.to_string());
+        quasis.push(text);
+    }
+
+    let mut interpolations = Vec::with_capacity(template_literal.types.len());
+    for interpolation in &template_literal.types {
+        let Some(parsed) = parse_type(interpolation) else {
+            return Some(ParsedType::Unknown);
+        };
+        interpolations.push(parsed);
+    }
+
+    Some(ParsedType::TemplateLiteral(ParsedTemplateLiteralType {
+        quasis,
+        interpolations,
+        span: Some(text_span_from_oxc_span(template_literal.span)),
+    }))
+}
+
+/// Lowers `Check extends Extends ? True : False`. If any branch contains a
+/// construct we do not model yet (e.g. nested `infer`), the whole conditional
+/// degrades to `Unknown` so a reference to it resolves conservatively instead of
+/// disappearing and cascading into `TS2304`.
+fn parse_conditional_type(conditional_type: &TSConditionalType<'_>) -> Option<ParsedType> {
+    let (Some(check_type), Some(extends_type), Some(true_type), Some(false_type)) = (
+        parse_type(&conditional_type.check_type),
+        parse_type(&conditional_type.extends_type),
+        parse_type(&conditional_type.true_type),
+        parse_type(&conditional_type.false_type),
+    ) else {
+        return Some(ParsedType::Unknown);
+    };
+
+    Some(ParsedType::Conditional(ParsedConditionalType {
+        check_type: Box::new(check_type),
+        extends_type: Box::new(extends_type),
+        true_type: Box::new(true_type),
+        false_type: Box::new(false_type),
+        span: Some(text_span_from_oxc_span(conditional_type.span)),
+    }))
 }
 
 fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {

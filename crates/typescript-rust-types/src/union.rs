@@ -133,6 +133,12 @@ pub fn union_type(types: Vec<Type>) -> Type {
         return Type::Any;
     }
 
+    // `never` is the identity element of union: `T | never` is `T`. Drop it so
+    // distributive conditional results (e.g. `Exclude`) collapse cleanly. If
+    // every member was `never`, the union itself is `never`.
+    let had_members = !flattened.is_empty();
+    flattened.retain(|ty| !matches!(ty, Type::Never));
+
     let mut unique = Vec::new();
     for ty in flattened {
         if !unique.contains(&ty) {
@@ -141,6 +147,7 @@ pub fn union_type(types: Vec<Type>) -> Type {
     }
 
     match unique.len() {
+        0 if had_members => Type::Never,
         0 => Type::Unknown,
         1 => unique.into_iter().next().unwrap(),
         _ => Type::Union(UnionType::new(unique)),
@@ -351,6 +358,23 @@ mod tests {
 
         assert!(matches!(ty, Type::Union(_)));
         assert_eq!(ty.name(), "true | boolean");
+    }
+
+    #[test]
+    fn union_drops_never_members() {
+        let ty = union_type(vec![Type::StringLiteral("b".to_string()), Type::Never]);
+        assert_eq!(ty, Type::StringLiteral("b".to_string()));
+    }
+
+    #[test]
+    fn union_of_only_never_is_never() {
+        let ty = union_type(vec![Type::Never, Type::Never]);
+        assert_eq!(ty, Type::Never);
+    }
+
+    #[test]
+    fn empty_union_stays_unknown() {
+        assert_eq!(union_type(vec![]), Type::Unknown);
     }
 
     #[test]

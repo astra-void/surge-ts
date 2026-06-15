@@ -15,6 +15,7 @@ pub enum ObjectAssignabilityFailure {
 pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     if from == to
         || matches!(from, Type::Any)
+        || matches!(from, Type::Never)
         || matches!(to, Type::Any)
         || matches!(to, Type::Unknown)
     {
@@ -147,6 +148,19 @@ mod tests {
             is_variadic,
             required_parameter_count,
         ))
+    }
+
+    #[test]
+    fn never_assignable_to_everything() {
+        assert!(is_assignable_to(&Type::Never, &Type::String));
+        assert!(is_assignable_to(&Type::Never, &Type::Number));
+        assert!(is_assignable_to(&Type::Never, &Type::Never));
+    }
+
+    #[test]
+    fn nothing_assignable_to_never_except_never() {
+        assert!(!is_assignable_to(&Type::String, &Type::Never));
+        assert!(!is_assignable_to(&Type::Undefined, &Type::Never));
     }
 
     #[test]

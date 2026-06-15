@@ -615,14 +615,23 @@ fn resolve_namespace_import(
         return;
     }
 
-    let namespace_type = if let Some((export_table, _, _)) = try_resolve_module(
+    let namespace_type = if let Some((export_table, _, resolved_index)) = try_resolve_module(
         &import.module_specifier,
         ctx,
         program_files,
         module_export_tables,
         module_resolution_scopes,
     ) {
-        namespace_export_object_type(&export_table)
+        let namespace_type = namespace_export_object_type(&export_table);
+        // tsc displays a namespace import object as `typeof import("<path>")`
+        // (absolute, without the source extension) rather than the structural
+        // shape. Tag the object with that display form when we know the file.
+        match resolved_index.and_then(|index| program_files.get(index)) {
+            Some(resolved_file) => {
+                tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
+            }
+            None => namespace_type,
+        }
     } else {
         if resolve_relative_module(
             &ctx.file_name,
@@ -945,4 +954,30 @@ fn resolve_named_import(
         }
     }
     return;
+}
+
+/// Tags a namespace import object with tsc's `typeof import("<path>")` display
+/// form. The path is the resolved module file made absolute and stripped of its
+/// TypeScript extension (e.g. `…/pkg/index.d.ts` -> `…/pkg/index`).
+fn tag_namespace_type_with_module_path(namespace_type: Type, resolved_file_name: &str) -> Type {
+    match namespace_type {
+        Type::Object(object) => {
+            let path = strip_typescript_extension(resolved_file_name);
+            Type::Object(object.with_alias_name(format!("typeof import(\"{path}\")")))
+        }
+        other => other,
+    }
+}
+
+/// Strips a TypeScript source/declaration extension, matching the module name
+/// tsc prints inside `typeof import(...)`. Declaration extensions are checked
+/// first so `index.d.ts` becomes `index`, not `index.d`.
+fn strip_typescript_extension(file_name: &str) -> &str {
+    for extension in [".d.ts", ".d.mts", ".d.cts", ".ts", ".tsx", ".mts", ".cts"] {
+        if let Some(stripped) = file_name.strip_suffix(extension) {
+            return stripped;
+        }
+    }
+
+    file_name
 }

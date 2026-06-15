@@ -228,6 +228,144 @@ fn parse_tsx_source_uses_typescript_entry_without_jsx_syntax() {
     assert_eq!(parsed.statements.len(), 1);
 }
 
+fn first_initializer(source: &str) -> ParsedExpression {
+    let parsed = parse_source(source, "example.tsx");
+    assert!(
+        parsed.parser_errors.is_empty(),
+        "unexpected parser errors for {source}: {:?}",
+        parsed.parser_errors
+    );
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration for {source}");
+    };
+    variable
+        .initializer
+        .clone()
+        .unwrap_or_else(|| panic!("expected an initializer for {source}"))
+}
+
+#[test]
+fn parse_tsx_jsx_element_variants_without_parser_errors() {
+    for source in [
+        "const a = <div />;",
+        "const b = <div></div>;",
+        "const c = <div id=\"x\">hello</div>;",
+        "const d = <div>{value}</div>;",
+        "const e = <><span /></>;",
+        "const f = <section><span>{name}</span></section>;",
+        "const g = <UI.Button />;",
+        "const h = <Button value={count} enabled />;",
+    ] {
+        let parsed = parse_source(source, "example.tsx");
+        assert!(
+            parsed.parser_errors.is_empty(),
+            "tsx source should parse without parser errors for {source}: {:?}",
+            parsed.parser_errors
+        );
+        assert_eq!(parsed.statements.len(), 1, "for {source}");
+    }
+}
+
+#[test]
+fn parse_tsx_intrinsic_element_has_no_component_reference() {
+    let ParsedExpression::JsxElement {
+        tag_name,
+        component_name,
+        ..
+    } = first_initializer("const a = <div id=\"root\">hello</div>;")
+    else {
+        panic!("expected a JSX element");
+    };
+    assert_eq!(tag_name, "div");
+    // Lowercase intrinsic tags are not value references.
+    assert_eq!(component_name, None);
+}
+
+#[test]
+fn parse_tsx_component_element_records_value_reference() {
+    let ParsedExpression::JsxElement {
+        tag_name,
+        component_name,
+        ..
+    } = first_initializer("const a = <Button value={count} enabled />;")
+    else {
+        panic!("expected a JSX element");
+    };
+    assert_eq!(tag_name, "Button");
+    // Capitalized components resolve as value references so missing names report TS2304.
+    assert_eq!(component_name, Some("Button".to_string()));
+}
+
+#[test]
+fn parse_tsx_member_element_resolves_head_identifier() {
+    let ParsedExpression::JsxElement {
+        tag_name,
+        component_name,
+        ..
+    } = first_initializer("const a = <UI.Button />;")
+    else {
+        panic!("expected a JSX element");
+    };
+    assert_eq!(tag_name, "UI.Button");
+    // The head of a member tag is the value that must resolve in scope.
+    assert_eq!(component_name, Some("UI".to_string()));
+}
+
+#[test]
+fn parse_tsx_expression_child_preserves_inner_expression() {
+    let ParsedExpression::JsxElement { children, .. } =
+        first_initializer("const a = <div>{value}</div>;")
+    else {
+        panic!("expected a JSX element");
+    };
+    let expression_child = children
+        .iter()
+        .find_map(|child| match child {
+            ParsedJsxChild::Expression {
+                expression: Some(expression),
+                ..
+            } => Some(expression),
+            _ => None,
+        })
+        .expect("expected an expression container child");
+    assert!(matches!(
+        expression_child,
+        ParsedExpression::Identifier { name, .. } if name == "value"
+    ));
+}
+
+#[test]
+fn parse_tsx_fragment_walks_children() {
+    let ParsedExpression::JsxFragment { children, .. } =
+        first_initializer("const a = <><span /></>;")
+    else {
+        panic!("expected a JSX fragment");
+    };
+    assert!(
+        children
+            .iter()
+            .any(|child| matches!(child, ParsedJsxChild::Element(_))),
+        "fragment should retain its nested element child"
+    );
+}
+
+#[test]
+fn parse_ts_angle_brackets_are_not_parsed_as_jsx() {
+    // In `.ts` mode `<T>` is a type assertion / generic, never a JSX element.
+    let parsed = parse_source("const x = identity<number>(1);", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+    let ParsedStatement::VariableDeclaration(variable) = &parsed.statements[0] else {
+        panic!("expected a variable declaration");
+    };
+    assert!(
+        !matches!(
+            variable.initializer,
+            Some(ParsedExpression::JsxElement { .. } | ParsedExpression::JsxFragment { .. })
+        ),
+        "angle brackets in .ts must not lower to JSX"
+    );
+}
+
 #[test]
 fn parse_number_literal_type() {
     let parsed = parse_source("let value: 1 = 1;", "example.ts");

@@ -41,7 +41,13 @@ pub(crate) fn collect_ambient_globals(
             continue;
         }
 
-        if parsed_file.file_kind == FileKind::DependencyDeclaration {
+        // Dependency declaration files normally contribute symbols only through
+        // module resolution, not the global scope. Configured `@types/*`
+        // packages (`compilerOptions.types`) are the exception: like TypeScript,
+        // their non-module declarations populate the ambient global scope.
+        if parsed_file.file_kind == FileKind::DependencyDeclaration
+            && !is_configured_types_global_file(&parsed_file.file_name, &ctx.options.types)
+        {
             continue;
         }
 
@@ -169,6 +175,24 @@ pub(crate) fn collect_ambient_globals(
         ctx.type_declarations = saved_type_declarations;
         ctx.type_declaration_scope = saved_type_declaration_scope;
     }
+}
+
+/// Whether `file_name` belongs to one of the configured `compilerOptions.types`
+/// packages under `node_modules/@types/<mangled>`. Scoped names map like
+/// TypeScript: `@scope/pkg` -> `scope__pkg`.
+fn is_configured_types_global_file(file_name: &str, types: &[String]) -> bool {
+    types.iter().any(|type_name| {
+        let mangled = mangle_types_package_name(type_name);
+        let needle = format!("/@types/{mangled}/");
+        file_name.contains(&needle)
+    })
+}
+
+fn mangle_types_package_name(type_name: &str) -> String {
+    type_name
+        .strip_prefix('@')
+        .map(|name| name.replace('/', "__"))
+        .unwrap_or_else(|| type_name.to_string())
 }
 
 pub(crate) fn collect_ambient_modules(

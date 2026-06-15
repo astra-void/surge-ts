@@ -42,7 +42,7 @@
   {
     "code": "TS2614",
     "category": "Error",
-    "message": "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from \"{0}\"' instead?",
+    "message": "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from {0}' instead?",
     "source": "typescript",
     "arity": 2,
     "support": "emitted"
@@ -307,6 +307,14 @@
     "code": "TS2591",
     "category": "Error",
     "message": "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2688",
+    "category": "Error",
+    "message": "Cannot find type definition file for '{0}'.",
     "source": "typescript",
     "arity": 1,
     "support": "emitted"

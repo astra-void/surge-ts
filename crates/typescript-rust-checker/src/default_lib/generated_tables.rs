@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use typescript_rust_syntax::{
-    ParsedFunctionType, ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedNamedType,
-    ParsedType, ParsedTypeParameter,
+    ParsedConditionalType, ParsedFunctionType, ParsedFunctionTypeParameter, ParsedInterfaceMember,
+    ParsedNamedType, ParsedType, ParsedTypeParameter,
 };
 use typescript_rust_types::{FunctionType, ObjectProperty, ObjectType, Type};
 
@@ -867,6 +867,59 @@ fn build_core_snapshot() -> GeneratedDefaultLibSnapshot {
         ),
     );
 
+    // type Exclude<T, U> = T extends U ? never : T;
+    insert_type_declaration(
+        &mut type_declarations,
+        "Exclude",
+        type_alias_decl(
+            "Exclude",
+            "crates/typescript-rust-checker/generated-libs/lib.es.generated.d.ts",
+            vec![type_param("T", None, None), type_param("U", None, None)],
+            conditional(
+                ParsedType::Named(named("T", vec![])),
+                ParsedType::Named(named("U", vec![])),
+                ParsedType::Never,
+                ParsedType::Named(named("T", vec![])),
+            ),
+        ),
+    );
+
+    // type Extract<T, U> = T extends U ? T : never;
+    insert_type_declaration(
+        &mut type_declarations,
+        "Extract",
+        type_alias_decl(
+            "Extract",
+            "crates/typescript-rust-checker/generated-libs/lib.es.generated.d.ts",
+            vec![type_param("T", None, None), type_param("U", None, None)],
+            conditional(
+                ParsedType::Named(named("T", vec![])),
+                ParsedType::Named(named("U", vec![])),
+                ParsedType::Named(named("T", vec![])),
+                ParsedType::Never,
+            ),
+        ),
+    );
+
+    // type NonNullable<T> = T extends null | undefined ? never : T;
+    // `null` is modeled as `undefined` here, so the extends type collapses to
+    // `undefined`; both branches stay faithful for the `string | undefined` case.
+    insert_type_declaration(
+        &mut type_declarations,
+        "NonNullable",
+        type_alias_decl(
+            "NonNullable",
+            "crates/typescript-rust-checker/generated-libs/lib.es.generated.d.ts",
+            vec![type_param("T", None, None)],
+            conditional(
+                ParsedType::Named(named("T", vec![])),
+                ParsedType::Union(vec![ParsedType::Undefined, ParsedType::Undefined]),
+                ParsedType::Never,
+                ParsedType::Named(named("T", vec![])),
+            ),
+        ),
+    );
+
     GeneratedDefaultLibSnapshot {
         file_name: "crates/typescript-rust-checker/generated-libs/lib.es.generated.d.ts",
         type_declarations,
@@ -1237,6 +1290,21 @@ fn named(name: &str, type_arguments: Vec<ParsedType>) -> ParsedNamedType {
         span: None,
         type_arguments,
     }
+}
+
+fn conditional(
+    check_type: ParsedType,
+    extends_type: ParsedType,
+    true_type: ParsedType,
+    false_type: ParsedType,
+) -> ParsedType {
+    ParsedType::Conditional(ParsedConditionalType {
+        check_type: Box::new(check_type),
+        extends_type: Box::new(extends_type),
+        true_type: Box::new(true_type),
+        false_type: Box::new(false_type),
+        span: None,
+    })
 }
 
 fn function_signature(

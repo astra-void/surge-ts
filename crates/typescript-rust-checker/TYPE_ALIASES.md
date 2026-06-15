@@ -35,9 +35,30 @@ Alias limitations:
   namespace imports, named re-exports, type-only re-exports, and star
   re-exports for loaded `.ts` files
 - v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and
-  `Omit` on top of mapped types; `Required`, `Readonly`, `ReturnType`,
-  `Parameters`, `Awaited`, and conditional-type-backed utilities remain
-  unsupported or synthetic noise reducers. Full index signatures remain
-  unsupported, while any narrow `Record<string, T>` / string-index fallback is
-  confined to oracle-backed narrow paths when explicitly implemented.
+  `Omit` on top of mapped types.
+- A narrow conditional-type evaluator now backs `Check extends Extends ? True :
+  False`. It evaluates concretely when both sides are concrete (a single
+  assignability test selects the branch) and distributes over unions when the
+  check type is a naked type parameter. On top of it, `Exclude<T, U>`,
+  `Extract<T, U>`, and `NonNullable<T>` are real conditional-type aliases (no
+  independent synthetic resolver). `never` is modeled as the empty type: it is
+  assignable to everything, nothing is assignable to it, and it is dropped from
+  unions (`T | never === T`). `ReturnType` and `Parameters` stay as narrow
+  synthetic lowerings over concrete function types (no `infer`).
+- Template literal types are supported as a narrow evaluator: a template whose
+  interpolations all resolve to finite string/number/boolean literal unions
+  expands to the deduped cartesian-product string-literal union (e.g.
+  `` `/${"users"|"posts"}/${"new"|"edit"}` ``). This works after explicit
+  generic substitution and over `keyof` results. Broad or unresolved
+  interpolations (`` `id:${string}` ``) degrade to `string` rather than
+  cascading; this under-reports relative to tsc but never produces a false
+  positive. Recursive expansion, `infer`/pattern matching inside templates, and
+  the intrinsic string utilities (`Uppercase`, etc.) remain unsupported.
+- Still unsupported in this slice: `Required`, `Readonly`, `Awaited`, full
+  conditional-type inference, arbitrary/nested `infer`, recursive conditional
+  evaluation, and key remapping in mapped types. An
+  unsupported conditional (e.g. one containing nested `infer`) degrades to
+  `unknown` rather than cascading. Full index signatures remain unsupported,
+  while any narrow `Record<string, T>` / string-index fallback is confined to
+  oracle-backed narrow paths when explicitly implemented.
 - program-mode relative module visibility only for loaded `.ts` files

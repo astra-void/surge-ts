@@ -1,6 +1,8 @@
 use oxc_ast::ast::{
     Argument, ArrayExpression, ArrowFunctionExpression, BinaryExpression, BinaryOperator,
     ChainElement, ChainExpression, ComputedMemberExpression, ConditionalExpression, Expression,
+    JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName,
+    JSXExpressionContainer, JSXFragment, JSXMemberExpression, JSXMemberExpressionObject,
     LogicalExpression, LogicalOperator, NewExpression, ObjectExpression, ObjectPropertyKind,
     PropertyKey, PropertyKind, StaticMemberExpression, UnaryExpression, UnaryOperator,
 };
@@ -8,8 +10,8 @@ use oxc_span::{GetSpan, Span};
 
 use crate::{
     ParsedArrowFunction, ParsedArrowFunctionBody, ParsedBinaryOperator, ParsedCall,
-    ParsedCallArgument, ParsedExpression, ParsedLogicalOperator, ParsedObjectProperty,
-    ParsedUnaryOperator, TextSpan,
+    ParsedCallArgument, ParsedExpression, ParsedJsxAttribute, ParsedJsxChild,
+    ParsedLogicalOperator, ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
 };
 
 use super::spans::text_span_from_oxc_span;
@@ -137,10 +139,211 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
                 .map(|arrow| ParsedExpression::ArrowFunction(Box::new(arrow)))
                 .unwrap_or(ParsedExpression::Unknown)
         }
+        Expression::JSXElement(jsx_element) => parse_jsx_element(jsx_element),
+        Expression::JSXFragment(jsx_fragment) => parse_jsx_fragment(jsx_fragment),
         _ => ParsedExpression::Unknown,
     };
 
     (parsed_expression, expression.span())
+}
+
+fn parse_jsx_element(element: &JSXElement<'_>) -> ParsedExpression {
+    let opening = &element.opening_element;
+    let (tag_name, tag_name_span, component_name, component_span) =
+        parse_jsx_element_name(&opening.name);
+    let attributes = opening
+        .attributes
+        .iter()
+        .filter_map(parse_jsx_attribute_item)
+        .collect();
+    let children = element.children.iter().map(parse_jsx_child).collect();
+
+    ParsedExpression::JsxElement {
+        tag_name,
+        tag_name_span,
+        component_name,
+        component_span,
+        attributes,
+        children,
+        span: Some(text_span_from_oxc_span(element.span)),
+    }
+}
+
+fn parse_jsx_fragment(fragment: &JSXFragment<'_>) -> ParsedExpression {
+    let children = fragment.children.iter().map(parse_jsx_child).collect();
+
+    ParsedExpression::JsxFragment {
+        children,
+        span: Some(text_span_from_oxc_span(fragment.span)),
+    }
+}
+
+/// Returns `(tag_name, tag_name_span, component_name, component_span)`. The
+/// component name/span are populated only when the tag is a value reference (a
+/// capitalized component or a `Foo.Bar` member tag) so the checker can resolve it
+/// and report TS2304 for missing names; intrinsic lowercase tags carry `None`.
+fn parse_jsx_element_name(
+    name: &JSXElementName<'_>,
+) -> (String, Option<TextSpan>, Option<String>, Option<TextSpan>) {
+    match name {
+        JSXElementName::Identifier(identifier) => {
+            // Intrinsic element such as `<div />`; not a value reference.
+            let span = Some(text_span_from_oxc_span(identifier.span));
+            (identifier.name.to_string(), span, None, None)
+        }
+        JSXElementName::IdentifierReference(identifier) => {
+            // Component reference such as `<Button />`.
+            let span = Some(text_span_from_oxc_span(identifier.span));
+            (
+                identifier.name.to_string(),
+                span,
+                Some(identifier.name.to_string()),
+                span,
+            )
+        }
+        JSXElementName::MemberExpression(member) => {
+            let span = Some(text_span_from_oxc_span(member.span));
+            let (head_name, head_span) = jsx_member_expression_head(member);
+            (
+                jsx_member_expression_name(member),
+                span,
+                head_name,
+                head_span,
+            )
+        }
+        JSXElementName::NamespacedName(namespaced) => {
+            let span = Some(text_span_from_oxc_span(namespaced.span));
+            (
+                format!("{}:{}", namespaced.namespace.name, namespaced.name.name),
+                span,
+                None,
+                None,
+            )
+        }
+        JSXElementName::ThisExpression(this) => (
+            "this".to_string(),
+            Some(text_span_from_oxc_span(this.span)),
+            None,
+            None,
+        ),
+    }
+}
+
+/// Builds the dotted display name for a member tag (`UI.Button`, `A.B.C`).
+fn jsx_member_expression_name(member: &JSXMemberExpression<'_>) -> String {
+    let object = match &member.object {
+        JSXMemberExpressionObject::IdentifierReference(identifier) => identifier.name.to_string(),
+        JSXMemberExpressionObject::MemberExpression(inner) => jsx_member_expression_name(inner),
+        JSXMemberExpressionObject::ThisExpression(_) => "this".to_string(),
+    };
+    format!("{}.{}", object, member.property.name)
+}
+
+/// Returns the head identifier of a member tag (the value that must resolve in
+/// scope). `<UI.Button />` resolves `UI`; `<this.Foo />` has no resolvable head.
+fn jsx_member_expression_head(
+    member: &JSXMemberExpression<'_>,
+) -> (Option<String>, Option<TextSpan>) {
+    let mut object = &member.object;
+    loop {
+        match object {
+            JSXMemberExpressionObject::IdentifierReference(identifier) => {
+                return (
+                    Some(identifier.name.to_string()),
+                    Some(text_span_from_oxc_span(identifier.span)),
+                );
+            }
+            JSXMemberExpressionObject::MemberExpression(inner) => {
+                object = &inner.object;
+            }
+            JSXMemberExpressionObject::ThisExpression(_) => return (None, None),
+        }
+    }
+}
+
+fn parse_jsx_attribute_item(item: &JSXAttributeItem<'_>) -> Option<ParsedJsxAttribute> {
+    match item {
+        JSXAttributeItem::Attribute(attribute) => {
+            let (name, name_span) = parse_jsx_attribute_name(&attribute.name);
+            let (value, value_span) = match &attribute.value {
+                Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                    parse_jsx_container_expression(container)
+                }
+                Some(JSXAttributeValue::Element(element)) => {
+                    let span = Some(text_span_from_oxc_span(element.span));
+                    (Some(parse_jsx_element(element)), span)
+                }
+                Some(JSXAttributeValue::Fragment(fragment)) => {
+                    let span = Some(text_span_from_oxc_span(fragment.span));
+                    (Some(parse_jsx_fragment(fragment)), span)
+                }
+                // String-literal values and boolean shorthand have nothing to check.
+                Some(JSXAttributeValue::StringLiteral(_)) | None => (None, None),
+            };
+            Some(ParsedJsxAttribute {
+                name,
+                name_span,
+                value,
+                value_span,
+            })
+        }
+        JSXAttributeItem::SpreadAttribute(spread) => {
+            // Spread checking is out of scope, but the argument is still walked so
+            // ordinary diagnostics inside it (e.g. unresolved names) are preserved.
+            let (expression, span) = parse_expression(&spread.argument);
+            Some(ParsedJsxAttribute {
+                name: String::new(),
+                name_span: None,
+                value: Some(expression),
+                value_span: Some(text_span_from_oxc_span(span)),
+            })
+        }
+    }
+}
+
+fn parse_jsx_attribute_name(name: &JSXAttributeName<'_>) -> (String, Option<TextSpan>) {
+    match name {
+        JSXAttributeName::Identifier(identifier) => (
+            identifier.name.to_string(),
+            Some(text_span_from_oxc_span(identifier.span)),
+        ),
+        JSXAttributeName::NamespacedName(namespaced) => (
+            format!("{}:{}", namespaced.namespace.name, namespaced.name.name),
+            Some(text_span_from_oxc_span(namespaced.span)),
+        ),
+    }
+}
+
+fn parse_jsx_container_expression(
+    container: &JSXExpressionContainer<'_>,
+) -> (Option<ParsedExpression>, Option<TextSpan>) {
+    match container.expression.as_expression() {
+        Some(expression) => {
+            let (parsed, span) = parse_expression(expression);
+            (Some(parsed), Some(text_span_from_oxc_span(span)))
+        }
+        // Empty container `{}`: nothing to check.
+        None => (None, Some(text_span_from_oxc_span(container.span))),
+    }
+}
+
+fn parse_jsx_child(child: &JSXChild<'_>) -> ParsedJsxChild {
+    match child {
+        JSXChild::Text(_) => ParsedJsxChild::Text,
+        JSXChild::Element(element) => ParsedJsxChild::Element(parse_jsx_element(element)),
+        JSXChild::Fragment(fragment) => ParsedJsxChild::Element(parse_jsx_fragment(fragment)),
+        JSXChild::ExpressionContainer(container) => {
+            let (expression, span) = parse_jsx_container_expression(container);
+            ParsedJsxChild::Expression { expression, span }
+        }
+        JSXChild::Spread(spread) => {
+            let (expression, span) = parse_expression(&spread.expression);
+            ParsedJsxChild::Expression {
+                expression: Some(expression),
+                span: Some(text_span_from_oxc_span(span)),
+            }
+        }
+    }
 }
 
 pub(crate) fn parse_call_expression(

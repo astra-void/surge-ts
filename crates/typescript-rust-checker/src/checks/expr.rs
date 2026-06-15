@@ -1,6 +1,6 @@
 use std::time::Instant;
 use typescript_rust_diagnostics::Diagnostic;
-use typescript_rust_syntax::{ParsedExpression, TextSpan as SyntaxTextSpan};
+use typescript_rust_syntax::{ParsedExpression, ParsedJsxChild, TextSpan as SyntaxTextSpan};
 use typescript_rust_types::{NumberLiteralType, Type, is_assignable_to, union_type};
 
 use super::call::{
@@ -27,6 +27,9 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
         Type::StringLiteral(_) => Type::String,
         Type::NumberLiteral(_) => Type::Number,
         Type::BooleanLiteral(_) => Type::Boolean,
+        // A named interface/type-alias object is not a fresh literal; preserve
+        // it (and its alias name) as-is rather than widening its members.
+        Type::Object(obj) if obj.alias_name.is_some() => ty.clone(),
         Type::Object(obj) => {
             let mut new_props = std::collections::BTreeMap::new();
             for (k, v) in obj.properties.iter() {
@@ -602,6 +605,53 @@ pub(crate) fn evaluate_expression(
                 other => other,
             }
         }
+        ParsedExpression::JsxElement {
+            component_name,
+            component_span,
+            attributes,
+            children,
+            ..
+        } => {
+            // A capitalized component (`<Button />`) or member tag (`<UI.Button />`)
+            // is a value reference; resolve it so a missing name reports TS2304 the
+            // same way an ordinary identifier would. Intrinsic tags carry no name.
+            if let Some(name) = component_name {
+                let identifier = ParsedExpression::Identifier {
+                    name: name.clone(),
+                    span: *component_span,
+                };
+                let _ = evaluate_expression(
+                    &identifier,
+                    component_span.or(fallback_span),
+                    symbols,
+                    ctx,
+                );
+            }
+
+            for attribute in attributes {
+                if let Some(value) = &attribute.value {
+                    let _ = evaluate_expression(
+                        value,
+                        attribute.value_span.or(fallback_span),
+                        symbols,
+                        ctx,
+                    );
+                }
+            }
+
+            for child in children {
+                evaluate_jsx_child(child, fallback_span, symbols, ctx);
+            }
+
+            infer_expression(expression, symbols, ctx)
+        }
+        ParsedExpression::JsxFragment { children, .. } => {
+            for child in children {
+                evaluate_jsx_child(child, fallback_span, symbols, ctx);
+            }
+
+            infer_expression(expression, symbols, ctx)
+        }
         _ => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
             report_inferred_expression(
@@ -612,6 +662,28 @@ pub(crate) fn evaluate_expression(
                 ctx,
             );
             inferred_expression
+        }
+    }
+}
+
+/// Walks a JSX child for ordinary diagnostics. Text is inert; `{expression}`
+/// containers and nested elements are evaluated so diagnostics such as unresolved
+/// names inside `{...}` are still reported.
+fn evaluate_jsx_child(
+    child: &ParsedJsxChild,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    match child {
+        ParsedJsxChild::Text => {}
+        ParsedJsxChild::Expression { expression, span } => {
+            if let Some(expression) = expression {
+                let _ = evaluate_expression(expression, span.or(fallback_span), symbols, ctx);
+            }
+        }
+        ParsedJsxChild::Element(element) => {
+            let _ = evaluate_expression(element, fallback_span, symbols, ctx);
         }
     }
 }
@@ -922,6 +994,7 @@ fn evaluate_index_access(
         | Type::Number
         | Type::Boolean
         | Type::Void
+        | Type::Never
         | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)

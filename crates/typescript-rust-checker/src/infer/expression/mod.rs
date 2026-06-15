@@ -1,7 +1,9 @@
 use std::time::Instant;
 
+use std::collections::BTreeMap;
+
 use typescript_rust_syntax::ParsedExpression;
-use typescript_rust_types::{NumberLiteralType, Type, union_type};
+use typescript_rust_types::{NumberLiteralType, ObjectType, Type, union_type};
 
 use crate::context::CheckerContext;
 use crate::infer::map_parsed_type;
@@ -313,12 +315,25 @@ pub(crate) fn infer_expression(
             index,
             index_span,
         } => infer_optional_index_access(object, object_span, index, index_span, symbols, ctx),
+        ParsedExpression::JsxElement { .. } | ParsedExpression::JsxFragment { .. } => {
+            InferredExpression::Known(jsx_element_type())
+        }
         ParsedExpression::Unknown => InferredExpression::Unknown,
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.type_inference += infer_start.elapsed()
     });
     result
+}
+
+/// The conservative type assigned to every JSX element and fragment. This is a
+/// parser-safe stand-in for `JSX.Element`: an opaque empty object tagged with the
+/// `Element` alias name so it renders exactly as tsc does in assignability
+/// diagnostics (`Type 'Element' is not assignable to type 'number'.`). It does not
+/// resolve the `JSX` namespace or validate intrinsic element props — both are out
+/// of scope for this slice.
+pub(crate) fn jsx_element_type() -> Type {
+    Type::Object(ObjectType::new(BTreeMap::new(), None).with_alias_name("Element"))
 }
 
 pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {

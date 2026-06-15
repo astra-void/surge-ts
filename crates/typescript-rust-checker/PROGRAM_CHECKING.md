@@ -155,12 +155,19 @@ See [MODULES.md](./MODULES.md) for the import/export syntax surface, module-file
   inference, and tuple-valued implicit generic returns remain unsupported.
 - `--maxDiagnostics` limits rendered diagnostics but does not change the total
   counts in the compatibility summary.
-- `.tsx` visibility in project mode is file-discovery only; JSX syntax, JSX
-  namespace modeling, React globals, DOM globals, and `@types` discovery are
-  still out of scope.
+- `.tsx` files have a parser-safe JSX foundation: JSX elements, fragments,
+  attributes, and `{...}` expression containers parse in expression position, and
+  JSX expressions infer a conservative `JSX.Element` stand-in (an opaque empty
+  object that renders as `Element`). Child and attribute expression containers
+  and capitalized component / member tags are walked for ordinary diagnostics
+  (so unresolved names still report `TS2304`). `JSX` namespace resolution,
+  `JSX.IntrinsicElements` prop validation, React globals, DOM globals, and the
+  JSX transform remain out of scope.
 - Positional single-file mode still uses the single-file checker APIs and does not resolve sibling files.
 - Diagnostic span policy lives in [DIAGNOSTIC_SPANS.md](./DIAGNOSTIC_SPANS.md).
-- v0.81 synthetic utility lowering covers `Record<K, T>`, `Partial<T>`, `Pick<T, K>`, and `Omit<T, K>` for concrete object/interface shapes and string-literal key unions. It does not imply physical `lib.d.ts`, `@types`, DOM/Node globals, conditional types, template literal types, or the rest of the utility-type ecosystem, and full index signatures remain unsupported.
+- v0.81 synthetic utility lowering covers `Record<K, T>`, `Partial<T>`, `Pick<T, K>`, and `Omit<T, K>` for concrete object/interface shapes and string-literal key unions.
+- A narrow conditional-type evaluator handles `T extends U ? X : Y` (concrete evaluation plus distribution over a naked type parameter), which backs `Exclude`, `Extract`, and `NonNullable`; `ReturnType`/`Parameters` stay as synthetic lowerings over concrete function types. This does not imply physical `lib.d.ts`, `@types`, DOM/Node globals, conditional-type inference, nested/arbitrary `infer`, recursive conditionals, or the rest of the utility-type ecosystem; unsupported conditionals degrade to `unknown`, and full index signatures remain unsupported.
+- A narrow template literal type evaluator expands a template into a deduped string-literal union when every interpolation resolves to a finite string/number/boolean literal union (including after generic substitution and over `keyof`). Broad or unresolved interpolations (e.g. `` `id:${string}` ``) degrade to `string` rather than cascading, which under-reports relative to tsc but never yields a false positive. Recursive expansion, in-template `infer`/pattern matching, and intrinsic string utilities (`Uppercase`, etc.) remain unsupported.
 
 ## Upstream Virtual Files
 

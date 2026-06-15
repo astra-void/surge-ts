@@ -335,6 +335,16 @@ fixtures = [
   "tests/compat-projects/no-node-types-buffer-process-basic/src/index.ts",
 ]
 
+[TS2688]
+status = "emitted"
+fixtures = [
+  "crates/typescript-rust-cli/tests/project_mode.rs",
+  "tests/compat-projects/configured-types-missing-basic/tsconfig.json",
+]
+oracle = [
+  "tests/compat-projects/configured-types-missing-basic/tsconfig.json",
+]
+
 [TS2693]
 status = "emitted"
 fixtures = [

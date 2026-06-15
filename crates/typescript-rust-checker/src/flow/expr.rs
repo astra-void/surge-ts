@@ -6,7 +6,9 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use typescript_rust_diagnostics::Diagnostic;
-use typescript_rust_syntax::{ParsedExpression, ParsedVariableKind, TextSpan as SyntaxTextSpan};
+use typescript_rust_syntax::{
+    ParsedExpression, ParsedJsxChild, ParsedVariableKind, TextSpan as SyntaxTextSpan,
+};
 
 use crate::context::{CheckerContext, convert_span};
 use crate::program::{
@@ -373,6 +375,64 @@ pub(crate) fn check_expression_flow_impl(
             }
             check_expression_flow_impl(right, fallback_span, flow_state, statement_index, ctx)
         }
+        ParsedExpression::JsxElement {
+            component_name,
+            component_span,
+            attributes,
+            children,
+            ..
+        } => {
+            if let Some(name) = component_name {
+                if report_read_flow(
+                    name,
+                    component_span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
+                .is_blocked()
+                {
+                    return FlowCheck::Blocked;
+                }
+            }
+
+            for attribute in attributes {
+                if let Some(value) = &attribute.value {
+                    if check_expression_flow_impl(
+                        value,
+                        attribute.value_span.or(fallback_span),
+                        flow_state,
+                        statement_index,
+                        ctx,
+                    )
+                    .is_blocked()
+                    {
+                        return FlowCheck::Blocked;
+                    }
+                }
+            }
+
+            for child in children {
+                if check_jsx_child_flow(child, fallback_span, flow_state, statement_index, ctx)
+                    .is_blocked()
+                {
+                    return FlowCheck::Blocked;
+                }
+            }
+
+            FlowCheck::Clear
+        }
+        ParsedExpression::JsxFragment { children, .. } => {
+            for child in children {
+                if check_jsx_child_flow(child, fallback_span, flow_state, statement_index, ctx)
+                    .is_blocked()
+                {
+                    return FlowCheck::Blocked;
+                }
+            }
+
+            FlowCheck::Clear
+        }
         ParsedExpression::ArrowFunction(_) => FlowCheck::Clear,
         ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)
@@ -380,6 +440,31 @@ pub(crate) fn check_expression_flow_impl(
         | ParsedExpression::UndefinedLiteral
         | ParsedExpression::NullLiteral
         | ParsedExpression::Unknown => FlowCheck::Clear,
+    }
+}
+
+fn check_jsx_child_flow(
+    child: &ParsedJsxChild,
+    fallback_span: Option<SyntaxTextSpan>,
+    flow_state: &FunctionFlowState,
+    statement_index: usize,
+    ctx: &mut CheckerContext,
+) -> FlowCheck {
+    match child {
+        ParsedJsxChild::Text => FlowCheck::Clear,
+        ParsedJsxChild::Expression { expression, span } => match expression {
+            Some(expression) => check_expression_flow_impl(
+                expression,
+                span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            ),
+            None => FlowCheck::Clear,
+        },
+        ParsedJsxChild::Element(element) => {
+            check_expression_flow_impl(element, fallback_span, flow_state, statement_index, ctx)
+        }
     }
 }
 

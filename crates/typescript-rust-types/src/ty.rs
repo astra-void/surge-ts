@@ -14,6 +14,7 @@ pub enum Type {
     Void,
     Any,
     Unknown,
+    Never,
     StringLiteral(String),
     NumberLiteral(NumberLiteralType),
     BooleanLiteral(bool),
@@ -133,11 +134,16 @@ impl Type {
             Type::Void => "void".to_string(),
             Type::Any => "any".to_string(),
             Type::Unknown => "unknown".to_string(),
+            Type::Never => "never".to_string(),
             Type::StringLiteral(value) => format!("{value:?}"),
             Type::NumberLiteral(value) => value.value.clone(),
             Type::BooleanLiteral(value) => value.to_string(),
             Type::Function(function) => function.name(),
             Type::Object(object) => {
+                if let Some(alias_name) = &object.alias_name {
+                    return alias_name.to_string();
+                }
+
                 let mut parts = object
                     .properties
                     .iter()

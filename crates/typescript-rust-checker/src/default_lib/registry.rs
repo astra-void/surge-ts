@@ -99,6 +99,9 @@ fn load_default_lib_sources() -> Vec<DefaultLibSource> {
                 "Record",
                 "Omit",
                 "ReturnType",
+                "Exclude",
+                "Extract",
+                "NonNullable",
             ],
         },
         DefaultLibSource {

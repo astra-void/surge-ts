@@ -3,11 +3,24 @@ use std::sync::Arc;
 
 use crate::{Type, union_type};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct ObjectType {
     pub properties: Arc<BTreeMap<String, ObjectProperty>>,
     pub string_index_type: Option<Arc<Type>>,
+    /// Name of the interface or type alias this object was resolved from, used
+    /// only for diagnostic display (tsc shows `'StrictObj'`, not the structural
+    /// expansion). Deliberately excluded from equality so assignability and
+    /// structural comparisons stay name-agnostic.
+    pub alias_name: Option<Arc<str>>,
 }
+
+impl PartialEq for ObjectType {
+    fn eq(&self, other: &Self) -> bool {
+        self.properties == other.properties && self.string_index_type == other.string_index_type
+    }
+}
+
+impl Eq for ObjectType {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectProperty {
@@ -44,7 +57,15 @@ impl ObjectType {
         Self {
             properties: Arc::new(properties),
             string_index_type: string_index_type.map(Arc::new),
+            alias_name: None,
         }
+    }
+
+    /// Returns a copy tagged with the interface/type-alias name it was resolved
+    /// from, for diagnostic display only.
+    pub fn with_alias_name(mut self, alias_name: impl Into<Arc<str>>) -> Self {
+        self.alias_name = Some(alias_name.into());
+        self
     }
 
     pub fn get_property(&self, name: &str) -> Option<&ObjectProperty> {
@@ -89,6 +110,7 @@ impl Clone for ObjectType {
         Self {
             properties: self.properties.clone(),
             string_index_type: self.string_index_type.clone(),
+            alias_name: self.alias_name.clone(),
         }
     }
 }

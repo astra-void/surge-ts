@@ -1,0 +1,8 @@
+declare namespace JSX {
+  interface Element {}
+  interface IntrinsicElements {
+    div: { id?: string };
+    span: {};
+    section: {};
+  }
+}

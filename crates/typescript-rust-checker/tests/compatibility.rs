@@ -237,6 +237,49 @@ fn object_literal_excess_property_uses_first_source_order_property() {
 }
 
 #[test]
+fn named_interface_shown_by_name_in_excess_property() {
+    let source = "interface I { a: number } let s: I = { a: 1, b: 2 };";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2353"]);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("does not exist in type 'I'"),
+        "expected interface name in TS2353 message: {rendered}"
+    );
+}
+
+#[test]
+fn named_type_alias_shown_by_name_in_excess_property() {
+    let source = "type T = { a: number }; let s: T = { a: 1, b: 2 };";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2353"]);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("does not exist in type 'T'"),
+        "expected type-alias name in TS2353 message: {rendered}"
+    );
+}
+
+#[test]
+fn named_interface_shown_by_name_in_missing_property() {
+    let source = "interface I { a: number; z: number } let s: I = { a: 1 };";
+    let diagnostics = check_source(source, "example.ts");
+    let rendered = render_diagnostics(&diagnostics, source);
+
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2741"]);
+    assert!(
+        diagnostics[0].message.contains("required in type 'I'"),
+        "expected interface name as TS2741 target: {rendered}"
+    );
+}
+
+#[test]
 fn argument_literal_widens_to_base_for_non_literal_target() {
     let source = "declare function g(x: string): void; g(1);";
     let diagnostics = check_source(source, "example.ts");

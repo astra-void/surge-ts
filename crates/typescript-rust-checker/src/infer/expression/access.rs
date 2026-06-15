@@ -98,6 +98,7 @@ pub(crate) fn infer_index_access(
         | Type::Number
         | Type::Boolean
         | Type::Void
+        | Type::Never
         | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)

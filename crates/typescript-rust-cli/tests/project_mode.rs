@@ -2246,6 +2246,64 @@ fn cli_tsx_parser_safe_basic_fixture_reports_ts2322() {
 }
 
 #[test]
+fn cli_tsx_jsx_basic_fixture_reports_element_not_assignable() {
+    let project = compat_project_root("tsx-jsx-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    // Only the meaningful assignment mismatch is reported; the well-formed JSX on
+    // lines 2-3 produces no cascade. The conservative `JSX.Element` stand-in renders
+    // as `Element`, matching tsc's message exactly.
+    assert_eq!(json_diagnostic_codes(&parsed), vec!["TS2322".to_string()]);
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2322"), vec![Some(4)]);
+    let message = json_diagnostics(&parsed)[0]["message"].as_str().unwrap();
+    assert_eq!(
+        message,
+        "Type 'Element' is not assignable to type 'number'."
+    );
+}
+
+#[test]
+fn cli_tsx_jsx_expression_diagnostics_basic_fixture_reports_unresolved_child() {
+    let project = compat_project_root("tsx-jsx-expression-diagnostics-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    // The unresolved name inside `{missingValue}` is still reported; the resolved
+    // `{ok}` container produces nothing.
+    assert_eq!(json_diagnostic_codes(&parsed), vec!["TS2304".to_string()]);
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2304"), vec![Some(3)]);
+}
+
+#[test]
+fn cli_tsx_jsx_attributes_basic_fixture_reports_unresolved_component() {
+    let project = compat_project_root("tsx-jsx-attributes-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    // The capitalized `<Button />` tag is a value reference and reports TS2304 when
+    // unresolved; the intrinsic `<div id="root" />` and the resolved `{count}`
+    // attribute do not cascade.
+    assert_eq!(json_diagnostic_codes(&parsed), vec!["TS2304".to_string()]);
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2304"), vec![Some(3)]);
+}
+
+#[test]
+fn cli_tsx_generic_angle_regression_basic_fixture_has_no_diagnostics() {
+    let project = compat_project_root("tsx-generic-angle-regression-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    // Pins that adding JSX parsing does not disturb `.ts` generic call / angle-bracket
+    // behavior: both compilers agree on zero diagnostics.
+    assert!(json_diagnostics(&parsed).is_empty());
+}
+
+#[test]
 fn cli_compat_report_format_json_still_report_shape() {
     let project = compat_project_root("package-imports").join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
@@ -3383,4 +3441,71 @@ fn cli_skip_lib_check_dependency_dts_loads_as_symbol_source_without_noise() {
         Value::from(0)
     );
     assert_eq!(parsed["diagnosticsTotal"], Value::from(0));
+}
+
+#[test]
+fn cli_configured_types_node_loads_at_types_declarations() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/configured-types-node-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    // `process` resolves through configured @types/node; only the `bad`
+    // assignment mismatch should remain (no unresolved `process`/`NodeJS`).
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2322".to_string()]);
+    assert!(!codes.contains(&"TS2304".to_string()));
+    assert!(!codes.contains(&"TS2591".to_string()));
+}
+
+#[test]
+fn cli_configured_types_scoped_maps_to_at_types_scope_dir() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/configured-types-scoped-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    // `@scope/pkg` maps to node_modules/@types/scope__pkg, whose `declare const`
+    // becomes a global. Only the `bad` assignment mismatch should remain.
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2322".to_string()]);
+    assert!(!codes.contains(&"TS2304".to_string()));
+}
+
+#[test]
+fn cli_configured_types_missing_reports_ts2688() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/configured-types-missing-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    let diagnostics = json_diagnostics(&parsed);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["code"], Value::from("TS2688"));
+    assert_eq!(diagnostics[0]["fileName"], Value::from(""));
+    assert_eq!(
+        diagnostics[0]["message"],
+        Value::from("Cannot find type definition file for 'configured-types-missing-pkg'.")
+    );
+}
+
+#[test]
+fn cli_configured_types_no_node_does_not_autoload_at_types() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/configured-types-no-node-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    // Without `compilerOptions.types`, configured @types are not pulled in, so
+    // `process` stays unresolved and surfaces the install-@types/node hint.
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2591".to_string()]);
 }
