@@ -14,10 +14,10 @@
 		"real:auth-kit": "tsx scripts/real-projects/measure-auth-kit.ts"
 	},
 	"devDependencies": {
-		"@types/node": "^25.6.0",
-		"@typescript/native-preview": "7.0.0-dev.20260521.1",
-		"tsx": "4.21.0",
+		"@types/node": "^25.9.3",
+		"@typescript/native-preview": "7.0.0-dev.20260615.1",
+		"tsx": "4.22.4",
 		"typescript": "6.0.3"
 	},
-	"packageManager": "pnpm@11.6.0"
+	"packageManager": "pnpm@11.7.0"
 }
