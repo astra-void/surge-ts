@@ -60,6 +60,7 @@ v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable be
 - Loaded `.d.ts` files can contribute ambient globals and exact `declare module "pkg"` blocks.
 - Ambient modules resolve before package import stubbing fallback.
 - Default exports, namespace imports, named re-exports, type-only re-exports, and star re-exports are pinned for the supported ambient-module subset.
-- Duplicate ambient module and duplicate ambient global behavior is intentionally first-wins / pinned rather than full declaration merging.
+- Duplicate `interface` declarations merge (same file, across global files, reopened `declare module` blocks, and `declare global`); a conflicting property type reports TS2717 with the first declaration winning. Duplicate ambient `var`/`const`/`function` globals stay first-wins / pinned.
+- A `declare module "pkg"` block in a module file augments an already-resolved target (merging exported interfaces, adding new exported functions/types); augmenting an unresolved target keeps the TS2307 no-cascade policy.
 - Unsupported declaration syntax stays parser-safe and emits a stable pinned diagnostic.
-- No `package.json`, `@types`, or `node_modules` discovery is added here. v0.85 adds a generated default-lib subset instead of full `lib.d.ts` discovery, and `noLib: true` disables the generated default libs. `baseUrl` remains unsupported/deprecated.
+- Current project mode supports focused declaration-side modern package resolution (conditional/pattern `exports`, `imports`, `typesVersions`, self-name), configured `@types`/`typeRoots`, class/static/constructor semantics, opt-in physical `lib*.d.ts` loading, JSX props checking, and a narrow declaration-merging/module-augmentation slice. Full automatic `@types` discovery, full `lib.d.ts`/Node parity, and full TypeScript parity remain out of scope. `baseUrl` remains unsupported/deprecated.

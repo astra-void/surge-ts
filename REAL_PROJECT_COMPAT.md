@@ -400,14 +400,12 @@ does not misread the file as a config input.
 
 The current baseline still intentionally avoids:
 
-- full package resolution remains unsupported
+- full runtime/JS package resolution parity (the declaration side now resolves conditional and pattern `exports`, the `imports` field, `typesVersions`, package self-name, and subpaths)
 - explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
 - `baseUrl` resolution remains unsupported/deprecated
-- lib.d.ts modeling or auto-loading
-- full declaration-file semantics
-- `@types` discovery
-- only exact `exports.types` declaration targets are supported; full exports maps are not
-- exact package declaration subpaths are supported; wildcard/runtime subpaths are not
+- full upstream `lib.d.ts` parity (a generated subset loads by default; an opt-in physical `lib*.d.ts` loader is available)
+- full declaration-file semantics (a narrow declaration-merging, module-augmentation, and `declare class` slice is supported)
+- full automatic `@types` discovery (configured `compilerOptions.types` / `typeRoots` packages are supported)
 - project references
 - incremental or watch behavior
 - narrow generic call-site inference exists for simple direct calls, repeated-parameter calls, and array-element calls, but full generic inference, generic classes, overload inference, callback contextual inference, higher-order inference, constraint enforcement, and tuple-valued implicit generic returns remain unsupported
@@ -415,7 +413,6 @@ The current baseline still intentionally avoids:
 - CommonJS or bundler semantics
 - generic constraints enforcement
 - mixed default + named imports
-- default class exports
 - v0.81 only lowers `Record`, `Partial`, `Pick`, and `Omit` in a narrow synthetic path; the rest of the utility-type ecosystem remains out of scope
 
 The current declaration and diagnostic baseline includes:
@@ -425,12 +422,12 @@ The current declaration and diagnostic baseline includes:
 - bare package imports (e.g. `pkg` or `@scope/pkg`) and exact subpaths resolve to declaration entrypoints (`types`, `typings`, `exports["types"]`, or `index.d.ts` fallback) in project mode
 - resolved package `.d.ts` files act as external modules and do not leak private helpers globally
 - default import, namespace import, and re-export behavior for ambient modules and package entrypoints is pinned
-- duplicate ambient module and duplicate ambient global behavior is pinned, not merged
+- duplicate `interface` declarations merge across files, reopened ambient modules, and module augmentations; a conflicting property reports TS2717 and the first declaration wins, while duplicate ambient `var`/`const`/`function` globals stay pinned
 - unsupported declaration syntax remains parser-safe and emits stable diagnostics
 - TS2882 is catalog-backed and is emitted for unresolved side-effect imports such as `import "reflect-metadata";`
 - ordinary missing package imports still produce TS2307 by default
 - `--stubExternalModules` suppresses non-relative missing-module diagnostics, including the side-effect TS2882 form, while leaving relative missing modules and resolved package declaration errors unchanged
-- full package resolution, wildcard `exports`, JS runtime subpaths, `@types`, and lib.d.ts discovery are still out of scope
+- full runtime/JS package resolution, full automatic `@types` discovery, and full `lib.d.ts` parity are still out of scope
 - explicit type arguments still instantiate generic aliases/interfaces and the narrow generic call-site path still applies them when present
 - tuple-valued implicit generic returns are suppressed for now; explicit type-argument substitution still preserves tuple returns
 
