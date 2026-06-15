@@ -370,16 +370,34 @@ fn evaluate_object_literal_with_expected_type(
             }))
             .name();
 
-        let diagnostic = match expected_diagnostic {
-            ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
-                Diagnostic::ts1360(&source_type_name, &target_type_name, ctx.file_name.clone())
+        // tsc surfaces a missing required property differently for an
+        // intersection target: it reports the outer assignability code (the
+        // missing property becomes nested elaboration) rather than the
+        // standalone TS2741. Mirror that so the reported code matches.
+        let diagnostic = if expected_object_type.is_intersection {
+            match expected_diagnostic {
+                ExpectedTypeDiagnostic::TypeNotAssignable => {
+                    Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone())
+                }
+                ExpectedTypeDiagnostic::ArgumentNotAssignable => {
+                    Diagnostic::ts2345(&source_type_name, &target_type_name, ctx.file_name.clone())
+                }
+                ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
+                    Diagnostic::ts1360(&source_type_name, &target_type_name, ctx.file_name.clone())
+                }
             }
-            _ => Diagnostic::ts2741(
-                property_name,
-                &source_type_name,
-                &target_type_name,
-                ctx.file_name.clone(),
-            ),
+        } else {
+            match expected_diagnostic {
+                ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
+                    Diagnostic::ts1360(&source_type_name, &target_type_name, ctx.file_name.clone())
+                }
+                _ => Diagnostic::ts2741(
+                    property_name,
+                    &source_type_name,
+                    &target_type_name,
+                    ctx.file_name.clone(),
+                ),
+            }
         };
 
         ctx.push(diagnostic_with_syntax_span(diagnostic, fallback_span));

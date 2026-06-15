@@ -68,6 +68,7 @@ pub enum ParsedType {
     Array(Box<ParsedType>),
     Tuple(Vec<ParsedType>),
     Union(Vec<ParsedType>),
+    Intersection(Vec<ParsedType>),
     Function(ParsedFunctionType),
     Named(ParsedNamedType),
     TypeOf(ParsedTypeOfType),
@@ -230,6 +231,10 @@ pub struct ParsedClassDeclaration {
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub type_parameters: Vec<ParsedTypeParameter>,
+    /// Base classes named in an `extends` clause. A class has at most one, but
+    /// this is modelled as a list so the instance side can reuse the interface
+    /// heritage-merge path. A non-identifier base (e.g. a mixin call) is dropped.
+    pub extends: Vec<ParsedNamedType>,
     pub members: Vec<ParsedClassMember>,
     pub span: Option<TextSpan>,
 }
@@ -238,7 +243,23 @@ pub struct ParsedClassDeclaration {
 pub enum ParsedClassMember {
     Property(ParsedClassProperty),
     Method(ParsedClassMethod),
+    Accessor(ParsedClassAccessor),
     Constructor(ParsedClassConstructor),
+}
+
+/// A `get`/`set` accessor pair, collapsed into a single member keyed by name.
+/// Either side may be absent (getter-only or setter-only). The instance side
+/// lowers this to a property whose type is the getter return type when present,
+/// otherwise the setter parameter type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedClassAccessor {
+    pub name: String,
+    pub name_span: Option<TextSpan>,
+    pub is_static: bool,
+    pub getter_return_type: Option<ParsedType>,
+    pub setter_param_type: Option<ParsedType>,
+    pub has_getter: bool,
+    pub has_setter: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -792,6 +813,9 @@ pub struct ParsedFunctionParameter {
     pub initializer: Option<ParsedExpression>,
     pub initializer_span: Option<TextSpan>,
     pub optional: bool,
+    /// `...args` rest parameter. Marks the signature variadic so arity checks
+    /// accept any number of trailing arguments.
+    pub rest: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

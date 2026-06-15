@@ -88,6 +88,9 @@ pub(crate) fn resolve_parsed_type(
         }
         ParsedType::Tuple(elements) => resolve_tuple_type(elements, ctx, resolving, substitution),
         ParsedType::Union(types) => resolve_union_type(types, ctx, resolving, substitution),
+        ParsedType::Intersection(types) => {
+            resolve_intersection_type(types, ctx, resolving, substitution)
+        }
         ParsedType::Function(function_type) => {
             resolve_function_type(function_type, ctx, resolving, substitution)
         }
@@ -344,6 +347,18 @@ pub(crate) fn resolve_conditional_type(
         };
     }
 
+    // An `any` check type makes the branch indeterminate: tsc yields the union of
+    // both branches, which with `any` in play collapses to an open `any` rather
+    // than deterministically picking the true branch. Degrade to `any` so the
+    // result stays open instead of resolving to a misleading concrete branch
+    // (e.g. node's `_Request = typeof globalThis extends {...} ? {} : ...`).
+    if matches!(resolved_check.ty, Type::Any) {
+        return ResolvedType {
+            ty: Type::Any,
+            had_error: false,
+        };
+    }
+
     let branch = if is_assignable_to(&resolved_check.ty, &resolved_extends.ty) {
         *conditional.true_type
     } else {
@@ -529,6 +544,103 @@ pub(crate) fn resolve_union_type(
     ResolvedType {
         ty: union_type(resolved_types),
         had_error,
+    }
+}
+
+/// Resolves an intersection `A & B`. Object-like operands are merged into a
+/// single object exposing every member's property surface, which lets the
+/// existing object machinery (property access, assignability, object-literal
+/// checking) handle intersections without a dedicated runtime type. The merged
+/// object is tagged via [`with_intersection_marker`] so a missing required
+/// property surfaces the outer assignability code tsc reports for intersections.
+///
+/// Simplification follows the existing `any`/`unknown` policy: `T & any` is
+/// `any`, `T & unknown` is `T`. Conflicting properties keep the left operand
+/// (full `string & number -> never` reduction is a non-goal). If any operand is
+/// unresolved the whole intersection degrades to `Unknown` after the root
+/// diagnostic is reported, so reads stay conservative and never cascade.
+pub(crate) fn resolve_intersection_type(
+    types: Vec<ParsedType>,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let mut resolved_types = Vec::new();
+    let mut had_error = false;
+
+    for ty in types {
+        let resolved = resolve_parsed_type(ty, ctx, resolving, substitution);
+        had_error |= resolved.had_error;
+        resolved_types.push(resolved.ty);
+    }
+
+    if had_error {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
+    ResolvedType {
+        ty: merge_intersection_members(resolved_types),
+        had_error: false,
+    }
+}
+
+fn merge_intersection_members(members: Vec<Type>) -> Type {
+    if members.iter().any(|ty| matches!(ty, Type::Any)) {
+        return Type::Any;
+    }
+
+    let members: Vec<Type> = members
+        .into_iter()
+        .filter(|ty| !matches!(ty, Type::Unknown))
+        .collect();
+
+    let display_name = (!members.is_empty()).then(|| {
+        members
+            .iter()
+            .map(Type::name)
+            .collect::<Vec<_>>()
+            .join(" & ")
+    });
+
+    let object_members: Vec<_> = members
+        .iter()
+        .filter_map(|ty| match ty {
+            Type::Object(object) => Some(object),
+            _ => None,
+        })
+        .collect();
+
+    if !object_members.is_empty() {
+        let mut properties: BTreeMap<String, ObjectProperty> = BTreeMap::new();
+        let mut string_index_type: Option<Type> = None;
+
+        for object in &object_members {
+            for (name, property) in object.properties.iter() {
+                properties
+                    .entry(name.clone())
+                    .or_insert_with(|| property.clone());
+            }
+            if string_index_type.is_none()
+                && let Some(index) = object.string_index_type.as_deref()
+            {
+                string_index_type = Some(index.clone());
+            }
+        }
+
+        let mut merged =
+            alloc_object_type(properties, string_index_type).with_intersection_marker();
+        if let Some(display_name) = display_name {
+            merged = merged.with_alias_name(display_name);
+        }
+        return Type::Object(merged);
+    }
+
+    match members.into_iter().next() {
+        Some(member) => member,
+        None => Type::Unknown,
     }
 }
 

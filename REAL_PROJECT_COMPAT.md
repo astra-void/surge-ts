@@ -5,6 +5,23 @@ not a claim that large TypeScript packages pass. `v0.60` adds a TypeScript
 oracle comparison harness on top of that baseline so we can measure the current
 checker against a pinned compiler without changing the checker to chase parity.
 
+v1.2.6 restores auth-kit to exact `0` diagnostics after a class-heritage
+regression. `class`/`declare class` now resolve a single `extends` base, merging
+the base's instance members (own and inherited) into the derived instance type
+through the shared interface-heritage path, and `get`/`set` accessor members
+lower to instance properties via the existing object/interface property path. A
+declaration-file base that resolves to `any`, fails to resolve, or is an empty
+unmodelled lib/dependency stub keeps the derived type open (no cascade) so
+unmodelled DOM/Node bases like `Request` do not flood inherited access with
+TS2339; an unresolved base in user source stays closed and still reports the
+missing member. Rest parameters (`...args`) in class methods are now captured and
+mark the signature variadic, fixing false TS2554 arity errors on calls like
+`cookies.get(name)`. The auth-kit `NextRequest` (`extends Request` plus a
+`get cookies()` accessor) shape is reproduced and pinned by the
+`next-request-shape-authkit-regression` fixture. DOM/Node global parity and full
+`@types` ingestion remain out of scope; the open-on-unmodelled-base policy is the
+no-cascade stand-in.
+
 v1.2.5 is a performance pass after v1.2.4, not a new TypeScript semantic phase.
 No new TypeScript surface was added and, on the latest auth-kit measurement,
 exact diagnostics remain 0 and raw oracle match stays yes. Four changes land:

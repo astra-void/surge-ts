@@ -66,7 +66,12 @@ pub(crate) fn check_variable_declaration_against_symbols(
 
     let symbol_kind = map_symbol_kind(variable.kind);
 
+    // A `declare const`/`declare let` is pre-registered as an ambient symbol
+    // before this check runs, so the duplicate probe would always find the
+    // declaration's own pre-registration and report a spurious redeclaration.
+    // Ambient declarations do not conflict with themselves; skip the report.
     if options.report_duplicate_let_const
+        && !variable.is_declare
         && matches!(symbol_kind, SymbolKind::Let | SymbolKind::Const)
         && symbols.contains_let_or_const(&variable.name)
     {

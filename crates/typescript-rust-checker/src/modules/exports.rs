@@ -162,24 +162,41 @@ pub(crate) fn resolve_module_export_table(
     resolving: &mut [bool],
     ctx: &mut CheckerContext,
 ) -> Option<ModuleExportTable> {
-    if let Some(resolved) = resolved_module_export_tables[file_index].clone() {
-        return Some(resolved);
+    // `file_index` may originate from a different vector domain than the slices
+    // passed here. The relative/package resolvers and `module_file_index_by_identity`
+    // index the full project file list, but some callers (ambient module binding)
+    // pass a narrow local vector. A resolved index from the global domain can then
+    // exceed these slices, so every access is bounds-checked and an out-of-domain
+    // index yields a conservative unresolved result instead of panicking.
+    if let Some(Some(resolved)) = resolved_module_export_tables.get(file_index) {
+        return Some(resolved.clone());
     }
 
-    let Some(local_export_table) = local_module_export_tables[file_index].clone() else {
+    let Some(parsed_file) = parsed_files.get(file_index) else {
         return None;
     };
 
-    if resolving[file_index] {
-        return Some(local_export_table);
+    let Some(local_export_table) = local_module_export_tables
+        .get(file_index)
+        .and_then(|slot| slot.clone())
+    else {
+        return None;
+    };
+
+    match resolving.get(file_index) {
+        Some(true) => return Some(local_export_table),
+        Some(false) => {}
+        None => return None,
     }
 
-    resolving[file_index] = true;
-    ctx.set_file_name(parsed_files[file_index].file_name.clone());
+    if let Some(slot) = resolving.get_mut(file_index) {
+        *slot = true;
+    }
+    ctx.set_file_name(parsed_file.file_name.clone());
 
     let mut resolved_export_table = local_export_table;
 
-    for statement in &parsed_files[file_index].statements {
+    for statement in &parsed_file.statements {
         match statement {
             ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
                 is_type_only,
@@ -195,10 +212,10 @@ pub(crate) fn resolve_module_export_table(
                     local_module_export_tables,
                     resolved_module_export_tables,
                     resolving,
-                    &parsed_files[file_index].file_name,
+                    &parsed_file.file_name,
                 ) else {
                     if resolve_relative_module(
-                        &parsed_files[file_index].file_name,
+                        &parsed_file.file_name,
                         module_specifier,
                         parsed_files,
                         &ctx.module_file_index_by_identity,
@@ -236,7 +253,7 @@ pub(crate) fn resolve_module_export_table(
                     continue;
                 };
 
-                ctx.set_file_name(parsed_files[file_index].file_name.clone());
+                ctx.set_file_name(parsed_file.file_name.clone());
 
                 for specifier in specifiers {
                     let specifier_is_type_only = *is_type_only || specifier.is_type_only;
@@ -377,10 +394,10 @@ pub(crate) fn resolve_module_export_table(
                     local_module_export_tables,
                     resolved_module_export_tables,
                     resolving,
-                    &parsed_files[file_index].file_name,
+                    &parsed_file.file_name,
                 ) else {
                     if resolve_relative_module(
-                        &parsed_files[file_index].file_name,
+                        &parsed_file.file_name,
                         module_specifier,
                         parsed_files,
                         &ctx.module_file_index_by_identity,
@@ -402,7 +419,7 @@ pub(crate) fn resolve_module_export_table(
                     continue;
                 };
 
-                ctx.set_file_name(parsed_files[file_index].file_name.clone());
+                ctx.set_file_name(parsed_file.file_name.clone());
                 insert_namespace_export(
                     &mut resolved_export_table.symbols,
                     exported_name,
@@ -414,7 +431,7 @@ pub(crate) fn resolve_module_export_table(
     }
 
     let re_export_start = Instant::now();
-    for statement in &parsed_files[file_index].statements {
+    for statement in &parsed_file.statements {
         let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
             module_specifier,
             module_specifier_span,
@@ -431,7 +448,7 @@ pub(crate) fn resolve_module_export_table(
             local_module_export_tables,
             resolved_module_export_tables,
             resolving,
-            &parsed_files[file_index].file_name,
+            &parsed_file.file_name,
         ) else {
             if !(ctx.options.stub_external_modules && is_external_specifier(module_specifier)) {
                 emit_unresolved_export_module_diagnostic(
@@ -444,7 +461,7 @@ pub(crate) fn resolve_module_export_table(
             continue;
         };
 
-        ctx.set_file_name(parsed_files[file_index].file_name.clone());
+        ctx.set_file_name(parsed_file.file_name.clone());
 
         for (name, declaration) in target_export_table.type_declarations.iter() {
             if resolved_export_table
@@ -471,11 +488,14 @@ pub(crate) fn resolve_module_export_table(
         timings.re_export_expansion += re_export_start.elapsed()
     });
 
-    resolving[file_index] = false;
+    if let Some(slot) = resolving.get_mut(file_index) {
+        *slot = false;
+    }
     resolved_export_table.namespace_export_object_type =
         Some(compute_namespace_export_object_type(&resolved_export_table));
-    resolved_module_export_tables[file_index] =
-        Some(resolved_export_table.clone_with_reason(TypeCopyReason::ModuleExport));
+    if let Some(slot) = resolved_module_export_tables.get_mut(file_index) {
+        *slot = Some(resolved_export_table.clone_with_reason(TypeCopyReason::ModuleExport));
+    }
     Some(resolved_export_table)
 }
 

@@ -131,7 +131,10 @@ function main(argv = process.argv.slice(2)): void {
     '500',
     '--json',
   ]);
-  const oracle = JSON.parse(oracleJsonText) as OracleComparison;
+  const oracle = parseJsonFromCommandOutput<OracleComparison>(
+    oracleJsonText,
+    'oracle:compare --json',
+  );
 
   runCommand('cargo', ['build', '--release', '-p', 'typescript-rust-cli']);
 
@@ -143,7 +146,10 @@ function main(argv = process.argv.slice(2)): void {
     'json',
     '--timings',
   ]);
-  const compatReport = JSON.parse(compatReportResult.stdout) as CompatReport;
+  const compatReport = parseJsonFromCommandOutput<CompatReport>(
+    compatReportResult.stdout,
+    'compatReport --format json',
+  );
   const programMeasurements = parseProgramMeasurements(compatReportResult.stderr);
 
   runCommand('pnpm', [
@@ -242,6 +248,69 @@ function runCommandResult(command: string, args: string[]): { stdout: string; st
     stdout: `${result.stdout ?? ''}`,
     stderr: `${result.stderr ?? ''}`,
   };
+}
+
+function parseJsonFromCommandOutput<T>(raw: string, context: string): T {
+  const text = raw.trim();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // stdout may be prefixed/suffixed by pnpm reporter noise ("Already up to
+    // date", "Done in ...") or other wrapper output; recover the JSON region.
+  }
+
+  for (let start = 0; start < text.length; start += 1) {
+    const ch = text[start];
+    if (ch !== '{' && ch !== '[') {
+      continue;
+    }
+    const candidate = extractBalancedJson(text, start);
+    if (candidate === null) {
+      continue;
+    }
+    try {
+      return JSON.parse(candidate) as T;
+    } catch {
+      continue;
+    }
+  }
+
+  const snippet = text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
+  throw new Error(`Failed to parse JSON from ${context} output:\n${snippet}`);
+}
+
+function extractBalancedJson(text: string, start: number): string | null {
+  const open = text[start];
+  const close = open === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === open) {
+      depth += 1;
+    } else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
 }
 
 function releaseBinaryPath(): string {

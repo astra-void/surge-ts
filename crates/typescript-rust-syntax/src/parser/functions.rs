@@ -357,6 +357,25 @@ pub(crate) fn parse_function_parameter(
         initializer,
         initializer_span,
         optional: parameter.optional || parameter.initializer.is_some(),
+        rest: false,
+    })
+}
+
+pub(crate) fn parse_rest_function_parameter(
+    rest: &oxc_ast::ast::FormalParameterRest<'_>,
+) -> Option<ParsedFunctionParameter> {
+    let declared_type = rest
+        .type_annotation
+        .as_ref()
+        .and_then(|annotation| parse_type_annotation(annotation));
+
+    Some(ParsedFunctionParameter {
+        binding_name: parse_binding_name(&rest.rest.argument),
+        declared_type,
+        initializer: None,
+        initializer_span: None,
+        optional: false,
+        rest: true,
     })
 }
 

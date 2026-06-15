@@ -9,9 +9,9 @@
 use std::collections::BTreeMap;
 
 use typescript_rust_syntax::{
-    ParsedBindingName, ParsedClassDeclaration, ParsedClassMember, ParsedClassMethod,
-    ParsedClassProperty, ParsedFunctionParameter, ParsedFunctionType, ParsedFunctionTypeParameter,
-    ParsedInterfaceMember, ParsedNamedType, ParsedType,
+    ParsedBindingName, ParsedClassAccessor, ParsedClassDeclaration, ParsedClassMember,
+    ParsedClassMethod, ParsedClassProperty, ParsedFunctionParameter, ParsedFunctionType,
+    ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedNamedType, ParsedType,
 };
 use typescript_rust_types::{FunctionType, ObjectProperty, ObjectType, Type};
 
@@ -39,7 +39,7 @@ pub(crate) fn class_instance_interface_info(
         file_name,
         name_span: class.name_span,
         type_parameters: class.type_parameters.clone(),
-        extends: Vec::new(),
+        extends: class.extends.clone(),
         members,
         string_index_type: None,
         resolution_scope: None,
@@ -62,8 +62,28 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
             optional: false,
             ty: method_function_type(method),
         }),
+        ParsedClassMember::Accessor(accessor) if !accessor.is_static => {
+            Some(ParsedInterfaceMember {
+                name: accessor.name.clone(),
+                name_span: accessor.name_span,
+                optional: false,
+                ty: accessor_property_type(accessor),
+            })
+        }
         _ => None,
     }
+}
+
+/// Lowers an accessor to the type of the property it presents. A getter's
+/// return type wins (the read type); a setter-only accessor falls back to its
+/// parameter type. Missing annotations degrade to `any`, matching the implicit
+/// type tsc infers for an un-annotated accessor.
+fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
+    accessor
+        .getter_return_type
+        .clone()
+        .or_else(|| accessor.setter_param_type.clone())
+        .unwrap_or(ParsedType::Any)
 }
 
 fn method_function_type(method: &ParsedClassMethod) -> ParsedType {
@@ -90,7 +110,7 @@ fn parameter_to_type_parameter(parameter: &ParsedFunctionParameter) -> ParsedFun
         ty: parameter.declared_type.clone().unwrap_or(ParsedType::Any),
         optional: parameter.optional,
         is_this: false,
-        rest: false,
+        rest: parameter.rest,
     }
 }
 
@@ -138,6 +158,13 @@ pub(crate) fn build_class_value_symbol(
                 properties.insert(
                     method.name.clone(),
                     ObjectProperty::required(Type::Function(function_type)),
+                );
+            }
+            ParsedClassMember::Accessor(accessor) if accessor.is_static => {
+                let property_type = map_parsed_type(accessor_property_type(accessor), ctx);
+                properties.insert(
+                    accessor.name.clone(),
+                    ObjectProperty::required(property_type),
                 );
             }
             _ => {}
@@ -255,7 +282,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     ctx,
                 );
             }
-            ParsedClassMember::Property(_) => {}
+            ParsedClassMember::Property(_) | ParsedClassMember::Accessor(_) => {}
         }
     }
 }

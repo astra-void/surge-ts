@@ -131,14 +131,17 @@ pub(crate) fn resolve_interface_declaration(
     let mut properties = BTreeMap::new();
     let mut had_error = false;
     let mut inherited_index_type: Option<Type> = None;
+    // A base that resolves to `any` (e.g. a mixin) leaves the derived member set
+    // unknown; tsc keeps the type open. A base that fails to resolve is only
+    // treated as open inside declaration files, where the real base is assumed to
+    // be an unmodelled lib type (DOM/Node `Request`) that tsc resolves under
+    // `skipLibCheck`; in user source an unresolved base is a genuine error and
+    // tsc still flags missing-member access, so it must stay closed there.
+    let in_declaration_file = is_declaration_file_name(&ctx.file_name);
+    let mut base_is_open = false;
 
     for base in extends {
         let resolved_base = resolve_named_type(base.clone(), ctx, resolving, substitution);
-        if resolved_base.ty == Type::Unknown {
-            had_error |= resolved_base.had_error;
-            continue;
-        }
-
         had_error |= resolved_base.had_error;
 
         match resolved_base.ty {
@@ -151,8 +154,20 @@ pub(crate) fn resolve_interface_declaration(
                         inherited_index_type = Some(index_type.as_ref().clone());
                     }
                 }
+                // An empty-object base inside a declaration file is, in this
+                // checker, an unmodelled lib/dependency stub (e.g. the generated
+                // `interface Request {}` placeholder for the DOM type). tsc has the
+                // real, populated base under `skipLibCheck`, so keep the derived
+                // type open instead of flagging every inherited access.
+                if in_declaration_file
+                    && object_type.properties.is_empty()
+                    && object_type.string_index_type.is_none()
+                {
+                    base_is_open = true;
+                }
             }
-            Type::Any => {}
+            Type::Any => base_is_open = true,
+            Type::Unknown => base_is_open |= in_declaration_file,
             _ => {}
         }
     }
@@ -177,13 +192,18 @@ pub(crate) fn resolve_interface_declaration(
             had_error |= resolved.had_error;
             Some(resolved.ty)
         }
-        None => inherited_index_type,
+        None => inherited_index_type.or(if base_is_open { Some(Type::Any) } else { None }),
     };
 
     ResolvedType {
         ty: Type::Object(alloc_object_type(properties, resolved_index_type)),
         had_error,
     }
+}
+
+fn is_declaration_file_name(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
 }
 
 pub(crate) fn generated_default_lib_map_instance_type() -> Type {

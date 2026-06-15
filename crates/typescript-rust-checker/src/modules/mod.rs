@@ -281,6 +281,44 @@ mod tests {
     }
 
     #[test]
+    fn resolved_module_index_domain_no_panic() {
+        // A resolved module index from the global project domain
+        // (`module_file_index_by_identity`) can exceed the length of a narrow
+        // local file vector — exactly what the ambient-module binding path passes.
+        // The export resolver must degrade to a conservative unresolved result
+        // rather than index out of bounds and panic.
+        let files = program(&[("src/index.ts", "export { foo } from \"target-pkg\";")]);
+
+        let mut file_kinds = HashMap::new();
+        file_kinds.insert("src/index.ts".to_string(), FileKind::RootSource);
+        let mut options = crate::context::CheckerOptions::default();
+        options
+            .resolved_modules
+            .insert("target-pkg".to_string(), "src/target.ts".to_string());
+        let mut ctx = CheckerContext::new("src/index.ts".to_string(), options, file_kinds);
+
+        let mut identity = HashMap::new();
+        identity.insert(canonical_file_identity("src/target.ts").into(), 194usize);
+        ctx.set_module_file_index_by_identity(identity);
+
+        let local_tables = files
+            .iter()
+            .map(|file| {
+                Some(build_module_export_table(
+                    file,
+                    &TypeDeclarationTable::new(),
+                    &SymbolTable::new(),
+                    None,
+                    &mut ctx,
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        let resolved = resolve_module_export_tables(&files, &local_tables, &mut ctx);
+        assert!(resolved[0].is_some());
+    }
+
+    #[test]
     fn module_resolver_extensionless_ts() {
         let files = program(&[("src/index.ts", "export {}"), ("src/user.ts", "export {}")]);
         let resolved = resolve_relative_module("src/index.ts", "./user", &files).unwrap();

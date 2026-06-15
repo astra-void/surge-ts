@@ -452,6 +452,23 @@ fn parse_literal_union_type() {
 }
 
 #[test]
+fn parse_intersection_type() {
+    let parsed = parse_source("type AB = A & B & C;", "example.ts");
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::TypeAliasDeclaration(alias) = &parsed.statements[0] else {
+        panic!("expected a type alias declaration");
+    };
+
+    let ParsedType::Intersection(types) = &alias.ty else {
+        panic!("expected an intersection alias");
+    };
+
+    assert_eq!(types.len(), 3);
+    assert!(types.iter().all(|ty| matches!(ty, ParsedType::Named(_))));
+}
+
+#[test]
 fn parse_void_type() {
     let parsed = parse_source("let value: void = undefined;", "example.ts");
     assert!(parsed.parser_errors.is_empty());

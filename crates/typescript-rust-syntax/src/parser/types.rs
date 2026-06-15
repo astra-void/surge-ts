@@ -1,10 +1,10 @@
 use oxc_ast::ast::{
-    PropertyKey, TSConditionalType, TSIndexedAccessType, TSLiteral, TSLiteralType, TSMappedType,
-    TSMappedTypeModifierOperator, TSMethodSignature, TSMethodSignatureKind, TSPropertySignature,
-    TSSignature, TSTupleElement, TSTupleType, TSType, TSTypeAliasDeclaration, TSTypeLiteral,
-    TSTypeName, TSTypeOperator, TSTypeOperatorOperator, TSTypeParameter,
-    TSTypeParameterDeclaration, TSTypeParameterInstantiation, TSTypeQuery, TSTypeQueryExprName,
-    TSTypeReference, TSUnionType,
+    PropertyKey, TSConditionalType, TSIndexedAccessType, TSIntersectionType, TSLiteral,
+    TSLiteralType, TSMappedType, TSMappedTypeModifierOperator, TSMethodSignature,
+    TSMethodSignatureKind, TSPropertySignature, TSSignature, TSTupleElement, TSTupleType, TSType,
+    TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeOperator, TSTypeOperatorOperator,
+    TSTypeParameter, TSTypeParameterDeclaration, TSTypeParameterInstantiation, TSTypeQuery,
+    TSTypeQueryExprName, TSTypeReference, TSUnionType,
 };
 use oxc_span::GetSpan;
 
@@ -48,6 +48,9 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
             parse_type(&parenthesized_type.type_annotation)
         }
         TSType::TSUnionType(union_type) => Some(parse_union_type(union_type)),
+        TSType::TSIntersectionType(intersection_type) => {
+            Some(parse_intersection_type(intersection_type))
+        }
         TSType::TSTypeReference(type_reference) => parse_type_reference(type_reference),
         TSType::TSTypeQuery(type_query) => parse_type_query(type_query),
         TSType::TSTypeOperatorType(type_operator) => parse_type_operator(type_operator),
@@ -232,6 +235,20 @@ fn parse_union_type(union_type: &TSUnionType<'_>) -> ParsedType {
     }
 
     ParsedType::Union(types)
+}
+
+fn parse_intersection_type(intersection_type: &TSIntersectionType<'_>) -> ParsedType {
+    let mut types = Vec::new();
+
+    for ty in &intersection_type.types {
+        let Some(parsed_type) = parse_type(ty) else {
+            return ParsedType::Unknown;
+        };
+
+        types.push(parsed_type);
+    }
+
+    ParsedType::Intersection(types)
 }
 
 fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {

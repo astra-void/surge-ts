@@ -17,6 +17,8 @@ v0.65 hardens the v0.64 declaration ingestion foundation. v0.69 supports narrow 
 - Supports `declare global { ... }` inside module files, merging interface declarations into the global type namespace and adding supported global `var`/`function` declarations.
 - Supports module augmentation: a `declare module "pkg"` block in a module file merges its exported interfaces and adds new exported functions/types into an already-resolved target module.
 - Supports a narrow `declare class` (instance members, static side, and constructor signature) and merges a same-named `interface` into the class's instance members.
+- Resolves a single `extends` base for both `class` and `declare class`: the base's instance members (own and inherited) merge into the derived instance type via the shared interface-heritage path, so inherited fields/methods are visible on property access and property calls. A base that resolves to `any`, fails to resolve inside a declaration file, or is an empty unmodelled lib/dependency stub keeps the derived type open (no cascade) rather than flagging every inherited access; an unresolved base in user source stays closed and reports the missing-member error. Unresolved/circular heritage degrades without cascading or recursing.
+- Lowers `get`/`set` accessor members (on `class` and `declare class`) to instance properties through the existing object/interface property path: a getter contributes its return type, a setter-only accessor its parameter type, and missing annotations degrade to `any`.
 - Declaration files remain symbol sources even when `skipLibCheck` suppresses their diagnostics in dependency graphs.
 
 ## Limitations

@@ -17,6 +17,12 @@ pub struct ObjectType {
     /// instance type). Static members live in `properties`. Excluded from
     /// equality, like `alias_name`, so structural comparisons stay shape-based.
     pub construct_signature: Option<Arc<FunctionType>>,
+    /// Set when this object is the merged surface of an intersection (`A & B`).
+    /// Used only to pick the diagnostic tsc reports for a missing required
+    /// property (intersections surface the outer assignability code, e.g.
+    /// `TS2322`/`TS2345`, rather than the standalone `TS2741`). Excluded from
+    /// equality so intersection-merged objects compare structurally.
+    pub is_intersection: bool,
 }
 
 impl PartialEq for ObjectType {
@@ -64,6 +70,7 @@ impl ObjectType {
             string_index_type: string_index_type.map(Arc::new),
             alias_name: None,
             construct_signature: None,
+            is_intersection: false,
         }
     }
 
@@ -71,6 +78,12 @@ impl ObjectType {
     /// from, for diagnostic display only.
     pub fn with_alias_name(mut self, alias_name: impl Into<Arc<str>>) -> Self {
         self.alias_name = Some(alias_name.into());
+        self
+    }
+
+    /// Marks this object as the merged surface of an intersection type.
+    pub fn with_intersection_marker(mut self) -> Self {
+        self.is_intersection = true;
         self
     }
 
@@ -129,6 +142,7 @@ impl Clone for ObjectType {
             string_index_type: self.string_index_type.clone(),
             alias_name: self.alias_name.clone(),
             construct_signature: self.construct_signature.clone(),
+            is_intersection: self.is_intersection,
         }
     }
 }

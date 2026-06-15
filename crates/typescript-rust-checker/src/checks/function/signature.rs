@@ -277,7 +277,7 @@ pub(crate) fn map_function_signature(
     alloc_function_type(
         parameter_types,
         function_return_type,
-        false,
+        parameters.last().is_some_and(|parameter| parameter.rest),
         required_parameter_count(parameters),
     )
 }
@@ -287,7 +287,7 @@ pub(crate) fn required_parameter_count(parameters: &[ParsedFunctionParameter]) -
 
     while required > 0 {
         let parameter = &parameters[required - 1];
-        if parameter.optional || parameter.initializer.is_some() {
+        if parameter.optional || parameter.initializer.is_some() || parameter.rest {
             required -= 1;
         } else {
             break;
