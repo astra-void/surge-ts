@@ -4,7 +4,8 @@ use std::sync::Arc;
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedInterfaceDeclaration,
-    ParsedStatement, ParsedType, ParsedTypeAliasDeclaration, parse_source,
+    ParsedNamespaceDeclaration, ParsedStatement, ParsedType, ParsedTypeAliasDeclaration,
+    parse_source,
 };
 
 use crate::checks::{assign, call, expr, function as check_function, var};
@@ -415,7 +416,67 @@ fn collect_type_declarations_from_statement(statement: &ParsedStatement, ctx: &m
             declaration,
             ..
         }) => collect_type_declarations_from_statement(declaration.as_ref(), ctx),
+        ParsedStatement::NamespaceDeclaration(namespace) => {
+            collect_namespace_type_declarations(namespace, ctx);
+        }
         _ => {}
+    }
+}
+
+/// Registers a namespace's interfaces and type aliases under qualified names
+/// (`JSX.IntrinsicElements`, `JSX.Element`, ...) so the JSX checker can resolve
+/// them. Members are not leaked into the unqualified scope. Nested namespaces are
+/// flattened by their already-dotted names. Duplicate members are first-wins
+/// (declaration merging), so no TS2300 is emitted here.
+fn collect_namespace_type_declarations(
+    namespace: &ParsedNamespaceDeclaration,
+    ctx: &mut CheckerContext,
+) {
+    for statement in &namespace.statements {
+        let inner = match statement {
+            ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
+                declaration,
+                ..
+            }) => declaration.as_ref(),
+            other => other,
+        };
+
+        match inner {
+            ParsedStatement::InterfaceDeclaration(interface) => {
+                let qualified = format!("{}.{}", namespace.name, interface.name);
+                let info = InterfaceInfo {
+                    name: qualified.clone(),
+                    file_name: ctx.file_name.clone(),
+                    name_span: interface.name_span,
+                    type_parameters: interface.type_parameters.clone(),
+                    extends: interface.extends.clone(),
+                    members: interface.members.clone(),
+                    string_index_type: interface.string_index_type.clone(),
+                    resolution_scope: None,
+                };
+                let _ = ctx
+                    .type_declarations
+                    .insert(qualified, TypeDeclarationInfo::Interface(info));
+            }
+            ParsedStatement::TypeAliasDeclaration(alias) => {
+                let qualified = format!("{}.{}", namespace.name, alias.name);
+                let info = TypeAliasInfo {
+                    name: qualified.clone(),
+                    file_name: ctx.file_name.clone(),
+                    name_span: alias.name_span,
+                    type_parameters: alias.type_parameters.clone(),
+                    ty: alias.ty.clone(),
+                    resolution_scope: None,
+                };
+                let _ = ctx
+                    .type_declarations
+                    .insert(qualified, TypeDeclarationInfo::Alias(info));
+            }
+            ParsedStatement::NamespaceDeclaration(inner_namespace) => {
+                collect_namespace_type_declarations(inner_namespace, ctx);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -711,6 +772,9 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Equals { .. }) => {}
         ParsedStatement::DeclareModuleDeclaration(_) => {}
+        // Namespace members are bound during type-declaration collection; the
+        // namespace itself produces no value-level checks here.
+        ParsedStatement::NamespaceDeclaration(_) => {}
         ParsedStatement::UnsupportedDeclaration { span } => {
             let mut diag =
                 typescript_rust_diagnostics::Diagnostic::typescript_rust_unsupported_declaration(
@@ -831,6 +895,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         type_parameters: interface.type_parameters.clone(),
         extends: interface.extends.clone(),
         members: interface.members.clone(),
+        string_index_type: interface.string_index_type.clone(),
         resolution_scope: None,
     };
 

@@ -1,7 +1,8 @@
 use std::time::Instant;
 use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
-    ParsedCall, ParsedCallArgument, ParsedExpression, ParsedType, TextSpan as SyntaxTextSpan,
+    ParsedCall, ParsedCallArgument, ParsedExpression, ParsedNamedType, ParsedType,
+    TextSpan as SyntaxTextSpan,
 };
 use typescript_rust_types::{
     FunctionType, Type, TypeCopyReason, UnionType, is_assignable_to, union_type,
@@ -201,6 +202,37 @@ pub(crate) fn check_new_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    // Physical-lib mode: `new Foo<Args>()` produces an instance of the `Foo`
+    // interface (the instance interface shares the constructor's name, e.g.
+    // `Map<K, V>`, `Date`, `URL`, `Response`). Prefer resolving the real
+    // interface instance over the hardcoded builtin fast-path so that lib
+    // methods and properties carry meaningful types. Gated to interfaces
+    // declared in physical default-lib files, so generated/default mode keeps
+    // the existing builtin behaviour.
+    if let ParsedExpression::Identifier { name, .. } = callee {
+        let physical_interface_file = match ctx.lookup_type_declaration(name) {
+            Some(crate::symbols::TypeDeclarationInfo::Interface(info)) => {
+                if crate::default_lib::is_physical_default_lib_file_name(&info.file_name) {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if physical_interface_file.is_some() {
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            let named = ParsedType::Named(ParsedNamedType {
+                name: name.clone(),
+                span: None,
+                type_arguments: type_arguments.to_vec(),
+            });
+            return Some(crate::infer::map_parsed_type(named, ctx));
+        }
+    }
+
     if let ParsedExpression::Identifier { name, .. } = callee
         && let Some(result_type) =
             typescript_rust_types::Type::builtin_constructor_result_type(name)

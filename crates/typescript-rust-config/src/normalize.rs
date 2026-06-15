@@ -79,7 +79,21 @@ pub(crate) fn normalize_compiler_options(
                 normalized.type_roots = parse_path_list_option(value, config_dir, diagnostics);
             }
             "types" => {
-                normalized.types = parse_string_list_option(value, diagnostics, config_dir);
+                normalized.types = Some(parse_string_list_option(value, diagnostics, config_dir));
+            }
+            "resolvePackageJsonExports" => {
+                normalized.resolve_package_json_exports =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.resolve_package_json_exports);
+            }
+            "resolvePackageJsonImports" => {
+                normalized.resolve_package_json_imports =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.resolve_package_json_imports);
+            }
+            "customConditions" => {
+                normalized.custom_conditions =
+                    parse_string_list_option(value, diagnostics, config_dir);
             }
             other => match find_tsconfig_option(other) {
                 Some(definition) => match definition.support {

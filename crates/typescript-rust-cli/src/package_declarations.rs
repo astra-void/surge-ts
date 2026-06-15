@@ -299,78 +299,229 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
     resolved_packages
 }
 
-/// Resolve `compilerOptions.types` entries to `@types/*` declaration entrypoints
-/// and load them into the project file set as dependency declaration files.
+/// Outcome of resolving the project's configured type packages.
+pub(crate) struct TypePackageResolution {
+    /// Type-package names actually included, in load order. Passed to the checker
+    /// as `CheckerOptions.types` so node-specific builtins and the `@types`
+    /// ambient-global gate fire for them.
+    pub effective_type_names: Vec<String>,
+    /// Explicitly-listed `types` entries that could not be resolved. The caller
+    /// emits a TS2688 for each; wildcard-discovered packages never appear here.
+    pub missing: Vec<String>,
+}
+
+/// Resolve the project's type packages and load them as dependency declarations.
 ///
-/// This is intentionally narrow: each configured name is mapped to
-/// `node_modules/@types/<mangled>` (searching upward from the project root), and
-/// only `types` / `typings` / exact `exports["."].types` / `index.d.ts` are
-/// consulted. It does not implement general package resolution. Names that
-/// cannot be resolved anywhere up the tree are returned so the caller can emit a
-/// TS2688 diagnostic.
-pub(crate) fn resolve_configured_type_declarations(
+/// Mirrors TypeScript 6.0's `getAutomaticTypeDirectiveNames`:
+///
+/// * `types` absent (`None`) or `types: []` → include nothing. TypeScript 6.0
+///   removed the implicit inclusion of every visible `@types` package; automatic
+///   discovery is now opt-in via the `"*"` wildcard below.
+/// * `types` containing `"*"` → expand the wildcard to every package found under
+///   the effective type roots (`typeRoots` if set, otherwise the ancestor
+///   `node_modules/@types` chain), skipping dot-prefixed and "not needed"
+///   packages. Other literal entries are preserved; the list is deduped in order.
+/// * each resulting name resolves nearest-root-first; scoped names are mangled
+///   (`@scope/pkg` -> `scope__pkg`) only under `@types` roots, matching
+///   `getCandidateFromTypeRoot`.
+///
+/// Entrypoint resolution stays narrow: `types` / `typings` / exact
+/// `exports["."].types` / `index.d.ts`.
+pub(crate) fn resolve_type_packages(
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
     root_dir: &Path,
-    types: &[String],
+    types: Option<&[String]>,
+    type_roots: &[PathBuf],
     cache: &mut PackageDeclarationResolverCache,
-) -> Vec<String> {
-    let mut missing = Vec::new();
+) -> TypePackageResolution {
+    let mut resolution = TypePackageResolution {
+        effective_type_names: Vec::new(),
+        missing: Vec::new(),
+    };
+
+    // `types` absent or empty: nothing is auto-included (TypeScript 6.0).
+    let Some(configured) = types else {
+        return resolution;
+    };
+    if configured.is_empty() {
+        return resolution;
+    }
+
+    let roots = effective_type_roots(root_dir, type_roots);
+
+    // Expand `"*"` entries to the packages discovered under the type roots.
+    let wildcard_matches = if configured.iter().any(|entry| entry == "*") {
+        discover_wildcard_type_names(&roots, cache)
+    } else {
+        Vec::new()
+    };
+
+    // Flatten the directive list in order, deduping by name. `explicit` entries
+    // emit TS2688 when unresolved; wildcard matches never do (they came from
+    // directories that exist).
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut directives: Vec<(String, bool)> = Vec::new();
+    for entry in configured {
+        if entry == "*" {
+            for name in &wildcard_matches {
+                if seen_names.insert(name.clone()) {
+                    directives.push((name.clone(), false));
+                }
+            }
+        } else if seen_names.insert(entry.clone()) {
+            directives.push((entry.clone(), true));
+        }
+    }
+
     let mut known_file_names: HashSet<String> = inputs
         .iter()
         .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
         .collect();
 
-    for type_name in types {
-        let mangled = types_package_name(type_name);
-        let Some(path) = resolve_configured_type_entrypoint(&mangled, root_dir, cache) else {
-            missing.push(type_name.clone());
-            continue;
-        };
-
-        let canonical_path = path.canonicalize().unwrap_or(path);
-        let normalized_file_name = canonicalize_if_exists_string(&canonical_path);
-        if !known_file_names.insert(normalized_file_name.clone()) {
-            continue;
+    for (name, explicit) in directives {
+        match resolve_type_directive_in_roots(&name, &roots, cache) {
+            Some(path) => {
+                load_type_package_file(&path, inputs, sources, &mut known_file_names);
+                resolution.effective_type_names.push(name);
+            }
+            None => {
+                if explicit {
+                    resolution.missing.push(name);
+                }
+            }
         }
-
-        let Ok(source_text) = std::fs::read_to_string(&canonical_path) else {
-            continue;
-        };
-
-        inputs.push(SourceFileInput {
-            file_name: normalized_file_name.clone(),
-            source_text: source_text.clone(),
-        });
-        sources.push((canonical_path, normalized_file_name, source_text));
     }
 
-    missing
+    resolution
 }
 
-fn resolve_configured_type_entrypoint(
-    mangled: &str,
-    root_dir: &Path,
-    cache: &mut PackageDeclarationResolverCache,
-) -> Option<PathBuf> {
+/// The effective type roots for type-directive resolution, nearest first.
+/// Mirrors `getEffectiveTypeRoots`: explicit `typeRoots` win outright; otherwise
+/// every ancestor `node_modules/@types` directory (existence checked lazily when
+/// scanning or resolving).
+fn effective_type_roots(root_dir: &Path, type_roots: &[PathBuf]) -> Vec<PathBuf> {
+    if !type_roots.is_empty() {
+        return type_roots.to_vec();
+    }
+
+    let mut roots = Vec::new();
     let mut current_dir = root_dir.to_path_buf();
-
     loop {
-        let pkg_dir = current_dir
-            .join("node_modules")
-            .join("@types")
-            .join(mangled);
-        if let Some(path) = resolve_at_types_package_entrypoint(&pkg_dir, cache) {
-            return Some(path);
-        }
-
+        roots.push(current_dir.join("node_modules").join("@types"));
         let Some(parent) = current_dir.parent() else {
             break;
         };
         current_dir = parent.to_path_buf();
     }
+    roots
+}
 
+/// Whether a type root uses the DefinitelyTyped `@types` mangling convention
+/// (scoped `@scope/pkg` stored on disk as `scope__pkg`).
+fn is_at_types_root(root: &Path) -> bool {
+    root.ends_with(Path::new("node_modules").join("@types"))
+}
+
+/// Discover the package names contributed by a `"*"` wildcard, scanning each
+/// effective type root once. Skips dot-prefixed directories and "not needed"
+/// packages (`package.json` with `"typings": null`). Names are the raw directory
+/// base names (the mangled form for scoped `@types` packages), matching
+/// TypeScript's `getAutomaticTypeDirectiveNames`.
+fn discover_wildcard_type_names(
+    roots: &[PathBuf],
+    cache: &mut PackageDeclarationResolverCache,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+
+        let mut dir_names: Vec<String> = entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().is_dir())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| !name.starts_with('.'))
+            .collect();
+        dir_names.sort();
+
+        for dir_name in dir_names {
+            if is_not_needed_types_package(&root.join(&dir_name), cache) {
+                continue;
+            }
+            if seen.insert(dir_name.clone()) {
+                names.push(dir_name);
+            }
+        }
+    }
+
+    names
+}
+
+/// A "not needed" stub: `package.json` with `"typings": null`, used by
+/// DefinitelyTyped to mark packages that ship their own types. Excluded from
+/// wildcard discovery, matching TypeScript.
+fn is_not_needed_types_package(
+    pkg_dir: &Path,
+    cache: &mut PackageDeclarationResolverCache,
+) -> bool {
+    let pkg_json_path = pkg_dir.join("package.json");
+    if !pkg_json_path.is_file() {
+        return false;
+    }
+    match read_package_json(&pkg_json_path, cache) {
+        Some(json) => matches!(json.get("typings"), Some(serde_json::Value::Null)),
+        None => false,
+    }
+}
+
+/// Resolve a type-directive name to its entrypoint, trying each root in order
+/// (nearest first) and returning the first hit. Scoped names are mangled only
+/// under `@types` roots; custom `typeRoots` use the name verbatim.
+fn resolve_type_directive_in_roots(
+    name: &str,
+    roots: &[PathBuf],
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PathBuf> {
+    for root in roots {
+        let lookup = if is_at_types_root(root) {
+            types_package_name(name)
+        } else {
+            name.to_string()
+        };
+        if let Some(path) = resolve_at_types_package_entrypoint(&root.join(&lookup), cache) {
+            return Some(path);
+        }
+    }
     None
+}
+
+/// Add a resolved type-package declaration file to the project file set unless it
+/// is already present.
+fn load_type_package_file(
+    path: &Path,
+    inputs: &mut Vec<SourceFileInput>,
+    sources: &mut Vec<(PathBuf, String, String)>,
+    known_file_names: &mut HashSet<String>,
+) {
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let normalized_file_name = canonicalize_if_exists_string(&canonical_path);
+    if !known_file_names.insert(normalized_file_name.clone()) {
+        return;
+    }
+
+    let Ok(source_text) = std::fs::read_to_string(&canonical_path) else {
+        return;
+    };
+
+    inputs.push(SourceFileInput {
+        file_name: normalized_file_name.clone(),
+        source_text: source_text.clone(),
+    });
+    sources.push((canonical_path, normalized_file_name, source_text));
 }
 
 fn resolve_at_types_package_entrypoint(

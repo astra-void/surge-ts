@@ -88,6 +88,21 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
+        name: "resolvePackageJsonExports",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
+        name: "resolvePackageJsonImports",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
+        name: "customConditions",
+        value_kind: TsConfigOptionValueKind::StringArray,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
         name: "rootDir",
         value_kind: TsConfigOptionValueKind::String,
         support: TsConfigOptionSupport::KnownNoop,

@@ -10,8 +10,8 @@ use oxc_span::{GetSpan, Span};
 
 use crate::{
     ParsedArrowFunction, ParsedArrowFunctionBody, ParsedBinaryOperator, ParsedCall,
-    ParsedCallArgument, ParsedExpression, ParsedJsxAttribute, ParsedJsxChild,
-    ParsedLogicalOperator, ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
+    ParsedCallArgument, ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind,
+    ParsedJsxChild, ParsedLogicalOperator, ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
 };
 
 use super::spans::text_span_from_oxc_span;
@@ -265,26 +265,43 @@ fn parse_jsx_attribute_item(item: &JSXAttributeItem<'_>) -> Option<ParsedJsxAttr
     match item {
         JSXAttributeItem::Attribute(attribute) => {
             let (name, name_span) = parse_jsx_attribute_name(&attribute.name);
-            let (value, value_span) = match &attribute.value {
+            let (value, value_span, value_kind) = match &attribute.value {
                 Some(JSXAttributeValue::ExpressionContainer(container)) => {
-                    parse_jsx_container_expression(container)
+                    let (value, value_span) = parse_jsx_container_expression(container);
+                    (value, value_span, ParsedJsxAttributeValueKind::Expression)
                 }
                 Some(JSXAttributeValue::Element(element)) => {
                     let span = Some(text_span_from_oxc_span(element.span));
-                    (Some(parse_jsx_element(element)), span)
+                    (
+                        Some(parse_jsx_element(element)),
+                        span,
+                        ParsedJsxAttributeValueKind::Expression,
+                    )
                 }
                 Some(JSXAttributeValue::Fragment(fragment)) => {
                     let span = Some(text_span_from_oxc_span(fragment.span));
-                    (Some(parse_jsx_fragment(fragment)), span)
+                    (
+                        Some(parse_jsx_fragment(fragment)),
+                        span,
+                        ParsedJsxAttributeValueKind::Expression,
+                    )
                 }
-                // String-literal values and boolean shorthand have nothing to check.
-                Some(JSXAttributeValue::StringLiteral(_)) | None => (None, None),
+                // A string-literal value (`id="x"`) types as `string`; keep its span
+                // so the checker can point a prop diagnostic at the value.
+                Some(JSXAttributeValue::StringLiteral(literal)) => (
+                    None,
+                    Some(text_span_from_oxc_span(literal.span)),
+                    ParsedJsxAttributeValueKind::StringLiteral,
+                ),
+                // Boolean shorthand (`disabled`) is equivalent to `disabled={true}`.
+                None => (None, None, ParsedJsxAttributeValueKind::BooleanShorthand),
             };
             Some(ParsedJsxAttribute {
                 name,
                 name_span,
                 value,
                 value_span,
+                value_kind,
             })
         }
         JSXAttributeItem::SpreadAttribute(spread) => {
@@ -296,6 +313,7 @@ fn parse_jsx_attribute_item(item: &JSXAttributeItem<'_>) -> Option<ParsedJsxAttr
                 name_span: None,
                 value: Some(expression),
                 value_span: Some(text_span_from_oxc_span(span)),
+                value_kind: ParsedJsxAttributeValueKind::Expression,
             })
         }
     }

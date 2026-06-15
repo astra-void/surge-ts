@@ -606,42 +606,26 @@ pub(crate) fn evaluate_expression(
             }
         }
         ParsedExpression::JsxElement {
+            tag_name,
+            tag_name_span,
             component_name,
             component_span,
             attributes,
             children,
-            ..
+            span,
         } => {
-            // A capitalized component (`<Button />`) or member tag (`<UI.Button />`)
-            // is a value reference; resolve it so a missing name reports TS2304 the
-            // same way an ordinary identifier would. Intrinsic tags carry no name.
-            if let Some(name) = component_name {
-                let identifier = ParsedExpression::Identifier {
-                    name: name.clone(),
-                    span: *component_span,
-                };
-                let _ = evaluate_expression(
-                    &identifier,
-                    component_span.or(fallback_span),
-                    symbols,
-                    ctx,
-                );
-            }
-
-            for attribute in attributes {
-                if let Some(value) = &attribute.value {
-                    let _ = evaluate_expression(
-                        value,
-                        attribute.value_span.or(fallback_span),
-                        symbols,
-                        ctx,
-                    );
-                }
-            }
-
-            for child in children {
-                evaluate_jsx_child(child, fallback_span, symbols, ctx);
-            }
+            super::jsx::check_jsx_element(
+                tag_name,
+                *tag_name_span,
+                component_name.as_deref(),
+                *component_span,
+                *span,
+                attributes,
+                children,
+                fallback_span,
+                symbols,
+                ctx,
+            );
 
             infer_expression(expression, symbols, ctx)
         }
@@ -705,8 +689,13 @@ pub(crate) fn report_inferred_expression(
             }
 
             if is_missing_node_like_global(&name, ctx) {
+                let diagnostic = if ctx.options.types_uses_wildcard() {
+                    Diagnostic::ts2580(&name, ctx.file_name.clone())
+                } else {
+                    Diagnostic::ts2591(&name, ctx.file_name.clone())
+                };
                 ctx.push(diagnostic_with_syntax_span(
-                    Diagnostic::ts2591(&name, ctx.file_name.clone()),
+                    diagnostic,
                     choose_span(span, fallback_span),
                 ));
                 return;

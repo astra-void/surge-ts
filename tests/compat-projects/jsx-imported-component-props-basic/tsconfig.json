@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["react"],
+    "lib": ["es2022", "dom"]
+  },
+  "include": ["src/**/*"]
+}

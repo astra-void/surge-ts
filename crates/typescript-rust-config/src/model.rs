@@ -32,7 +32,21 @@ pub struct NormalizedCompilerOptions {
     pub lib: Vec<String>,
     pub paths: Vec<PathMapping>,
     pub type_roots: Vec<PathBuf>,
-    pub types: Vec<String>,
+    /// `compilerOptions.types`. `None` means the option was absent (TypeScript
+    /// then auto-includes every visible `@types` package); `Some(list)` means it
+    /// was specified — `Some(vec![])` disables automatic inclusion entirely.
+    pub types: Option<Vec<String>>,
+    /// `compilerOptions.resolvePackageJsonExports`. When false, the package
+    /// `exports` field is bypassed during declaration resolution. Defaults to
+    /// `true` for modern resolvers (node16/nodenext/bundler).
+    pub resolve_package_json_exports: bool,
+    /// `compilerOptions.resolvePackageJsonImports`. When false, the package
+    /// `imports` (`#alias`) field is bypassed. Defaults to `true` for modern
+    /// resolvers.
+    pub resolve_package_json_imports: bool,
+    /// `compilerOptions.customConditions`. Extra export/import conditions that
+    /// participate in condition matching, in configured priority order.
+    pub custom_conditions: Vec<String>,
 }
 
 impl Default for NormalizedCompilerOptions {
@@ -52,7 +66,10 @@ impl Default for NormalizedCompilerOptions {
             lib: Vec::new(),
             paths: Vec::new(),
             type_roots: Vec::new(),
-            types: Vec::new(),
+            types: None,
+            resolve_package_json_exports: true,
+            resolve_package_json_imports: true,
+            custom_conditions: Vec::new(),
         }
     }
 }

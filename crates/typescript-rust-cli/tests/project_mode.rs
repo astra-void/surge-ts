@@ -216,6 +216,80 @@ fn project_mode_lib_option_es_only_skips_dom_generated_libs() {
     assert_eq!(json_diagnostic_codes(&parsed), vec!["TS2304"]);
 }
 
+/// Physical lib loading requires the `typescript` package to be installed
+/// (`pnpm install`). `cargo test` must not depend on that, so physical-lib
+/// tests skip when the package is absent.
+fn typescript_lib_available() -> bool {
+    workspace_root()
+        .join("node_modules/typescript/lib/lib.es5.d.ts")
+        .is_file()
+}
+
+fn run_physical_fixture_codes(fixture: &str) -> Vec<String> {
+    let project = compat_project_root(fixture).join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&[
+        "--project",
+        project.as_str(),
+        "--format",
+        "json",
+        "--physicalLibs",
+    ]);
+    json_diagnostic_codes(&parsed)
+}
+
+#[test]
+fn project_mode_physical_libs_resolve_array_callback_return() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // `values.map(v => v.toString())` must infer `string[]`, so assigning it to
+    // `number[]` is the only error, mirroring tsc against the real lib.es5.
+    assert_eq!(
+        run_physical_fixture_codes("physical-lib-es-array-basic"),
+        vec!["TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_physical_libs_resolve_map_generic_methods() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    assert_eq!(
+        run_physical_fixture_codes("physical-lib-es-map-set-basic"),
+        vec!["TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_physical_libs_resolve_index_signature() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    assert_eq!(
+        run_physical_fixture_codes("physical-lib-index-signature-basic"),
+        vec!["TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_physical_libs_no_lib_disables_globals() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // `noLib: true` disables physical default libs too, so `Promise`/`Date` are
+    // missing (matching tsc's low-cascade missing-global behaviour).
+    let codes = run_physical_fixture_codes("physical-lib-no-lib-basic");
+    assert!(!codes.is_empty());
+    // Missing global types under noLib (`Cannot find global type 'Array'`, etc.).
+    assert!(codes.iter().all(|code| code == "TS2318"));
+}
+
 #[test]
 fn project_mode_lib_option_dom_enables_authenticator_transport() {
     let root = temp_dir("project-lib-dom");
@@ -3508,4 +3582,129 @@ fn cli_configured_types_no_node_does_not_autoload_at_types() {
     // `process` stays unresolved and surfaces the install-@types/node hint.
     let codes = json_diagnostic_codes(&parsed);
     assert_eq!(codes, vec!["TS2591".to_string()]);
+}
+
+#[test]
+fn cli_auto_types_wildcard_discovers_node() {
+    // `types: ["*"]` auto-discovers the visible @types/node package; `process`
+    // resolves and only the `bad` assignment mismatch remains.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/auto-types-node-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2322".to_string()]);
+}
+
+#[test]
+fn cli_auto_types_empty_types_disables_discovery() {
+    // `types: []` disables automatic inclusion, so `process` is unresolved.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/auto-types-disabled-empty-types-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2591".to_string()]);
+}
+
+#[test]
+fn cli_auto_types_narrowed_loads_only_listed() {
+    // `types: ["node"]` loads node but not the visible react package.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/auto-types-narrowed-types-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2304".to_string()]);
+}
+
+#[test]
+fn cli_auto_types_wildcard_discovers_scoped_package() {
+    // `types: ["*"]` discovers @types/scope__pkg and unmangles it to a global.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/auto-types-scoped-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2322".to_string()]);
+}
+
+#[test]
+fn cli_auto_types_wildcard_discovers_ancestor_node() {
+    // The visible @types/node lives in an ancestor directory; `types: ["*"]`
+    // walks up the node_modules/@types chain to find it.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/auto-types-ancestor-visibility-basic/packages/app/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2322".to_string()]);
+}
+
+#[test]
+fn cli_auto_types_nearest_package_wins() {
+    // The app-local @types/node (`marker.token: string`) wins over the ancestor
+    // copy (`marker.token: number`); only the `number` mismatch remains.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/auto-types-nearest-wins-basic/packages/app/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2322".to_string()]);
+    let lines = json_diagnostic_lines(&parsed, "TS2322");
+    assert_eq!(lines, vec![Some(2)]);
+}
+
+#[test]
+fn cli_type_roots_wildcard_includes_custom_root_package() {
+    // `typeRoots: ["./custom-types"]` with `types: ["*"]` discovers the package
+    // under the custom root.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/type-roots-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2322".to_string()]);
+}
+
+#[test]
+fn cli_type_roots_ignores_default_node_modules() {
+    // With `typeRoots` set, the default node_modules/@types/node is NOT consulted,
+    // so `process` stays unresolved and surfaces the wildcard install hint (TS2580).
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/type-roots-ignore-default-node-modules-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2580".to_string()]);
+}
+
+#[test]
+fn cli_type_roots_with_types_filter_loads_only_listed() {
+    // `typeRoots` + `types: ["node"]` loads only node from the custom root; react
+    // under the same root is excluded.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/type-roots-with-types-filter-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2304".to_string()]);
 }

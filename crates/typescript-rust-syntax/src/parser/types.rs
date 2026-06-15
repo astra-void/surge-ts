@@ -57,6 +57,11 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSTemplateLiteralType(template_literal) => {
             parse_template_literal_type(template_literal)
         }
+        // Polymorphic `this` (common in lib builder methods like `Map.set`,
+        // `Array.prototype` chaining) is not modelled; fall back to `any` so the
+        // member still parses rather than being dropped, keeping the surrounding
+        // declaration intact and cascade-free.
+        TSType::TSThisType(_) => Some(ParsedType::Any),
         _ => None,
     }
 }
@@ -312,6 +317,15 @@ pub(crate) fn parse_type_method_signature(
     })
 }
 
+/// Extract the value type of an index signature (`[key: string]: T` -> `T`).
+/// String and number index signatures are not distinguished; both map to the
+/// object's string index type.
+pub(crate) fn parse_index_signature_value_type(
+    index_signature: &oxc_ast::ast::TSIndexSignature<'_>,
+) -> Option<ParsedType> {
+    parse_type(&index_signature.type_annotation.type_annotation)
+}
+
 pub(crate) fn parse_type_parameters(
     type_parameters: Option<&TSTypeParameterDeclaration<'_>>,
 ) -> Vec<ParsedTypeParameter> {
@@ -345,7 +359,11 @@ pub(crate) fn parse_type_arguments(
 pub(crate) fn parse_type_property_signature(
     property_signature: &TSPropertySignature<'_>,
 ) -> Option<ParsedObjectTypeProperty> {
-    if property_signature.readonly || property_signature.computed {
+    // `readonly` is not modelled for assignability, but the property must still
+    // be present on the type. Standard lib interfaces (DOM `Response.ok`,
+    // `URL`, etc.) rely heavily on `readonly` members, so parse them as ordinary
+    // properties rather than dropping them.
+    if property_signature.computed {
         return None;
     }
 

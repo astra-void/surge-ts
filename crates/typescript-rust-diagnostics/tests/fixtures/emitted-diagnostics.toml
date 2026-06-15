@@ -329,6 +329,15 @@ span_tests = [
   "crates/typescript-rust-checker/tests/spans.rs",
 ]
 
+[TS2580]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/type-roots-ignore-default-node-modules-basic/tsconfig.json",
+]
+oracle = [
+  "tests/compat-projects/type-roots-ignore-default-node-modules-basic/tsconfig.json",
+]
+
 [TS2591]
 status = "emitted"
 fixtures = [
@@ -365,6 +374,12 @@ fixtures = [
 span_tests = [
   "crates/typescript-rust-checker/tests/compatibility.rs",
   "crates/typescript-rust-checker/tests/spans.rs",
+]
+
+[TS2745]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/jsx-children-basic/tsconfig.json",
 ]
 
 [TS2749]

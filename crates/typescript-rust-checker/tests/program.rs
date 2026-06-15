@@ -3416,12 +3416,12 @@ fn declaration_file_unsupported_enum_still_reports() {
 }
 
 #[test]
-fn declaration_file_unsupported_namespace_still_reports() {
+fn declaration_file_namespace_is_supported() {
+    // Identifier-named namespaces are parsed so their members (e.g.
+    // `JSX.IntrinsicElements`) can resolve; an empty namespace is inert, matching
+    // tsc which reports nothing here.
     let diagnostics = native_program(&[("types/globals.d.ts", "declare namespace N {}")]);
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["typescript-rust::unsupported-declaration"]
-    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
 
 #[test]

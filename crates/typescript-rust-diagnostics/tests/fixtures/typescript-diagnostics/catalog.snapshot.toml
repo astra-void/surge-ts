@@ -305,6 +305,14 @@ message = "Cannot assign to '{0}' because it is a constant."
 arity = 1
 
 [[diagnostic]]
+code = "TS2580"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`."
+arity = 1
+
+[[diagnostic]]
 code = "TS2591"
 category = "Error"
 source = "typescript"
@@ -335,6 +343,14 @@ source = "typescript"
 support = "emitted"
 message = "Property '{0}' is missing in type '{1}' but required in type '{2}'."
 arity = 3
+
+[[diagnostic]]
+code = "TS2745"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This JSX tag's '{0}' prop expects type '{1}' which requires multiple children, but only a single child was provided."
+arity = 2
 
 [[diagnostic]]
 code = "TS2749"

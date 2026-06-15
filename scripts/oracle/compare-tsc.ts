@@ -192,6 +192,22 @@ const fixturePresets: Record<string, string> = {
   'tsx-jsx-expression-diagnostics-basic': path.join(workspaceRoot, 'tests/compat-projects/tsx-jsx-expression-diagnostics-basic/tsconfig.json'),
   'tsx-jsx-attributes-basic': path.join(workspaceRoot, 'tests/compat-projects/tsx-jsx-attributes-basic/tsconfig.json'),
   'tsx-generic-angle-regression-basic': path.join(workspaceRoot, 'tests/compat-projects/tsx-generic-angle-regression-basic/tsconfig.json'),
+  'jsx-function-component-props-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-function-component-props-basic/tsconfig.json'),
+  'jsx-intrinsic-elements-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-intrinsic-elements-basic/tsconfig.json'),
+  'jsx-children-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-children-basic/tsconfig.json'),
+  'jsx-component-member-tag-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-component-member-tag-basic/tsconfig.json'),
+  'jsx-imported-component-props-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-imported-component-props-basic/tsconfig.json'),
+  'jsx-dom-physical-lib-prop-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-dom-physical-lib-prop-basic/tsconfig.json'),
+  'jsx-unresolved-no-cascade-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-unresolved-no-cascade-basic/tsconfig.json'),
+  'auto-types-node-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-node-basic/tsconfig.json'),
+  'auto-types-disabled-empty-types-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-disabled-empty-types-basic/tsconfig.json'),
+  'auto-types-narrowed-types-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-narrowed-types-basic/tsconfig.json'),
+  'auto-types-scoped-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-scoped-basic/tsconfig.json'),
+  'auto-types-ancestor-visibility-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-ancestor-visibility-basic/packages/app/tsconfig.json'),
+  'auto-types-nearest-wins-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-nearest-wins-basic/packages/app/tsconfig.json'),
+  'type-roots-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-basic/tsconfig.json'),
+  'type-roots-ignore-default-node-modules-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-ignore-default-node-modules-basic/tsconfig.json'),
+  'type-roots-with-types-filter-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-with-types-filter-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

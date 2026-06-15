@@ -23,6 +23,11 @@ pub enum FileKind {
     RootDeclaration,
     DependencyDeclaration,
     GeneratedDeclaration,
+    /// A physical TypeScript `lib*.d.ts` default-lib file loaded from the
+    /// installed `typescript` package (opt-in `--physicalLibs`). Lowered through
+    /// the real ambient-global pipeline, but its own diagnostics are suppressed
+    /// like any other trusted upstream library file.
+    PhysicalDefaultLib,
 }
 
 impl FileKind {
@@ -32,6 +37,7 @@ impl FileKind {
             FileKind::RootDeclaration
                 | FileKind::DependencyDeclaration
                 | FileKind::GeneratedDeclaration
+                | FileKind::PhysicalDefaultLib
         )
     }
 }
@@ -48,10 +54,23 @@ pub struct CheckerOptions {
     pub no_implicit_any: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
+    /// Effective type-package names included in the program. When the project's
+    /// `compilerOptions.types` used the `"*"` wildcard, the literal `"*"` is kept
+    /// in this list as a sentinel (see [`Self::types_uses_wildcard`]); it never
+    /// matches a real `@types` package path, so the other consumers ignore it.
     pub types: Vec<String>,
     pub no_lib: bool,
     pub skip_lib_check: bool,
     pub diagnostic_profile: DiagnosticProfile,
+}
+
+impl CheckerOptions {
+    /// Whether `compilerOptions.types` contained the `"*"` wildcard. Selects the
+    /// node install-hint variant (TS2580 with a wildcard, TS2591 without),
+    /// matching TypeScript's `usesWildcardTypes` branch.
+    pub(crate) fn types_uses_wildcard(&self) -> bool {
+        self.types.iter().any(|name| name == "*")
+    }
 }
 
 impl Default for CheckerOptions {
@@ -285,6 +304,13 @@ impl CheckerContext {
 
         if self.current_file_kind == FileKind::GeneratedDeclaration {
             return diagnostic.code.to_string() != "typescript-rust::parser-error";
+        }
+
+        // Physical default-lib files are trusted upstream declarations: never
+        // surface diagnostics that originate inside them, so unsupported lib
+        // syntax cannot flood normal user diagnostics.
+        if self.current_file_kind == FileKind::PhysicalDefaultLib {
+            return true;
         }
 
         let code = diagnostic.code.to_string();

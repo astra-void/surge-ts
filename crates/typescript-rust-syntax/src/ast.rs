@@ -18,13 +18,27 @@ pub enum ParsedStatement {
     ImportDeclaration(ParsedImportDeclaration),
     ExportDeclaration(ParsedExportDeclaration),
     DeclareModuleDeclaration(ParsedDeclareModuleDeclaration),
-    UnsupportedDeclaration { span: Option<TextSpan> },
+    /// An identifier-named namespace/module block such as `declare namespace JSX { ... }`.
+    /// String-named `declare module "pkg"` blocks use [`ParsedDeclareModuleDeclaration`].
+    NamespaceDeclaration(ParsedNamespaceDeclaration),
+    UnsupportedDeclaration {
+        span: Option<TextSpan>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedDeclareModuleDeclaration {
     pub module_specifier: String,
     pub module_specifier_span: Option<TextSpan>,
+    pub statements: Vec<ParsedStatement>,
+    pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedNamespaceDeclaration {
+    /// The namespace identifier, e.g. `JSX`. Nested names (`A.B`) are joined with `.`.
+    pub name: String,
+    pub name_span: Option<TextSpan>,
     pub statements: Vec<ParsedStatement>,
     pub span: Option<TextSpan>,
 }
@@ -191,6 +205,10 @@ pub struct ParsedInterfaceDeclaration {
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub extends: Vec<ParsedNamedType>,
     pub members: Vec<ParsedInterfaceMember>,
+    /// Value type of a string/number index signature (`[key: string]: T`), if
+    /// present. The key type is not modelled separately; both string and number
+    /// index signatures map here.
+    pub string_index_type: Option<ParsedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -494,9 +512,25 @@ pub struct ParsedJsxAttribute {
     pub name_span: Option<TextSpan>,
     /// The expression inside a `{...}` attribute value, a JSX element value, or the
     /// argument of a `{...spread}` attribute. `None` for string-literal values
-    /// (`id="x"`) and boolean shorthand (`enabled`), which carry nothing to check.
+    /// (`id="x"`) and boolean shorthand (`enabled`); their type is recovered from
+    /// [`ParsedJsxAttribute::value_kind`] instead.
     pub value: Option<ParsedExpression>,
     pub value_span: Option<TextSpan>,
+    /// Classifies values that carry no [`ParsedExpression`] so the checker can type
+    /// `id="x"` as `string` and the `disabled` shorthand as `true`.
+    pub value_kind: ParsedJsxAttributeValueKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParsedJsxAttributeValueKind {
+    /// The value is the `value` expression (`name={expr}`), an empty container
+    /// (`name={}`), or a `{...spread}` argument.
+    #[default]
+    Expression,
+    /// A string-literal value, `name="literal"` — typed as `string`.
+    StringLiteral,
+    /// Boolean shorthand, `name` — equivalent to `name={true}`.
+    BooleanShorthand,
 }
 
 #[derive(Debug, Clone, PartialEq)]

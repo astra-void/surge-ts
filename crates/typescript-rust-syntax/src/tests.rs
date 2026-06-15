@@ -3427,12 +3427,22 @@ fn parse_export_star_as_from_unsupported_no_panic() {
 }
 
 #[test]
-fn parse_declare_namespace_is_unsupported() {
-    let parsed = parse_source("declare namespace N {}", "example.d.ts");
+fn parse_declare_namespace_yields_namespace_declaration() {
+    let parsed = parse_source(
+        "declare namespace JSX { interface Element {} }",
+        "example.d.ts",
+    );
     assert!(parsed.parser_errors.is_empty());
+    let ParsedStatement::NamespaceDeclaration(namespace) = &parsed.statements[0] else {
+        panic!(
+            "expected namespace declaration, got {:?}",
+            parsed.statements
+        );
+    };
+    assert_eq!(namespace.name, "JSX");
     assert!(matches!(
-        &parsed.statements[0],
-        ParsedStatement::UnsupportedDeclaration { .. }
+        &namespace.statements[0],
+        ParsedStatement::InterfaceDeclaration(interface) if interface.name == "Element"
     ));
 }
 

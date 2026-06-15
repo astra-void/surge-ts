@@ -8,7 +8,11 @@ use crate::context::{CheckerContext, convert_span};
 pub(crate) fn emit_unknown_type_name(named_type: &ParsedNamedType, ctx: &mut CheckerContext) {
     let diagnostic =
         if named_type.name == "Buffer" && !ctx.options.types.iter().any(|ty| ty == "node") {
-            Diagnostic::ts2591(&named_type.name, ctx.file_name.clone())
+            if ctx.options.types_uses_wildcard() {
+                Diagnostic::ts2580(&named_type.name, ctx.file_name.clone())
+            } else {
+                Diagnostic::ts2591(&named_type.name, ctx.file_name.clone())
+            }
         } else {
             Diagnostic::ts2304(&named_type.name, ctx.file_name.clone())
         };

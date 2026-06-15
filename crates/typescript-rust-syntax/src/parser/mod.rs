@@ -7,7 +7,7 @@ use oxc_ast::ast::{
 
 use crate::{
     ParsedAssignment, ParsedDeclareModuleDeclaration, ParsedExportDeclaration, ParsedExpression,
-    ParsedStatement, ParsedVariableDeclaration, ParsedVariableKind,
+    ParsedNamespaceDeclaration, ParsedStatement, ParsedVariableDeclaration, ParsedVariableKind,
 };
 
 mod entry;
@@ -344,10 +344,15 @@ fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedSt
     use oxc_span::GetSpan;
     let module_specifier = match &module.id {
         TSModuleDeclarationName::StringLiteral(literal) => literal.value.to_string(),
-        _ => {
-            return vec![ParsedStatement::UnsupportedDeclaration {
-                span: Some(text_span_from_oxc_span(module.span)),
-            }];
+        // `namespace JSX { ... }` / `module Foo { ... }` (identifier-named). The body
+        // is preserved so the checker can resolve qualified members such as
+        // `JSX.IntrinsicElements`.
+        TSModuleDeclarationName::Identifier(identifier) => {
+            return parse_ts_namespace_declaration(
+                identifier.name.to_string(),
+                Some(text_span_from_oxc_span(identifier.span)),
+                module,
+            );
         }
     };
 
@@ -375,6 +380,40 @@ fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedSt
         ParsedDeclareModuleDeclaration {
             module_specifier,
             module_specifier_span: Some(text_span_from_oxc_span(module.id.span())),
+            statements,
+            span: Some(text_span_from_oxc_span(module.span)),
+        },
+    )]
+}
+
+fn parse_ts_namespace_declaration(
+    name: String,
+    name_span: Option<crate::TextSpan>,
+    module: &TSModuleDeclaration<'_>,
+) -> Vec<ParsedStatement> {
+    let statements = match &module.body {
+        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => block
+            .body
+            .iter()
+            .filter_map(parse_statement)
+            .flatten()
+            .collect(),
+        // `namespace A.B { ... }` nests as a module body; flatten it into a
+        // dotted-name namespace so members resolve as `A.B.Member`.
+        Some(TSModuleDeclarationBody::TSModuleDeclaration(inner)) => {
+            let inner_name = match &inner.id {
+                TSModuleDeclarationName::Identifier(identifier) => identifier.name.to_string(),
+                TSModuleDeclarationName::StringLiteral(literal) => literal.value.to_string(),
+            };
+            parse_ts_namespace_declaration(format!("{name}.{inner_name}"), name_span, inner)
+        }
+        None => Vec::new(),
+    };
+
+    vec![ParsedStatement::NamespaceDeclaration(
+        ParsedNamespaceDeclaration {
+            name,
+            name_span,
             statements,
             span: Some(text_span_from_oxc_span(module.span)),
         },

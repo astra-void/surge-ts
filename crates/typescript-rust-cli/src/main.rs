@@ -15,9 +15,11 @@ use report::{
 use serde_json::{Map, Value};
 use typescript_rust_checker::{
     CheckerOptions, SourceFileInput, check_program_with_stats_and_jobs, check_source_with_options,
-    load_default_lib_inputs,
+    default_full_lib_seed_for_target, load_default_lib_inputs, resolve_physical_default_libs,
 };
-use typescript_rust_config::{TsConfigLoadOptions, canonicalize_if_exists_string, load_tsconfig};
+use typescript_rust_config::{
+    ScriptTarget, TsConfigLoadOptions, canonicalize_if_exists_string, load_tsconfig,
+};
 use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode, render_diagnostics};
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -87,6 +89,13 @@ struct Cli {
     #[arg(long = "noLib")]
     no_lib: bool,
 
+    /// Load real TypeScript `lib*.d.ts` files from the installed `typescript`
+    /// package instead of the generated default-lib subset. Opt-in; also
+    /// enabled by a `.physicalLibs` marker beside the project or the
+    /// `TYPESCRIPT_RUST_PHYSICAL_LIBS` env var.
+    #[arg(long = "physicalLibs")]
+    physical_libs: bool,
+
     #[arg(long, hide = true)]
     timings: bool,
 }
@@ -136,6 +145,7 @@ fn main() -> ExitCode {
             cli.diagnostic_profile
                 .unwrap_or(CliDiagnosticProfile::Tsc)
                 .into(),
+            cli.physical_libs,
             cli.timings,
         );
     }
@@ -268,6 +278,40 @@ fn run_single_file_mode(
     ExitCode::SUCCESS
 }
 
+/// Whether physical TypeScript `lib*.d.ts` loading is enabled for this run.
+/// Opt-in via the `--physicalLibs` flag, a `.physicalLibs` marker file beside
+/// the resolved `tsconfig.json`, or the `TYPESCRIPT_RUST_PHYSICAL_LIBS` env var.
+fn physical_libs_enabled(cli_flag: bool, config_path: &std::path::Path) -> bool {
+    if cli_flag {
+        return true;
+    }
+    if std::env::var_os("TYPESCRIPT_RUST_PHYSICAL_LIBS").is_some() {
+        return true;
+    }
+    config_path
+        .parent()
+        .map(|dir| dir.join(".physicalLibs").exists())
+        .unwrap_or(false)
+}
+
+/// Map a configured `target` to the lib name base used to derive the default
+/// `lib.<base>.full.d.ts` aggregate when `compilerOptions.lib` is unset.
+fn target_lib_basename(target: ScriptTarget) -> &'static str {
+    match target {
+        ScriptTarget::ES2015 => "es2015",
+        ScriptTarget::ES2016 => "es2016",
+        ScriptTarget::ES2017 => "es2017",
+        ScriptTarget::ES2018 => "es2018",
+        ScriptTarget::ES2019 => "es2019",
+        ScriptTarget::ES2020 => "es2020",
+        ScriptTarget::ES2021 => "es2021",
+        ScriptTarget::ES2022 => "es2022",
+        ScriptTarget::ES2023 => "es2023",
+        ScriptTarget::ES2024 => "es2024",
+        ScriptTarget::ESNext => "esnext",
+    }
+}
+
 fn run_project_mode(
     project: PathBuf,
     show_config: bool,
@@ -278,6 +322,7 @@ fn run_project_mode(
     jobs: usize,
     stub_external_modules: bool,
     diagnostic_profile: typescript_rust_checker::DiagnosticProfile,
+    physical_libs_flag: bool,
     timings_enabled: bool,
 ) -> ExitCode {
     let mut timings = CliTimings::default();
@@ -347,10 +392,40 @@ fn run_project_mode(
     }
 
     let default_lib_loading_start = Instant::now();
-    let default_lib_inputs = load_default_lib_inputs(
-        loaded.compiler_options.no_lib,
-        Some(loaded.compiler_options.lib.as_slice()),
-    );
+    let physical_libs_enabled = physical_libs_enabled(physical_libs_flag, &loaded.config_path);
+    let default_lib_inputs = if physical_libs_enabled {
+        let default_seed =
+            default_full_lib_seed_for_target(target_lib_basename(loaded.compiler_options.target));
+        match resolve_physical_default_libs(
+            &loaded.root_dir,
+            loaded.compiler_options.no_lib,
+            loaded.compiler_options.lib.as_slice(),
+            &default_seed,
+        ) {
+            Some(resolution) => {
+                for unknown in &resolution.unknown_libs {
+                    eprintln!(
+                        "warning: unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
+                    );
+                }
+                resolution.inputs
+            }
+            None => {
+                eprintln!(
+                    "warning: --physicalLibs requested but no TypeScript package was found under node_modules; falling back to the generated default-lib subset"
+                );
+                load_default_lib_inputs(
+                    loaded.compiler_options.no_lib,
+                    Some(loaded.compiler_options.lib.as_slice()),
+                )
+            }
+        }
+    } else {
+        load_default_lib_inputs(
+            loaded.compiler_options.no_lib,
+            Some(loaded.compiler_options.lib.as_slice()),
+        )
+    };
     if timings_enabled {
         timings.default_lib_loading += default_lib_loading_start.elapsed();
     }
@@ -374,13 +449,28 @@ fn run_project_mode(
     let mut package_resolution_cache =
         package_declarations::PackageDeclarationResolverCache::default();
 
-    let missing_configured_types = package_declarations::resolve_configured_type_declarations(
+    let type_package_resolution = package_declarations::resolve_type_packages(
         &mut inputs,
         &mut sources,
         &loaded.root_dir,
-        &loaded.compiler_options.types,
+        loaded.compiler_options.types.as_deref(),
+        &loaded.compiler_options.type_roots,
         &mut package_resolution_cache,
     );
+
+    // Pass the resolved type-package names to the checker. When the project used
+    // the `"*"` wildcard, keep the literal `"*"` as a sentinel so the checker can
+    // select the node install-hint variant (TS2580 vs TS2591) like tsc's
+    // `usesWildcardTypes`; it never matches a real `@types` path.
+    let mut checker_types = type_package_resolution.effective_type_names.clone();
+    if loaded
+        .compiler_options
+        .types
+        .as_deref()
+        .is_some_and(|types| types.iter().any(|name| name == "*"))
+    {
+        checker_types.push("*".to_string());
+    }
 
     loop {
         let files_before = inputs.len();
@@ -432,7 +522,7 @@ fn run_project_mode(
         skip_lib_check: loaded.compiler_options.skip_lib_check,
         stub_external_modules,
         resolved_modules,
-        types: loaded.compiler_options.types.clone(),
+        types: checker_types,
         diagnostic_profile,
     };
 
@@ -443,7 +533,8 @@ fn run_project_mode(
         diagnostic_profile,
     );
     diagnostics.extend(
-        missing_configured_types
+        type_package_resolution
+            .missing
             .iter()
             .map(|type_name| Diagnostic::ts2688(type_name, String::new())),
     );
@@ -908,16 +999,10 @@ fn build_compiler_options_json(
             ),
         );
     }
-    if !compiler_options.types.is_empty() {
+    if let Some(types) = &compiler_options.types {
         options.insert(
             "types".to_string(),
-            Value::Array(
-                compiler_options
-                    .types
-                    .iter()
-                    .map(|ty| Value::String(ty.clone()))
-                    .collect(),
-            ),
+            Value::Array(types.iter().map(|ty| Value::String(ty.clone())).collect()),
         );
     }
 

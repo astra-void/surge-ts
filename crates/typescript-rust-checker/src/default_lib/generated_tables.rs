@@ -1349,6 +1349,7 @@ fn interface_decl(
         type_parameters,
         extends,
         members,
+        string_index_type: None,
         resolution_scope: None,
     })
 }

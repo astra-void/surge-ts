@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "lib": ["es2022"],
+    "typeRoots": ["./node_modules/@types"],
+    "types": ["*"]
+  },
+  "include": ["src/**/*"]
+}

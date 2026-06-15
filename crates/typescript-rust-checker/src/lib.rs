@@ -14,7 +14,10 @@ mod spans;
 mod symbols;
 
 pub use context::{CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind};
-pub use default_lib::load_default_lib_inputs;
+pub use default_lib::{
+    PhysicalLibResolution, default_full_lib_seed_for_target, load_default_lib_inputs,
+    resolve_physical_default_libs,
+};
 pub use driver::{check_source, check_source_with_options};
 pub use program::{
     ProgramCheckResult, SourceFileInput, check_program, check_program_with_options,

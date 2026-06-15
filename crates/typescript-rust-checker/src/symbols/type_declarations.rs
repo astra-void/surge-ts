@@ -42,6 +42,7 @@ pub(crate) struct InterfaceInfo {
     pub(crate) type_parameters: Vec<ParsedTypeParameter>,
     pub(crate) extends: Vec<ParsedNamedType>,
     pub(crate) members: Vec<ParsedInterfaceMember>,
+    pub(crate) string_index_type: Option<ParsedType>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
 }
 
@@ -55,6 +56,7 @@ impl Clone for InterfaceInfo {
             type_parameters: self.type_parameters.clone(),
             extends: self.extends.clone(),
             members: self.members.clone(),
+            string_index_type: self.string_index_type.clone(),
             resolution_scope: self.resolution_scope.clone(),
         }
     }
@@ -167,6 +169,24 @@ impl TypeDeclarationTable {
         None
     }
 
+    /// Insert `declaration`, replacing any existing entry for `name`.
+    ///
+    /// Unlike [`insert`](Self::insert) (which is first-wins), this overwrites the
+    /// id mapping with a freshly allocated payload. The previous payload remains
+    /// in the append-only arena but is no longer referenced. Used by the default
+    /// library declaration-merging path, where later interface declarations must
+    /// contribute their members rather than being dropped.
+    pub(crate) fn upsert(&mut self, name: impl AsRef<str>, declaration: TypeDeclarationInfo) {
+        let name_ref = name.as_ref();
+        let declaration_id = self.alloc_declaration_payload(declaration);
+        if let Some(existing) = self.declarations.get_mut(name_ref) {
+            *existing = declaration_id;
+        } else {
+            let key = ArenaStr::new(name_ref, &self.arena);
+            self.declarations.insert(key, declaration_id);
+        }
+    }
+
     fn alloc_declaration_payload(&mut self, declaration: TypeDeclarationInfo) -> TypeDeclarationId {
         let declaration = self.arena.alloc_type_declaration_payload(declaration);
         let id = TypeDeclarationId(self.payloads.len() as u32);
@@ -199,6 +219,7 @@ mod tests {
             type_parameters: vec![],
             extends: vec![],
             members: vec![],
+            string_index_type: None,
             resolution_scope: None,
         });
 
@@ -239,6 +260,7 @@ mod tests {
             type_parameters: vec![],
             extends: vec![],
             members: vec![],
+            string_index_type: None,
             resolution_scope: None,
         });
         let _ = local.insert("User", local_interface.clone());

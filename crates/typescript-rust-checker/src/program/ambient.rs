@@ -12,7 +12,9 @@ use crate::context::{CheckerContext, FileKind};
 use crate::default_lib::inject_generated_default_lib_snapshot_for_file_name;
 use crate::driver::collect_type_declarations;
 use crate::modules::{ModuleExportTable, build_module_export_table};
-use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
+use crate::symbols::{
+    InterfaceInfo, SymbolTable, TypeDeclarationInfo, TypeDeclarationScope, TypeDeclarationTable,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AmbientModuleEntry {
@@ -76,10 +78,22 @@ pub(crate) fn collect_ambient_globals(
             }
         });
 
+        let is_physical_lib = parsed_file.file_kind == FileKind::PhysicalDefaultLib;
         for (name, decl) in ambient_td.iter() {
-            let _ = ctx
-                .ambient_global_type_declarations
-                .insert(name.clone(), decl.clone());
+            if is_physical_lib {
+                // Default libs rely on declaration merging: the same interface
+                // (e.g. `PromiseConstructor`, `Array<T>`, DOM `Window`) is split
+                // across many lib files. Merge members rather than first-wins.
+                merge_physical_lib_type_declaration(
+                    &mut ctx.ambient_global_type_declarations,
+                    name.as_ref(),
+                    decl,
+                );
+            } else {
+                let _ = ctx
+                    .ambient_global_type_declarations
+                    .insert(name.clone(), decl.clone());
+            }
         }
 
         let mut local_function_signatures = HashMap::new();
@@ -174,6 +188,62 @@ pub(crate) fn collect_ambient_globals(
 
         ctx.type_declarations = saved_type_declarations;
         ctx.type_declaration_scope = saved_type_declaration_scope;
+    }
+}
+
+/// Merge a physical default-lib type declaration into the ambient global table.
+///
+/// When both the existing and incoming declarations are interfaces, their
+/// members and `extends` clauses are concatenated (TypeScript interface
+/// declaration merging). Otherwise the first declaration wins, matching how a
+/// `var` + interface pair (e.g. `Promise`) keeps the interface as the type.
+fn merge_physical_lib_type_declaration(
+    table: &mut TypeDeclarationTable,
+    name: &str,
+    incoming: &TypeDeclarationInfo,
+) {
+    let merged = match (table.get(name), incoming) {
+        (
+            Some(TypeDeclarationInfo::Interface(existing)),
+            TypeDeclarationInfo::Interface(incoming),
+        ) => {
+            let mut members = existing.members.clone();
+            members.extend(incoming.members.iter().cloned());
+            let mut extends = existing.extends.clone();
+            extends.extend(incoming.extends.iter().cloned());
+            let type_parameters = if existing.type_parameters.is_empty() {
+                incoming.type_parameters.clone()
+            } else {
+                existing.type_parameters.clone()
+            };
+            Some(InterfaceInfo {
+                name: existing.name.clone(),
+                file_name: existing.file_name.clone(),
+                name_span: existing.name_span,
+                type_parameters,
+                extends,
+                members,
+                string_index_type: existing
+                    .string_index_type
+                    .clone()
+                    .or_else(|| incoming.string_index_type.clone()),
+                resolution_scope: existing
+                    .resolution_scope
+                    .clone()
+                    .or_else(|| incoming.resolution_scope.clone()),
+            })
+        }
+        // Existing non-interface, or incoming non-interface: first declaration
+        // wins (e.g. an alias already present, or a `var`/interface pair).
+        (Some(_), _) => return,
+        (None, _) => {
+            let _ = table.insert(name, incoming.clone());
+            return;
+        }
+    };
+
+    if let Some(merged) = merged {
+        table.upsert(name, TypeDeclarationInfo::Interface(merged));
     }
 }
 

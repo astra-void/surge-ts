@@ -112,6 +112,9 @@ pub(crate) fn check_program_statement(
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
         ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Equals { .. }) => {}
         ParsedStatement::DeclareModuleDeclaration(_) => {}
+        // Namespace members are bound during type-declaration collection; the
+        // namespace itself produces no value-level checks here.
+        ParsedStatement::NamespaceDeclaration(_) => {}
         ParsedStatement::UnsupportedDeclaration { span } => {
             emit_unsupported_declaration_diagnostic(ctx, span);
         }

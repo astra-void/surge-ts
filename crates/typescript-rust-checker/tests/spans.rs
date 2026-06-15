@@ -1639,21 +1639,16 @@ fn span_unsupported_declare_class_points_to_keyword_or_statement() {
 }
 
 #[test]
-fn span_unsupported_declare_namespace_points_to_keyword_or_statement() {
+fn declare_namespace_is_supported_without_diagnostic() {
+    // Namespaces are now parsed so qualified members resolve (`JSX.IntrinsicElements`);
+    // an empty namespace emits nothing, matching tsc.
     let source = "declare namespace N {}";
     let diagnostics = native_program(vec![typescript_rust_checker::SourceFileInput {
         file_name: "example.d.ts".to_string(),
         source_text: source.to_string(),
     }]);
 
-    assert_eq!(
-        diagnostic_tuples(&diagnostics),
-        vec![(
-            "typescript-rust::unsupported-declaration".to_string(),
-            "example.d.ts".to_string(),
-            Some(span(source, source)),
-        )]
-    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
 
 #[test]

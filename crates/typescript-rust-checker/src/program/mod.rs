@@ -396,7 +396,7 @@ fn parse_program_files(
                 FileKind::DependencyDeclaration => {
                     timings.dependency_declaration_parse_time += parse_duration
                 }
-                FileKind::GeneratedDeclaration => {
+                FileKind::GeneratedDeclaration | FileKind::PhysicalDefaultLib => {
                     timings.generated_default_lib_parse_time += parse_duration
                 }
                 FileKind::RootSource | FileKind::RootDeclaration => {}
@@ -417,6 +417,9 @@ fn parse_program_files(
                     }
                 }
                 FileKind::GeneratedDeclaration => {}
+                FileKind::PhysicalDefaultLib => {
+                    c.generated_default_lib_files += 1;
+                }
             });
             ParsedProgramFile {
                 file_name: file_name.clone(),
@@ -434,6 +437,14 @@ fn classify_file_kind(file_name: &str) -> FileKind {
     if is_declaration_file_name(file_name) {
         if is_generated_declaration_file_name(file_name) {
             return FileKind::GeneratedDeclaration;
+        }
+
+        // Physical default libs live under `.../typescript/lib/lib.*.d.ts`.
+        // Classify them ahead of the generic dependency-declaration check so
+        // they route through the real ambient-lowering pipeline rather than
+        // being skipped like ordinary `node_modules` declarations.
+        if crate::default_lib::is_physical_default_lib_file_name(file_name) {
+            return FileKind::PhysicalDefaultLib;
         }
 
         if file_name.contains("/node_modules/") || file_name.contains("/node_modules/.pnpm/") {
@@ -477,9 +488,10 @@ fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut Checker
 
 fn inject_generated_default_lib_inputs(files: &mut Vec<SourceFileInput>, no_lib: bool) {
     if no_lib
-        || files
-            .iter()
-            .any(|file| crate::default_lib::is_generated_default_lib_file_name(&file.file_name))
+        || files.iter().any(|file| {
+            crate::default_lib::is_generated_default_lib_file_name(&file.file_name)
+                || crate::default_lib::is_physical_default_lib_file_name(&file.file_name)
+        })
     {
         return;
     }
