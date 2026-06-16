@@ -290,6 +290,100 @@ fn project_mode_physical_libs_no_lib_disables_globals() {
     assert!(codes.iter().all(|code| code == "TS2318"));
 }
 
+/// Run a compat fixture in default mode (no `--physicalLibs`). Physical lib
+/// loading is the default, so these prove the real lib graph loads without the
+/// opt-in flag.
+fn run_default_fixture_codes(fixture: &str) -> Vec<String> {
+    let project = compat_project_root(fixture).join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+    json_diagnostic_codes(&parsed)
+}
+
+#[test]
+fn project_mode_physical_libs_are_the_default_es_dom() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // No `--physicalLibs`, no `compilerOptions.lib`: the target's `.full` lib
+    // graph (ES + DOM) loads by default, so `Map`, `Promise`, `JSON`, `Number`
+    // and `Array.from` all resolve.
+    assert!(run_default_fixture_codes("default-lib-physical-default-es-dom-basic").is_empty());
+}
+
+#[test]
+fn project_mode_physical_libs_target_selects_graph() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // `target: es2017` (no explicit lib) seeds `lib.es2017.full`, so the es2017
+    // additions `Object.entries`/`Object.values`/`String.padStart` resolve.
+    assert!(run_default_fixture_codes("default-lib-physical-target-graph-basic").is_empty());
+}
+
+#[test]
+fn project_mode_physical_libs_lib_option_dom() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    assert!(run_default_fixture_codes("default-lib-physical-lib-option-dom-basic").is_empty());
+}
+
+#[test]
+fn project_mode_physical_libs_default_no_lib_disables_globals() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // `noLib: true` is honored even though physical loading is the default.
+    let codes = run_default_fixture_codes("default-lib-physical-no-lib-basic");
+    assert!(!codes.is_empty());
+    assert!(codes.iter().all(|code| code == "TS2318"));
+}
+
+#[test]
+fn project_mode_physical_libs_dom_globals() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // `navigator`, `document`, `window` come from the real DOM lib.
+    assert!(run_default_fixture_codes("default-lib-physical-dom-globals-basic").is_empty());
+}
+
+#[test]
+fn project_mode_physical_libs_timers() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // `setInterval`/`clearInterval`/`setTimeout`/`clearTimeout` come from the lib.
+    assert!(run_default_fixture_codes("default-lib-physical-timers-basic").is_empty());
+}
+
+#[test]
+fn project_mode_physical_libs_formdata() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    assert!(run_default_fixture_codes("default-lib-physical-formdata-basic").is_empty());
+}
+
+#[test]
+fn project_mode_physical_libs_html_element() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // `HTMLDivElement` and `HTMLElement` come from the real DOM lib, not a
+    // hardcoded global.
+    assert!(run_default_fixture_codes("default-lib-physical-html-element-basic").is_empty());
+}
+
 #[test]
 fn project_mode_lib_option_dom_enables_authenticator_transport() {
     let root = temp_dir("project-lib-dom");
@@ -3815,6 +3909,106 @@ fn cli_type_roots_with_types_filter_loads_only_listed() {
     ]);
     let codes = json_diagnostic_codes(&parsed);
     assert_eq!(codes, vec!["TS2304".to_string()]);
+}
+
+#[test]
+fn cli_reference_types_directive_loads_node_at_types() {
+    // `/// <reference types="node" />` resolves @types/node even though
+    // `compilerOptions.types` is empty; `process` resolves and there are no errors.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/reference-types-node-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(json_diagnostic_codes(&parsed), Vec::<String>::new());
+}
+
+#[test]
+fn cli_reference_types_directive_resolves_scoped_package() {
+    // `types="@scope/pkg"` maps to node_modules/@types/scope__pkg and contributes
+    // its `declare const` as a global.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/reference-types-scoped-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(json_diagnostic_codes(&parsed), Vec::<String>::new());
+}
+
+#[test]
+fn cli_reference_types_directive_follows_recursive_references() {
+    // pkg-a's own `/// <reference types="pkg-b" />` is followed, so pkg-b's
+    // interface is visible to the root file.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/reference-types-recursive-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(json_diagnostic_codes(&parsed), Vec::<String>::new());
+}
+
+#[test]
+fn cli_reference_types_directive_missing_reports_located_ts2688() {
+    // A missing reference in a root source file reports TS2688 located at the
+    // specifier, matching tsc.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/reference-types-missing-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    let diagnostics = json_diagnostics(&parsed);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["code"], Value::from("TS2688"));
+    assert_eq!(diagnostics[0]["fileName"], Value::from("src/index.ts"));
+    assert_eq!(diagnostics[0]["line"], Value::from(1));
+    assert_eq!(diagnostics[0]["column"], Value::from(23));
+    assert_eq!(
+        diagnostics[0]["message"],
+        Value::from("Cannot find type definition file for 'reference-types-missing-pkg'.")
+    );
+}
+
+#[test]
+fn cli_reference_types_directive_in_dependency_dts_is_followed() {
+    // A reference directive inside a resolved package's declaration file pulls in
+    // its @types dependency, so the dependency's type resolves with no errors.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/reference-types-dependency-dts-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(json_diagnostic_codes(&parsed), Vec::<String>::new());
+}
+
+#[test]
+fn cli_reference_types_directive_resolves_through_type_roots() {
+    // With custom `typeRoots`, the directive resolves only through the allowed
+    // root (verbatim name, no @types mangling).
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/reference-types-with-type-roots-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(json_diagnostic_codes(&parsed), Vec::<String>::new());
+}
+
+#[test]
+fn cli_reference_types_directive_dedupes_across_files() {
+    // The same referenced package appears in two files; it loads once and the
+    // shared global resolves in both with no errors.
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/reference-types-dedupe-order-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(json_diagnostic_codes(&parsed), Vec::<String>::new());
 }
 
 fn run_compat_fixture_codes(fixture: &str) -> Vec<String> {

@@ -84,6 +84,24 @@ fn program_api_generated_default_libs_visible() {
 }
 
 #[test]
+fn program_api_generated_default_lib_array_global_from_dts() {
+    // The generated `.d.ts` fallback (parsed, not a Rust snapshot table) must
+    // provide the named `Array`/`ReadonlyArray` globals and their `.length`/
+    // `.map`/`.find` members, mirroring the physical-lib path.
+    let diagnostics = program(&[(
+        "example.ts",
+        "const values: Array<number> = [1, 2, 3];\n\
+         const readonlyValues: ReadonlyArray<number> = values;\n\
+         const size: number = values.length;\n\
+         const doubled: number[] = values.map((value) => value * 2);\n\
+         const found: number | undefined = values.find((value) => value > 1);\n\
+         void readonlyValues; void size; void doubled; void found;",
+    )]);
+
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
 fn program_api_no_lib_hides_generated_default_libs() {
     let diagnostics = program_with_options(
         &[(
