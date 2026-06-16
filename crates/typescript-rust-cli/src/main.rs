@@ -15,8 +15,8 @@ use report::{
 };
 use serde_json::{Map, Value};
 use typescript_rust_checker::{
-    CheckerOptions, SourceFileInput, check_program_with_stats_and_jobs, check_source_with_options,
-    default_full_lib_seed_for_target, load_default_lib_inputs, resolve_physical_default_libs,
+    CheckerOptions, DefaultLibRequest, SourceFileInput, check_program_with_stats_and_jobs,
+    check_source_with_options, load_default_lib_inputs,
 };
 use typescript_rust_config::{
     ScriptTarget, TsConfigLoadOptions, canonicalize_if_exists_string, load_tsconfig,
@@ -90,10 +90,10 @@ struct Cli {
     #[arg(long = "noLib")]
     no_lib: bool,
 
-    /// Load real TypeScript `lib*.d.ts` files from the installed `typescript`
-    /// package instead of the generated default-lib subset. Opt-in; also
-    /// enabled by a `.physicalLibs` marker beside the project or the
-    /// `TYPESCRIPT_RUST_PHYSICAL_LIBS` env var.
+    /// Debug aid: physical TypeScript `lib*.d.ts` loading is the default, so this
+    /// flag is no longer required. When set (or via a `.physicalLibs` marker or
+    /// the `TYPESCRIPT_RUST_PHYSICAL_LIBS` env var), a warning is emitted if the
+    /// TypeScript package cannot be found and the generated subset is used.
     #[arg(long = "physicalLibs")]
     physical_libs: bool,
 
@@ -279,10 +279,12 @@ fn run_single_file_mode(
     ExitCode::SUCCESS
 }
 
-/// Whether physical TypeScript `lib*.d.ts` loading is enabled for this run.
-/// Opt-in via the `--physicalLibs` flag, a `.physicalLibs` marker file beside
-/// the resolved `tsconfig.json`, or the `TYPESCRIPT_RUST_PHYSICAL_LIBS` env var.
-fn physical_libs_enabled(cli_flag: bool, config_path: &std::path::Path) -> bool {
+/// Whether physical TypeScript `lib*.d.ts` loading was explicitly requested via
+/// the `--physicalLibs` flag, a `.physicalLibs` marker file beside the resolved
+/// `tsconfig.json`, or the `TYPESCRIPT_RUST_PHYSICAL_LIBS` env var. Physical
+/// loading is now the default; this only controls whether a fallback warning is
+/// surfaced when the TypeScript package is missing.
+fn physical_libs_explicitly_requested(cli_flag: bool, config_path: &std::path::Path) -> bool {
     if cli_flag {
         return true;
     }
@@ -393,40 +395,29 @@ fn run_project_mode(
     }
 
     let default_lib_loading_start = Instant::now();
-    let physical_libs_enabled = physical_libs_enabled(physical_libs_flag, &loaded.config_path);
-    let default_lib_inputs = if physical_libs_enabled {
-        let default_seed =
-            default_full_lib_seed_for_target(target_lib_basename(loaded.compiler_options.target));
-        match resolve_physical_default_libs(
-            &loaded.root_dir,
-            loaded.compiler_options.no_lib,
-            loaded.compiler_options.lib.as_slice(),
-            &default_seed,
-        ) {
-            Some(resolution) => {
-                for unknown in &resolution.unknown_libs {
-                    eprintln!(
-                        "warning: unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
-                    );
-                }
-                resolution.inputs
-            }
-            None => {
-                eprintln!(
-                    "warning: --physicalLibs requested but no TypeScript package was found under node_modules; falling back to the generated default-lib subset"
-                );
-                load_default_lib_inputs(
-                    loaded.compiler_options.no_lib,
-                    Some(loaded.compiler_options.lib.as_slice()),
-                )
-            }
-        }
-    } else {
-        load_default_lib_inputs(
-            loaded.compiler_options.no_lib,
-            Some(loaded.compiler_options.lib.as_slice()),
-        )
-    };
+    let default_lib_load = load_default_lib_inputs(DefaultLibRequest {
+        no_lib: loaded.compiler_options.no_lib,
+        lib_entries: loaded.compiler_options.lib.as_slice(),
+        root_dir: &loaded.root_dir,
+        target_basename: target_lib_basename(loaded.compiler_options.target),
+    });
+    for unknown in &default_lib_load.unknown_libs {
+        eprintln!(
+            "warning: unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
+        );
+    }
+    // `--physicalLibs` (and its env/marker equivalents) is now only a debug aid:
+    // physical loading is the default, so the flag merely surfaces a warning when
+    // the TypeScript package could not be found and the generated subset was used.
+    if physical_libs_explicitly_requested(physical_libs_flag, &loaded.config_path)
+        && !default_lib_load.used_physical
+        && !loaded.compiler_options.no_lib
+    {
+        eprintln!(
+            "warning: --physicalLibs requested but no TypeScript package was found under node_modules; falling back to the generated default-lib subset"
+        );
+    }
+    let default_lib_inputs = default_lib_load.inputs;
     if timings_enabled {
         timings.default_lib_loading += default_lib_loading_start.elapsed();
     }
@@ -466,19 +457,14 @@ fn run_project_mode(
         &mut package_resolution_cache,
     );
 
-    // Pass the resolved type-package names to the checker. When the project used
-    // the `"*"` wildcard, keep the literal `"*"` as a sentinel so the checker can
-    // select the node install-hint variant (TS2580 vs TS2591) like tsc's
-    // `usesWildcardTypes`; it never matches a real `@types` path.
-    let mut checker_types = type_package_resolution.effective_type_names.clone();
-    if loaded
-        .compiler_options
-        .types
-        .as_deref()
-        .is_some_and(|types| types.iter().any(|name| name == "*"))
-    {
-        checker_types.push("*".to_string());
-    }
+    // Explicit `/// <reference types="..." />` directives resolve through the same
+    // type roots as `compilerOptions.types`. The resolver is re-run inside the
+    // expansion loop so directives in dependency declaration files (added by
+    // package resolution / import-graph expansion) participate too.
+    let mut reference_type_resolver = package_declarations::ReferenceTypeDirectiveResolver::new(
+        &loaded.root_dir,
+        &loaded.compiler_options.type_roots,
+    );
 
     loop {
         let files_before = inputs.len();
@@ -510,9 +496,37 @@ fn run_project_mode(
             timings.import_graph_expansion += import_graph_start.elapsed();
         }
 
+        reference_type_resolver.scan_and_resolve(
+            &mut inputs,
+            &mut sources,
+            &mut package_resolution_cache,
+        );
+
         if graph_loaded == 0 && inputs.len() == files_before {
             break;
         }
+    }
+
+    let reference_type_resolution = reference_type_resolver.into_resolution();
+
+    // Pass the resolved type-package names to the checker so node-specific
+    // builtins and the `@types` ambient-global gate fire for them. Reference-type
+    // packages join the configured ones; when the project used the `"*"` wildcard,
+    // keep the literal `"*"` sentinel so the checker selects the node install-hint
+    // variant (TS2580 vs TS2591) like tsc's `usesWildcardTypes`.
+    let mut checker_types = type_package_resolution.effective_type_names.clone();
+    for name in &reference_type_resolution.effective_type_names {
+        if !checker_types.contains(name) {
+            checker_types.push(name.clone());
+        }
+    }
+    if loaded
+        .compiler_options
+        .types
+        .as_deref()
+        .is_some_and(|types| types.iter().any(|name| name == "*"))
+    {
+        checker_types.push("*".to_string());
     }
 
     let path_modules = path_mapping::resolve_path_mappings(
@@ -547,6 +561,22 @@ fn run_project_mode(
             .iter()
             .map(|type_name| Diagnostic::ts2688(type_name, String::new())),
     );
+    for missing in &reference_type_resolution.missing {
+        // tsc locates the TS2688 at the directive in its containing file. When that
+        // file is a declaration file, the diagnostic is suppressed under
+        // `skipLibCheck`, like any other `.d.ts` diagnostic.
+        if loaded.compiler_options.skip_lib_check && missing.from_declaration_file {
+            continue;
+        }
+        diagnostics.push(
+            Diagnostic::ts2688(&missing.type_name, missing.file_name.clone()).with_span(
+                typescript_rust_diagnostics::TextSpan {
+                    start: missing.value_span.start,
+                    end: missing.value_span.end,
+                },
+            ),
+        );
+    }
     let exit_code = render_project_mode_output(
         &loaded,
         &diagnostics,

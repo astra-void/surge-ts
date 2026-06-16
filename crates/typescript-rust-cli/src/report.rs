@@ -907,6 +907,11 @@ fn classify_file_kind(file_name: &str) -> FileKindLabel {
             || lower.ends_with(".generated.d.ts")
             || lower.ends_with(".generated.d.mts")
             || lower.ends_with(".generated.d.cts")
+            // Physical TypeScript default libs (`.../typescript/lib/lib.*.d.ts`)
+            // are default-lib infrastructure, not project or dependency
+            // declarations; bucket them with the generated subset so project
+            // metrics stay stable regardless of the default-lib backend.
+            || lower.contains("/typescript/lib/lib.")
         {
             return FileKindLabel::GeneratedDeclaration;
         }

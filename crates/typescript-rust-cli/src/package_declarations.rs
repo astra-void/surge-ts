@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use typescript_rust_checker::SourceFileInput;
 use typescript_rust_config::canonicalize_if_exists_string;
-use typescript_rust_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
+use typescript_rust_syntax::{
+    ParsedExportDeclaration, ParsedStatement, ReferenceTypeDirective, TextSpan,
+    extract_reference_path_directives, extract_reference_type_directives, parse_source,
+};
 
 use crate::package_resolution::{
     ResolverOptions, select_export_target, select_import_target, types_versions_candidates,
@@ -298,6 +301,161 @@ pub(crate) fn resolve_type_packages(
     resolution
 }
 
+/// A `/// <reference types="..." />` site that could not be resolved to a type
+/// package. The caller emits a TS2688 located at `value_span` in `file_name`.
+pub(crate) struct MissingReferenceTypeDirective {
+    pub file_name: String,
+    pub type_name: String,
+    pub value_span: TextSpan,
+    /// Whether the referencing file is a declaration (`.d.ts`) file. tsc gates the
+    /// TS2688 from such a site behind `skipLibCheck`, like any other `.d.ts`
+    /// diagnostic.
+    pub from_declaration_file: bool,
+}
+
+/// Outcome of resolving every `/// <reference types>` directive reachable from the
+/// program.
+pub(crate) struct ReferenceTypeDirectiveResolution {
+    pub effective_type_names: Vec<String>,
+    pub missing: Vec<MissingReferenceTypeDirective>,
+}
+
+/// Resolves explicit `/// <reference types="..." />` directives against the same
+/// type roots and entrypoint logic as `compilerOptions.types`. The resolver is
+/// stateful so it can be re-run as the file set grows during import-graph and
+/// package-declaration expansion: each call scans only files not seen before and
+/// follows references recursively (a loaded type package's own directives).
+pub(crate) struct ReferenceTypeDirectiveResolver {
+    roots: Vec<PathBuf>,
+    scanned_files: HashSet<String>,
+    resolution_cache: HashMap<String, Option<PathBuf>>,
+    effective_type_names: Vec<String>,
+    seen_effective: HashSet<String>,
+    missing: Vec<MissingReferenceTypeDirective>,
+}
+
+impl ReferenceTypeDirectiveResolver {
+    pub fn new(root_dir: &Path, type_roots: &[PathBuf]) -> Self {
+        Self {
+            roots: effective_type_roots(root_dir, type_roots),
+            scanned_files: HashSet::new(),
+            resolution_cache: HashMap::new(),
+            effective_type_names: Vec::new(),
+            seen_effective: HashSet::new(),
+            missing: Vec::new(),
+        }
+    }
+
+    /// Scan every not-yet-scanned source for reference-type directives, loading
+    /// each resolved type package into `inputs`/`sources`. Loading appends files,
+    /// which are scanned in the same call, so recursive references converge here.
+    pub fn scan_and_resolve(
+        &mut self,
+        inputs: &mut Vec<SourceFileInput>,
+        sources: &mut Vec<(PathBuf, String, String)>,
+        cache: &mut PackageDeclarationResolverCache,
+    ) {
+        loop {
+            let pending: Vec<(String, String)> = sources
+                .iter()
+                .filter(|(_, file_name, _)| !self.scanned_files.contains(file_name))
+                .map(|(_, file_name, source_text)| (file_name.clone(), source_text.clone()))
+                .collect();
+
+            if pending.is_empty() {
+                break;
+            }
+
+            let mut known_file_names: HashSet<String> = inputs
+                .iter()
+                .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
+                .collect();
+
+            for (file_name, source_text) in pending {
+                self.scanned_files.insert(file_name.clone());
+
+                // `/// <reference path="..." />` pulls in a sibling declaration
+                // file relative to the referencing file. This is how a type
+                // package such as `@types/node` assembles its full surface
+                // (`index.d.ts` references `globals.d.ts`, `buffer.d.ts`, ...),
+                // where its ambient globals (`process`, `Buffer`) are declared.
+                for path_value in extract_reference_path_directives(&source_text) {
+                    load_reference_path_file(
+                        &file_name,
+                        &path_value,
+                        inputs,
+                        sources,
+                        &mut known_file_names,
+                    );
+                }
+
+                let directives = extract_reference_type_directives(&source_text);
+                if directives.is_empty() {
+                    continue;
+                }
+
+                let from_declaration_file = is_declaration_file_path_str(&file_name);
+                for directive in directives {
+                    self.resolve_directive(
+                        directive,
+                        &file_name,
+                        from_declaration_file,
+                        inputs,
+                        sources,
+                        &mut known_file_names,
+                        cache,
+                    );
+                }
+            }
+        }
+    }
+
+    fn resolve_directive(
+        &mut self,
+        directive: ReferenceTypeDirective,
+        file_name: &str,
+        from_declaration_file: bool,
+        inputs: &mut Vec<SourceFileInput>,
+        sources: &mut Vec<(PathBuf, String, String)>,
+        known_file_names: &mut HashSet<String>,
+        cache: &mut PackageDeclarationResolverCache,
+    ) {
+        let name = directive.value;
+        let resolved = match self.resolution_cache.get(&name) {
+            Some(cached) => cached.clone(),
+            None => {
+                let resolved = resolve_type_directive_in_roots(&name, &self.roots, cache);
+                self.resolution_cache.insert(name.clone(), resolved.clone());
+                resolved
+            }
+        };
+
+        match resolved {
+            Some(path) => {
+                load_type_package_file(&path, inputs, sources, known_file_names);
+                if self.seen_effective.insert(name.clone()) {
+                    self.effective_type_names.push(name);
+                }
+            }
+            None => {
+                self.missing.push(MissingReferenceTypeDirective {
+                    file_name: file_name.to_string(),
+                    type_name: name,
+                    value_span: directive.value_span,
+                    from_declaration_file,
+                });
+            }
+        }
+    }
+
+    pub fn into_resolution(self) -> ReferenceTypeDirectiveResolution {
+        ReferenceTypeDirectiveResolution {
+            effective_type_names: self.effective_type_names,
+            missing: self.missing,
+        }
+    }
+}
+
 /// The effective type roots for type-directive resolution, nearest first.
 /// Mirrors `getEffectiveTypeRoots`: explicit `typeRoots` win outright; otherwise
 /// every ancestor `node_modules/@types` directory (existence checked lazily when
@@ -403,6 +561,33 @@ fn resolve_type_directive_in_roots(
 
 /// Add a resolved type-package declaration file to the project file set unless it
 /// is already present.
+/// Load the file targeted by a `/// <reference path="..." />` directive,
+/// resolved relative to the referencing file's directory. The literal target is
+/// tried first (the directive normally names a `.d.ts` file outright); otherwise
+/// the usual declaration-candidate extensions are attempted.
+fn load_reference_path_file(
+    referencing_file: &str,
+    path_value: &str,
+    inputs: &mut Vec<SourceFileInput>,
+    sources: &mut Vec<(PathBuf, String, String)>,
+    known_file_names: &mut HashSet<String>,
+) {
+    let Some(base_dir) = Path::new(referencing_file).parent() else {
+        return;
+    };
+
+    let candidate = base_dir.join(path_value);
+    let resolved = if candidate.is_file() {
+        Some(candidate)
+    } else {
+        resolve_declaration_candidate(&candidate)
+    };
+
+    if let Some(path) = resolved {
+        load_type_package_file(&path, inputs, sources, known_file_names);
+    }
+}
+
 fn load_type_package_file(
     path: &Path,
     inputs: &mut Vec<SourceFileInput>,
