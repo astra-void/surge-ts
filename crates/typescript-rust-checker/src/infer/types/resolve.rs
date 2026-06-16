@@ -513,8 +513,22 @@ pub(crate) fn resolve_object_type(
         properties.insert(property.name, object_property);
     }
 
+    let mut resolved_object = alloc_object_type(properties, None);
+    if let Some(call_signature) = object_type.call_signature {
+        let resolved = resolve_parsed_type(
+            ParsedType::Function(*call_signature),
+            ctx,
+            resolving,
+            substitution,
+        );
+        had_error |= resolved.had_error;
+        if let Type::Function(function_type) = resolved.ty {
+            resolved_object = resolved_object.with_call_signature(function_type);
+        }
+    }
+
     ResolvedType {
-        ty: Type::Object(alloc_object_type(properties, None)),
+        ty: Type::Object(resolved_object),
         had_error,
     }
 }
@@ -719,8 +733,11 @@ pub(crate) fn resolve_named_type(
             ),
         };
         // tsc displays a non-generic interface/type-alias by its name in
-        // diagnostics (e.g. `'StrictObj'`, not the structural expansion).
-        let resolved = attach_object_alias_name(resolved, &named_type.name);
+        // diagnostics (e.g. `'StrictObj'`, not the structural expansion), and
+        // treats it nominally: the qualified `file::name` identity lets
+        // assignability recognise two resolutions of the same declaration.
+        let alias_id = format!("{}\u{0}{}", cache_key.file_name, cache_key.name);
+        let resolved = attach_object_alias_name(resolved, &named_type.name, &alias_id);
         cache_named_type_resolution(ctx, &cache_key, &resolved);
         return resolved;
     }
@@ -748,19 +765,27 @@ pub(crate) fn resolve_named_type(
 /// Tags a resolved object type with the interface/type-alias name it came from
 /// so diagnostics display the name (tsc behaviour). Non-object resolutions and
 /// errored resolutions pass through unchanged.
-fn attach_object_alias_name(resolved: ResolvedType, name: &str) -> ResolvedType {
-    if resolved.had_error {
-        return resolved;
-    }
-
+fn attach_object_alias_name(resolved: ResolvedType, name: &str, alias_id: &str) -> ResolvedType {
     match resolved.ty {
-        Type::Object(object) => ResolvedType {
-            ty: Type::Object(object.with_alias_name(name)),
-            had_error: false,
-        },
+        // Tag the nominal identity even when the resolution errored (a cyclic
+        // member may have collapsed to `unknown`): the object is still this named
+        // declaration, so assignability can recognise two of its resolutions. The
+        // display `alias_name` stays gated on success to preserve diagnostics.
+        Type::Object(object) => {
+            let object = object.with_alias_id(alias_id);
+            let object = if resolved.had_error {
+                object
+            } else {
+                object.with_alias_name(name)
+            };
+            ResolvedType {
+                ty: Type::Object(object),
+                had_error: resolved.had_error,
+            }
+        }
         ty => ResolvedType {
             ty,
-            had_error: false,
+            had_error: resolved.had_error,
         },
     }
 }
@@ -1025,6 +1050,36 @@ pub(crate) fn is_concrete_substituted_index_reference(
     }
 }
 
+/// Selects the type of `index` from `object` without emitting diagnostics or
+/// recording cascade errors. Used when the receiver already errored but its
+/// structural shape is still usable, so the requested property can be selected
+/// without cascading a fresh missing-property diagnostic. Returns `None` when
+/// the receiver is not an indexable structure or the key is not present.
+fn select_indexed_property_no_cascade(object: &Type, index: &Type) -> Option<Type> {
+    match (object, index) {
+        (Type::Object(object_type), Type::StringLiteral(key)) => {
+            object_type.get_property_access_type(key)
+        }
+        (Type::Object(object_type), Type::Union(union_ty)) => {
+            let mut types = Vec::new();
+            for key_ty in union_ty.types() {
+                let Type::StringLiteral(key) = key_ty else {
+                    return None;
+                };
+                types.push(object_type.get_property_access_type(key)?);
+            }
+            Some(union_type(types))
+        }
+        (Type::Tuple(elements), Type::NumberLiteral(num)) => {
+            let index = num.value.parse::<usize>().ok()?;
+            elements.get(index).cloned()
+        }
+        (Type::Array(element_type), Type::Number) => Some(*element_type.clone()),
+        (Type::Tuple(elements), Type::Number) => Some(union_type(elements.clone())),
+        _ => None,
+    }
+}
+
 fn resolve_indexed_access_type(
     indexed_access: ParsedIndexedAccessType,
     ctx: &mut CheckerContext,
@@ -1081,12 +1136,6 @@ fn resolve_indexed_access_type(
 
     let resolved_object =
         resolve_parsed_type(*indexed_access.object_type, ctx, resolving, substitution);
-    if resolved_object.had_error {
-        if generic_indexed_access {
-            record_generic_indexed_access_unknown_fallback();
-        }
-        return resolved_object;
-    }
 
     let resolved_index = resolve_parsed_type(
         *indexed_access.index_type.clone(),
@@ -1094,6 +1143,32 @@ fn resolve_indexed_access_type(
         resolving,
         substitution,
     );
+
+    if resolved_object.had_error {
+        if generic_indexed_access {
+            record_generic_indexed_access_unknown_fallback();
+        }
+        // The receiver shape is known but one of its inner property types could
+        // not be resolved (e.g. an imported alias whose body references a lib
+        // type unavailable in the declaring module's scope). Still select the
+        // requested property so downstream code sees the right type, without
+        // emitting a fresh diagnostic from a receiver that already errored. The
+        // selected property is a legitimate type, so it is returned clean and
+        // participates normally in narrowing. A truly unresolved receiver
+        // (Unknown) has no selectable property and stays no-cascade as Unknown.
+        if let Some(selected) =
+            select_indexed_property_no_cascade(&resolved_object.ty, &resolved_index.ty)
+        {
+            return ResolvedType {
+                ty: selected,
+                had_error: false,
+            };
+        }
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
 
     if object_placeholder_name.is_some() && index_is_valid_generic_key {
         if generic_indexed_access {

@@ -7,10 +7,12 @@
 //! ambient-global pipeline (routed via `FileKind::PhysicalDefaultLib`), so no
 //! pre-baked snapshot is involved.
 //!
-//! Physical loading is opt-in (CLI `--physicalLibs`, a `.physicalLibs` marker
-//! file beside the project, or the `TYPESCRIPT_RUST_PHYSICAL_LIBS` env var) and
-//! requires the package to be installed. When the package cannot be found the
-//! resolver returns `None` and callers fall back to the generated subset.
+//! Physical loading is the default and requires the pinned `typescript` package
+//! to be installed. When the package cannot be found the resolver returns `None`
+//! and callers fall back to the generated subset. The CLI `--physicalLibs` flag
+//! (and the `.physicalLibs` marker file / `TYPESCRIPT_RUST_PHYSICAL_LIBS` env
+//! var) are now only a debug aid: they no longer toggle the default, but surface
+//! a warning when physical loading was requested yet the package was missing.
 
 use std::collections::BTreeSet;
 use std::fs;

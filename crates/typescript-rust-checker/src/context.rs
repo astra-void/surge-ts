@@ -24,9 +24,9 @@ pub enum FileKind {
     DependencyDeclaration,
     GeneratedDeclaration,
     /// A physical TypeScript `lib*.d.ts` default-lib file loaded from the
-    /// installed `typescript` package (opt-in `--physicalLibs`). Lowered through
-    /// the real ambient-global pipeline, but its own diagnostics are suppressed
-    /// like any other trusted upstream library file.
+    /// installed `typescript` package (the default in project mode). Lowered
+    /// through the real ambient-global pipeline, but its own diagnostics are
+    /// suppressed like any other trusted upstream library file.
     PhysicalDefaultLib,
 }
 

@@ -42,6 +42,7 @@ pub(crate) fn class_instance_interface_info(
         extends: class.extends.clone(),
         members,
         string_index_type: None,
+        call_signature: None,
         resolution_scope: None,
     }
 }

@@ -100,6 +100,20 @@ pub(crate) fn check_call_like(
             symbols,
             ctx,
         ),
+        Type::Object(object_type) if object_type.call_signature().is_some() => {
+            let call_signature = object_type.call_signature().unwrap();
+            with_type_copy_reason(TypeCopyReason::CallResolution, || {
+                check_function_type_call(
+                    call_signature,
+                    callee_span,
+                    call_span,
+                    type_arguments,
+                    arguments,
+                    symbols,
+                    ctx,
+                )
+            })
+        }
         _ => {
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2349(ctx.file_name.clone()),

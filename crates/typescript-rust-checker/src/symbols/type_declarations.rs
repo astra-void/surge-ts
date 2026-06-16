@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use typescript_rust_syntax::{
-    ParsedInterfaceMember, ParsedNamedType, ParsedType, ParsedTypeParameter, TextSpan,
+    ParsedFunctionType, ParsedInterfaceMember, ParsedNamedType, ParsedType, ParsedTypeParameter,
+    TextSpan,
 };
 
 use crate::arena::{ArenaStr, CheckerArena};
@@ -43,6 +44,7 @@ pub(crate) struct InterfaceInfo {
     pub(crate) extends: Vec<ParsedNamedType>,
     pub(crate) members: Vec<ParsedInterfaceMember>,
     pub(crate) string_index_type: Option<ParsedType>,
+    pub(crate) call_signature: Option<ParsedFunctionType>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
 }
 
@@ -57,6 +59,7 @@ impl Clone for InterfaceInfo {
             extends: self.extends.clone(),
             members: self.members.clone(),
             string_index_type: self.string_index_type.clone(),
+            call_signature: self.call_signature.clone(),
             resolution_scope: self.resolution_scope.clone(),
         }
     }
@@ -120,6 +123,10 @@ pub(crate) fn merge_interface_infos(
             .string_index_type
             .clone()
             .or_else(|| incoming.string_index_type.clone()),
+        call_signature: existing
+            .call_signature
+            .clone()
+            .or_else(|| incoming.call_signature.clone()),
         resolution_scope: existing
             .resolution_scope
             .clone()
@@ -303,6 +310,7 @@ mod tests {
             extends: vec![],
             members: vec![],
             string_index_type: None,
+            call_signature: None,
             resolution_scope: None,
         });
 
@@ -344,6 +352,7 @@ mod tests {
             extends: vec![],
             members: vec![],
             string_index_type: None,
+            call_signature: None,
             resolution_scope: None,
         });
         let _ = local.insert("User", local_interface.clone());

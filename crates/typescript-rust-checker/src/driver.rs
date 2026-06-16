@@ -10,9 +10,8 @@ use typescript_rust_syntax::{
 
 use crate::checks::{assign, call, expr, function as check_function, var};
 use crate::context::{CheckerContext, DeclarationNamespace, DeclarationResolutionKey, FileKind};
-use crate::default_lib::inject_generated_default_lib_snapshot_for_file_name;
 use crate::infer::{report_duplicate_type_parameters, validate_local_type_declaration};
-use crate::load_default_lib_inputs;
+use crate::load_generated_default_lib_inputs;
 use crate::paths::canonicalize_if_exists_string;
 use crate::program::collect_function_signatures_from_statements;
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
@@ -36,7 +35,6 @@ pub fn check_source_with_options(
     file_kinds.insert(file_name.clone(), classify_file_kind(&file_name));
     let mut ctx = CheckerContext::new(file_name.clone(), options, file_kinds);
 
-    crate::builtins::inject_builtins(&mut ctx);
     inject_generated_default_libs(&mut ctx);
 
     let mut merged_td = ctx.ambient_global_type_declarations.clone();
@@ -87,13 +85,28 @@ pub fn check_source_with_options(
 }
 
 fn inject_generated_default_libs(ctx: &mut CheckerContext) {
-    let default_lib_inputs = load_default_lib_inputs(ctx.options.no_lib, None);
-    let original_file_name = ctx.file_name.clone();
-
-    for input in default_lib_inputs {
-        let _ = inject_generated_default_lib_snapshot_for_file_name(&input.file_name, ctx, None);
+    let default_lib_inputs = load_generated_default_lib_inputs(ctx.options.no_lib, None);
+    if default_lib_inputs.is_empty() {
+        return;
     }
 
+    let original_file_name = ctx.file_name.clone();
+    let parsed_files: Vec<crate::program::ParsedProgramFile> = default_lib_inputs
+        .into_iter()
+        .map(|input| {
+            let parsed = parse_source(&input.source_text, &input.file_name);
+            crate::program::ParsedProgramFile {
+                file_name: parsed.file_name,
+                source_text: input.source_text,
+                statements: parsed.statements,
+                parser_errors: parsed.parser_errors,
+                is_module: parsed.is_module,
+                file_kind: FileKind::GeneratedDeclaration,
+            }
+        })
+        .collect();
+
+    crate::program::collect_ambient_globals(&parsed_files, ctx, None);
     ctx.set_file_name(original_file_name);
 }
 
@@ -103,128 +116,192 @@ pub(crate) fn collect_type_declarations(statements: &[ParsedStatement], ctx: &mu
     }
 }
 
+/// Merge every `declare global { }` / `declare module "X" { global { } }`
+/// augmentation *type* declaration across all files into the ambient global
+/// table. A global interface split across files (e.g. `@types/node`'s
+/// `BufferConstructor`, which gains `from` in `buffer.buffer.d.ts` and is named by
+/// `var Buffer` in `buffer.d.ts`) must be fully assembled here before any value is
+/// lowered against it during binding.
+pub(crate) fn collect_global_augmentations(
+    parsed_files: &[crate::program::ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) {
+    for parsed_file in parsed_files {
+        ctx.set_file_name(parsed_file.file_name.clone());
+        for_each_global_augmentation_block(
+            &parsed_file.statements,
+            ctx,
+            merge_global_augmentation_types,
+        );
+    }
+}
+
+/// Lower `declare global` augmentation *values* against the caller's current type
+/// environment. Called during binding (where the owning module's import scope is
+/// active, so a `declare global { var x: ImportedType }` resolves) after
+/// [`collect_global_augmentations`] has merged every augmentation type.
+pub(crate) fn lower_global_augmentation_values_from_statements(
+    statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) {
+    for_each_global_augmentation_block(statements, ctx, lower_global_augmentation_values);
+}
+
+/// Single-file driver path: no cross-file split and no module import scope, so the
+/// two phases run back-to-back over the one file's statements.
 pub(crate) fn collect_global_augmentations_from_statements(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
+) {
+    for_each_global_augmentation_block(statements, ctx, merge_global_augmentation_types);
+    for_each_global_augmentation_block(statements, ctx, lower_global_augmentation_values);
+}
+
+fn for_each_global_augmentation_block(
+    statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+    visit: fn(&[ParsedStatement], &mut CheckerContext),
 ) {
     for statement in statements {
         let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
             continue;
         };
 
-        if module.module_specifier != "global" {
+        if module.module_specifier == "global" {
+            visit(&module.statements, ctx);
             continue;
         }
 
-        let saved_type_declarations = std::mem::replace(
-            &mut ctx.type_declarations,
-            crate::symbols::TypeDeclarationTable::new(),
-        );
-        let saved_symbols = std::mem::replace(&mut ctx.symbols, crate::symbols::SymbolTable::new());
-
-        collect_type_declarations(&module.statements, ctx);
-        let ambient_td = ctx.type_declarations.clone();
-        for (name, decl) in ambient_td.iter() {
-            crate::symbols::merge_type_declaration_into_table(
-                &mut ctx.ambient_global_type_declarations,
-                name.as_ref(),
-                decl,
-            );
-        }
-
-        let mut local_function_signatures = HashMap::new();
-        let mut current_symbols = std::mem::take(&mut ctx.symbols);
-        collect_function_signatures_from_statements(
-            &module.statements,
-            0,
-            &mut current_symbols,
-            &mut local_function_signatures,
-            ctx,
-        );
-        ctx.symbols = current_symbols;
-
-        for stmt in &module.statements {
-            let var = match stmt {
-                ParsedStatement::VariableDeclaration(var) => Some(var),
-                ParsedStatement::ExportDeclaration(
-                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
-                        declaration, ..
-                    },
-                ) => {
-                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
-                        Some(var)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            if let Some(var) = var {
-                let ty = var
-                    .declared_type
-                    .as_ref()
-                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
-                    .unwrap_or(typescript_rust_types::Type::Unknown);
-                if ctx.ambient_global_symbols.get(&var.name).is_none() {
-                    ctx.ambient_global_symbols.insert(
-                        var.name.clone(),
-                        crate::symbols::SymbolInfo {
-                            ty,
-                            kind: if matches!(
-                                var.kind,
-                                typescript_rust_syntax::ParsedVariableKind::Const
-                            ) {
-                                crate::symbols::SymbolKind::Const
-                            } else {
-                                crate::symbols::SymbolKind::Let
-                            },
-                            function_signature: None,
-                        },
-                    );
+        // `declare module "X" { global { ... } }` also augments the global scope
+        // (e.g. `@types/node` declares `var Buffer` inside the "buffer" module).
+        for nested in &module.statements {
+            if let ParsedStatement::DeclareModuleDeclaration(inner) = nested {
+                if inner.module_specifier == "global" {
+                    visit(&inner.statements, ctx);
                 }
             }
         }
+    }
+}
 
-        for (loc, fun_ty) in local_function_signatures {
-            let name = match &module.statements[loc.statement_index] {
-                ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
-                ParsedStatement::ExportDeclaration(
-                    typescript_rust_syntax::ParsedExportDeclaration::Default {
-                        declaration:
-                            typescript_rust_syntax::ParsedDefaultExportDeclaration::Function(f),
-                        ..
-                    },
-                ) => f.name.clone(),
-                ParsedStatement::ExportDeclaration(
-                    typescript_rust_syntax::ParsedExportDeclaration::Statement {
-                        declaration, ..
-                    },
-                ) => {
-                    if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
-                        f.name.clone()
-                    } else {
-                        "unknown".to_string()
-                    }
+fn merge_global_augmentation_types(block_statements: &[ParsedStatement], ctx: &mut CheckerContext) {
+    let saved_type_declarations = std::mem::replace(
+        &mut ctx.type_declarations,
+        crate::symbols::TypeDeclarationTable::new(),
+    );
+    let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
+    ctx.type_declaration_scope = None;
+
+    collect_type_declarations(block_statements, ctx);
+    let ambient_td = ctx.type_declarations.clone();
+    for (name, decl) in ambient_td.iter() {
+        crate::symbols::merge_type_declaration_into_table(
+            &mut ctx.ambient_global_type_declarations,
+            name.as_ref(),
+            decl,
+        );
+    }
+
+    ctx.type_declarations = saved_type_declarations;
+    ctx.type_declaration_scope = saved_type_declaration_scope;
+}
+
+fn lower_global_augmentation_values(
+    block_statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) {
+    // Value types resolve against the caller's current type environment (during
+    // binding: the module's local declarations plus its import scope) and the
+    // ambient table. The block's own types were merged into the ambient table by
+    // `merge_global_augmentation_types`, so a split global interface resolves to
+    // its fully-merged form rather than this block's partial declaration.
+    let saved_symbols = std::mem::take(&mut ctx.symbols);
+    let mut current_symbols = crate::symbols::SymbolTable::new();
+    let mut local_function_signatures = HashMap::new();
+    collect_function_signatures_from_statements(
+        block_statements,
+        0,
+        &mut current_symbols,
+        &mut local_function_signatures,
+        ctx,
+    );
+    ctx.symbols = current_symbols;
+
+    for stmt in block_statements {
+        let var = match stmt {
+            ParsedStatement::VariableDeclaration(var) => Some(var),
+            ParsedStatement::ExportDeclaration(
+                typescript_rust_syntax::ParsedExportDeclaration::Statement { declaration, .. },
+            ) => {
+                if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                    Some(var)
+                } else {
+                    None
                 }
-                _ => "unknown".to_string(),
-            };
+            }
+            _ => None,
+        };
 
-            if ctx.ambient_global_symbols.get(&name).is_none() {
+        if let Some(var) = var {
+            let ty = var
+                .declared_type
+                .as_ref()
+                .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+                .unwrap_or(typescript_rust_types::Type::Unknown);
+            if ctx.ambient_global_symbols.get(&var.name).is_none() {
                 ctx.ambient_global_symbols.insert(
-                    name,
+                    var.name.clone(),
                     crate::symbols::SymbolInfo {
-                        ty: typescript_rust_types::Type::Function(fun_ty),
-                        kind: crate::symbols::SymbolKind::Function,
+                        ty,
+                        kind: if matches!(
+                            var.kind,
+                            typescript_rust_syntax::ParsedVariableKind::Const
+                        ) {
+                            crate::symbols::SymbolKind::Const
+                        } else {
+                            crate::symbols::SymbolKind::Let
+                        },
                         function_signature: None,
                     },
                 );
             }
         }
-
-        ctx.type_declarations = saved_type_declarations;
-        ctx.symbols = saved_symbols;
     }
+
+    for (loc, fun_ty) in local_function_signatures {
+        let name = match &block_statements[loc.statement_index] {
+            ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
+            ParsedStatement::ExportDeclaration(
+                typescript_rust_syntax::ParsedExportDeclaration::Default {
+                    declaration: typescript_rust_syntax::ParsedDefaultExportDeclaration::Function(f),
+                    ..
+                },
+            ) => f.name.clone(),
+            ParsedStatement::ExportDeclaration(
+                typescript_rust_syntax::ParsedExportDeclaration::Statement { declaration, .. },
+            ) => {
+                if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
+                    f.name.clone()
+                } else {
+                    "unknown".to_string()
+                }
+            }
+            _ => "unknown".to_string(),
+        };
+
+        if ctx.ambient_global_symbols.get(&name).is_none() {
+            ctx.ambient_global_symbols.insert(
+                name,
+                crate::symbols::SymbolInfo {
+                    ty: typescript_rust_types::Type::Function(fun_ty),
+                    kind: crate::symbols::SymbolKind::Function,
+                    function_signature: None,
+                },
+            );
+        }
+    }
+
+    ctx.symbols = saved_symbols;
 }
 
 pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
@@ -463,6 +540,7 @@ fn collect_namespace_type_declarations(
                     extends: interface.extends.clone(),
                     members: interface.members.clone(),
                     string_index_type: interface.string_index_type.clone(),
+                    call_signature: interface.call_signature.clone(),
                     resolution_scope: None,
                 };
                 let _ = ctx
@@ -912,6 +990,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         extends: interface.extends.clone(),
         members: interface.members.clone(),
         string_index_type: interface.string_index_type.clone(),
+        call_signature: interface.call_signature.clone(),
         resolution_scope: None,
     };
 

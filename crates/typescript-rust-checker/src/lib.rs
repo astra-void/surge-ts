@@ -1,5 +1,4 @@
 mod arena;
-mod builtins;
 mod checks;
 mod context;
 mod default_lib;
@@ -15,8 +14,8 @@ mod symbols;
 
 pub use context::{CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind};
 pub use default_lib::{
-    PhysicalLibResolution, default_full_lib_seed_for_target, load_default_lib_inputs,
-    resolve_physical_default_libs,
+    DefaultLibLoad, DefaultLibRequest, PhysicalLibResolution, default_full_lib_seed_for_target,
+    load_default_lib_inputs, load_generated_default_lib_inputs, resolve_physical_default_libs,
 };
 pub use driver::{check_source, check_source_with_options};
 pub use program::{

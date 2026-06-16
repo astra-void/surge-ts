@@ -111,6 +111,29 @@ pub(crate) fn evaluate_expression_with_expected_type(
         );
     }
 
+    // Contextual typing through a union: when the expected type is a union whose
+    // only non-nullish member is a single concrete type (e.g. `{ ... } | null`,
+    // mapped here to `{ ... } | undefined`), use that member as the contextual
+    // type so an object/array literal's property values are evaluated with the
+    // expected element types rather than context-free (which would widen
+    // member-access values like `res.status` toward `unknown`).
+    if let Type::Union(union) = expected_type {
+        let mut non_nullish = union
+            .types()
+            .iter()
+            .filter(|member| !matches!(member, Type::Undefined | Type::Void));
+        if let (Some(member), None) = (non_nullish.next(), non_nullish.next()) {
+            return evaluate_expression_with_expected_type(
+                expression,
+                fallback_span,
+                Some(member),
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            );
+        }
+    }
+
     evaluate_expression(expression, fallback_span, symbols, ctx)
 }
 
@@ -251,7 +274,11 @@ fn evaluate_object_literal_with_expected_type(
 ) -> InferredExpression {
     let object_start = Instant::now();
     let mut inferred_property_types = BTreeMap::new();
+    // The empty object type `{}` (no properties, no string index) accepts any
+    // object literal without excess-property errors, matching tsc. Library
+    // signatures like `Object.keys(o: {})` rely on this.
     if !expected_object_type.allows_string_index_access()
+        && !expected_object_type.properties.is_empty()
         && let Some(property) = properties
             .iter()
             .find(|property| !expected_object_type.contains_property(&property.name))

@@ -45,12 +45,29 @@ pub(crate) fn push_duplicate_default_export_diagnostic(
     ctx.push(diagnostic);
 }
 
+/// Diagnostic for an unresolved module specifier, matching tsc's
+/// `getCannotResolveModuleNameErrorForSpecificModule`: a Node built-in name
+/// (bare or `node:`-prefixed) gets the install-@types/node hint (TS2580 with a
+/// `types: ["*"]` wildcard, TS2591 otherwise); anything else gets the generic
+/// TS2307. Side-effect imports never reach here — they use TS2882.
+fn unresolved_module_diagnostic(ctx: &CheckerContext, module_specifier: &str) -> Diagnostic {
+    if is_node_core_module(module_specifier) {
+        if ctx.options.types_uses_wildcard() {
+            Diagnostic::ts2580(module_specifier, ctx.file_name.clone())
+        } else {
+            Diagnostic::ts2591(module_specifier, ctx.file_name.clone())
+        }
+    } else {
+        Diagnostic::ts2307(module_specifier, ctx.file_name.clone())
+    }
+}
+
 pub(crate) fn emit_unresolved_export_module_diagnostic(
     ctx: &mut CheckerContext,
     module_specifier: &str,
     module_specifier_span: Option<TextSpan>,
 ) {
-    let mut diagnostic = Diagnostic::ts2307(module_specifier, ctx.file_name.clone());
+    let mut diagnostic = unresolved_module_diagnostic(ctx, module_specifier);
 
     if let Some(span) = module_specifier_span {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -67,7 +84,7 @@ pub(crate) fn emit_unresolved_module_diagnostic(
         ParsedImportKind::SideEffect => {
             Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
         }
-        _ => Diagnostic::ts2307(&import.module_specifier, ctx.file_name.clone()),
+        _ => unresolved_module_diagnostic(ctx, &import.module_specifier),
     };
 
     if let Some(span) = import.module_specifier_span.or(import.span) {

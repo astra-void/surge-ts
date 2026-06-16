@@ -9,7 +9,6 @@ use typescript_rust_syntax::ParsedStatement;
 use super::*;
 
 use crate::context::{CheckerContext, FileKind};
-use crate::default_lib::inject_generated_default_lib_snapshot_for_file_name;
 use crate::driver::collect_type_declarations;
 use crate::modules::{ModuleExportTable, build_module_export_table};
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
@@ -26,28 +25,15 @@ pub(crate) fn collect_ambient_globals(
     ctx: &mut CheckerContext,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) {
+    // Phase 1: collect and merge every ambient global *type* declaration across
+    // all declaration files before any value symbol is lowered. The default lib
+    // graph splits a single global interface across files (e.g. `ArrayConstructor`
+    // gains `isArray` in lib.es5 and `from`/`of` in lib.es2015.core), and a
+    // `declare var Array: ArrayConstructor` would otherwise freeze the variable's
+    // type against whatever members were merged when its own file was processed,
+    // dropping members contributed by files processed later.
     for parsed_file in parsed_files {
-        if !parsed_file.file_kind.is_declaration() {
-            continue;
-        }
-
-        if parsed_file.file_kind == FileKind::GeneratedDeclaration {
-            ctx.set_file_name(parsed_file.file_name.clone());
-            let _ = inject_generated_default_lib_snapshot_for_file_name(
-                &parsed_file.file_name,
-                ctx,
-                timings,
-            );
-            continue;
-        }
-
-        // Dependency declaration files normally contribute symbols only through
-        // module resolution, not the global scope. Configured `@types/*`
-        // packages (`compilerOptions.types`) are the exception: like TypeScript,
-        // their non-module declarations populate the ambient global scope.
-        if parsed_file.file_kind == FileKind::DependencyDeclaration
-            && !is_configured_types_global_file(&parsed_file.file_name, &ctx.options.types)
-        {
+        if !is_ambient_global_declaration_file(parsed_file, ctx) {
             continue;
         }
 
@@ -68,12 +54,8 @@ pub(crate) fn collect_ambient_globals(
             metrics.collect_type_declarations_duration += collect_duration;
         });
         record_program_timing(timings, |timings| {
-            if parsed_file.file_kind == FileKind::GeneratedDeclaration {
-                timings.generated_default_lib_global_collection += collect_duration;
-            } else {
-                timings.dependency_declaration_collection += collect_duration;
-                timings.dependency_declaration_lower_time += collect_duration;
-            }
+            timings.dependency_declaration_collection += collect_duration;
+            timings.dependency_declaration_lower_time += collect_duration;
         });
 
         // Declaration merging across global declaration files: the same
@@ -87,6 +69,24 @@ pub(crate) fn collect_ambient_globals(
                 decl,
             );
         }
+
+        ctx.type_declarations = saved_type_declarations;
+        ctx.type_declaration_scope = saved_type_declaration_scope;
+    }
+
+    // Phase 2: lower ambient value symbols (functions, `declare var`s, and
+    // `declare class` constructors) against the now fully-merged type table, so
+    // a variable typed by a split global interface sees every member.
+    for parsed_file in parsed_files {
+        if !is_ambient_global_declaration_file(parsed_file, ctx) {
+            continue;
+        }
+
+        ctx.set_file_name(parsed_file.file_name.clone());
+        let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
+        ctx.type_declaration_scope = None;
+        let saved_type_declarations =
+            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
 
         let mut local_function_signatures = HashMap::new();
         let mut current_symbols = std::mem::take(&mut ctx.symbols);
@@ -210,6 +210,26 @@ pub(crate) fn collect_ambient_globals(
         ctx.type_declarations = saved_type_declarations;
         ctx.type_declaration_scope = saved_type_declaration_scope;
     }
+}
+
+/// Whether a parsed file contributes to the ambient global scope. Declaration
+/// files do, except dependency declarations that are not part of a configured
+/// `@types/*` package (those reach the program only through module resolution).
+fn is_ambient_global_declaration_file(
+    parsed_file: &ParsedProgramFile,
+    ctx: &CheckerContext,
+) -> bool {
+    if !parsed_file.file_kind.is_declaration() {
+        return false;
+    }
+
+    if parsed_file.file_kind == FileKind::DependencyDeclaration
+        && !is_configured_types_global_file(&parsed_file.file_name, &ctx.options.types)
+    {
+        return false;
+    }
+
+    true
 }
 
 /// Whether `file_name` belongs to one of the configured `compilerOptions.types`

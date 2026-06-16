@@ -4,8 +4,10 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use typescript_rust_syntax::{ParsedInterfaceMember, ParsedNamedType, ParsedType};
-use typescript_rust_types::{ObjectProperty, Type};
+use typescript_rust_syntax::{
+    ParsedFunctionType, ParsedInterfaceMember, ParsedNamedType, ParsedType,
+};
+use typescript_rust_types::{FunctionType, ObjectProperty, Type};
 
 use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::{CheckerContext, DeclarationResolutionKey};
@@ -84,23 +86,39 @@ pub(crate) fn resolve_interface(
         }
     }
 
-    // Physical default libs: `await` is stripped at parse time, so model
-    // `Promise<T>`/`PromiseLike<T>` as their resolved value `T` (an implicit
-    // await everywhere). This mirrors the generated-lib behaviour and lets
-    // async/await code typecheck against the resolved type. `.then()`-style
-    // chaining on a raw promise remains a documented limitation.
-    if is_physical_default_lib_file_name(&interface.file_name)
-        && matches!(interface.name.as_str(), "Promise" | "PromiseLike")
-    {
-        let ty = local_substitution
-            .get("T")
-            .cloned()
-            .unwrap_or(Type::Unknown);
-        resolving.pop();
-        return ResolvedType {
-            ty,
-            had_error: false,
-        };
+    if is_physical_default_lib_file_name(&interface.file_name) {
+        match interface.name.as_str() {
+            // The lib declares `Array`/`ReadonlyArray` as interfaces, but they
+            // model the same structure as the `T[]` syntax (which lowers to
+            // `Type::Array`). Collapse them so an `Array<T>` annotation and a
+            // `T[]` annotation are the same type and compare assignable; their
+            // members (`map`, `concat`, `length`, …) are served by the array
+            // apparent-type path. This mirrors the generated-lib behaviour.
+            "Array" | "ReadonlyArray" => {
+                let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
+                resolving.pop();
+                return ResolvedType {
+                    ty: Type::Array(Box::new(element_type)),
+                    had_error: false,
+                };
+            }
+            // `await` is stripped at parse time, so model `Promise<T>` /
+            // `PromiseLike<T>` as their resolved value `T` (an implicit await
+            // everywhere). `.then()`-style chaining on a raw promise remains a
+            // documented limitation.
+            "Promise" | "PromiseLike" => {
+                let ty = local_substitution
+                    .get("T")
+                    .cloned()
+                    .unwrap_or(Type::Unknown);
+                resolving.pop();
+                return ResolvedType {
+                    ty,
+                    had_error: false,
+                };
+            }
+            _ => {}
+        }
     }
 
     let is_namespace_member = interface.name.contains('.');
@@ -113,6 +131,7 @@ pub(crate) fn resolve_interface(
                 &interface.extends,
                 &interface.members,
                 interface.string_index_type.as_ref(),
+                interface.call_signature.as_ref(),
                 ctx,
                 resolving,
                 &local_substitution,
@@ -131,6 +150,7 @@ pub(crate) fn resolve_interface_declaration(
     extends: &[ParsedNamedType],
     members: &[ParsedInterfaceMember],
     string_index_type: Option<&ParsedType>,
+    call_signature: Option<&ParsedFunctionType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
@@ -182,6 +202,29 @@ pub(crate) fn resolve_interface_declaration(
     for member in members {
         let property_type = resolve_parsed_type(member.ty.clone(), ctx, resolving, substitution);
         had_error |= property_type.had_error;
+
+        // Same-named function members are overloads (within one interface, or
+        // merged across declaration-merged interfaces such as `ArrayConstructor`
+        // gaining `from` overloads in lib.es2015.core). Collapse them into one
+        // permissive signature so a call matching any overload's arity is
+        // accepted, rather than last-wins dropping every overload but one.
+        if let (Some(existing), Type::Function(incoming)) =
+            (properties.get(&member.name), &property_type.ty)
+            && let Type::Function(existing_fn) = &existing.ty
+        {
+            let merged = merge_overload_signatures(existing_fn, incoming);
+            let optional = existing.optional && member.optional;
+            properties.insert(
+                member.name.clone(),
+                if optional {
+                    ObjectProperty::optional(Type::Function(merged))
+                } else {
+                    ObjectProperty::required(Type::Function(merged))
+                },
+            );
+            continue;
+        }
+
         let object_property = if member.optional {
             ObjectProperty::optional(property_type.ty)
         } else {
@@ -202,10 +245,59 @@ pub(crate) fn resolve_interface_declaration(
         None => inherited_index_type.or(if base_is_open { Some(Type::Any) } else { None }),
     };
 
+    let mut object_type = alloc_object_type(properties, resolved_index_type);
+    if let Some(call_signature) = call_signature {
+        let resolved = resolve_parsed_type(
+            ParsedType::Function(call_signature.clone()),
+            ctx,
+            resolving,
+            substitution,
+        );
+        had_error |= resolved.had_error;
+        if let Type::Function(function_type) = resolved.ty {
+            object_type = object_type.with_call_signature(function_type);
+        }
+    }
+
     ResolvedType {
-        ty: Type::Object(alloc_object_type(properties, resolved_index_type)),
+        ty: Type::Object(object_type),
         had_error,
     }
+}
+
+/// Collapse two function overloads into a single permissive signature: the
+/// required-parameter count is the smaller of the two (a call matching the
+/// shorter overload's arity is accepted), the parameter list is the longer of
+/// the two with positions widened to `any` where the overloads disagree (so the
+/// merge never rejects an argument valid under either overload), and the result
+/// is variadic if either overload is. The shorter overload's return type is kept
+/// as the representative, matching the most basic form (e.g. `Array.from`'s
+/// `T[]`).
+fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
+    let (longer, shorter) = if a.parameters().len() >= b.parameters().len() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+
+    let parameters = longer
+        .parameters()
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| match shorter.parameters().get(index) {
+            Some(other) if other == ty => ty.clone(),
+            Some(_) => Type::Any,
+            None => ty.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    alloc_function_type(
+        parameters,
+        shorter.return_type().clone(),
+        a.is_variadic() || b.is_variadic(),
+        a.required_parameter_count()
+            .min(b.required_parameter_count()),
+    )
 }
 
 fn is_declaration_file_name(file_name: &str) -> bool {

@@ -9,7 +9,7 @@ use typescript_rust_diagnostics::Diagnostic;
 use super::*;
 
 use crate::context::{CheckerContext, FileKind};
-use crate::driver::{collect_global_augmentations_from_statements, collect_type_declarations};
+use crate::driver::{collect_type_declarations, lower_global_augmentation_values_from_statements};
 use crate::modules::{
     ModuleExportTable, ModuleImportBindings, build_module_export_table,
     resolve_module_export_tables, resolve_module_imports,
@@ -69,7 +69,6 @@ pub(crate) fn collect_preliminary_module_type_bindings(
             ctx,
         );
 
-        collect_global_augmentations_from_statements(&parsed_file.statements, ctx);
         ctx.type_declarations = saved_type_declarations;
         ctx.symbols = saved_symbols;
         ctx.type_declaration_scope = saved_type_declaration_scope;
@@ -199,10 +198,12 @@ pub(crate) fn collect_module_analyses_with_bindings(
         ctx.truncate_diagnostics(diagnostics_before_signatures);
         ctx.resolved_named_types = Arc::new(Mutex::new(HashMap::new()));
 
-        let saved_symbols_for_global_augments =
-            std::mem::replace(&mut ctx.symbols, local_symbols.clone());
-        collect_global_augmentations_from_statements(&parsed_file.statements, ctx);
-        ctx.symbols = saved_symbols_for_global_augments;
+        // Lower this module's `declare global` augmentation values now that its
+        // type environment (local declarations + import scope) is active. The
+        // augmentation types were merged globally before binding, so a value such
+        // as `var Buffer: BufferConstructor` sees the fully-merged interface while
+        // `var x: ImportedType` still resolves through the module's imports.
+        lower_global_augmentation_values_from_statements(&parsed_file.statements, ctx);
 
         let export_table = build_module_export_table(
             parsed_file,

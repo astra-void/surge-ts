@@ -12,11 +12,13 @@ use crate::symbols::{SymbolInfo, SymbolTable, TypeDeclarationTable};
 mod diagnostics;
 mod exports;
 mod imports;
+mod node_builtins;
 mod resolution;
 
 pub(crate) use diagnostics::*;
 pub(crate) use exports::*;
 pub(crate) use imports::*;
+pub(crate) use node_builtins::*;
 pub(crate) use resolution::*;
 
 #[derive(Debug, Clone)]

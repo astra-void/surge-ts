@@ -15,7 +15,7 @@ pub(crate) use crate::metrics::*;
 use crate::context::{CheckerContext, CheckerOptions, CompatibilityStats, FileKind};
 use crate::driver::validate_direct_utility_aliases;
 use crate::driver::{sync_global_this_symbol, validate_local_type_declarations};
-use crate::load_default_lib_inputs;
+use crate::load_generated_default_lib_inputs;
 use crate::modules::{ModuleExportTable, ModuleImportBindings, resolve_module_export_tables};
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{
@@ -156,14 +156,13 @@ pub fn check_program_with_stats_and_jobs(
     ctx.timings = timings.clone();
     ctx.set_module_file_index_by_identity(module_file_index_by_identity);
 
-    crate::builtins::inject_builtins(&mut ctx);
-
     let mut global_symbols = SymbolTable::new();
     let mut function_signatures = HashMap::new();
 
     let ambient_collection_start = Instant::now();
     emit_parser_diagnostics(&parsed_files, &mut ctx);
     collect_ambient_globals(&parsed_files, &mut ctx, timings.as_ref());
+    crate::driver::collect_global_augmentations(&parsed_files, &mut ctx);
     collect_ambient_modules(&parsed_files, &mut ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
         timings.ambient_collection += ambient_collection_start.elapsed()
@@ -379,14 +378,6 @@ fn parse_program_files(
             record_program_counter(|c| c.files_total += 1);
             if classify_file_kind(&file_name) == FileKind::GeneratedDeclaration {
                 record_program_counter(|c| c.generated_default_lib_files += 1);
-                return ParsedProgramFile {
-                    file_name: file_name.clone(),
-                    source_text: input.source_text,
-                    statements: Vec::new(),
-                    parser_errors: Vec::new(),
-                    is_module: false,
-                    file_kind: FileKind::GeneratedDeclaration,
-                };
             }
 
             let parse_start = Instant::now();
@@ -498,7 +489,7 @@ fn inject_generated_default_lib_inputs(files: &mut Vec<SourceFileInput>, no_lib:
         return;
     }
 
-    let mut default_lib_inputs = load_default_lib_inputs(false, None);
+    let mut default_lib_inputs = load_generated_default_lib_inputs(false, None);
     if default_lib_inputs.is_empty() {
         return;
     }

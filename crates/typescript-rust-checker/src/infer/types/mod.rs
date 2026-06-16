@@ -185,6 +185,7 @@ pub(crate) fn validate_local_type_declaration(
                         &interface.extends,
                         &interface.members,
                         interface.string_index_type.as_ref(),
+                        interface.call_signature.as_ref(),
                         ctx,
                         &mut resolving,
                         &substitution,
