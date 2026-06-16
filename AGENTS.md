@@ -7,3 +7,21 @@
 - Do not add large header comments, decorative section comments, or generated-looking comment blocks unless explicitly requested.
 - When modifying existing files, do not increase comment noise. Remove stale or misleading comments if they are directly related to the edited code.
 - Comments should justify themselves; if a comment does not explain why the code exists or why it is written that way, do not add it.
+
+## Verification
+
+- Rust crates: `cargo test`.
+- Oracle harness tests: `pnpm run oracle:test`.
+- Single-target oracle check: `pnpm run oracle:compare -- --project <preset|tsconfig>`
+  (or `--file <source.ts>`) to spot-check one fixture or project.
+- Oracle compatibility sweep: after changes that can affect diagnostics, run
+  `pnpm run oracle:sweep -- --all --maxDiagnostics 200` (or a targeted
+  `pnpm run oracle:sweep -- --filter <group> --maxDiagnostics 200`, or
+  `--discover <dir>` for projects outside the preset registry). A target fails
+  the gate only on diagnostic code-count or file/code/line mismatch;
+  message-text and span/column drift are reported but non-gating unless you pass
+  `--strictMessages` / `--strictSpans`.
+- Optional — benchmark harness tests: `pnpm run bench:test` (run when touching
+  the benchmark harness).
+- Do not edit fixtures, expected output, or checker semantics to make the sweep
+  pass; report real regressions honestly instead.

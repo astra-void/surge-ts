@@ -101,6 +101,79 @@ Run the parser and comparison tests:
 pnpm run oracle:test
 ```
 
+## Sweeping multiple targets
+
+`oracle:compare` checks one target at a time. `oracle:sweep` runs the same
+oracle comparison across many targets and prints a compact, regression-oriented
+summary. It reuses the exact comparison from `compare-tsc.ts` (each target runs
+through `oracle:compare --json`) and never adds classifiers, suppresses
+mismatches, or rewrites fixture expectations.
+
+It is not limited to the registered presets: a target can be a preset, an
+explicit `tsconfig.json` / project directory, a single source file, or every
+`tsconfig.json` discovered under a directory.
+
+List the selected targets and exit:
+
+```bash
+pnpm run oracle:sweep -- --list --all
+pnpm run oracle:sweep -- --list --filter node-protocol
+pnpm run oracle:sweep -- --list --discover tests/compat-projects
+```
+
+Run a targeted group, an arbitrary project, or everything, optionally in
+parallel:
+
+```bash
+pnpm run oracle:sweep -- --filter node-protocol --maxDiagnostics 200
+pnpm run oracle:sweep -- --all --exclude diagnostics-pack --maxDiagnostics 200
+pnpm run oracle:sweep -- --all --jobs 4 --maxDiagnostics 200
+pnpm run oracle:sweep -- --project .local-projects/app/tsconfig.json --maxDiagnostics 200
+pnpm run oracle:sweep -- --file examples/basic.ts
+pnpm run oracle:sweep -- --discover tests/compat-projects --jobs 4 --maxDiagnostics 200
+```
+
+Target sources:
+
+- `--all` selects every registered preset.
+- `--filter <substring>` keeps presets and discovered targets whose name
+  includes the substring (repeatable; works without `--all`).
+- `--exclude <substring>` drops any target whose name includes the substring
+  (repeatable).
+- `--project <path|dir|preset>` adds an explicit project; explicit projects are
+  always run and are not removed by `--filter` (repeatable).
+- `--file <source.ts>` adds a single source file (repeatable).
+- `--discover <dir>` recursively adds every `tsconfig.json` under a directory,
+  skipping `node_modules` (repeatable).
+- Targets are deduplicated by resolved path, so discovering the preset tree does
+  not double-run presets. Order is deterministic: presets in registry order,
+  then explicit targets in argument order, then discovered targets sorted by
+  name.
+- `--list` prints the selected names and exits; bare `--list` (no other source)
+  lists all presets.
+- Running with no `--all`, `--filter`, `--list`, `--project`, `--file`, or
+  `--discover` prints usage instead of starting a full sweep.
+- A selection that matches nothing exits non-zero.
+
+Default gate and drift:
+
+- A preset fails on diagnostic code-count mismatch or file/code/line mismatch.
+- Message-text drift and span/column drift are reported but do not fail the run
+  unless you pass `--strictMessages` or `--strictSpans`.
+- The summary always surfaces `messageDriftOnly` and `spanDriftOnly` counts so
+  lower-priority drift stays visible without gating development.
+
+Each preset prints one compact line, for example:
+
+```txt
+PASS node-protocol-buffer-basic ts=1 rust=1 onlyTsc=0 onlyRust=0 fileCodeLine=yes message=yes span=yes elapsed=312ms
+```
+
+Failing presets print their code/file/line buckets underneath; `--verbose`
+prints the full per-preset oracle output. `--json` emits a stable object with
+`selected`, `skipped`, per-preset `results`, and an aggregate `summary`
+(including the final `exitCode`).
+
 ## What it does
 
 - Project mode runs:

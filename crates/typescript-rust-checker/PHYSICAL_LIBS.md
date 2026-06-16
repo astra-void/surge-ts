@@ -5,23 +5,26 @@ parser-safe ingestion, reference-lib graph loading, merged global interfaces,
 common index signatures, and meaningful ES/DOM ambient globals. Full
 byte-for-byte TypeScript lib semantics remain in progress.
 
-This path is **opt-in**. The generated default-lib subset (see `default_lib`)
-stays the default so existing behaviour — including exact auth-kit diagnostics —
-is unchanged.
+This path is **the default** in project mode: the real `lib.d.ts` graph from the
+pinned local `typescript` package is loaded automatically, with no flag required.
+The generated default-lib subset (see `default_lib`) is now only a **fallback**
+used when the `typescript` package cannot be found (and remains the single-file
+support path).
 
-## Enabling
-
-Physical loading turns on when any of these is true:
-
-- the CLI flag `--physicalLibs` is passed (project mode),
-- a `.physicalLibs` marker file sits beside the resolved `tsconfig.json`
-  (used by the oracle fixtures, which run the CLI with only `--project`), or
-- the `TYPESCRIPT_RUST_PHYSICAL_LIBS` environment variable is set.
+## Default behaviour and the debug flag
 
 The resolver walks up from the project root looking for
-`node_modules/typescript/lib`. If the package is not installed it warns and
-falls back to the generated subset, so `cargo test` never requires
-`pnpm install`. Physical-lib fixtures and tests skip when the package is absent.
+`node_modules/typescript/lib` and loads the physical graph by default. If the
+package is not installed it falls back to the generated subset, so `cargo test`
+never requires `pnpm install`. Physical-lib fixtures and tests skip when the
+package is absent.
+
+The CLI flag `--physicalLibs` (and its equivalents — a `.physicalLibs` marker
+file beside the resolved `tsconfig.json`, or the `TYPESCRIPT_RUST_PHYSICAL_LIBS`
+environment variable) no longer toggle physical loading, since it is already the
+default. They are retained only as a debug aid: when physical loading was
+explicitly requested but the `typescript` package could not be found, the CLI
+emits a warning that the generated subset was used instead.
 
 ## What is loaded
 
@@ -71,7 +74,7 @@ files are suppressed so unsupported lib syntax cannot flood user diagnostics.
 
 - **Overload resolution** — only one signature is used per symbol, so valid
   calls against overloaded lib APIs can produce spurious `TS2554` arity errors.
-  This is the dominant source of the physical-mode auth-kit delta.
+  (auth-kit now compares exactly 0/0 under physical-default libs.)
 - **`Awaited<T>`** and `Promise.resolve`/`Promise.all` precise typing — the
   `Promise<T>` -> `T` collapse covers `await`, but utility-conditional awaited
   inference is not modelled, so some awaited values resolve to `unknown`.

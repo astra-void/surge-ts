@@ -420,7 +420,7 @@ The current baseline still intentionally avoids:
 - full runtime/JS package resolution parity (the declaration side now resolves conditional and pattern `exports`, the `imports` field, `typesVersions`, package self-name, and subpaths)
 - explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
 - `baseUrl` resolution remains unsupported/deprecated
-- full upstream `lib.d.ts` parity (a generated subset loads by default; an opt-in physical `lib*.d.ts` loader is available)
+- full upstream `lib.d.ts` parity (the physical `lib*.d.ts` graph from the local `typescript` package loads by default; the generated subset is the fallback when that package is absent)
 - full declaration-file semantics (a narrow declaration-merging, module-augmentation, and `declare class` slice is supported)
 - full automatic `@types` discovery (configured `compilerOptions.types` / `typeRoots` packages are supported)
 - project references

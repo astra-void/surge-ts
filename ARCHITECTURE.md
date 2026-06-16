@@ -46,7 +46,7 @@ v1.2.5 continues that direction inside `typescript-rust-checker` by decomposing 
 - New diagnostics: `typescript-rust-diagnostics` (catalog-driven, including CLI-only diagnostics like TS5112)
 - New project-visibility diagnostics: `typescript-rust-cli` may emit a custom `typescript-rust::project-has-no-source-files` diagnostic when project discovery returns zero source files
 - Checker-local path normalization lives in `typescript-rust-checker`; config loading and normalization remain in `typescript-rust-config` for tsconfig discovery.
-- Generated default-lib loading lives in `typescript-rust-checker` and is shared by single-file and program checking, while CLI project mode feeds lib selection from tsconfig into the same generated ambient subset.
+- Default-lib loading lives in `typescript-rust-checker` and is shared by single-file and program checking. Project mode loads the physical `lib*.d.ts` graph from the local `typescript` package by default, feeding lib selection from tsconfig into the real ambient declarations; the generated subset is the fallback when that package is absent (and the single-file support path).
 
 ## Diagnostics
 
@@ -63,4 +63,4 @@ v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable be
 - Duplicate `interface` declarations merge (same file, across global files, reopened `declare module` blocks, and `declare global`); a conflicting property type reports TS2717 with the first declaration winning. Duplicate ambient `var`/`const`/`function` globals stay first-wins / pinned.
 - A `declare module "pkg"` block in a module file augments an already-resolved target (merging exported interfaces, adding new exported functions/types); augmenting an unresolved target keeps the TS2307 no-cascade policy.
 - Unsupported declaration syntax stays parser-safe and emits a stable pinned diagnostic.
-- Current project mode supports focused declaration-side modern package resolution (conditional/pattern `exports`, `imports`, `typesVersions`, self-name), configured `@types`/`typeRoots`, class/static/constructor semantics, opt-in physical `lib*.d.ts` loading, JSX props checking, and a narrow declaration-merging/module-augmentation slice. Full automatic `@types` discovery, full `lib.d.ts`/Node parity, and full TypeScript parity remain out of scope. `baseUrl` remains unsupported/deprecated.
+- Current project mode supports focused declaration-side modern package resolution (conditional/pattern `exports`, `imports`, `typesVersions`, self-name), configured `@types`/`typeRoots`, class/static/constructor semantics, physical `lib*.d.ts` loading by default (generated subset as fallback), JSX props checking, and a narrow declaration-merging/module-augmentation slice. Full automatic `@types` discovery, full `lib.d.ts`/Node parity, and full TypeScript parity remain out of scope. `baseUrl` remains unsupported/deprecated.

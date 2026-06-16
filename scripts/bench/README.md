@@ -80,6 +80,34 @@ pnpm run bench:compilers -- --generate scale-small --files 50 --symbols 200
 
 *(Generated fixtures are written to `.bench/generated/` and not committed).*
 
+## Archiving Runs
+
+`archive-run.ts` wraps the existing benchmark and real-project commands and saves
+their raw output plus a small summary into a timestamped local directory under
+`.bench/runs/<timestamp>/`. It does not change what those commands measure; it
+only captures and labels their output so before/after runs are easy to compare.
+
+```bash
+pnpm run bench:archive                                  # compiler benchmark only (default)
+pnpm run bench:archive -- --bench                       # explicit compiler benchmark
+pnpm run bench:archive -- --real-auth-kit               # real auth-kit measurement
+pnpm run bench:archive -- --bench --real-auth-kit       # both
+pnpm run bench:archive -- --label builtin-removal-before
+pnpm run bench:archive -- --out .bench/runs/custom-name # override the output directory
+pnpm run bench:archive -- --dryRun                      # print commands + paths, run nothing
+```
+
+Each run directory contains the captured `bench-compilers.txt` / `real-auth-kit.txt`
+logs (and the bench `--json`), plus `summary.json` and `summary.md` with the git
+branch/commit, per-command pass/fail and exit codes, parsed benchmark medians, and
+auth-kit diagnostic counts when available. A partial summary is still written when
+one command fails; the process exits non-zero if any underlying command fails.
+
+`--real-auth-kit` runs `pnpm run real:auth-kit`, which resolves the auth-kit project
+from `AUTH_KIT_PROJECT` or known local paths and fails with a clear message (captured
+in the log) when it is missing. `.bench` is git-ignored, so archived runs are local by
+default.
+
 ## Running Benchmark Tests
 
 To verify the harness itself:
