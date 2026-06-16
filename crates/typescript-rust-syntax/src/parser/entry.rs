@@ -10,6 +10,8 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
     let parser = Parser::new(&allocator, source_text, source_type);
     let parsed = parser.parse();
 
+    let reference_type_directives = super::extract_reference_type_directives(source_text);
+
     let statements: Vec<crate::ParsedStatement> = parsed
         .program
         .body
@@ -38,5 +40,6 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
         statements,
         parser_errors,
         is_module,
+        reference_type_directives,
     }
 }

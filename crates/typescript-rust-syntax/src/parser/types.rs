@@ -14,7 +14,9 @@ use crate::{
     ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType, ParsedTypeParameter,
 };
 
-use super::function_types::{parse_function_type, parse_function_type_parameter};
+use super::function_types::{
+    parse_function_type, parse_function_type_parameter, parse_function_type_rest_parameter,
+};
 use super::spans::text_span_from_oxc_span;
 
 pub(crate) fn parse_type_annotation(
@@ -65,6 +67,15 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         // member still parses rather than being dropped, keeping the surrounding
         // declaration intact and cascade-free.
         TSType::TSThisType(_) => Some(ParsedType::Any),
+        // A type predicate (`x is T`) evaluates to `boolean` at the value level;
+        // an assertion predicate (`asserts x`, `asserts x is T`) evaluates to
+        // `void`. Lowering to those keeps the surrounding signature intact (e.g.
+        // `ArrayConstructor.isArray`) instead of dropping the whole member.
+        TSType::TSTypePredicate(predicate) => Some(if predicate.asserts {
+            ParsedType::Void
+        } else {
+            ParsedType::Boolean
+        }),
         _ => None,
     }
 }
@@ -289,6 +300,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
 
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
+    let mut call_signature = None;
 
     for member in &type_literal.members {
         let property = match member {
@@ -297,6 +309,12 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
             }
             TSSignature::TSMethodSignature(method_signature) => {
                 parse_type_method_signature(method_signature)
+            }
+            TSSignature::TSCallSignatureDeclaration(signature) => {
+                if call_signature.is_none() {
+                    call_signature = parse_call_signature(signature).map(Box::new);
+                }
+                continue;
             }
             _ => return ParsedType::Unknown,
         };
@@ -308,7 +326,38 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         properties.push(property);
     }
 
-    ParsedType::Object(ParsedObjectType { properties })
+    ParsedType::Object(ParsedObjectType {
+        properties,
+        call_signature,
+    })
+}
+
+/// Lowers a bare call signature (`(value?: any): number`) into a
+/// [`ParsedFunctionType`], shared by interface and object-type-literal parsing.
+pub(crate) fn parse_call_signature(
+    signature: &oxc_ast::ast::TSCallSignatureDeclaration<'_>,
+) -> Option<ParsedFunctionType> {
+    let mut parameters = signature
+        .params
+        .items
+        .iter()
+        .map(parse_function_type_parameter)
+        .collect::<Option<Vec<_>>>()?;
+
+    if let Some(rest) = signature.params.rest.as_deref() {
+        parameters.push(parse_function_type_rest_parameter(rest)?);
+    }
+
+    let return_type = signature
+        .return_type
+        .as_ref()
+        .and_then(|annotation| parse_type_annotation(annotation.as_ref()))?;
+
+    Some(ParsedFunctionType {
+        parameters,
+        return_type: Box::new(return_type),
+        type_parameters: parse_type_parameters(signature.type_parameters.as_deref()),
+    })
 }
 
 /// Lowers a method signature (`foo(arg: A): R`) into a property whose type is a
@@ -325,12 +374,16 @@ pub(crate) fn parse_type_method_signature(
         return None;
     };
 
-    let parameters = method_signature
+    let mut parameters = method_signature
         .params
         .items
         .iter()
         .map(parse_function_type_parameter)
         .collect::<Option<Vec<_>>>()?;
+
+    if let Some(rest) = method_signature.params.rest.as_deref() {
+        parameters.push(parse_function_type_rest_parameter(rest)?);
+    }
 
     let return_type = method_signature
         .return_type

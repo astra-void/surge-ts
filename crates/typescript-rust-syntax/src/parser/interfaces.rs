@@ -5,7 +5,8 @@ use crate::{ParsedInterfaceDeclaration, ParsedInterfaceMember};
 use super::spans::text_span_from_oxc_span;
 use super::types::parse_type_parameters;
 use super::types::{
-    parse_index_signature_value_type, parse_type_method_signature, parse_type_property_signature,
+    parse_call_signature, parse_index_signature_value_type, parse_type_method_signature,
+    parse_type_property_signature,
 };
 
 pub(crate) fn parse_interface_declaration(
@@ -33,6 +34,18 @@ pub(crate) fn parse_interface_declaration(
         })
         .next_back();
 
+    // A bare call signature (`(value?: any): number`) makes the interface
+    // callable. When an interface declares multiple call-signature overloads we
+    // keep the first that parses; the call checker only needs one viable arity.
+    let call_signature = declaration
+        .body
+        .body
+        .iter()
+        .find_map(|member| match member {
+            TSSignature::TSCallSignatureDeclaration(signature) => parse_call_signature(signature),
+            _ => None,
+        });
+
     Some(ParsedInterfaceDeclaration {
         is_declare: declaration.declare,
         name: declaration.id.name.to_string(),
@@ -45,6 +58,7 @@ pub(crate) fn parse_interface_declaration(
             .collect(),
         members,
         string_index_type,
+        call_signature,
     })
 }
 

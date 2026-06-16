@@ -4,7 +4,9 @@ mod ast;
 mod parser;
 
 pub use ast::*;
-pub use parser::parse_source;
+pub use parser::{
+    extract_reference_path_directives, extract_reference_type_directives, parse_source,
+};
 
 #[cfg(test)]
 mod tests;

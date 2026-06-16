@@ -58,7 +58,7 @@ fn parse_this_parameter(
     })
 }
 
-fn parse_function_type_rest_parameter(
+pub(crate) fn parse_function_type_rest_parameter(
     rest: &FormalParameterRest<'_>,
 ) -> Option<ParsedFunctionTypeParameter> {
     let BindingPattern::BindingIdentifier(binding) = &rest.rest.argument else {

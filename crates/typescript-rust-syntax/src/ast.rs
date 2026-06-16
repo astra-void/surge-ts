@@ -4,6 +4,18 @@ pub struct ParsedSource {
     pub statements: Vec<ParsedStatement>,
     pub parser_errors: Vec<String>,
     pub is_module: bool,
+    /// Leading `/// <reference types="..." />` directives, in source order.
+    pub reference_type_directives: Vec<ReferenceTypeDirective>,
+}
+
+/// A leading `/// <reference types="..." />` directive. Only the `types` form is
+/// modeled; `path`/`lib` references are not collected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceTypeDirective {
+    /// The referenced type-package specifier, e.g. `node` or `@scope/pkg`.
+    pub value: String,
+    /// Byte span of the specifier inside its quotes, used for TS2688 locations.
+    pub value_span: TextSpan,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -214,6 +226,9 @@ pub struct ParsedInterfaceDeclaration {
     /// present. The key type is not modelled separately; both string and number
     /// index signatures map here.
     pub string_index_type: Option<ParsedType>,
+    /// A bare call signature (`(value?: any): number`) on the interface, making
+    /// values of this type callable without `new` (e.g. `NumberConstructor`).
+    pub call_signature: Option<ParsedFunctionType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,6 +422,9 @@ pub enum ParsedDefaultExportDeclaration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedObjectType {
     pub properties: Vec<ParsedObjectTypeProperty>,
+    /// A bare call signature (`(value?: any): number`) on the object type,
+    /// making values of this type callable without `new`.
+    pub call_signature: Option<Box<ParsedFunctionType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
