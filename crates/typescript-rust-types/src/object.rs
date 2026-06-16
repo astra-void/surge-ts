@@ -12,11 +12,24 @@ pub struct ObjectType {
     /// expansion). Deliberately excluded from equality so assignability and
     /// structural comparisons stay name-agnostic.
     pub alias_name: Option<Arc<str>>,
+    /// Nominal identity of the non-generic interface/type-alias declaration this
+    /// object was resolved from (qualified `file::name`). Two objects resolved
+    /// from the same declaration share it; assignability treats them as the same
+    /// named type, matching tsc's nominal handling and avoiding spurious failures
+    /// when a deeply cyclic library type (e.g. `Buffer`) expands to structurally
+    /// different shapes at different sites. Excluded from equality, like
+    /// `alias_name`, so structural comparisons stay shape-based.
+    pub alias_id: Option<Arc<str>>,
     /// Construct signature for a class value (static side). When present, the
     /// object is callable with `new`, producing the signature's return type (the
     /// instance type). Static members live in `properties`. Excluded from
     /// equality, like `alias_name`, so structural comparisons stay shape-based.
     pub construct_signature: Option<Arc<FunctionType>>,
+    /// Call signature for a callable object (a `declare var Number: NumberConstructor`
+    /// style value whose interface has a `(value?: any): number` signature). When
+    /// present, the object is callable without `new`, producing the signature's
+    /// return type. Excluded from equality, like `construct_signature`.
+    pub call_signature: Option<Arc<FunctionType>>,
     /// Set when this object is the merged surface of an intersection (`A & B`).
     /// Used only to pick the diagnostic tsc reports for a missing required
     /// property (intersections surface the outer assignability code, e.g.
@@ -69,7 +82,9 @@ impl ObjectType {
             properties: Arc::new(properties),
             string_index_type: string_index_type.map(Arc::new),
             alias_name: None,
+            alias_id: None,
             construct_signature: None,
+            call_signature: None,
             is_intersection: false,
         }
     }
@@ -78,6 +93,12 @@ impl ObjectType {
     /// from, for diagnostic display only.
     pub fn with_alias_name(mut self, alias_name: impl Into<Arc<str>>) -> Self {
         self.alias_name = Some(alias_name.into());
+        self
+    }
+
+    /// Returns a copy tagged with the nominal identity of its source declaration.
+    pub fn with_alias_id(mut self, alias_id: impl Into<Arc<str>>) -> Self {
+        self.alias_id = Some(alias_id.into());
         self
     }
 
@@ -96,6 +117,17 @@ impl ObjectType {
 
     pub fn construct_signature(&self) -> Option<&FunctionType> {
         self.construct_signature.as_deref()
+    }
+
+    /// Returns a copy carrying a call signature, marking this object as callable
+    /// without `new` (e.g. `Number(value)`).
+    pub fn with_call_signature(mut self, call_signature: FunctionType) -> Self {
+        self.call_signature = Some(Arc::new(call_signature));
+        self
+    }
+
+    pub fn call_signature(&self) -> Option<&FunctionType> {
+        self.call_signature.as_deref()
     }
 
     pub fn get_property(&self, name: &str) -> Option<&ObjectProperty> {
@@ -141,7 +173,9 @@ impl Clone for ObjectType {
             properties: self.properties.clone(),
             string_index_type: self.string_index_type.clone(),
             alias_name: self.alias_name.clone(),
+            alias_id: self.alias_id.clone(),
             construct_signature: self.construct_signature.clone(),
+            call_signature: self.call_signature.clone(),
             is_intersection: self.is_intersection,
         }
     }

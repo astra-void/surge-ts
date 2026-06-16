@@ -30,6 +30,18 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
 
+    // Nominal identity: two objects resolved from the same non-generic named
+    // declaration are the same type, even if one expanded to a structurally
+    // different shape (a deeply cyclic library type can resolve to different
+    // depths at different sites). This mirrors tsc's named-type handling.
+    if let (Type::Object(from_obj), Type::Object(to_obj)) = (from, to) {
+        if let (Some(from_id), Some(to_id)) = (&from_obj.alias_id, &to_obj.alias_id) {
+            if from_id == to_id {
+                return true;
+            }
+        }
+    }
+
     match (from, to) {
         (Type::Undefined, Type::Void) => true,
         (Type::Function(source), Type::Function(target)) => {

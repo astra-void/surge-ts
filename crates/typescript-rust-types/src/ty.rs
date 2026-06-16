@@ -210,6 +210,9 @@ fn string_property_access_type(name: &str) -> Option<Type> {
             1,
         )),
         "slice" => Some(function_type(vec![Type::Number], Type::String, true, 1)),
+        "startsWith" | "endsWith" => {
+            Some(function_type(vec![Type::String], Type::Boolean, true, 1))
+        }
         "toLowerCase" | "toUpperCase" => Some(function_type(vec![], Type::String, false, 0)),
         "toString" => Some(function_type(vec![], Type::String, false, 0)),
         "padStart" => Some(function_type(
