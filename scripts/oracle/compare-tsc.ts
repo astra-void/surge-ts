@@ -161,7 +161,7 @@ const packageManagerArgsPrefix = process.env.npm_execpath ? [process.env.npm_exe
 const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
 const subprocessMaxBuffer = 50 * 1024 * 1024;
 
-const fixturePresets: Record<string, string> = {
+export const fixturePresets: Record<string, string> = {
   'declarations-basic': path.join(workspaceRoot, 'tests/compat-projects/declarations-basic/tsconfig.json'),
   'declarations-hardening': path.join(workspaceRoot, 'tests/compat-projects/declarations-hardening/tsconfig.json'),
   'module-export-visibility-hardening': path.join(workspaceRoot, 'tests/compat-projects/module-export-visibility-hardening/tsconfig.json'),
@@ -208,6 +208,21 @@ const fixturePresets: Record<string, string> = {
   'type-roots-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-basic/tsconfig.json'),
   'type-roots-ignore-default-node-modules-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-ignore-default-node-modules-basic/tsconfig.json'),
   'type-roots-with-types-filter-basic': path.join(workspaceRoot, 'tests/compat-projects/type-roots-with-types-filter-basic/tsconfig.json'),
+  'reference-types-node-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-node-basic/tsconfig.json'),
+  'reference-types-scoped-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-scoped-basic/tsconfig.json'),
+  'reference-types-recursive-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-recursive-basic/tsconfig.json'),
+  'reference-types-missing-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-missing-basic/tsconfig.json'),
+  'reference-types-dependency-dts-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-dependency-dts-basic/tsconfig.json'),
+  'reference-types-with-type-roots-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-with-type-roots-basic/tsconfig.json'),
+  'reference-types-dedupe-order-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-dedupe-order-basic/tsconfig.json'),
+  'node-protocol-buffer-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-buffer-basic/tsconfig.json'),
+  'node-protocol-fs-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-fs-basic/tsconfig.json'),
+  'node-protocol-type-only-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-type-only-basic/tsconfig.json'),
+  'node-protocol-namespace-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-namespace-basic/tsconfig.json'),
+  'node-protocol-no-node-types-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-no-node-types-basic/tsconfig.json'),
+  'node-protocol-reference-types-node-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-reference-types-node-basic/tsconfig.json'),
+  'node-protocol-types-empty-explicit-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-types-empty-explicit-reference-basic/tsconfig.json'),
+  'node-protocol-side-effect-import-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-side-effect-import-basic/tsconfig.json'),
   'interface-merging-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-merging-basic/tsconfig.json'),
   'interface-merging-across-files-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-merging-across-files-basic/tsconfig.json'),
   'interface-merging-conflict-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-merging-conflict-basic/tsconfig.json'),
