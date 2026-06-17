@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -133,7 +134,7 @@ pub fn check_program_with_stats_and_jobs(
     crate::modules::clear_relative_module_cache();
 
     let parse_start = Instant::now();
-    let mut parsed_files = parse_program_files(files, timings.as_ref());
+    let mut parsed_files = parse_program_files(files, jobs, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
         timings.parsing += parse_start.elapsed()
     });
@@ -361,10 +362,17 @@ pub fn check_program_with_stats_and_jobs(
         }
     }
 
-    let file_results = if jobs <= 1 || parsed_files.len() <= 1 {
+    let worker_count = resolve_worker_count(jobs, &parsed_files);
+    let file_results = if worker_count <= 1 {
         check_program_files_serial(&parsed_files, &shared_state, &ctx, timings.clone())
     } else {
-        check_program_files_parallel(&parsed_files, &shared_state, &ctx, jobs, timings.clone())
+        check_program_files_parallel(
+            &parsed_files,
+            &shared_state,
+            &ctx,
+            worker_count,
+            timings.clone(),
+        )
     };
 
     for result in file_results {
@@ -385,63 +393,130 @@ pub fn check_program_with_stats_and_jobs(
     ProgramCheckResult { diagnostics, stats }
 }
 
+/// Minimum source bytes assigned to a worker before `AUTO_JOBS` parallelizes the
+/// parse phase. Parse cost tracks byte length, and files are pulled through a
+/// shared cursor so large declaration/default-lib files don't stall one worker.
+/// This is a calibration threshold — tune with `bench:test`.
+const MIN_BYTES_PER_PARSE_WORKER: usize = 256 * 1024;
+
+fn resolve_parse_worker_count(jobs: usize, files: &[SourceFileInput]) -> usize {
+    let file_count = files.len();
+    if file_count <= 1 {
+        return 1;
+    }
+
+    let requested = if jobs == AUTO_JOBS {
+        let cores = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let bytes: usize = files.iter().map(|file| file.source_text.len()).sum();
+        let by_work = (bytes / MIN_BYTES_PER_PARSE_WORKER).max(1);
+        cores.min(by_work)
+    } else {
+        jobs
+    };
+
+    requested.max(1).min(file_count)
+}
+
 fn parse_program_files(
     files: Vec<SourceFileInput>,
+    jobs: usize,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<ParsedProgramFile> {
-    files
-        .into_iter()
-        .map(|input| {
-            let file_name = input.file_name;
-            record_program_counter(|c| c.files_total += 1);
-            if classify_file_kind(&file_name) == FileKind::GeneratedDeclaration {
-                record_program_counter(|c| c.generated_default_lib_files += 1);
-            }
+    let worker_count = resolve_parse_worker_count(jobs, &files);
+    if worker_count <= 1 {
+        return files
+            .iter()
+            .map(|input| parse_program_file(input, timings))
+            .collect();
+    }
 
-            let parse_start = Instant::now();
-            let parsed = parse_source(&input.source_text, &file_name);
-            let parse_duration = parse_start.elapsed();
-            let file_name = parsed.file_name;
-            let file_kind = classify_file_kind(&file_name);
-            record_program_timing(timings, |timings| match file_kind {
-                FileKind::DependencyDeclaration => {
-                    timings.dependency_declaration_parse_time += parse_duration
-                }
-                FileKind::GeneratedDeclaration | FileKind::PhysicalDefaultLib => {
-                    timings.generated_default_lib_parse_time += parse_duration
-                }
-                FileKind::RootSource | FileKind::RootDeclaration => {}
-            });
-            record_program_counter(|c| match file_kind {
-                FileKind::RootSource => c.root_source_files += 1,
-                FileKind::RootDeclaration | FileKind::DependencyDeclaration => {
-                    if matches!(file_kind, FileKind::DependencyDeclaration) {
-                        c.dependency_declaration_files += 1;
+    let next_index = AtomicUsize::new(0);
+    let timings_owned = timings.cloned();
+
+    let mut indexed = thread::scope(|scope| {
+        let next_index = &next_index;
+        let files = &files;
+        let mut handles = Vec::with_capacity(worker_count);
+
+        for _ in 0..worker_count {
+            let timings = timings_owned.clone();
+            handles.push(scope.spawn(move || {
+                let mut worker_results = Vec::new();
+                loop {
+                    let file_index = next_index.fetch_add(1, Ordering::Relaxed);
+                    if file_index >= files.len() {
+                        break;
                     }
-                    if matches!(file_kind, FileKind::RootDeclaration) {
-                        c.root_source_files += 1;
-                    }
-                    if matches!(file_kind, FileKind::DependencyDeclaration) {
-                        c.parsed_dependency_declaration_files += 1;
-                    } else {
-                        c.parsed_root_source_files += 1;
-                    }
+                    worker_results
+                        .push((file_index, parse_program_file(&files[file_index], timings.as_ref())));
                 }
-                FileKind::GeneratedDeclaration => {}
-                FileKind::PhysicalDefaultLib => {
-                    c.generated_default_lib_files += 1;
-                }
-            });
-            ParsedProgramFile {
-                file_name: file_name.clone(),
-                has_export_default: input.source_text.contains("export default"),
-                statements: parsed.statements,
-                parser_errors: parsed.parser_errors,
-                is_module: parsed.is_module,
-                file_kind: classify_file_kind(&file_name),
+                worker_results
+            }));
+        }
+
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("parse worker panicked"))
+            .collect::<Vec<_>>()
+    });
+
+    indexed.sort_by_key(|(file_index, _)| *file_index);
+    indexed.into_iter().map(|(_, parsed)| parsed).collect()
+}
+
+fn parse_program_file(
+    input: &SourceFileInput,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) -> ParsedProgramFile {
+    record_program_counter(|c| c.files_total += 1);
+    if classify_file_kind(&input.file_name) == FileKind::GeneratedDeclaration {
+        record_program_counter(|c| c.generated_default_lib_files += 1);
+    }
+
+    let parse_start = Instant::now();
+    let parsed = parse_source(&input.source_text, &input.file_name);
+    let parse_duration = parse_start.elapsed();
+    let file_name = parsed.file_name;
+    let file_kind = classify_file_kind(&file_name);
+    record_program_timing(timings, |timings| match file_kind {
+        FileKind::DependencyDeclaration => {
+            timings.dependency_declaration_parse_time += parse_duration
+        }
+        FileKind::GeneratedDeclaration | FileKind::PhysicalDefaultLib => {
+            timings.generated_default_lib_parse_time += parse_duration
+        }
+        FileKind::RootSource | FileKind::RootDeclaration => {}
+    });
+    record_program_counter(|c| match file_kind {
+        FileKind::RootSource => c.root_source_files += 1,
+        FileKind::RootDeclaration | FileKind::DependencyDeclaration => {
+            if matches!(file_kind, FileKind::DependencyDeclaration) {
+                c.dependency_declaration_files += 1;
             }
-        })
-        .collect()
+            if matches!(file_kind, FileKind::RootDeclaration) {
+                c.root_source_files += 1;
+            }
+            if matches!(file_kind, FileKind::DependencyDeclaration) {
+                c.parsed_dependency_declaration_files += 1;
+            } else {
+                c.parsed_root_source_files += 1;
+            }
+        }
+        FileKind::GeneratedDeclaration => {}
+        FileKind::PhysicalDefaultLib => {
+            c.generated_default_lib_files += 1;
+        }
+    });
+    ParsedProgramFile {
+        file_name: file_name.clone(),
+        has_export_default: input.source_text.contains("export default"),
+        statements: parsed.statements,
+        parser_errors: parsed.parser_errors,
+        is_module: parsed.is_module,
+        file_kind: classify_file_kind(&file_name),
+    }
 }
 
 fn classify_file_kind(file_name: &str) -> FileKind {
@@ -541,48 +616,76 @@ fn check_program_files_serial(
     results
 }
 
+/// Sentinel passed as `jobs` to request automatic worker-count selection.
+const AUTO_JOBS: usize = 0;
+
+/// Minimum parsed top-level statements assigned to a worker before `AUTO_JOBS`
+/// spins up another thread. Per-worker `CheckerContext` clones and thread spawn
+/// are not free, so tiny programs stay serial. Statement count is measured after
+/// the `skipLibCheck` trim above, so cleared declaration files correctly count as
+/// near-zero work. This is a calibration threshold — tune with `bench:test`.
+const MIN_STATEMENTS_PER_WORKER: usize = 500;
+
+fn resolve_worker_count(jobs: usize, parsed_files: &[ParsedProgramFile]) -> usize {
+    let file_count = parsed_files.len();
+    if file_count <= 1 {
+        return 1;
+    }
+
+    let requested = if jobs == AUTO_JOBS {
+        let cores = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let work_units: usize = parsed_files.iter().map(|file| file.statements.len()).sum();
+        let by_work = (work_units / MIN_STATEMENTS_PER_WORKER).max(1);
+        cores.min(by_work)
+    } else {
+        jobs
+    };
+
+    requested.max(1).min(file_count)
+}
+
 fn check_program_files_parallel(
     parsed_files: &[ParsedProgramFile],
     shared_state: &ProgramCheckSharedState,
     ctx: &CheckerContext,
-    jobs: usize,
+    worker_count: usize,
     timings: Option<Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<FileCheckResult> {
-    let worker_count = jobs.max(1).min(parsed_files.len());
     if worker_count <= 1 {
         return check_program_files_serial(parsed_files, shared_state, ctx, timings);
     }
 
-    let chunk_size = (parsed_files.len() + worker_count - 1) / worker_count;
-    let worker_base = ctx.clone();
+    let next_index = AtomicUsize::new(0);
 
     let results = thread::scope(|scope| {
-        let mut handles = Vec::new();
+        let next_index = &next_index;
+        let mut handles = Vec::with_capacity(worker_count);
 
-        for (chunk_index, chunk) in parsed_files.chunks(chunk_size).enumerate() {
+        for _ in 0..worker_count {
             let shared_state = shared_state;
-            let worker_ctx = worker_base.clone();
             let timings = timings.clone();
-            let start_index = chunk_index * chunk_size;
+            let mut local_ctx = ctx.clone();
+            local_ctx.diagnostics.clear();
+            local_ctx.stats = CompatibilityStats::default();
 
             handles.push(scope.spawn(move || {
-                let mut local_ctx = worker_ctx;
-                local_ctx.diagnostics.clear();
-                local_ctx.stats = CompatibilityStats::default();
-
-                let mut chunk_results = Vec::with_capacity(chunk.len());
-                for (offset, parsed_file) in chunk.iter().enumerate() {
-                    let file_index = start_index + offset;
-                    chunk_results.push(check_program_file(
+                let mut worker_results = Vec::new();
+                loop {
+                    let file_index = next_index.fetch_add(1, Ordering::Relaxed);
+                    if file_index >= parsed_files.len() {
+                        break;
+                    }
+                    worker_results.push(check_program_file(
                         file_index,
-                        parsed_file,
+                        &parsed_files[file_index],
                         shared_state,
                         &mut local_ctx,
                         timings.as_ref(),
                     ));
                 }
-
-                chunk_results
+                worker_results
             }));
         }
 

@@ -177,7 +177,9 @@ struct Cli {
     #[arg(long = "maxDiagnostics")]
     max_diagnostics: Option<usize>,
 
-    #[arg(long, value_parser = parse_jobs)]
+    /// Worker threads for project checking: `auto` (default) sizes by available
+    /// cores and workload, `1` forces serial, or pass an explicit count.
+    #[arg(long, value_parser = parse_jobs, value_name = "auto|N")]
     jobs: Option<usize>,
 
     #[arg(long = "stubExternalModules")]
@@ -245,7 +247,7 @@ fn main() -> ExitCode {
             pretty,
             color,
             cli.max_diagnostics,
-            cli.jobs.unwrap_or(1),
+            cli.jobs.unwrap_or(0),
             cli.stub_external_modules,
             cli.diagnostic_profile
                 .unwrap_or(CliDiagnosticProfile::Tsc)
@@ -779,7 +781,13 @@ fn run_project_mode(
     exit_code
 }
 
+/// `0` is the checker's sentinel for automatic worker-count selection, so `auto`
+/// maps to it while a literal `0` from the user is still rejected.
 fn parse_jobs(value: &str) -> Result<usize, String> {
+    if value.eq_ignore_ascii_case("auto") {
+        return Ok(0);
+    }
+
     let jobs = value
         .parse::<usize>()
         .map_err(|_| format!("invalid value for --jobs: {value}"))?;
