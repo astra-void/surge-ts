@@ -172,12 +172,12 @@ pub(crate) fn collect_module_analyses_with_bindings(
 
         // Set up the full type environment for function signature collection
         let merge_start = Instant::now();
-        let imported_type_declarations = preliminary_module_import_bindings[file_index]
+        let imported_layers = preliminary_module_import_bindings[file_index]
             .as_ref()
-            .map(|bindings| bindings.type_declarations.clone());
+            .map(|bindings| bindings.scope_layers());
         let mut scope_layers = vec![local_type_declarations.clone()];
-        if let Some(imported_type_declarations) = imported_type_declarations {
-            scope_layers.push(imported_type_declarations);
+        if let Some(imported_layers) = imported_layers {
+            scope_layers.extend(imported_layers);
         }
         let full_type_declarations_scope = Arc::new(TypeDeclarationScope::new(scope_layers));
         ctx.type_declarations = local_type_declarations.as_ref().clone();
@@ -250,7 +250,7 @@ pub(crate) fn build_module_resolution_scopes(
                 .get(file_index)
                 .and_then(|bindings| bindings.as_ref())
             {
-                layers.push(imported.type_declarations.clone());
+                layers.extend(imported.scope_layers());
             }
             record_program_timing(timings, |timings| {
                 timings.clone_copy_heavy_operations += clone_start.elapsed()

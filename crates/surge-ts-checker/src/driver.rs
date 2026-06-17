@@ -37,7 +37,7 @@ pub fn check_source_with_options(
 
     inject_generated_default_libs(&mut ctx);
 
-    let mut merged_td = ctx.ambient_global_type_declarations.clone();
+    let mut merged_td = ctx.ambient_global_type_declarations.as_ref().clone();
     for (k, v) in ctx.type_declarations.iter() {
         let _ = merged_td.insert(k.clone(), v.clone());
     }
@@ -126,14 +126,17 @@ pub(crate) fn collect_global_augmentations(
     parsed_files: &[crate::program::ParsedProgramFile],
     ctx: &mut CheckerContext,
 ) {
+    let mut block_tables = Vec::new();
     for parsed_file in parsed_files {
         ctx.set_file_name(parsed_file.file_name.clone());
-        for_each_global_augmentation_block(
-            &parsed_file.statements,
-            ctx,
-            merge_global_augmentation_types,
-        );
+        for_each_global_augmentation_block(&parsed_file.statements, ctx, |block_statements, ctx| {
+            block_tables.push(collect_global_augmentation_block_types(block_statements, ctx));
+        });
     }
+    crate::symbols::merge_shared_arena_tables_into(
+        std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
+        &block_tables,
+    );
 }
 
 /// Lower `declare global` augmentation *values* against the caller's current type
@@ -153,14 +156,21 @@ pub(crate) fn collect_global_augmentations_from_statements(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) {
-    for_each_global_augmentation_block(statements, ctx, merge_global_augmentation_types);
+    let mut block_tables = Vec::new();
+    for_each_global_augmentation_block(statements, ctx, |block_statements, ctx| {
+        block_tables.push(collect_global_augmentation_block_types(block_statements, ctx));
+    });
+    crate::symbols::merge_shared_arena_tables_into(
+        std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
+        &block_tables,
+    );
     for_each_global_augmentation_block(statements, ctx, lower_global_augmentation_values);
 }
 
 fn for_each_global_augmentation_block(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
-    visit: fn(&[ParsedStatement], &mut CheckerContext),
+    mut visit: impl FnMut(&[ParsedStatement], &mut CheckerContext),
 ) {
     for statement in statements {
         let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
@@ -184,7 +194,14 @@ fn for_each_global_augmentation_block(
     }
 }
 
-fn merge_global_augmentation_types(block_statements: &[ParsedStatement], ctx: &mut CheckerContext) {
+/// Collect one `declare global` block's type declarations into a fresh table that
+/// shares the ambient arena, so the result can later be merged into the ambient
+/// table by pointer. The caller merges every block's table together in one pass
+/// (see [`collect_global_augmentations`]).
+fn collect_global_augmentation_block_types(
+    block_statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) -> crate::symbols::TypeDeclarationTable {
     let shared = crate::symbols::TypeDeclarationTable::with_arena(
         ctx.ambient_global_type_declarations.arena_handle(),
     );
@@ -193,14 +210,12 @@ fn merge_global_augmentation_types(block_statements: &[ParsedStatement], ctx: &m
     ctx.type_declaration_scope = None;
 
     collect_type_declarations(block_statements, ctx);
-    let ambient_td = std::mem::take(&mut ctx.type_declarations);
-    crate::symbols::merge_shared_arena_table_into(
-        &mut ctx.ambient_global_type_declarations,
-        &ambient_td,
-    );
+    let block_table = std::mem::take(&mut ctx.type_declarations);
 
     ctx.type_declarations = saved_type_declarations;
     ctx.type_declaration_scope = saved_type_declaration_scope;
+
+    block_table
 }
 
 fn lower_global_augmentation_values(

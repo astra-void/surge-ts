@@ -36,7 +36,7 @@ impl From<usize> for DiagnosticArg {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextSpan {
     pub start: usize,
     pub end: usize,

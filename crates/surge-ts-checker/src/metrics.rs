@@ -130,6 +130,10 @@ pub(crate) fn set_counters_enabled(enabled: bool) {
     COUNTERS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+pub(crate) fn counters_enabled() -> bool {
+    COUNTERS_ENABLED.load(Ordering::Relaxed)
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ProgramTimings {
     pub(crate) parsing: Duration,

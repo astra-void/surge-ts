@@ -2,6 +2,7 @@
 
 use super::*;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -86,12 +87,34 @@ pub(crate) fn emit_unresolved_module_diagnostic(
     ctx.push(diagnostic);
 }
 
+thread_local! {
+    // Whether a module has any `export * from "X"` whose target does not resolve.
+    // This depends only on the (fixed-per-run) file set, but the import/export
+    // binding fixpoint queries it once per importing specifier across several
+    // passes. A barrel that re-exports N modules is imported by O(N) files, so the
+    // uncached scan (O(re-exports) per query, each rebuilding candidate paths and
+    // probing them) made the binding phase O(N^2). Keyed by the global file index;
+    // cleared per run alongside the relative-module cache.
+    static STAR_EXPORT_UNRESOLVED_CACHE: RefCell<HashMap<usize, bool>> =
+        RefCell::new(HashMap::new());
+}
+
+pub(crate) fn clear_star_export_unresolved_cache() {
+    STAR_EXPORT_UNRESOLVED_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
 pub(crate) fn module_has_unresolved_star_export(
     file_index: usize,
     parsed_files: &[ParsedProgramFile],
     file_index_by_identity: &HashMap<Arc<str>, usize>,
 ) -> bool {
-    parsed_files[file_index].statements.iter().any(|statement| {
+    if let Some(cached) =
+        STAR_EXPORT_UNRESOLVED_CACHE.with(|cache| cache.borrow().get(&file_index).copied())
+    {
+        return cached;
+    }
+
+    let result = parsed_files[file_index].statements.iter().any(|statement| {
         let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
             module_specifier,
             ..
@@ -107,7 +130,12 @@ pub(crate) fn module_has_unresolved_star_export(
             file_index_by_identity,
         )
         .is_none()
-    })
+    });
+
+    STAR_EXPORT_UNRESOLVED_CACHE.with(|cache| {
+        cache.borrow_mut().insert(file_index, result);
+    });
+    result
 }
 
 pub(crate) fn should_bind_unknown_for_missing_export(
