@@ -512,12 +512,20 @@ pub(crate) fn collect_exportable_value_symbols(
     let _ = local_type_declarations;
     shadow_ctx.type_declarations = ctx.type_declarations.clone();
 
-    let mut exportable_values = ctx
-        .ambient_global_symbols
-        .clone_with_reason(TypeCopyReason::ModuleExport);
+    // The ambient globals (the lib `.d.ts` surface, ~1000 entries) are only a
+    // read-only resolution backdrop here: the returned table is consulted via
+    // `get`, never iterated, and the actual export entries are built into a fresh
+    // table by the caller. Holding the globals as a `parent` fallback rather than
+    // as the own map keeps each module's export-table build O(local symbols)
+    // instead of deep-copying every global on the first local insert.
+    let mut exportable_values = SymbolTable::new();
     for (name, symbol) in local_symbols.iter_shared() {
         let _ = exportable_values.insert_shared(name.clone(), symbol.clone());
     }
+    let mut exportable_values = exportable_values.with_parent_fallback(Arc::new(
+        ctx.ambient_global_symbols
+            .clone_with_reason(TypeCopyReason::ModuleExport),
+    ));
 
     for statement in statements {
         collect_exportable_value_symbols_from_statement(

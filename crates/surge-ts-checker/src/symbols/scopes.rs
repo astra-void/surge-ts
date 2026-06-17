@@ -18,10 +18,19 @@ pub(crate) struct ScopeFrame {
 
 impl ScopeStack {
     pub(crate) fn from_root(root: SymbolTable) -> Self {
+        // Share the root (module/ambient) symbols through `parent` fallback rather
+        // than as the own map of either table. Both `visible_symbols` and the root
+        // frame are mutated on every local binding; holding `root` as their own
+        // map made the first insert copy the entire module symbol table per
+        // function body (the copy-on-write deep copy fired because the Arc was
+        // shared). With the fallback, inserts hit small unshared own maps and
+        // lookups still fall through to the full root. The fallback table is only
+        // ever read via `get`, never iterated.
+        let root = Arc::new(root);
         Self {
-            visible_symbols: root.clone(),
+            visible_symbols: SymbolTable::with_parent(root.clone()),
             frames: vec![ScopeFrame {
-                symbols: root,
+                symbols: SymbolTable::with_parent(root),
                 visible_shadows: HashMap::new(),
             }],
         }
