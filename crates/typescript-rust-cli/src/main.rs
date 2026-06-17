@@ -4,6 +4,7 @@ mod package_resolution;
 mod path_mapping;
 mod report;
 
+use std::io::IsTerminal;
 use std::time::Instant;
 use std::{fs, path::PathBuf, process::ExitCode};
 
@@ -21,7 +22,95 @@ use typescript_rust_checker::{
 use typescript_rust_config::{
     ScriptTarget, TsConfigLoadOptions, canonicalize_if_exists_string, load_tsconfig,
 };
-use typescript_rust_diagnostics::{Diagnostic, DiagnosticCode, render_diagnostics};
+use typescript_rust_diagnostics::{
+    Diagnostic, DiagnosticCode, TscRenderItem, TscRenderOptions, render_diagnostics,
+    render_diagnostics_tsc,
+};
+
+/// Selects how diagnostics are rendered for human-readable (non-`--format json`)
+/// output. `tsc` is the default and mirrors the TypeScript compiler's text
+/// output; `custom` preserves the project's original Rust-style report; `json`
+/// is the machine-readable form (equivalent to `--format json`).
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliDiagnosticStyle {
+    Tsc,
+    Custom,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DiagnosticStyle {
+    Tsc,
+    Custom,
+    Json,
+}
+
+/// Controls the multi-line `tsc`-style code-frame output. `auto` follows the
+/// terminal (pretty when stdout is a TTY, like `tsc`).
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum PrettyMode {
+    #[value(name = "true")]
+    Always,
+    #[value(name = "false")]
+    Never,
+    #[value(name = "auto")]
+    Auto,
+}
+
+fn resolve_diagnostic_style(
+    style: Option<CliDiagnosticStyle>,
+    format: Option<ReportFormat>,
+) -> DiagnosticStyle {
+    match style {
+        Some(CliDiagnosticStyle::Tsc) => DiagnosticStyle::Tsc,
+        Some(CliDiagnosticStyle::Custom) => DiagnosticStyle::Custom,
+        Some(CliDiagnosticStyle::Json) => DiagnosticStyle::Json,
+        // Back-compat: `--format json` keeps emitting JSON (the oracle harness
+        // relies on it). Plain `--format text` and the unset default both map to
+        // the new tsc-compatible renderer.
+        None => match format {
+            Some(ReportFormat::Json) => DiagnosticStyle::Json,
+            _ => DiagnosticStyle::Tsc,
+        },
+    }
+}
+
+fn resolve_pretty(mode: PrettyMode) -> bool {
+    match mode {
+        PrettyMode::Always => true,
+        PrettyMode::Never => false,
+        PrettyMode::Auto => std::io::stdout().is_terminal(),
+    }
+}
+
+fn resolve_color(pretty: bool) -> bool {
+    if !pretty {
+        return false;
+    }
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    if std::env::var_os("FORCE_COLOR").is_some() {
+        return true;
+    }
+    std::io::stdout().is_terminal()
+}
+
+/// The display label `tsc` would use for a file: relative to the current working
+/// directory when possible (with forward slashes), otherwise the path as-is.
+/// Empty for diagnostics with no real file (globals, command-line diagnostics).
+fn tsc_path_label(file_name: &str) -> String {
+    if file_name.is_empty() || file_name == "<command line>" {
+        return String::new();
+    }
+    let path = std::path::Path::new(file_name);
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(relative) = path.strip_prefix(&cwd) {
+            return relative.to_string_lossy().replace('\\', "/");
+        }
+    }
+    file_name.replace('\\', "/")
+}
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum CliDiagnosticProfile {
@@ -71,6 +160,16 @@ struct Cli {
 
     #[arg(long, value_enum)]
     format: Option<ReportFormat>,
+
+    #[arg(
+        long = "diagnosticStyle",
+        visible_alias = "diagnostic-style",
+        value_enum
+    )]
+    diagnostic_style: Option<CliDiagnosticStyle>,
+
+    #[arg(long, value_enum)]
+    pretty: Option<PrettyMode>,
 
     #[arg(long = "diagnosticProfile", value_enum)]
     diagnostic_profile: Option<CliDiagnosticProfile>,
@@ -134,12 +233,17 @@ fn main() -> ExitCode {
             )
             .exit();
         }
+        let style = resolve_diagnostic_style(cli.diagnostic_style, cli.format);
+        let pretty = resolve_pretty(cli.pretty.unwrap_or(PrettyMode::Auto));
+        let color = resolve_color(pretty);
         return run_project_mode(
             cli.project.unwrap(),
             cli.show_config,
             cli.show_spans,
             cli.compat_report,
-            cli.format.unwrap_or(ReportFormat::Text),
+            style,
+            pretty,
+            color,
             cli.max_diagnostics,
             cli.jobs.unwrap_or(1),
             cli.stub_external_modules,
@@ -183,13 +287,18 @@ fn main() -> ExitCode {
         .exit();
     };
 
+    let style = resolve_diagnostic_style(cli.diagnostic_style, cli.format);
+    let pretty = resolve_pretty(cli.pretty.unwrap_or(PrettyMode::Auto));
+    let color = resolve_color(pretty);
     run_single_file_mode(
         file_path,
         cli.no_implicit_any,
         cli.no_lib,
         cli.stub_external_modules,
         cli.show_spans,
-        cli.format.unwrap_or(ReportFormat::Text),
+        style,
+        pretty,
+        color,
         cli.max_diagnostics,
         cli.ignore_config,
         cli.diagnostic_profile
@@ -198,13 +307,16 @@ fn main() -> ExitCode {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_single_file_mode(
     file_path: PathBuf,
     no_implicit_any: bool,
     no_lib: bool,
     stub_external_modules: bool,
     show_spans: bool,
-    format: ReportFormat,
+    style: DiagnosticStyle,
+    pretty: bool,
+    color: bool,
     max_diagnostics: Option<usize>,
     ignore_config: bool,
     diagnostic_profile: typescript_rust_checker::DiagnosticProfile,
@@ -215,18 +327,29 @@ fn run_single_file_mode(
             .unwrap_or(false)
     {
         let diagnostic = typescript_rust_diagnostics::Diagnostic::ts5112("<command line>");
-        match format {
-            ReportFormat::Text => println!("{}", diagnostic.render("")),
-            ReportFormat::Json => {
+        let diagnostics = [diagnostic];
+        match style {
+            DiagnosticStyle::Json => {
                 let json = serde_json::to_string_pretty(&render_single_file_diagnostics_json(
                     &file_path,
-                    &[diagnostic],
+                    &diagnostics,
                     "",
                     max_diagnostics,
                 ))
                 .unwrap();
                 println!("{}", json);
             }
+            DiagnosticStyle::Custom => println!("{}", diagnostics[0].render("")),
+            DiagnosticStyle::Tsc => print!(
+                "{}",
+                render_single_file_diagnostics_tsc(
+                    &diagnostics,
+                    "",
+                    pretty,
+                    color,
+                    max_diagnostics
+                )
+            ),
         }
         return ExitCode::from(1);
     }
@@ -253,18 +376,11 @@ fn run_single_file_mode(
             diagnostic_profile,
         },
     );
-    match format {
-        ReportFormat::Text => println!(
-            "{}",
-            render_single_file_diagnostics(
-                &file_path,
-                &diagnostics,
-                &source_text,
-                show_spans,
-                max_diagnostics
-            )
-        ),
-        ReportFormat::Json => println!(
+    // `--showSpans` is a debug aid that forces the custom span renderer even
+    // under the default tsc style; JSON output ignores it.
+    let force_custom = matches!(style, DiagnosticStyle::Custom) || show_spans;
+    match style {
+        DiagnosticStyle::Json => println!(
             "{}",
             serde_json::to_string_pretty(&render_single_file_diagnostics_json(
                 &file_path,
@@ -274,9 +390,70 @@ fn run_single_file_mode(
             ))
             .unwrap()
         ),
+        _ if force_custom => println!(
+            "{}",
+            render_single_file_diagnostics(
+                &file_path,
+                &diagnostics,
+                &source_text,
+                show_spans,
+                max_diagnostics
+            )
+        ),
+        DiagnosticStyle::Tsc => print!(
+            "{}",
+            render_single_file_diagnostics_tsc(
+                &diagnostics,
+                &source_text,
+                pretty,
+                color,
+                max_diagnostics
+            )
+        ),
+        DiagnosticStyle::Custom => unreachable!("custom handled by force_custom"),
     }
 
     ExitCode::SUCCESS
+}
+
+/// Render single-file diagnostics in tsc-compatible form. The display label is
+/// derived from each diagnostic's own file name, so command-line diagnostics
+/// (with no real file) collapse to a header-only line.
+fn render_single_file_diagnostics_tsc(
+    diagnostics: &[Diagnostic],
+    source_text: &str,
+    pretty: bool,
+    color: bool,
+    max_diagnostics: Option<usize>,
+) -> String {
+    let total = diagnostics.len();
+    if total == 0 {
+        return String::new();
+    }
+    let limit = max_diagnostics.unwrap_or(total).min(total);
+    let shown = &diagnostics[..limit];
+
+    let labels: Vec<String> = shown
+        .iter()
+        .map(|diagnostic| tsc_path_label(&diagnostic.file_name))
+        .collect();
+    let items: Vec<TscRenderItem> = shown
+        .iter()
+        .zip(&labels)
+        .map(|(diagnostic, label)| TscRenderItem {
+            label,
+            source_text,
+            diagnostic,
+        })
+        .collect();
+
+    let mut out = render_diagnostics_tsc(&items, TscRenderOptions { pretty, color });
+    if limit < total {
+        out.push_str(&format!(
+            "\nShowing first {limit} of {total} diagnostics.\n"
+        ));
+    }
+    out
 }
 
 /// Whether physical TypeScript `lib*.d.ts` loading was explicitly requested via
@@ -315,12 +492,15 @@ fn target_lib_basename(target: ScriptTarget) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_project_mode(
     project: PathBuf,
     show_config: bool,
     show_spans: bool,
     compat_report: bool,
-    format: ReportFormat,
+    style: DiagnosticStyle,
+    pretty: bool,
+    color: bool,
     max_diagnostics: Option<usize>,
     jobs: usize,
     stub_external_modules: bool,
@@ -359,7 +539,9 @@ fn run_project_mode(
             &stats,
             show_spans,
             compat_report,
-            format,
+            style,
+            pretty,
+            color,
             max_diagnostics,
             timings_enabled,
             &mut timings,
@@ -584,7 +766,9 @@ fn run_project_mode(
         &result.stats,
         show_spans,
         compat_report,
-        format,
+        style,
+        pretty,
+        color,
         max_diagnostics,
         timings_enabled,
         &mut timings,
@@ -606,6 +790,7 @@ fn parse_jobs(value: &str) -> Result<usize, String> {
     Ok(jobs)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_project_mode_output(
     loaded: &typescript_rust_config::LoadedTsConfig,
     diagnostics: &[Diagnostic],
@@ -613,36 +798,35 @@ fn render_project_mode_output(
     stats: &typescript_rust_checker::CompatibilityStats,
     show_spans: bool,
     compat_report: bool,
-    format: ReportFormat,
+    style: DiagnosticStyle,
+    pretty: bool,
+    color: bool,
     max_diagnostics: Option<usize>,
     timings_enabled: bool,
     timings: &mut CliTimings,
 ) -> ExitCode {
     let render_start = Instant::now();
+    let json_output = matches!(style, DiagnosticStyle::Json);
+
     if compat_report {
         let report = build_project_compatibility_report(loaded, diagnostics, sources, stats);
-        match format {
-            ReportFormat::Text => {
-                println!("{}", render_project_compatibility_report_text(&report));
-                let preview = render_project_diagnostics_preview(
-                    diagnostics,
-                    sources,
-                    show_spans,
-                    max_diagnostics,
-                );
-                if !preview.is_empty() {
-                    println!();
-                    println!("{}", preview);
-                }
-            }
-            ReportFormat::Json => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&render_project_compatibility_report_json(
-                        &report
-                    ))
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&render_project_compatibility_report_json(&report))
                     .unwrap()
-                );
+            );
+        } else {
+            println!("{}", render_project_compatibility_report_text(&report));
+            let preview = render_project_diagnostics_preview(
+                diagnostics,
+                sources,
+                show_spans,
+                max_diagnostics,
+            );
+            if !preview.is_empty() {
+                println!();
+                println!("{}", preview);
             }
         }
         if timings_enabled {
@@ -651,19 +835,11 @@ fn render_project_mode_output(
         return ExitCode::SUCCESS;
     }
 
-    match format {
-        ReportFormat::Text => {
-            let preview = render_project_diagnostics_preview(
-                diagnostics,
-                sources,
-                show_spans,
-                max_diagnostics,
-            );
-            if !preview.is_empty() {
-                println!("{}", preview);
-            }
-        }
-        ReportFormat::Json => {
+    // `--showSpans` is a debug aid that forces the custom span renderer even
+    // under the default tsc style.
+    let force_custom = matches!(style, DiagnosticStyle::Custom) || show_spans;
+    match style {
+        DiagnosticStyle::Json => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&render_project_diagnostics_json(
@@ -675,6 +851,30 @@ fn render_project_mode_output(
                 .unwrap()
             );
         }
+        _ if force_custom => {
+            let preview = render_project_diagnostics_preview(
+                diagnostics,
+                sources,
+                show_spans,
+                max_diagnostics,
+            );
+            if !preview.is_empty() {
+                println!("{}", preview);
+            }
+        }
+        DiagnosticStyle::Tsc => {
+            print!(
+                "{}",
+                render_project_diagnostics_tsc(
+                    diagnostics,
+                    sources,
+                    pretty,
+                    color,
+                    max_diagnostics
+                )
+            );
+        }
+        DiagnosticStyle::Custom => unreachable!("custom handled by force_custom"),
     }
 
     if timings_enabled {
@@ -682,6 +882,72 @@ fn render_project_mode_output(
     }
 
     ExitCode::SUCCESS
+}
+
+/// Render project diagnostics in tsc-compatible form. Diagnostics are grouped by
+/// file in source-load order (matching the custom preview and tsc's file
+/// ordering); diagnostics whose file is not among the loaded sources (such as
+/// global "Cannot find global type" diagnostics) are appended afterwards with no
+/// source excerpt.
+fn render_project_diagnostics_tsc(
+    diagnostics: &[Diagnostic],
+    sources: &[(PathBuf, String, String)],
+    pretty: bool,
+    color: bool,
+    max_diagnostics: Option<usize>,
+) -> String {
+    if diagnostics.is_empty() {
+        return String::new();
+    }
+
+    let mut by_file: std::collections::HashMap<&str, Vec<&Diagnostic>> =
+        std::collections::HashMap::new();
+    for diagnostic in diagnostics {
+        by_file
+            .entry(diagnostic.file_name.as_str())
+            .or_default()
+            .push(diagnostic);
+    }
+
+    let mut ordered: Vec<(String, &str, &Diagnostic)> = Vec::with_capacity(diagnostics.len());
+    for (_, file_name, source_text) in sources {
+        if let Some(file_diagnostics) = by_file.remove(file_name.as_str()) {
+            let label = tsc_path_label(file_name);
+            for diagnostic in file_diagnostics {
+                ordered.push((label.clone(), source_text.as_str(), diagnostic));
+            }
+        }
+    }
+    // Any diagnostics not attached to a loaded source file, in original order.
+    if !by_file.is_empty() {
+        for diagnostic in diagnostics {
+            if by_file.contains_key(diagnostic.file_name.as_str()) {
+                ordered.push((tsc_path_label(&diagnostic.file_name), "", diagnostic));
+            }
+        }
+    }
+
+    let total = ordered.len();
+    let limit = max_diagnostics.unwrap_or(total).min(total);
+    let truncated = limit < total;
+    ordered.truncate(limit);
+
+    let items: Vec<TscRenderItem> = ordered
+        .iter()
+        .map(|(label, source_text, diagnostic)| TscRenderItem {
+            label,
+            source_text,
+            diagnostic,
+        })
+        .collect();
+
+    let mut out = render_diagnostics_tsc(&items, TscRenderOptions { pretty, color });
+    if truncated {
+        out.push_str(&format!(
+            "\nShowing first {limit} of {total} diagnostics.\n"
+        ));
+    }
+    out
 }
 
 fn apply_project_no_lib_compatibility_diagnostics(

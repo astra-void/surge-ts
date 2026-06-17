@@ -6,6 +6,7 @@ mod code;
 mod diagnostic;
 mod generated;
 mod render;
+mod tsc_render;
 
 pub use catalog::*;
 pub use category::*;
@@ -13,6 +14,7 @@ pub use code::*;
 pub use diagnostic::*;
 pub use generated::*;
 pub use render::*;
+pub use tsc_render::*;
 
 #[cfg(test)]
 mod tests {

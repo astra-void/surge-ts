@@ -84,6 +84,12 @@ v1.2.5 continues that direction inside `typescript-rust-checker` by decomposing 
 Diagnostics are catalog-driven in `typescript-rust-diagnostics`.
 The Rust accessors are generated from `diagnostic-messages.json`, and spans remain a checker/parser concern rather than a catalog concern.
 
+The default human-readable CLI output is `tsc`-compatible (`render_diagnostics_tsc`):
+`--diagnosticStyle <tsc|custom|json>` selects the renderer and `--pretty` controls
+the code-frame form. JSON output is unchanged and still drives the oracle harness,
+so this rendering layer never affects diagnostic comparison. See the CLI README for
+flag details.
+
 ## Declaration Ingestion
 
 v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable before any package or lib discovery work lands.

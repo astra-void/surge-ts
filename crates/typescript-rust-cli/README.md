@@ -23,6 +23,59 @@ comparison. The report also includes lightweight build provenance so it is
 clear whether the output came from the current workspace binary: package
 version, build profile, binary path, current directory, and workspace root.
 
+## Diagnostic output styles
+
+The default human-readable output is **tsc-compatible**. The original
+project-specific (Rust-style `error[TS....]` / ` --> `) output is preserved
+behind an explicit flag, and JSON remains explicitly opt-in.
+
+- `--diagnosticStyle <tsc|custom|json>` (alias: `--diagnostic-style`) selects the
+  renderer. Default: `tsc`.
+  - `tsc` — TypeScript-compiler-compatible text output (the default).
+  - `custom` — the original `typescript-rust` report style.
+  - `json` — machine-readable diagnostics (equivalent to `--format json`).
+- `--pretty <true|false|auto>` controls the multi-line `tsc` code-frame output.
+  Default: `auto` (pretty when stdout is a TTY, like `tsc`).
+- `--format json` continues to emit JSON (back-compat; used by the oracle
+  harness). `--format text` maps to the default `tsc` style.
+
+`--pretty false` matches `tsc`'s one-line-per-diagnostic output:
+
+```text
+src/index.ts(3,1): error TS2588: Cannot assign to 'a' because it is a constant.
+```
+
+`--pretty true` matches `tsc`'s multi-line code frame and summary footer:
+
+```text
+src/index.ts:3:1 - error TS2588: Cannot assign to 'a' because it is a constant.
+
+3 a = 3;
+  ~
+
+Found 1 error in src/index.ts:3
+```
+
+When pretty output is enabled and color is active, ANSI escape sequences match
+`tsc` (cyan file, yellow line/column, red `error`, gray code, inverse gutter,
+red squiggle). Color follows the terminal by default and honors the standard
+`NO_COLOR` / `FORCE_COLOR` environment variables for deterministic output.
+
+`--showSpans` remains a debug affordance and forces the custom span renderer
+even under the default `tsc` style.
+
+`--diagnosticStyle` is independent of `--diagnosticProfile`: the former selects
+how diagnostics are *rendered*, while the latter selects which diagnostics the
+*checker* emits (oracle-aligned `tsc` vs. cascade-suppressing `native`).
+
+The footer matches `tsc` exactly for the single-file/single-error case
+(`Found 1 error in <file>:<line>`), the same-file multi-error case
+(`Found N errors in the same file, starting at: <file>:<line>`), and the
+multi-file case (`Found N errors in M files.` followed by the `Errors  Files`
+table). Multi-line span underlining renders the span's starting line; rendering
+every line of a multi-line span is deferred (the JSON output and oracle
+comparison are unaffected).
+
 ## External Modules (v0.63)
 
 By default, unresolved non-relative package imports emit TS2307.
@@ -67,7 +120,7 @@ cargo run -p typescript-rust-cli -- --ignoreConfig examples/basic.ts
 
 ## JSON output
 
-- `--format json` prints diagnostic JSON in normal project or single-file mode.
+- `--format json` (or `--diagnosticStyle json`) prints diagnostic JSON in normal project or single-file mode.
 - `--compatReport --format json` prints compatibility-report JSON.
 - `--diagnosticProfile <tsc|native>` sets the diagnostic profile. The `tsc` profile strictly aligns with TypeScript's oracle baseline, while `native` aggressively suppresses noisy cascades at boundaries like `satisfies`. (Default: `tsc`)
 - `--jobs` is project-mode infrastructure for deterministic per-file checking only. It keeps shared prepasses serial and merges diagnostics in loaded-file order. The default is `1`.

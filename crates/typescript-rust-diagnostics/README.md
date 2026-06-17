@@ -9,7 +9,12 @@ Checked-in Rust accessors live in [`src/generated.rs`](src/generated.rs) and are
 
 - `Diagnostic::tsXXXX(...)` for TypeScript-compatible diagnostics
 - `Diagnostic::typescript_rust_* (...)` for project-specific diagnostics
-- `render_diagnostics(...)` for text output
+- `render_diagnostics(...)` for the project's custom text output
+- `render_diagnostics_tsc(...)` (with `TscRenderItem` / `TscRenderOptions`) for
+  `tsc`-compatible text output: `--pretty false` single-line form and
+  `--pretty true` code-frame form, with optional `tsc`-matching ANSI color. It is
+  a renderer only and never changes which diagnostics, spans, or messages are
+  produced.
 - `cataloged_diagnostic_descriptors()` for catalog inspection
 
 ## Regeneration
