@@ -75,7 +75,7 @@ These forms remain intentionally out of scope for v0.70.1:
 - Modern package declaration resolution is supported on the declaration side: conditional and pattern `exports`, the `imports` field, `typesVersions`, package self-name imports, and exact subpaths. Full runtime/JS entrypoint resolution and `main` parity remain out of scope.
 - explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
 - `baseUrl` resolution remains unsupported/deprecated
-- A generated default-lib foundation loads a small supported subset from the local TypeScript package as ambient default libs; an opt-in physical `lib*.d.ts` loader can load the real lib files. `noLib: true` disables the generated default libs. `@types` discovery is supported through configured `compilerOptions.types`/`typeRoots`; full automatic `@types` discovery and full lib.d.ts/Node parity remain out of scope.
+- Project mode loads the physical `lib*.d.ts` graph from the local TypeScript package as ambient default libs by default; the generated default-lib subset is the fallback used only when that package cannot be found. `noLib: true` disables both, keeping standard/DOM globals unavailable. `@types` discovery is supported through configured `compilerOptions.types`/`typeRoots`; full automatic `@types` discovery and full lib.d.ts/Node parity remain out of scope.
 - The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.
   - Ambient modules and resolved package entrypoints resolve before package stubbing.
   - Default import, namespace import, named re-export, type-only re-export, and star re-export behavior inside exact ambient modules is pinned.

@@ -3,6 +3,32 @@
 This crate tracks compatibility in narrow, oracle-backed phases rather than claiming full TypeScript parity.
 Its compatibility surfaces are raw measurements, not root-cause classifiers.
 
+## Current state
+
+- auth-kit matches TypeScript exactly at 0/0; the oracle preset sweep is 75/75
+  under the normal gate (code-count and file/code/line), and the
+  `diagnostics-pack` preset is green at exact 31/31. Message-text and span/column
+  drift are reported but non-gating unless `--strictMessages` / `--strictSpans`
+  are passed.
+- Standard/DOM/global library surfaces come from the physical `lib*.d.ts` graph
+  loaded by default from the local `typescript` package; the generated subset is
+  the fallback when that package is absent. `noLib: true` keeps the standard/DOM
+  globals unavailable.
+- A program-wide generic instantiation cache for context-free library/dependency
+  declarations and a deferred interface/alias payload clone in named-type
+  resolution (clone only on a genuine cache miss) stabilize performance without
+  changing emitted diagnostics. Regression fixtures
+  (`generic-cache-dependency-instantiation-basic`,
+  `generic-cache-module-source-not-persisted-basic`,
+  `generic-cache-unresolved-argument-diagnostics-basic`) are oracle presets.
+
+The version-tagged coverage notes below are historical. Their wall-clock medians
+predate physical-lib-by-default: the `~0.20s` auth-kit medians in the v1.2.5
+note reflect the older generated-snapshot measurement state, while the current
+physical `.d.ts` path measures higher (roughly `~0.6s` in the latest local
+measurement). Read current numbers from the `.bench/` artifacts, not these
+snapshot-era figures.
+
 ## Current coverage
 
 - v1.2.5 is a performance pass after v1.2.4, not a new TypeScript semantic
@@ -187,8 +213,10 @@ command set.
 ## Still out of scope
 
 - Full JSX semantics.
-- Full lib.d.ts parity beyond the generated subset.
-- Node and `@types` discovery.
+- Full lib.d.ts parity beyond the loaded physical-lib subset (the generated
+  subset fallback is narrower still).
+- Automatic Node and `@types` discovery (configured `compilerOptions.types` /
+  `typeRoots` packages are supported).
 - Full package resolution and package runtime exports resolution.
 - `baseUrl`, project references, and broader module-resolution heuristics.
 - Full callback contextual typing or generic callback inference.
