@@ -77,9 +77,11 @@ export type BenchStats = {
   runs: number;
 };
 
+export type RustJobValue = number | 'auto';
+
 export type BenchResult = {
   project: string;
-  rustJobs?: number;
+  rustJobs?: RustJobValue;
   stats: Record<string, BenchStats | null>;
   drift: Record<string, string>;
 };
@@ -99,14 +101,14 @@ export type ParsedArgs = {
   project: string | null;
   name: string | null;
   maxDiagnostics: number;
-  rustJobs: number[];
+  rustJobs: RustJobValue[];
   outDir: string | null;
   allowMissing: boolean;
   authKitFallback: boolean;
 };
 
 export type JobOutputPaths = {
-  jobs: number;
+  jobs: RustJobValue;
   json: string;
   html: string;
   svg: string;
@@ -163,7 +165,7 @@ export type MemoryModeResult = {
   format: string;
   compatReport: boolean;
   timings: boolean;
-  rustJobs: number | null;
+  rustJobs: RustJobValue | null;
   peakRssBytes: number | null;
   peakRssMb: number | null;
   peakRssSource: PeakRssSource;
@@ -299,7 +301,7 @@ const workspaceRoot = path.resolve(scriptDir, '../..');
 const benchDir = path.join(workspaceRoot, '.bench');
 
 const DEFAULT_MAX_DIAGNOSTICS = 500;
-const DEFAULT_RUST_JOBS = [1, 4];
+const DEFAULT_RUST_JOBS: RustJobValue[] = [1, 'auto'];
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
@@ -360,18 +362,33 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return parsed;
 }
 
-export function parseRustJobs(value: string): number[] {
-  const jobs = value
+export function parseRustJobs(value: string): RustJobValue[] {
+  const parts = value
     .split(',')
     .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .map((part) => Number(part));
+    .filter((part) => part.length > 0);
 
-  if (jobs.length === 0 || jobs.some((job) => !Number.isInteger(job) || job <= 0)) {
-    throw new Error(`--rustJobs must be a comma-separated list of positive integers, got "${value}"`);
+  if (parts.length === 0) {
+    throw new Error(`--rustJobs must be a comma-separated list of positive integers or "auto", got "${value}"`);
   }
 
-  return [...new Set(jobs)];
+  const jobs: RustJobValue[] = parts.map((part) => {
+    if (part === 'auto') {
+      return 'auto';
+    }
+    const n = Number(part);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new Error(`--rustJobs must be a comma-separated list of positive integers or "auto", got "${value}"`);
+    }
+    return n;
+  });
+
+  const seen = new Set<RustJobValue>();
+  return jobs.filter((job) => {
+    if (seen.has(job)) return false;
+    seen.add(job);
+    return true;
+  });
 }
 
 export function authKitCandidateRoots(root: string, env: NodeJS.ProcessEnv): string[] {
@@ -457,7 +474,7 @@ export function slugify(value: string): string {
   return slug.length > 0 ? slug : 'project';
 }
 
-export function outputPathsForProject(outDir: string, rustJobs: number[]): OutputPaths {
+export function outputPathsForProject(outDir: string, rustJobs: RustJobValue[]): OutputPaths {
   return {
     outDir,
     oracleCompareTxt: path.join(outDir, 'oracle-compare.txt'),
@@ -601,7 +618,7 @@ function main(argv = process.argv.slice(2)): void {
 
   writeFileSync(outputs.memoryJson, `${JSON.stringify(memoryResults.map(toMemoryJson), null, 2)}\n`);
 
-  const benchResults: Array<{ jobs: number; result: BenchResult }> = [];
+  const benchResults: Array<{ jobs: RustJobValue; result: BenchResult }> = [];
   for (const job of outputs.jobs) {
     runCommand('pnpm', [
       'exec',
@@ -967,7 +984,7 @@ function renderMeasurementMarkdown(input: {
   maxDiagnostics: number;
   oracle: OracleComparison;
   compatReport: CompatReport;
-  benchResults: Array<{ jobs: number; result: BenchResult }>;
+  benchResults: Array<{ jobs: RustJobValue; result: BenchResult }>;
   programMeasurements: ProgramMeasurements;
   memoryResults: MemoryModeResult[];
 }): string {
