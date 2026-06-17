@@ -13,7 +13,11 @@
 		"bench:compilers": "tsx scripts/bench/compare-compilers.ts",
 		"bench:archive": "tsx scripts/bench/archive-run.ts",
 		"bench:test": "tsx --test scripts/bench/compare-compilers.test.ts scripts/bench/archive-run.test.ts",
-		"real:auth-kit": "tsx scripts/real-projects/measure-auth-kit.ts"
+		"real:project": "tsx scripts/real-projects/measure-project.ts",
+		"real:test": "tsx --test scripts/real-projects/measure-project.test.ts",
+		"real:auth-kit": "tsx scripts/real-projects/measure-project.ts --name auth-kit --authKitFallback",
+		"real:trpc": "tsx scripts/real-projects/measure-project.ts --project .local-projects/trpc --name trpc --allowMissing",
+		"real:unnamed": "tsx scripts/real-projects/measure-project.ts --project ../../nextjs/unnamed --name unnamed --allowMissing"
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.3",
