@@ -704,6 +704,76 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "surge-ts-checker"
+version = "0.1.0"
+dependencies = [
+ "oxc_allocator",
+ "serde",
+ "surge-ts-diagnostics",
+ "surge-ts-syntax",
+ "surge-ts-types",
+ "toml",
+]
+
+[[package]]
+name = "surge-ts-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde_json",
+ "surge-ts-checker",
+ "surge-ts-config",
+ "surge-ts-diagnostics",
+ "surge-ts-syntax",
+ "thiserror",
+]
+
+[[package]]
+name = "surge-ts-config"
+version = "0.1.0"
+dependencies = [
+ "globset",
+ "jsonc-parser",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "walkdir",
+]
+
+[[package]]
+name = "surge-ts-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "surge-ts-diagnostics-codegen",
+ "toml",
+]
+
+[[package]]
+name = "surge-ts-diagnostics-codegen"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "surge-ts-syntax"
+version = "0.1.0"
+dependencies = [
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_parser",
+ "oxc_span",
+ "oxc_syntax",
+]
+
+[[package]]
+name = "surge-ts-types"
+version = "0.1.0"
+
+[[package]]
 name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -785,76 +855,6 @@ name = "toml_write"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
-
-[[package]]
-name = "typescript-rust-checker"
-version = "0.1.0"
-dependencies = [
- "oxc_allocator",
- "serde",
- "toml",
- "typescript-rust-diagnostics",
- "typescript-rust-syntax",
- "typescript-rust-types",
-]
-
-[[package]]
-name = "typescript-rust-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "serde_json",
- "thiserror",
- "typescript-rust-checker",
- "typescript-rust-config",
- "typescript-rust-diagnostics",
- "typescript-rust-syntax",
-]
-
-[[package]]
-name = "typescript-rust-config"
-version = "0.1.0"
-dependencies = [
- "globset",
- "jsonc-parser",
- "serde",
- "serde_json",
- "thiserror",
- "walkdir",
-]
-
-[[package]]
-name = "typescript-rust-diagnostics"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "toml",
- "typescript-rust-diagnostics-codegen",
-]
-
-[[package]]
-name = "typescript-rust-diagnostics-codegen"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "typescript-rust-syntax"
-version = "0.1.0"
-dependencies = [
- "oxc_allocator",
- "oxc_ast",
- "oxc_parser",
- "oxc_span",
- "oxc_syntax",
-]
-
-[[package]]
-name = "typescript-rust-types"
-version = "0.1.0"
 
 [[package]]
 name = "unicode-id-start"

@@ -8,6 +8,12 @@ export type BenchReportResult = {
   drift: Record<string, string>;
 };
 
+// The internal tool key `ts-rust` is kept stable as a JSON/stats key for
+// backward-compatible archives; only the user-facing label renders as surge-ts.
+export function toolDisplayLabel(tool: string): string {
+  return tool === 'ts-rust' ? 'surge-ts' : tool;
+}
+
 function escapeHtml(unsafe: string): string {
   return unsafe
     .replace(/&/g, "&amp;")
@@ -59,7 +65,8 @@ export function renderBenchmarkSvg(results: BenchReportResult[]): string {
       const drift = tool !== 'tsc' ? r.drift[tool] : '';
       const driftColor = drift === 'exact vs tsc' ? 'green' : 'red';
       const driftText = drift ? ` [${escapeHtml(drift)}]` : '';
-      const toolLabel = tool === 'ts-rust' && r.rustJobs !== undefined ? `${tool} (jobs=${r.rustJobs})` : tool;
+      const baseLabel = toolDisplayLabel(tool);
+      const toolLabel = tool === 'ts-rust' && r.rustJobs !== undefined ? `${baseLabel} (jobs=${r.rustJobs})` : baseLabel;
 
       const width = (stats.median / maxTime) * plotWidth;
       const color = toolColors[tool] || '#ccc';

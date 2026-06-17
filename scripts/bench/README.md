@@ -6,14 +6,14 @@ It is **not** a marketing benchmark. It compares the same `tsconfig.json` inputs
 
 1. JavaScript TypeScript compiler (`tsc`, pinned through workspace dependency)
 2. TypeScript native Go compiler (`tsgo`, optional)
-3. `typescript-rust` CLI (using the release binary, not `cargo run`)
+3. `surge-ts` CLI (using the release binary, not `cargo run`)
 
 ## Requirements
 
 1. **Release Binary Required:** The benchmark tests the prebuilt release binary, not debug builds. Build it first:
 
     ```bash
-    cargo build --release -p typescript-rust-cli
+    cargo build --release -p surge-ts-cli
     ```
 
 2. **`tsgo` is Included When Available:** `@typescript/native-preview` does not need to be installed globally. If `tsgo` is present in the workspace, the harness will benchmark it automatically and still cleanly skip it when it is unavailable.
@@ -25,8 +25,8 @@ The benchmark compares **no-emit project checking** only:
 
 - `tsc --noEmit --pretty false --project <tsconfig>`
 - `tsgo --noEmit --pretty false --project <tsconfig>`
-- `typescript-rust-cli --project <tsconfig> --format json --maxDiagnostics 10000`
-- `typescript-rust-cli --project <tsconfig> --format json --maxDiagnostics 10000 --jobs <n>` for deterministic project-checking measurements with explicit Rust worker counts
+- `surge-ts --project <tsconfig> --format json --maxDiagnostics 10000`
+- `surge-ts --project <tsconfig> --format json --maxDiagnostics 10000 --jobs <n>` for deterministic project-checking measurements with explicit Rust worker counts
 
 It does not measure watch mode, incremental builds, project references, emitting, or editor performance.
 
@@ -113,7 +113,7 @@ default.
 To verify the harness itself:
 
 ```bash
-cargo build --release -p typescript-rust-cli
+cargo build --release -p surge-ts-cli
 pnpm run bench:test
 ```
 

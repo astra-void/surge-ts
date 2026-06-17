@@ -11,7 +11,7 @@ const TYPESCRIPT_PACKAGE_JSON = path.join(WORKSPACE_ROOT, "node_modules/typescri
 const TYPESCRIPT_LIB_DIR = path.join(WORKSPACE_ROOT, "node_modules/typescript/lib");
 const OUTPUT_DIR = path.join(
   WORKSPACE_ROOT,
-  "crates/typescript-rust-checker/generated-libs",
+  "crates/surge-ts-checker/generated-libs",
 );
 const ES_LIB_SOURCE = path.join(TYPESCRIPT_LIB_DIR, "lib.es5.d.ts");
 const ES_COLLECTION_LIB_SOURCE = path.join(TYPESCRIPT_LIB_DIR, "lib.es2015.collection.d.ts");

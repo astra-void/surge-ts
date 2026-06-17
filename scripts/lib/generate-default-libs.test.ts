@@ -35,11 +35,11 @@ test("generateDefaultLibs writes deterministic generated files with the supporte
 
   const esPath = path.join(
     workspaceRoot,
-    "crates/typescript-rust-checker/generated-libs/lib.es.generated.d.ts",
+    "crates/surge-ts-checker/generated-libs/lib.es.generated.d.ts",
   );
   const domPath = path.join(
     workspaceRoot,
-    "crates/typescript-rust-checker/generated-libs/lib.dom.generated.d.ts",
+    "crates/surge-ts-checker/generated-libs/lib.dom.generated.d.ts",
   );
 
   const esSource = fs.readFileSync(esPath, "utf8");

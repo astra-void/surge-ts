@@ -10,9 +10,9 @@ TypeScript package installed in `node_modules`.
 
 ## Output
 
-- `crates/typescript-rust-checker/generated-libs/lib.es.generated.d.ts`
-- `crates/typescript-rust-checker/generated-libs/lib.dom.generated.d.ts`
-- `crates/typescript-rust-checker/generated-libs/manifest.json`
+- `crates/surge-ts-checker/generated-libs/lib.es.generated.d.ts`
+- `crates/surge-ts-checker/generated-libs/lib.dom.generated.d.ts`
+- `crates/surge-ts-checker/generated-libs/manifest.json`
 
 ## Usage
 

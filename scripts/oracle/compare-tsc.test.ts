@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import {
   buildTypeScriptCommand,
-  buildTypeScriptRustCommand,
+  buildSurgeTsCommand,
   compareDiagnostics,
   compareMessages,
   countDiagnostics,
@@ -15,7 +15,7 @@ import {
   formatDiagnosticFingerprintEntry,
   parseArgs,
   parseTypeScriptDiagnostics,
-  parseTypeScriptRustDiagnostics,
+  parseSurgeTsDiagnostics,
   renderComparisonText,
   resolveFilePath,
   resolveOracleMode,
@@ -70,7 +70,7 @@ function parses_typescript_output(): void {
 }
 
 function parses_rust_output(): void {
-  const diagnostics = parseTypeScriptRustDiagnostics(
+  const diagnostics = parseSurgeTsDiagnostics(
     JSON.stringify({
       diagnostics: [
         {
@@ -87,7 +87,7 @@ function parses_rust_output(): void {
 
   assert.equal(diagnostics.length, 1);
   assert.deepEqual(diagnostics[0], {
-    source: 'typescript-rust',
+    source: 'surge-ts',
     code: 'TS2307',
     fileName: 'src/index.ts',
     line: 1,
@@ -101,7 +101,7 @@ function counts_diagnostic_keys(): void {
     [
       { source: 'typescript', code: 'TS2322', fileName: 'src/a.ts' },
       { source: 'typescript', code: 'TS2322', fileName: 'src/b.ts' },
-      { source: 'typescript-rust', code: 'TS2304', fileName: 'src/a.ts' },
+      { source: 'surge-ts', code: 'TS2304', fileName: 'src/a.ts' },
     ],
     (diagnostic) => diagnostic.code,
   );
@@ -149,12 +149,12 @@ function builds_commands(): void {
     'pnpm exec tsc --noEmit --pretty false --ignoreConfig examples/basic.ts',
   );
   assert.match(
-    buildTypeScriptRustCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json').replace(/\\/g, '/'),
-    /cargo run -q --manifest-path .*Cargo\.toml -p typescript-rust-cli -- --project tests\/compat-projects\/generics-basic\/tsconfig\.json --format json/,
+    buildSurgeTsCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json').replace(/\\/g, '/'),
+    /cargo run -q --manifest-path .*Cargo\.toml -p surge-ts-cli -- --project tests\/compat-projects\/generics-basic\/tsconfig\.json --format json/,
   );
   assert.match(
-    buildTypeScriptRustCommand('file', 'examples/basic.ts', true).replace(/\\/g, '/'),
-    /cargo run -q --manifest-path .*Cargo\.toml -p typescript-rust-cli -- --format json --ignoreConfig examples\/basic\.ts/,
+    buildSurgeTsCommand('file', 'examples/basic.ts', true).replace(/\\/g, '/'),
+    /cargo run -q --manifest-path .*Cargo\.toml -p surge-ts-cli -- --format json --ignoreConfig examples\/basic\.ts/,
   );
 }
 
@@ -174,7 +174,7 @@ function compares_raw_fingerprints(): void {
     ],
     [
       {
-        source: 'typescript-rust',
+        source: 'surge-ts',
         code: 'TS2322',
         fileName: 'src/right.ts',
         line: 1,
@@ -182,7 +182,7 @@ function compares_raw_fingerprints(): void {
         message: 'Type mismatch',
       },
       {
-        source: 'typescript-rust',
+        source: 'surge-ts',
         code: 'TS2307',
         fileName: 'src/right.ts',
         line: 2,
@@ -190,7 +190,7 @@ function compares_raw_fingerprints(): void {
         message: "Cannot find module 'pkg' or its corresponding type declarations.",
       },
       {
-        source: 'typescript-rust',
+        source: 'surge-ts',
         code: 'TS2304',
         fileName: 'src/right.ts',
         line: 3,
@@ -198,7 +198,7 @@ function compares_raw_fingerprints(): void {
         message: "Cannot find name 'missingValue'.",
       },
       {
-        source: 'typescript-rust',
+        source: 'surge-ts',
         code: 'TS2305',
         fileName: 'src/right.ts',
         line: 4,
@@ -210,13 +210,13 @@ function compares_raw_fingerprints(): void {
 
   assert.equal(comparison.summary.byCodeMatch, false);
   assert.equal(comparison.details?.onlyTypeScript?.rawDiagnosticFingerprints?.length, 1);
-  assert.equal(comparison.details?.onlyTypeScriptRust?.rawDiagnosticFingerprints?.length, 4);
-  assert.equal(comparison.details?.onlyTypeScriptRust?.rawDiagnosticFingerprints?.[0]?.code, 'TS2322');
-  assert.equal(comparison.details?.onlyTypeScriptRust?.rawTs2307ModuleSpecifiers?.[0].key, 'pkg');
-  assert.equal(comparison.details?.onlyTypeScriptRust?.rawTs2304Identifiers?.[0].key, 'missingValue');
-  assert.equal(comparison.details?.onlyTypeScriptRust?.rawTs2305ModuleExports?.[0].moduleSpecifier, 'pkg');
+  assert.equal(comparison.details?.onlySurgeTs?.rawDiagnosticFingerprints?.length, 4);
+  assert.equal(comparison.details?.onlySurgeTs?.rawDiagnosticFingerprints?.[0]?.code, 'TS2322');
+  assert.equal(comparison.details?.onlySurgeTs?.rawTs2307ModuleSpecifiers?.[0].key, 'pkg');
+  assert.equal(comparison.details?.onlySurgeTs?.rawTs2304Identifiers?.[0].key, 'missingValue');
+  assert.equal(comparison.details?.onlySurgeTs?.rawTs2305ModuleExports?.[0].moduleSpecifier, 'pkg');
   assert.equal(
-    formatDiagnosticFingerprintEntry(comparison.details?.onlyTypeScriptRust?.rawDiagnosticFingerprints?.[0] ?? {
+    formatDiagnosticFingerprintEntry(comparison.details?.onlySurgeTs?.rawDiagnosticFingerprints?.[0] ?? {
       fileName: 'src/right.ts',
       code: 'TS2322',
       line: 1,
@@ -239,9 +239,9 @@ function compares_message_parity(): void {
       { source: 'typescript', code: 'TS2322', fileName: 'src/a.ts', line: 9, column: 5, message: "Type 'number' is not assignable to type 'string'." },
     ],
     [
-      { source: 'typescript-rust', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type '1' is not assignable to parameter of type 'string'." },
-      { source: 'typescript-rust', code: 'TS2554', fileName: 'src/a.ts', line: 6, column: 1, message: 'Expected 1 arguments, but got 2.' },
-      { source: 'typescript-rust', code: 'TS2322', fileName: 'src/a.ts', line: 9, column: 26, message: "Type '1' is not assignable to type 'string'." },
+      { source: 'surge-ts', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type '1' is not assignable to parameter of type 'string'." },
+      { source: 'surge-ts', code: 'TS2554', fileName: 'src/a.ts', line: 6, column: 1, message: 'Expected 1 arguments, but got 2.' },
+      { source: 'surge-ts', code: 'TS2322', fileName: 'src/a.ts', line: 9, column: 26, message: "Type '1' is not assignable to type 'string'." },
     ],
   );
 
@@ -255,7 +255,7 @@ function compares_message_parity(): void {
     line: 7,
     column: 7,
     typescript: "Argument of type 'number' is not assignable to parameter of type 'string'.",
-    typescriptRust: "Argument of type '1' is not assignable to parameter of type 'string'.",
+    surgeTs: "Argument of type '1' is not assignable to parameter of type 'string'.",
   });
 }
 
@@ -267,7 +267,7 @@ function renders_message_parity(): void {
       { source: 'typescript', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type 'number' is not assignable to parameter of type 'string'." },
     ],
     [
-      { source: 'typescript-rust', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type '1' is not assignable to parameter of type 'string'." },
+      { source: 'surge-ts', code: 'TS2345', fileName: 'src/a.ts', line: 7, column: 7, message: "Argument of type '1' is not assignable to parameter of type 'string'." },
     ],
   );
 
@@ -297,7 +297,7 @@ function renders_raw_sections(): void {
     ],
     [
       {
-        source: 'typescript-rust',
+        source: 'surge-ts',
         code: 'TS2307',
         fileName: 'src/right.ts',
         line: 2,

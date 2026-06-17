@@ -1,0 +1,14 @@
+[package]
+name = "surge-ts-checker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+oxc_allocator = "0.128.0"
+surge-ts-diagnostics = { version = "0.1.0", path = "../surge-ts-diagnostics" }
+surge-ts-syntax = { version = "0.1.0", path = "../surge-ts-syntax" }
+surge-ts-types = { version = "0.1.0", path = "../surge-ts-types" }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

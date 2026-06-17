@@ -1,11 +1,11 @@
 [workspace]
 members = [
-  "crates/typescript-rust-cli",
-  "crates/typescript-rust-syntax",
-  "crates/typescript-rust-checker",
-  "crates/typescript-rust-diagnostics",
-  "crates/typescript-rust-diagnostics-codegen",
-  "crates/typescript-rust-types",
-  "crates/typescript-rust-config",
+  "crates/surge-ts-cli",
+  "crates/surge-ts-syntax",
+  "crates/surge-ts-checker",
+  "crates/surge-ts-diagnostics",
+  "crates/surge-ts-diagnostics-codegen",
+  "crates/surge-ts-types",
+  "crates/surge-ts-config",
 ]
 resolver = "2"

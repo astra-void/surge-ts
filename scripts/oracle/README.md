@@ -1,7 +1,7 @@
 # TypeScript Oracle Comparison
 
 This workspace keeps a pinned root `typescript` dev dependency and a small
-comparison harness for measuring `typescript-rust` against the TypeScript
+comparison harness for measuring `surge-ts` against the TypeScript
 compiler.
 
 v0.68 uses oracle comparisons to validate emitted diagnostic coverage. The new `diagnostics-pack` fixture is a synthetic example that should stay tiny and reviewable while still exercising real checker emission paths.
@@ -11,10 +11,10 @@ The Node toolchain is dev-only. Rust crates do not depend on Node tooling, and
 
 ## Known Mismatches
 
-- **Duplicate Declarations (`TS2393`, `TS2451`)**: TypeScript reports diagnostics on *both* the original declaration and the duplicate. `typescript-rust` reports it on only one.
+- **Duplicate Declarations (`TS2393`, `TS2451`)**: TypeScript reports diagnostics on *both* the original declaration and the duplicate. `surge-ts` reports it on only one.
 - **Control Flow (`TS2454`)**: TypeScript sometimes emits multiple use-before-assignment diagnostics for the same variable in complex assignments.
-- **Generic Arity (`TS2314`, `TS2315`)**: TypeScript reports the error on the *usage* site (e.g. the variable declaration). `typescript-rust` reports it using the span of the *type declaration*.
-- **Implicit Any (`TS7005`)**: `typescript-rust` reports this for uninitialized variables globally if `strict` is enabled, while TypeScript has more complex usage-based inference.
+- **Generic Arity (`TS2314`, `TS2315`)**: TypeScript reports the error on the *usage* site (e.g. the variable declaration). `surge-ts` reports it using the span of the *type declaration*.
+- **Implicit Any (`TS7005`)**: `surge-ts` reports this for uninitialized variables globally if `strict` is enabled, while TypeScript has more complex usage-based inference.
 
 ## Lockfile policy
 
@@ -64,15 +64,15 @@ Compare a project while suppressing external package missing-module errors:
 ```bash
 pnpm run oracle:compare -- --project package-imports --stubExternalModules
 ```
-*Note: `--stubExternalModules` is a typescript-rust-only compatibility flag. The oracle does not pass it to TypeScript. In this mode, typescript-rust suppresses non-relative missing-module diagnostics, including TS2307 and the side-effect-import TS2882 form, while TypeScript still reports its normal diagnostics.*
+*Note: `--stubExternalModules` is a surge-ts-only compatibility flag. The oracle does not pass it to TypeScript. In this mode, surge-ts suppresses non-relative missing-module diagnostics, including TS2307 and the side-effect-import TS2882 form, while TypeScript still reports its normal diagnostics.*
 
 Compare a project while requesting deterministic parallel project checking:
 
 ```bash
 pnpm run oracle:compare -- --project tests/compat-projects/parallel-ordering-basic/tsconfig.json --rustJobs 4
 ```
-`--rustJobs` only affects the `typescript-rust` command. It does not change the `tsc` baseline or the oracle comparison rules.
-The rendered comparison also prints the exact `typescript-rust` command and the explicit job count so stale-binary and wrong-workspace confusion is easier to spot.
+`--rustJobs` only affects the `surge-ts` command. It does not change the `tsc` baseline or the oracle comparison rules.
+The rendered comparison also prints the exact `surge-ts` command and the explicit job count so stale-binary and wrong-workspace confusion is easier to spot.
 
 The `package-imports` fixture pins TypeScript 6.0.3 behavior for unresolved
 package imports: ordinary imports and re-exports remain TS2307, while a bare
@@ -201,7 +201,7 @@ prints the full per-preset oracle output. `--json` emits a stable object with
   `(fileName, code, line)` where both sides have line data.
 - Reports message parity: diagnostics that share an exact
   `(fileName, code, line, column)` are paired, and any remaining message-text
-  difference is listed with the `tsc` and `typescript-rust` text side by side.
+  difference is listed with the `tsc` and `surge-ts` text side by side.
   Pairs whose spans differ are left to the span-level levels, so this section
   isolates pure message-text drift.
 

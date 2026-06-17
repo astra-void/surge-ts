@@ -105,13 +105,13 @@ test('extractAuthKitCounts parses measurement markdown', () => {
   const md = [
     '## Raw Totals',
     '- TypeScript total diagnostics: 12',
-    '- typescript-rust total diagnostics: 12',
+    '- surge-ts total diagnostics: 12',
     '- code-count match: yes',
   ].join('\n');
   const counts = extractAuthKitCounts(md);
   assert.ok(counts);
   assert.strictEqual(counts?.typescriptTotal, 12);
-  assert.strictEqual(counts?.typescriptRustTotal, 12);
+  assert.strictEqual(counts?.surgeTsTotal, 12);
   assert.strictEqual(counts?.codeCountMatch, true);
 
   assert.strictEqual(extractAuthKitCounts('nothing relevant here'), null);

@@ -7,12 +7,12 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
-import { renderBenchmarkSvg, renderBenchmarkHtml } from './report.js';
+import { renderBenchmarkSvg, renderBenchmarkHtml, toolDisplayLabel } from './report.js';
 
 import {
   resolveProjectPresetOrPath,
   parseTypeScriptDiagnostics,
-  parseTypeScriptRustDiagnostics,
+  parseSurgeTsDiagnostics,
   compareDiagnostics,
   type NormalizedDiagnostic
 } from '../oracle/compare-tsc.js';
@@ -170,12 +170,12 @@ function main(argv = process.argv.slice(2)): void {
        console.log(`  tsgo skipped (not installed). Use pnpm add -g @typescript/native-preview to install.`);
     }
 
-    // 3. ts-rust
-    console.log(`  Running ts-rust baseline...`);
+    // 3. surge-ts (internal tool key: ts-rust)
+    console.log(`  Running surge-ts baseline...`);
     const rustOutput = runTool('ts-rust', resolvedTsconfig, 1, 0, args.rustJobs);
     const rustDiagnosticsOutput = rustOutput.stdout.trim() ? rustOutput.stdout : rustOutput.stderr;
     try {
-      const rustDiagnostics = parseTypeScriptRustDiagnostics(rustDiagnosticsOutput, path.dirname(resolvedTsconfig));
+      const rustDiagnostics = parseSurgeTsDiagnostics(rustDiagnosticsOutput, path.dirname(resolvedTsconfig));
       const rustCompare = compareDiagnostics('project', projectDisplay, tscDiagnostics, rustDiagnostics);
       if (rustCompare.summary.byCodeMatch && rustCompare.summary.byFileCodeMatch) {
          benchRes.drift['ts-rust'] = 'exact vs tsc';
@@ -241,11 +241,11 @@ function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rus
     } else if (tool === 'tsgo-singleThreaded') {
       res = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, 'exec', 'tsgo', '--noEmit', '--pretty', 'false', '--singleThreaded', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
     } else if (tool === 'ts-rust') {
-      let exePath = path.join(workspaceRoot, 'target/release/typescript-rust-cli');
+      let exePath = path.join(workspaceRoot, 'target/release/surge');
       if (process.platform === 'win32') exePath += '.exe';
       if (!existsSync(exePath)) {
-        console.error(`Missing release binary: target/release/typescript-rust-cli${process.platform === 'win32' ? '.exe' : ''}`);
-        console.error(`Run: cargo build --release -p typescript-rust-cli`);
+        console.error(`Missing release binary: target/release/surge${process.platform === 'win32' ? '.exe' : ''}`);
+        console.error(`Run: cargo build --release -p surge-ts-cli`);
         process.exit(1);
       }
       res = spawnSync(exePath, ['--project', tsconfig, '--format', 'json', '--maxDiagnostics', '10000', '--jobs', String(rustJobs)], { cwd: workspaceRoot, encoding: 'utf8' });
@@ -323,7 +323,7 @@ function printResults(results: BenchResult[]) {
     for (const tool of ['tsc', 'tsgo', 'tsgo-singleThreaded', 'ts-rust'] as Tool[]) {
       if (r.stats[tool]) {
         const s = r.stats[tool]!;
-        const toolLabel = tool === 'ts-rust' ? `${tool} (jobs=${r.rustJobs})` : tool;
+        const toolLabel = tool === 'ts-rust' ? `${toolDisplayLabel(tool)} (jobs=${r.rustJobs})` : toolDisplayLabel(tool);
         console.log(`${`${r.project.padEnd(30)}${toolLabel.padEnd(25)}${s.median.toFixed(2)}s`.padEnd(65) + `${s.min.toFixed(2)}s`.padEnd(10) + `${s.max.toFixed(2)}s`.padEnd(10)}${s.runs}`);
       }
     }
@@ -334,7 +334,7 @@ function printResults(results: BenchResult[]) {
   for (const r of results) {
     for (const tool of ['tsgo', 'tsgo-singleThreaded', 'ts-rust'] as Tool[]) {
       if (r.drift[tool] !== 'skipped') {
-         console.log(`${r.project.padEnd(30)}${tool.padEnd(25)}${r.drift[tool]}`);
+         console.log(`${r.project.padEnd(30)}${toolDisplayLabel(tool).padEnd(25)}${r.drift[tool]}`);
       }
     }
   }

@@ -1,0 +1,21 @@
+[package]
+name = "surge-ts-cli"
+version = "0.1.0"
+edition = "2024"
+description = "surge-ts is a Rust-based TypeScript noEmit compatibility checker."
+
+# Public CLI command is `surge-ts`; the package name is `surge-ts-cli`.
+[[bin]]
+name = "surge"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+thiserror = "2.0.18"
+# `preserve_order` keeps package.json object key order, which determines
+# conditional-`exports`/`imports` priority during package resolution.
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
+surge-ts-checker = { version = "0.1.0", path = "../surge-ts-checker" }
+surge-ts-config = { version = "0.1.0", path = "../surge-ts-config" }
+surge-ts-diagnostics = { version = "0.1.0", path = "../surge-ts-diagnostics" }
+surge-ts-syntax = { version = "0.1.0", path = "../surge-ts-syntax" }

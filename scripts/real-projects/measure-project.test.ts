@@ -28,7 +28,7 @@ const MACOS_TIME_REPORT = [
 ].join('\n');
 
 const LINUX_TIME_REPORT = [
-  '\tCommand being timed: "target/release/typescript-rust-cli --project tsconfig.json"',
+  '\tCommand being timed: "target/release/surge --project tsconfig.json"',
   '\tUser time (seconds): 0.40',
   '\tMaximum resident set size (kbytes): 166992',
   '\tExit status: 0',

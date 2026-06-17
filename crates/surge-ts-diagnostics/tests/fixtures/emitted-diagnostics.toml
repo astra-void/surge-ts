@@ -1,0 +1,571 @@
+[TS5112]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+]
+oracle = [
+  "CLI tests",
+]
+
+[TS1360]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/satisfies-basic",
+]
+
+[TS2304]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+  "crates/surge-ts-checker/tests/generics_spans.rs",
+  "crates/surge-ts-checker/tests/generics.rs",
+  "crates/surge-ts-checker/tests/example_spans.rs",
+  "crates/surge-ts-checker/tests/compatibility.rs",
+]
+
+[TS2300]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2717]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+  "tests/compat-projects/interface-merging-conflict-basic/tsconfig.json",
+]
+oracle = [
+  "tests/compat-projects/interface-merging-conflict-basic/tsconfig.json",
+]
+
+[TS2305]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2614]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/compat-projects/package-declarations",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2306]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2307]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/program.rs",
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2882]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2314]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/generics.rs",
+  "crates/surge-ts-checker/tests/generics_spans.rs",
+]
+
+[TS2315]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/generics.rs",
+  "crates/surge-ts-checker/tests/generics_spans.rs",
+]
+
+[TS2322]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "crates/surge-ts-cli/tests/json_diagnostics.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+  "crates/surge-ts-checker/tests/generics_spans.rs",
+  "crates/surge-ts-checker/tests/generics.rs",
+  "crates/surge-ts-checker/tests/example_spans.rs",
+  "crates/surge-ts-checker/tests/compatibility.rs",
+]
+
+[TS2339]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/example_spans.rs",
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2344]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/utility-types-basic/src/index.ts",
+  "tests/smoke/generic_keyof_constraint_explicit_key_mismatch.ts",
+  "tests/smoke/generic_keyof_constraint_explicit_union_key_mismatch.ts",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/generics_spans.rs",
+]
+
+[TS2345]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+  "crates/surge-ts-checker/tests/example_spans.rs",
+]
+
+[TS2349]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2351]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2352]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2353]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/compatibility.rs",
+]
+
+[TS2355]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+[TS2356]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2362]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/example_spans.rs",
+]
+
+[TS2363]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2365]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/example_spans.rs",
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2366]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+[TS2367]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/example_spans.rs",
+]
+
+[TS2393]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2394]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2448]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+[TS2451]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2454]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+[TS2493]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/indexed-access-basic/src/index.ts",
+]
+
+[TS2536]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2538]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/indexed-access-basic/src/index.ts",
+]
+
+[TS2551]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2552]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/catch-binding-scope-basic/src/index.ts",
+]
+
+[TS2554]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2576]
+status = "emitted"
+span_tests = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "tests/compat-projects/class-instance-static-separation-basic",
+]
+
+[TS2588]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/program.rs",
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2580]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/type-roots-ignore-default-node-modules-basic/tsconfig.json",
+]
+oracle = [
+  "tests/compat-projects/type-roots-ignore-default-node-modules-basic/tsconfig.json",
+]
+
+[TS2591]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/no-node-types-buffer-process-basic/src/index.ts",
+]
+
+[TS2688]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/compat-projects/configured-types-missing-basic/tsconfig.json",
+]
+oracle = [
+  "tests/compat-projects/configured-types-missing-basic/tsconfig.json",
+]
+
+[TS2693]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/generics.rs",
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+[TS2741]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/compatibility.rs",
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2745]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/jsx-children-basic/tsconfig.json",
+]
+
+[TS2749]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2872]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS2873]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS7005]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS7006]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/generics.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS7019]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7030]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7031]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/binding-pattern-parameters-basic/tsconfig.json",
+  "tests/compat-projects/trpc-like-callbacks-basic/tsconfig.json",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+]
+
+[TS7034]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7051]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7052]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7053]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7054]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7055]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7056]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7057]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7058]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7059]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7060]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS7061]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+["surge::parser-error"]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+["surge::duplicate-type-parameter"]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/generics_spans.rs",
+  "crates/surge-ts-checker/tests/generics.rs",
+]
+
+["surge::duplicate-default-export"]
+status = "emitted"
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+["surge::unsupported-module-syntax"]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+["surge::unsupported-declaration"]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/generics.rs",
+  "tests/smoke/manifest.toml",
+]
+span_tests = [
+  "crates/surge-ts-checker/tests/spans.rs",
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
+["surge::type-alias-cycle"]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]
+
+["surge::type-declaration-cycle"]
+status = "emitted"
+fixtures = [
+  "tests/smoke/manifest.toml",
+]

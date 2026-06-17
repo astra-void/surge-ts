@@ -14,6 +14,7 @@ import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { toolDisplayLabel } from '../bench/report.js';
 
 export type DiagnosticFingerprint = {
   fileName: string;
@@ -27,7 +28,7 @@ export type DiagnosticFingerprint = {
 export type CountBucket = {
   key: string;
   typescript: number;
-  typescriptRust: number;
+  surgeTs: number;
 };
 
 export type OracleComparison = {
@@ -37,12 +38,12 @@ export type OracleComparison = {
     total: number;
     byCode: Array<{ key: string; count: number }>;
   };
-  typescriptRust: {
+  surgeTs: {
     total: number;
   };
   matches?: {
     onlyTypeScriptFileCodeLine?: CountBucket[];
-    onlyTypeScriptRustFileCodeLine?: CountBucket[];
+    onlySurgeTsFileCodeLine?: CountBucket[];
   };
   summary: {
     byCodeMatch: boolean;
@@ -53,7 +54,7 @@ export type OracleComparison = {
     onlyTypeScript?: {
       rawDiagnosticFingerprints?: DiagnosticFingerprint[];
     };
-    onlyTypeScriptRust?: {
+    onlySurgeTs?: {
       rawDiagnosticFingerprints?: DiagnosticFingerprint[];
     };
   };
@@ -517,7 +518,7 @@ function main(argv = process.argv.slice(2)): void {
   writeFileSync(outputs.oracleCompareJson, `${oracleJson}\n`);
   const oracle = JSON.parse(oracleJson) as OracleComparison;
 
-  runCommand('cargo', ['build', '--release', '-p', 'typescript-rust-cli']);
+  runCommand('cargo', ['build', '--release', '-p', 'surge-ts-cli']);
 
   const binary = releaseBinaryPath();
   const memoryResults: MemoryModeResult[] = [];
@@ -534,7 +535,7 @@ function main(argv = process.argv.slice(2)): void {
   assertMeasuredOk(compatReportResult);
   memoryResults.push(
     toMemoryModeResult(compatReportResult, {
-      command: 'ts-rust',
+      command: 'surge-ts',
       mode: 'compatReport json + timings',
       format: 'json',
       compatReport: true,
@@ -553,7 +554,7 @@ function main(argv = process.argv.slice(2)): void {
   // construction. jobs>1 variants expose any per-worker context duplication.
   memoryResults.push(
     measureRustMode(binary, project.tsconfig, [], {
-      command: 'ts-rust',
+      command: 'surge-ts',
       mode: 'default tsc renderer',
       format: 'text',
       compatReport: false,
@@ -561,7 +562,7 @@ function main(argv = process.argv.slice(2)): void {
       rustJobs: 1,
     }),
     measureRustMode(binary, project.tsconfig, ['--format', 'json'], {
-      command: 'ts-rust',
+      command: 'surge-ts',
       mode: 'json',
       format: 'json',
       compatReport: false,
@@ -569,7 +570,7 @@ function main(argv = process.argv.slice(2)): void {
       rustJobs: 1,
     }),
     measureRustMode(binary, project.tsconfig, ['--compatReport', '--format', 'json'], {
-      command: 'ts-rust',
+      command: 'surge-ts',
       mode: 'compatReport json',
       format: 'json',
       compatReport: true,
@@ -583,7 +584,7 @@ function main(argv = process.argv.slice(2)): void {
     }
     memoryResults.push(
       measureRustMode(binary, project.tsconfig, ['--format', 'json', '--jobs', String(job)], {
-        command: 'ts-rust',
+        command: 'surge-ts',
         mode: `json (jobs=${job})`,
         format: 'json',
         compatReport: false,
@@ -802,7 +803,7 @@ function extractBalancedJson(text: string, start: number): string | null {
 }
 
 function releaseBinaryPath(): string {
-  const binary = path.join(workspaceRoot, 'target', 'release', 'typescript-rust-cli');
+  const binary = path.join(workspaceRoot, 'target', 'release', 'surge');
   return process.platform === 'win32' ? `${binary}.exe` : binary;
 }
 
@@ -972,10 +973,10 @@ function renderMeasurementMarkdown(input: {
 }): string {
   const { oracle, compatReport, programMeasurements } = input;
   const rawOnlyTs = oracle.details?.onlyTypeScript?.rawDiagnosticFingerprints ?? [];
-  const rawOnlyRust = oracle.details?.onlyTypeScriptRust?.rawDiagnosticFingerprints ?? [];
+  const rawOnlyRust = oracle.details?.onlySurgeTs?.rawDiagnosticFingerprints ?? [];
   const fileCodeLineMismatch =
     (oracle.matches?.onlyTypeScriptFileCodeLine?.length ?? 0) +
-    (oracle.matches?.onlyTypeScriptRustFileCodeLine?.length ?? 0);
+    (oracle.matches?.onlySurgeTsFileCodeLine?.length ?? 0);
 
   const lines: string[] = [
     `# ${input.name} Measurement`,
@@ -994,17 +995,17 @@ function renderMeasurementMarkdown(input: {
     '',
     '## Oracle Comparison',
     `- TypeScript total diagnostics: ${oracle.typescript.total}`,
-    `- typescript-rust total diagnostics: ${oracle.typescriptRust.total}`,
+    `- surge-ts total diagnostics: ${oracle.surgeTs.total}`,
     `- code-count match: ${boolToYesNo(oracle.summary.byCodeMatch)}`,
     `- file/code match: ${boolToYesNo(oracle.summary.byFileCodeMatch)}`,
     `- file/code/line match: ${oracle.summary.byFileCodeLineMatch === null ? 'n/a' : boolToYesNo(oracle.summary.byFileCodeLineMatch)}`,
     `- only-TypeScript diagnostics: ${sumFingerprints(rawOnlyTs)}`,
-    `- only-typescript-rust diagnostics: ${sumFingerprints(rawOnlyRust)}`,
+    `- only-surge-ts diagnostics: ${sumFingerprints(rawOnlyRust)}`,
     '',
     '### Only TypeScript Fingerprints',
     ...formatFingerprintList(rawOnlyTs),
     '',
-    '### Only typescript-rust Fingerprints',
+    '### Only surge-ts Fingerprints',
     ...formatFingerprintList(rawOnlyRust),
     '',
     '## Compat Report',
@@ -1040,7 +1041,7 @@ function renderMeasurementMarkdown(input: {
       ...tools.map((tool) => {
         const stat = result.stats[tool];
         const drift = result.drift[tool] ?? '';
-        return `| ${tool} | ${formatSeconds(stat)} | ${drift} |`;
+        return `| ${toolDisplayLabel(tool)} | ${formatSeconds(stat)} | ${drift} |`;
       }),
     );
   }
@@ -1049,7 +1050,7 @@ function renderMeasurementMarkdown(input: {
     '',
     '## Next-Action Triage (raw buckets only)',
     `- only-TypeScript top codes: ${formatTopCodes(rawOnlyTs)}`,
-    `- only-typescript-rust top codes: ${formatTopCodes(rawOnlyRust)}`,
+    `- only-surge-ts top codes: ${formatTopCodes(rawOnlyRust)}`,
     `- file/code/line mismatch buckets: ${fileCodeLineMismatch}`,
     `- crash/error: ${formatWarnings(oracle.warnings)}`,
     '',

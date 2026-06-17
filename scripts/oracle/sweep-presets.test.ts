@@ -48,17 +48,17 @@ function makeComparison(overrides: Partial<ComparisonResult> = {}): ComparisonRe
     project: 'demo',
     file: null,
     typescript: { total: 1, byCode: [], byFileCode: [], byFileCodeLine: [] },
-    typescriptRust: { total: 1, byCode: [], byFileCode: [], byFileCodeLine: [] },
+    surgeTs: { total: 1, byCode: [], byFileCode: [], byFileCodeLine: [] },
     matches: {
       byCode: [],
       onlyTypeScript: [],
-      onlyTypeScriptRust: [],
+      onlySurgeTs: [],
       byFileCode: [],
       onlyTypeScriptFileCode: [],
-      onlyTypeScriptRustFileCode: [],
+      onlySurgeTsFileCode: [],
       byFileCodeLine: [],
       onlyTypeScriptFileCodeLine: [],
-      onlyTypeScriptRustFileCodeLine: [],
+      onlySurgeTsFileCodeLine: [],
     },
     messageParity: { comparedLocations: 1, matches: 1, mismatches: [] },
     summary: {
@@ -67,10 +67,10 @@ function makeComparison(overrides: Partial<ComparisonResult> = {}): ComparisonRe
       byFileCodeLineMatch: true,
       messageMatch: true,
     },
-    tooling: { typescriptVersion: 'x', typescriptCommand: 'tsc', typescriptRustCommand: 'cargo' },
+    tooling: { typescriptVersion: 'x', typescriptCommand: 'tsc', surgeTsCommand: 'cargo' },
     details: {
       onlyTypeScript: { rawDiagnosticFingerprints: [] },
-      onlyTypeScriptRust: { rawDiagnosticFingerprints: [] },
+      onlySurgeTs: { rawDiagnosticFingerprints: [] },
     },
   } as unknown as ComparisonResult;
 
@@ -219,15 +219,15 @@ test('deriveResult fails on code-count mismatch and counts surplus', () => {
   const comparison = makeComparison({
     summary: { byCodeMatch: false, byFileCodeMatch: true, byFileCodeLineMatch: true, messageMatch: true } as never,
     matches: {
-      onlyTypeScript: [{ key: 'TS2322', typescript: 4, typescriptRust: 0 }],
-      onlyTypeScriptRust: [],
+      onlyTypeScript: [{ key: 'TS2322', typescript: 4, surgeTs: 0 }],
+      onlySurgeTs: [],
       byCode: [],
       byFileCode: [],
       onlyTypeScriptFileCode: [],
-      onlyTypeScriptRustFileCode: [],
+      onlySurgeTsFileCode: [],
       byFileCodeLine: [],
       onlyTypeScriptFileCodeLine: [],
-      onlyTypeScriptRustFileCodeLine: [],
+      onlySurgeTsFileCodeLine: [],
     } as never,
   });
   const result = deriveResult(DEMO, comparison, 10, baseArgs);
@@ -248,7 +248,7 @@ test('span drift detected from column differences and gated by --strictSpans', (
   const comparison = makeComparison({
     details: {
       onlyTypeScript: { rawDiagnosticFingerprints: [{ fileName: 'a.ts', code: 'TS1', line: 3, column: 5, message: 'm', count: 1 }] },
-      onlyTypeScriptRust: { rawDiagnosticFingerprints: [{ fileName: 'a.ts', code: 'TS1', line: 3, column: 9, message: 'm', count: 1 }] },
+      onlySurgeTs: { rawDiagnosticFingerprints: [{ fileName: 'a.ts', code: 'TS1', line: 3, column: 9, message: 'm', count: 1 }] },
     } as never,
   });
   assert.equal(deriveSpanMatch(comparison), false);
@@ -260,7 +260,7 @@ test('same-column message difference is not span drift', () => {
   const comparison = makeComparison({
     details: {
       onlyTypeScript: { rawDiagnosticFingerprints: [{ fileName: 'a.ts', code: 'TS1', line: 3, column: 5, message: 'x', count: 1 }] },
-      onlyTypeScriptRust: { rawDiagnosticFingerprints: [{ fileName: 'a.ts', code: 'TS1', line: 3, column: 5, message: 'y', count: 1 }] },
+      onlySurgeTs: { rawDiagnosticFingerprints: [{ fileName: 'a.ts', code: 'TS1', line: 3, column: 5, message: 'y', count: 1 }] },
     } as never,
   });
   assert.equal(deriveSpanMatch(comparison), true);

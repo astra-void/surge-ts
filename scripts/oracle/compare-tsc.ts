@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export type Source = 'typescript' | 'typescript-rust';
+export type Source = 'typescript' | 'surge-ts';
 
 export type NormalizedDiagnostic = {
   source: Source;
@@ -28,7 +28,7 @@ export type DiagnosticFingerprint = {
 export type CountBucket = {
   key: string;
   typescript: number;
-  typescriptRust: number;
+  surgeTs: number;
 };
 
 export type CountEntry = {
@@ -59,7 +59,7 @@ export type MessageMismatch = {
   line: number | null;
   column: number | null;
   typescript: string;
-  typescriptRust: string;
+  surgeTs: string;
 };
 
 export type MessageParity = {
@@ -73,7 +73,7 @@ export type ComparisonResult = {
   project: string | null;
   file: string | null;
   ignoreConfig?: boolean;
-  typescriptRustOptions?: {
+  surgeTsOptions?: {
     stubExternalModules?: boolean;
     rustJobs?: number;
   };
@@ -81,21 +81,21 @@ export type ComparisonResult = {
   tooling: {
     typescriptVersion: string;
     typescriptCommand: string;
-    typescriptRustCommand: string;
-    typescriptRustJobs?: number;
+    surgeTsCommand: string;
+    surgeTsJobs?: number;
   };
   typescript: DiagnosticTotals;
-  typescriptRust: DiagnosticTotals;
+  surgeTs: DiagnosticTotals;
   matches: {
     byCode: CountBucket[];
     onlyTypeScript: CountBucket[];
-    onlyTypeScriptRust: CountBucket[];
+    onlySurgeTs: CountBucket[];
     byFileCode: CountBucket[];
     onlyTypeScriptFileCode: CountBucket[];
-    onlyTypeScriptRustFileCode: CountBucket[];
+    onlySurgeTsFileCode: CountBucket[];
     byFileCodeLine: CountBucket[];
     onlyTypeScriptFileCodeLine: CountBucket[];
-    onlyTypeScriptRustFileCodeLine: CountBucket[];
+    onlySurgeTsFileCodeLine: CountBucket[];
   };
   messageParity: MessageParity;
   summary: {
@@ -105,7 +105,7 @@ export type ComparisonResult = {
     messageMatch: boolean | null;
   };
   details?: {
-    onlyTypeScriptRust?: {
+    onlySurgeTs?: {
       rawDiagnosticFingerprints?: DiagnosticFingerprintCountEntry[];
       rawTs2305ModuleExports?: ModuleExportCountEntry[];
       rawTs2307ModuleSpecifiers?: CountEntry[];
@@ -515,7 +515,7 @@ export function runTsc(mode: OracleMode): RunResult {
   };
 }
 
-export function runTypeScriptRust(
+export function runSurgeTs(
   mode: OracleMode,
   maxDiagnostics?: number,
   rustJobs?: number,
@@ -526,11 +526,11 @@ export function runTypeScriptRust(
     '--manifest-path',
     path.join(workspaceRoot, 'Cargo.toml'),
     '-p',
-    'typescript-rust-cli',
+    'surge-ts-cli',
     '--',
   ];
 
-  // Argument order mirrors buildTypeScriptRustCommand so the printed command
+  // Argument order mirrors buildSurgeTsCommand so the printed command
   // matches what actually runs. The positional source file must come last.
   if (mode.kind === 'project') {
     args.push('--project', mode.resolvedTsconfig, '--format', 'json');
@@ -564,7 +564,7 @@ export function runTypeScriptRust(
   });
 
   if (result.error) {
-    throw new Error(`failed to run typescript-rust-cli: ${result.error.message}`);
+    throw new Error(`failed to run surge-ts-cli: ${result.error.message}`);
   }
 
   return {
@@ -611,7 +611,7 @@ export function parseTypeScriptDiagnostics(output: string, projectDir: string): 
   return diagnostics;
 }
 
-export function parseTypeScriptRustDiagnostics(
+export function parseSurgeTsDiagnostics(
   output: string,
   projectDir: string,
 ): NormalizedDiagnostic[] {
@@ -620,7 +620,7 @@ export function parseTypeScriptRustDiagnostics(
     parsed = JSON.parse(output);
   } catch (error) {
     throw new Error(
-      `typescript-rust-cli did not emit valid JSON diagnostics.\n${formatParseFailure(output, error)}`,
+      `surge-ts-cli did not emit valid JSON diagnostics.\n${formatParseFailure(output, error)}`,
     );
   }
 
@@ -638,7 +638,7 @@ export function parseTypeScriptRustDiagnostics(
     };
 
     return {
-      source: 'typescript-rust',
+      source: 'surge-ts',
       code: String(entry.code ?? ''),
       fileName: normalizeDiagnosticFileName(projectDir, String(entry.fileName ?? '')),
       line: typeof entry.line === 'number' ? entry.line : undefined,
@@ -730,73 +730,73 @@ export function compareDiagnostics(
   mode: 'project' | 'file',
   targetDisplay: string,
   typescript: NormalizedDiagnostic[],
-  typescriptRust: NormalizedDiagnostic[],
+  surgeTs: NormalizedDiagnostic[],
   ignoreConfig?: boolean,
   stubExternalModules?: boolean,
   rustJobs?: number,
 ): ComparisonResult {
-  const byCode = compareBuckets(typescript, typescriptRust, keyByCode);
-  const byFileCode = compareBuckets(typescript, typescriptRust, keyByFileCode);
+  const byCode = compareBuckets(typescript, surgeTs, keyByCode);
+  const byFileCode = compareBuckets(typescript, surgeTs, keyByFileCode);
   const byFileCodeLine = compareBuckets(
     typescript.filter(hasLineInfo),
-    typescriptRust.filter(hasLineInfo),
+    surgeTs.filter(hasLineInfo),
     keyByFileCodeLine,
   );
   const onlyDiagnostics = subtractDiagnosticsByKey(
     typescript,
-    typescriptRust,
+    surgeTs,
     keyByDiagnosticFingerprint,
   );
   const onlyTypeScriptDiagnostics = onlyDiagnostics.onlyLeft;
-  const onlyTypeScriptRustDiagnostics = onlyDiagnostics.onlyRight;
-  const messageParity = compareMessages(typescript, typescriptRust);
+  const onlySurgeTsDiagnostics = onlyDiagnostics.onlyRight;
+  const messageParity = compareMessages(typescript, surgeTs);
 
   return {
     mode,
     project: mode === 'project' ? targetDisplay : null,
     file: mode === 'file' ? targetDisplay : null,
     ignoreConfig: ignoreConfig ?? false,
-    typescriptRustOptions: {
+    surgeTsOptions: {
       stubExternalModules: stubExternalModules ?? false,
       rustJobs,
     },
-    warnings: buildComparisonWarnings(typescript, typescriptRust),
+    warnings: buildComparisonWarnings(typescript, surgeTs),
     tooling: {
       typescriptVersion: pinnedTypeScriptVersion,
       typescriptCommand: buildTypeScriptCommand(mode, targetDisplay, ignoreConfig),
-      typescriptRustCommand: buildTypeScriptRustCommand(
+      surgeTsCommand: buildSurgeTsCommand(
         mode,
         targetDisplay,
         ignoreConfig,
         stubExternalModules,
         rustJobs,
       ),
-      typescriptRustJobs: rustJobs,
+      surgeTsJobs: rustJobs,
     },
     typescript: summarizeDiagnostics(typescript),
-    typescriptRust: summarizeDiagnostics(typescriptRust),
+    surgeTs: summarizeDiagnostics(surgeTs),
     matches: {
       byCode: byCode.matches,
       onlyTypeScript: byCode.onlyTypeScript,
-      onlyTypeScriptRust: byCode.onlyTypeScriptRust,
+      onlySurgeTs: byCode.onlySurgeTs,
       byFileCode: byFileCode.matches,
       onlyTypeScriptFileCode: byFileCode.onlyTypeScript,
-      onlyTypeScriptRustFileCode: byFileCode.onlyTypeScriptRust,
+      onlySurgeTsFileCode: byFileCode.onlySurgeTs,
       byFileCodeLine: byFileCodeLine.matches,
       onlyTypeScriptFileCodeLine: byFileCodeLine.onlyTypeScript,
-      onlyTypeScriptRustFileCodeLine: byFileCodeLine.onlyTypeScriptRust,
+      onlySurgeTsFileCodeLine: byFileCodeLine.onlySurgeTs,
     },
     messageParity,
     summary: {
-      byCodeMatch: byCode.onlyTypeScript.length === 0 && byCode.onlyTypeScriptRust.length === 0,
+      byCodeMatch: byCode.onlyTypeScript.length === 0 && byCode.onlySurgeTs.length === 0,
       byFileCodeMatch:
-        byFileCode.onlyTypeScript.length === 0 && byFileCode.onlyTypeScriptRust.length === 0,
+        byFileCode.onlyTypeScript.length === 0 && byFileCode.onlySurgeTs.length === 0,
       byFileCodeLineMatch:
         byFileCodeLine.matches.length > 0 ||
         byFileCodeLine.onlyTypeScript.length > 0 ||
-        byFileCodeLine.onlyTypeScriptRust.length > 0
+        byFileCodeLine.onlySurgeTs.length > 0
           ? byFileCodeLine.onlyTypeScript.length === 0 &&
-            byFileCodeLine.onlyTypeScriptRust.length === 0
+            byFileCodeLine.onlySurgeTs.length === 0
           : null,
       messageMatch:
         messageParity.comparedLocations === 0 ? null : messageParity.mismatches.length === 0,
@@ -805,21 +805,21 @@ export function compareDiagnostics(
       onlyTypeScript: {
         rawDiagnosticFingerprints: groupDiagnosticsByFingerprint(onlyTypeScriptDiagnostics),
       },
-      onlyTypeScriptRust: {
-        rawDiagnosticFingerprints: groupDiagnosticsByFingerprint(onlyTypeScriptRustDiagnostics),
+      onlySurgeTs: {
+        rawDiagnosticFingerprints: groupDiagnosticsByFingerprint(onlySurgeTsDiagnostics),
         rawTs2305ModuleExports: groupDiagnosticsByModuleExportExtractor(
-          onlyTypeScriptRustDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2305'),
+          onlySurgeTsDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2305'),
           (diagnostic) => {
             const exportInfo = extractTs2305ModuleExport(diagnostic.message);
             return exportInfo ? { moduleSpecifier: exportInfo.moduleSpecifier, exportName: exportInfo.exportName } : null;
           },
         ),
         rawTs2307ModuleSpecifiers: groupDiagnosticsByExtractor(
-          onlyTypeScriptRustDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2307'),
+          onlySurgeTsDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2307'),
           (diagnostic) => extractTs2307ModuleSpecifier(diagnostic.message),
         ),
         rawTs2304Identifiers: groupDiagnosticsByExtractor(
-          onlyTypeScriptRustDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2304'),
+          onlySurgeTsDiagnostics.filter((diagnostic) => diagnostic.code === 'TS2304'),
           (diagnostic) => extractTs2304Identifier(diagnostic.message),
         ),
       },
@@ -837,28 +837,28 @@ export function compareDiagnostics(
  */
 export function compareMessages(
   typescript: NormalizedDiagnostic[],
-  typescriptRust: NormalizedDiagnostic[],
+  surgeTs: NormalizedDiagnostic[],
 ): MessageParity {
   const typeScriptByLocation = groupByLocation(typescript);
-  const typeScriptRustByLocation = groupByLocation(typescriptRust);
+  const surgeTsByLocation = groupByLocation(surgeTs);
 
   let comparedLocations = 0;
   let matches = 0;
   const mismatches: MessageMismatch[] = [];
 
   const sharedKeys = [...typeScriptByLocation.keys()]
-    .filter((key) => typeScriptRustByLocation.has(key))
+    .filter((key) => surgeTsByLocation.has(key))
     .sort((leftKey, rightKey) => leftKey.localeCompare(rightKey));
 
   for (const key of sharedKeys) {
     comparedLocations += 1;
     const typeScriptList = typeScriptByLocation.get(key) ?? [];
-    const typeScriptRustList = typeScriptRustByLocation.get(key) ?? [];
+    const surgeTsList = surgeTsByLocation.get(key) ?? [];
 
-    const typeScriptRustRemaining = new Map<string, number>();
-    for (const diagnostic of typeScriptRustList) {
+    const surgeTsRemaining = new Map<string, number>();
+    for (const diagnostic of surgeTsList) {
       const message = diagnostic.message ?? '';
-      typeScriptRustRemaining.set(message, (typeScriptRustRemaining.get(message) ?? 0) + 1);
+      surgeTsRemaining.set(message, (surgeTsRemaining.get(message) ?? 0) + 1);
     }
 
     // Consume exact message matches first; whatever is left on each side is a
@@ -866,27 +866,27 @@ export function compareMessages(
     const typeScriptUnmatched: string[] = [];
     for (const diagnostic of typeScriptList) {
       const message = diagnostic.message ?? '';
-      const remaining = typeScriptRustRemaining.get(message) ?? 0;
+      const remaining = surgeTsRemaining.get(message) ?? 0;
       if (remaining > 0) {
-        typeScriptRustRemaining.set(message, remaining - 1);
+        surgeTsRemaining.set(message, remaining - 1);
         matches += 1;
       } else {
         typeScriptUnmatched.push(message);
       }
     }
 
-    const typeScriptRustUnmatched: string[] = [];
-    for (const [message, count] of typeScriptRustRemaining) {
+    const surgeTsUnmatched: string[] = [];
+    for (const [message, count] of surgeTsRemaining) {
       for (let index = 0; index < count; index += 1) {
-        typeScriptRustUnmatched.push(message);
+        surgeTsUnmatched.push(message);
       }
     }
 
     typeScriptUnmatched.sort((left, right) => left.localeCompare(right));
-    typeScriptRustUnmatched.sort((left, right) => left.localeCompare(right));
+    surgeTsUnmatched.sort((left, right) => left.localeCompare(right));
 
-    const representative = typeScriptList[0] ?? typeScriptRustList[0];
-    const pairCount = Math.min(typeScriptUnmatched.length, typeScriptRustUnmatched.length);
+    const representative = typeScriptList[0] ?? surgeTsList[0];
+    const pairCount = Math.min(typeScriptUnmatched.length, surgeTsUnmatched.length);
     for (let index = 0; index < pairCount; index += 1) {
       mismatches.push({
         fileName: representative.fileName,
@@ -894,7 +894,7 @@ export function compareMessages(
         line: representative.line ?? null,
         column: representative.column ?? null,
         typescript: typeScriptUnmatched[index],
-        typescriptRust: typeScriptRustUnmatched[index],
+        surgeTs: surgeTsUnmatched[index],
       });
     }
   }
@@ -937,7 +937,7 @@ export function buildTypeScriptCommand(mode: 'project' | 'file', targetDisplay: 
   return ignoreConfig ? `pnpm exec tsc --noEmit --pretty false --ignoreConfig ${targetDisplay}` : `pnpm exec tsc --noEmit --pretty false ${targetDisplay}`;
 }
 
-export function buildTypeScriptRustCommand(
+export function buildSurgeTsCommand(
   mode: 'project' | 'file',
   targetDisplay: string,
   ignoreConfig?: boolean,
@@ -945,7 +945,7 @@ export function buildTypeScriptRustCommand(
   rustJobs?: number,
 ): string {
   const cargoToml = normalizePathForDisplay(path.join(workspaceRoot, 'Cargo.toml'));
-  let args = `cargo run -q --manifest-path ${cargoToml} -p typescript-rust-cli --`;
+  let args = `cargo run -q --manifest-path ${cargoToml} -p surge-ts-cli --`;
 
   if (mode === 'project') {
     args += ` --project ${targetDisplay} --format json`;
@@ -988,7 +988,7 @@ export function compareBuckets(
 ): {
   matches: CountBucket[];
   onlyTypeScript: CountBucket[];
-  onlyTypeScriptRust: CountBucket[];
+  onlySurgeTs: CountBucket[];
 } {
   const leftCounts = countDiagnostics(left, keyFn);
   const rightCounts = countDiagnostics(right, keyFn);
@@ -996,36 +996,36 @@ export function compareBuckets(
   const sortedKeys = [...keys].sort((leftKey, rightKey) => leftKey.localeCompare(rightKey));
   const matches: CountBucket[] = [];
   const onlyTypeScript: CountBucket[] = [];
-  const onlyTypeScriptRust: CountBucket[] = [];
+  const onlySurgeTs: CountBucket[] = [];
 
   for (const key of sortedKeys) {
     const leftCount = leftCounts.get(key) ?? 0;
     const rightCount = rightCounts.get(key) ?? 0;
     if (leftCount === rightCount) {
       if (leftCount > 0) {
-        matches.push({ key, typescript: leftCount, typescriptRust: rightCount });
+        matches.push({ key, typescript: leftCount, surgeTs: rightCount });
       }
       continue;
     }
 
     if (leftCount > 0 && rightCount === 0) {
-      onlyTypeScript.push({ key, typescript: leftCount, typescriptRust: 0 });
+      onlyTypeScript.push({ key, typescript: leftCount, surgeTs: 0 });
       continue;
     }
 
     if (rightCount > 0 && leftCount === 0) {
-      onlyTypeScriptRust.push({ key, typescript: 0, typescriptRust: rightCount });
+      onlySurgeTs.push({ key, typescript: 0, surgeTs: rightCount });
       continue;
     }
 
     if (leftCount > rightCount) {
-      onlyTypeScript.push({ key, typescript: leftCount, typescriptRust: rightCount });
+      onlyTypeScript.push({ key, typescript: leftCount, surgeTs: rightCount });
     } else {
-      onlyTypeScriptRust.push({ key, typescript: leftCount, typescriptRust: rightCount });
+      onlySurgeTs.push({ key, typescript: leftCount, surgeTs: rightCount });
     }
   }
 
-  return { matches, onlyTypeScript, onlyTypeScriptRust };
+  return { matches, onlyTypeScript, onlySurgeTs };
 }
 
 export function countDiagnostics(
@@ -1222,23 +1222,23 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   lines.push(comparison.mode === 'project' ? `Project: ${comparison.project}` : `File: ${comparison.file}`);
   lines.push('');
 
-  if (comparison.typescriptRustOptions?.stubExternalModules) {
-    lines.push('typescript-rust options: --stubExternalModules');
-    lines.push('Note: --stubExternalModules is a typescript-rust-only compatibility mode.');
+  if (comparison.surgeTsOptions?.stubExternalModules) {
+    lines.push('surge-ts options: --stubExternalModules');
+    lines.push('Note: --stubExternalModules is a surge-ts-only compatibility mode.');
     lines.push('');
   }
 
   lines.push('Tooling:');
   lines.push(`TypeScript version: ${comparison.tooling.typescriptVersion}`);
   lines.push(`TypeScript command: ${comparison.tooling.typescriptCommand}`);
-  lines.push(`typescript-rust command: ${comparison.tooling.typescriptRustCommand}`);
-  if (comparison.tooling.typescriptRustJobs !== undefined) {
-    lines.push(`typescript-rust jobs: ${comparison.tooling.typescriptRustJobs}`);
+  lines.push(`surge-ts command: ${comparison.tooling.surgeTsCommand}`);
+  if (comparison.tooling.surgeTsJobs !== undefined) {
+    lines.push(`surge-ts jobs: ${comparison.tooling.surgeTsJobs}`);
   }
   lines.push('');
   lines.push('Totals:');
   lines.push(`TypeScript diagnostics: ${comparison.typescript.total}`);
-  lines.push(`typescript-rust diagnostics: ${comparison.typescriptRust.total}`);
+  lines.push(`surge-ts diagnostics: ${comparison.surgeTs.total}`);
   lines.push('');
   if (comparison.warnings && comparison.warnings.length > 0) {
     lines.push('Warnings:');
@@ -1271,28 +1271,28 @@ export function renderComparisonText(comparison: ComparisonResult): string {
   lines.push('');
   appendMessageParitySection(lines, comparison.messageParity);
   lines.push('Raw message extraction, not root-cause classification:');
-  if (comparison.details?.onlyTypeScriptRust?.rawTs2305ModuleExports?.length) {
+  if (comparison.details?.onlySurgeTs?.rawTs2305ModuleExports?.length) {
     lines.push('  TS2305 module/export:');
-    for (const entry of comparison.details.onlyTypeScriptRust.rawTs2305ModuleExports.slice(0, 10)) {
+    for (const entry of comparison.details.onlySurgeTs.rawTs2305ModuleExports.slice(0, 10)) {
       lines.push(`    ${entry.moduleSpecifier} :: ${entry.exportName}  ${entry.count}`);
     }
   }
-  if (comparison.details?.onlyTypeScriptRust?.rawTs2307ModuleSpecifiers?.length) {
+  if (comparison.details?.onlySurgeTs?.rawTs2307ModuleSpecifiers?.length) {
     lines.push('  TS2307 specifiers:');
-    for (const entry of comparison.details.onlyTypeScriptRust.rawTs2307ModuleSpecifiers.slice(0, 10)) {
+    for (const entry of comparison.details.onlySurgeTs.rawTs2307ModuleSpecifiers.slice(0, 10)) {
       lines.push(`    ${entry.key}  ${entry.count}`);
     }
   }
-  if (comparison.details?.onlyTypeScriptRust?.rawTs2304Identifiers?.length) {
+  if (comparison.details?.onlySurgeTs?.rawTs2304Identifiers?.length) {
     lines.push('  TS2304 identifiers:');
-    for (const entry of comparison.details.onlyTypeScriptRust.rawTs2304Identifiers.slice(0, 10)) {
+    for (const entry of comparison.details.onlySurgeTs.rawTs2304Identifiers.slice(0, 10)) {
       lines.push(`    ${entry.key}  ${entry.count}`);
     }
   }
   lines.push('');
-  if (comparison.details?.onlyTypeScriptRust?.rawDiagnosticFingerprints?.length) {
+  if (comparison.details?.onlySurgeTs?.rawDiagnosticFingerprints?.length) {
     lines.push('Top ONLY_RUST raw diagnostic fingerprints:');
-    for (const entry of comparison.details.onlyTypeScriptRust.rawDiagnosticFingerprints.slice(0, 10)) {
+    for (const entry of comparison.details.onlySurgeTs.rawDiagnosticFingerprints.slice(0, 10)) {
       lines.push(`  ${formatDiagnosticFingerprintEntry(entry)}`);
     }
     lines.push('');
@@ -1309,7 +1309,7 @@ export function renderComparisonText(comparison: ComparisonResult): string {
     lines,
     comparison.matches.byCode,
     comparison.matches.onlyTypeScript,
-    comparison.matches.onlyTypeScriptRust,
+    comparison.matches.onlySurgeTs,
   );
   lines.push('');
   lines.push('By file/code:');
@@ -1317,7 +1317,7 @@ export function renderComparisonText(comparison: ComparisonResult): string {
     lines,
     comparison.matches.byFileCode,
     comparison.matches.onlyTypeScriptFileCode,
-    comparison.matches.onlyTypeScriptRustFileCode,
+    comparison.matches.onlySurgeTsFileCode,
   );
   lines.push('');
   lines.push('By file/code/line:');
@@ -1328,7 +1328,7 @@ export function renderComparisonText(comparison: ComparisonResult): string {
       lines,
       comparison.matches.byFileCodeLine,
       comparison.matches.onlyTypeScriptFileCodeLine,
-      comparison.matches.onlyTypeScriptRustFileCodeLine,
+      comparison.matches.onlySurgeTsFileCodeLine,
     );
   }
   return `${lines.join('\n')}\n`;
@@ -1336,22 +1336,22 @@ export function renderComparisonText(comparison: ComparisonResult): string {
 
 function buildComparisonWarnings(
   typescript: NormalizedDiagnostic[],
-  typescriptRust: NormalizedDiagnostic[],
+  surgeTs: NormalizedDiagnostic[],
 ): string[] {
   const warnings: string[] = [];
-  const rustOnlyDiagnostics = typescriptRust.filter((diagnostic) =>
-    diagnostic.code.startsWith('typescript-rust::'),
+  const rustOnlyDiagnostics = surgeTs.filter((diagnostic) =>
+    diagnostic.code.startsWith('surge::'),
   );
 
   if (rustOnlyDiagnostics.length > 0) {
     warnings.push(
-      `Rust-only typescript-rust::* diagnostics in tsc profile: ${rustOnlyDiagnostics.length}`,
+      `Rust-only surge::* diagnostics in tsc profile: ${rustOnlyDiagnostics.length}`,
     );
   }
 
-  if (typescriptRust.length > typescript.length * 2) {
+  if (surgeTs.length > typescript.length * 2) {
     warnings.push(
-      `Severe over-report: typescript-rust diagnostics (${typescriptRust.length}) exceed TypeScript diagnostics (${typescript.length}) by more than 2x`,
+      `Severe over-report: surge-ts diagnostics (${surgeTs.length}) exceed TypeScript diagnostics (${typescript.length}) by more than 2x`,
     );
   }
 
@@ -1373,7 +1373,7 @@ export function appendMessageParitySection(lines: string[], messageParity: Messa
     const location = `${mismatch.fileName}:${mismatch.line ?? 'n/a'}:${mismatch.column ?? 'n/a'}`;
     lines.push(`  ${location} ${mismatch.code}`);
     lines.push(`    tsc : ${mismatch.typescript}`);
-    lines.push(`    rust: ${mismatch.typescriptRust}`);
+    lines.push(`    rust: ${mismatch.surgeTs}`);
   }
   if (messageParity.mismatches.length > 20) {
     lines.push(`  ... and ${messageParity.mismatches.length - 20} more`);
@@ -1385,9 +1385,9 @@ export function appendBucketSection(
   lines: string[],
   matches: CountBucket[],
   onlyTypeScript: CountBucket[],
-  onlyTypeScriptRust: CountBucket[],
+  onlySurgeTs: CountBucket[],
 ): void {
-  if (matches.length === 0 && onlyTypeScript.length === 0 && onlyTypeScriptRust.length === 0) {
+  if (matches.length === 0 && onlyTypeScript.length === 0 && onlySurgeTs.length === 0) {
     lines.push('  (none)');
     return;
   }
@@ -1397,21 +1397,21 @@ export function appendBucketSection(
   }
 
   for (const bucket of onlyTypeScript) {
-    if (bucket.typescriptRust === 0) {
+    if (bucket.surgeTs === 0) {
       lines.push(`ONLY_TS ${formatBucketKey(bucket.key)} ${bucket.typescript}`);
     } else {
       lines.push(
-        `DIFF ${formatBucketKey(bucket.key)} TypeScript=${bucket.typescript} typescript-rust=${bucket.typescriptRust}`,
+        `DIFF ${formatBucketKey(bucket.key)} TypeScript=${bucket.typescript} surge-ts=${bucket.surgeTs}`,
       );
     }
   }
 
-  for (const bucket of onlyTypeScriptRust) {
+  for (const bucket of onlySurgeTs) {
     if (bucket.typescript === 0) {
-      lines.push(`ONLY_RUST ${formatBucketKey(bucket.key)} ${bucket.typescriptRust}`);
+      lines.push(`ONLY_RUST ${formatBucketKey(bucket.key)} ${bucket.surgeTs}`);
     } else {
       lines.push(
-        `DIFF ${formatBucketKey(bucket.key)} TypeScript=${bucket.typescript} typescript-rust=${bucket.typescriptRust}`,
+        `DIFF ${formatBucketKey(bucket.key)} TypeScript=${bucket.typescript} surge-ts=${bucket.surgeTs}`,
       );
     }
   }
@@ -1444,7 +1444,7 @@ function printHelpAndExit(): never {
       '  --failOnMismatch          Exit with code 1 when code/file mismatches exist.',
       '  --strictCodes             Alias for --failOnMismatch.',
       '  --strictMessages          Exit with code 1 when any same-location message text differs from tsc.',
-      '  --rustJobs <n>            Pass a deterministic project-checking job count to typescript-rust.',
+      '  --rustJobs <n>            Pass a deterministic project-checking job count to surge-ts.',
       '',
       'Known presets:',
       `  ${Object.keys(fixturePresets).join(', ')}`,
@@ -1511,14 +1511,14 @@ function executeComparison(
   const comparisonDisplay = displayComparisonTargetPath(comparisonPath);
   const projectDir = path.dirname(comparisonPath);
   const tsc = runTsc(mode);
-  const rust = runTypeScriptRust(mode, maxDiagnostics, mode.kind === 'project' ? mode.rustJobs : undefined);
+  const rust = runSurgeTs(mode, maxDiagnostics, mode.kind === 'project' ? mode.rustJobs : undefined);
   const rustOutput = rust.stdout.trim() ? rust.stdout : rust.stderr;
 
   const tscDiagnostics = limitDiagnostics(
     parseTypeScriptDiagnostics(`${tsc.stdout}${tsc.stderr}`, projectDir),
     maxDiagnostics,
   );
-  const rustDiagnostics = limitDiagnostics(parseTypeScriptRustDiagnostics(rustOutput, projectDir), maxDiagnostics);
+  const rustDiagnostics = limitDiagnostics(parseSurgeTsDiagnostics(rustOutput, projectDir), maxDiagnostics);
 
   return compareDiagnostics(
     mode.kind,

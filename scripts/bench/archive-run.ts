@@ -50,7 +50,7 @@ export type BenchMedians = {
 
 export type AuthKitCounts = {
   typescriptTotal: number | null;
-  typescriptRustTotal: number | null;
+  surgeTsTotal: number | null;
   codeCountMatch: boolean | null;
 };
 
@@ -173,7 +173,7 @@ export function extractBenchMedians(benchJson: unknown): BenchMedians[] {
 
 export function extractAuthKitCounts(markdown: string): AuthKitCounts | null {
   const tsTotal = matchNumber(markdown, /TypeScript total diagnostics:\s*(\d+)/);
-  const rustTotal = matchNumber(markdown, /typescript-rust total diagnostics:\s*(\d+)/);
+  const rustTotal = matchNumber(markdown, /surge-ts total diagnostics:\s*(\d+)/);
   const matchLine = markdown.match(/code-count match:\s*(yes|no)/i);
 
   if (tsTotal === null && rustTotal === null && !matchLine) {
@@ -182,7 +182,7 @@ export function extractAuthKitCounts(markdown: string): AuthKitCounts | null {
 
   return {
     typescriptTotal: tsTotal,
-    typescriptRustTotal: rustTotal,
+    surgeTsTotal: rustTotal,
     codeCountMatch: matchLine ? matchLine[1].toLowerCase() === 'yes' : null,
   };
 }
@@ -255,7 +255,7 @@ export function renderSummaryMarkdown(summary: ArchiveSummary): string {
   if (summary.authKit) {
     lines.push('## Auth-Kit Diagnostics', '');
     lines.push(`- TypeScript total: ${summary.authKit.typescriptTotal ?? 'n/a'}`);
-    lines.push(`- typescript-rust total: ${summary.authKit.typescriptRustTotal ?? 'n/a'}`);
+    lines.push(`- surge-ts total: ${summary.authKit.surgeTsTotal ?? 'n/a'}`);
     lines.push(
       `- code-count match: ${
         summary.authKit.codeCountMatch === null ? 'n/a' : summary.authKit.codeCountMatch ? 'yes' : 'no'

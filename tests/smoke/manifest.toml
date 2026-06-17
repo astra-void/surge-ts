@@ -2598,12 +2598,12 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "type-alias-cycle-self"
 path = "tests/smoke/type_alias_cycle_self.ts"
-expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+expected_diagnostics = ["surge::type-alias-cycle"]
 
 [[case]]
 name = "type-alias-cycle-indirect"
 path = "tests/smoke/type_alias_cycle_indirect.ts"
-expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+expected_diagnostics = ["surge::type-alias-cycle"]
 
 [[case]]
 name = "type-alias-duplicate-declaration"
@@ -3923,27 +3923,27 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "type-alias-cycle-self-no-cascade"
 path = "tests/smoke/type_alias_cycle_self_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+expected_diagnostics = ["surge::type-alias-cycle"]
 
 [[case]]
 name = "type-alias-cycle-indirect-no-cascade"
 path = "tests/smoke/type_alias_cycle_indirect_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+expected_diagnostics = ["surge::type-alias-cycle"]
 
 [[case]]
 name = "type-alias-cycle-in-object-property-no-cascade"
 path = "tests/smoke/type_alias_cycle_in_object_property_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+expected_diagnostics = ["surge::type-alias-cycle"]
 
 [[case]]
 name = "type-alias-cycle-in-union-no-cascade"
 path = "tests/smoke/type_alias_cycle_in_union_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+expected_diagnostics = ["surge::type-alias-cycle"]
 
 [[case]]
 name = "type-alias-cycle-function-return-no-missing-return-cascade"
 path = "tests/smoke/type_alias_cycle_function_return_no_missing_return_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+expected_diagnostics = ["surge::type-alias-cycle"]
 
 [[case]]
 name = "type-alias-not-value-still-ts2304"
@@ -4248,17 +4248,17 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "interface-cycle-self-no-stack-overflow"
 path = "tests/smoke/interface_cycle_self_no_stack_overflow.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-cycle-indirect-no-stack-overflow"
 path = "tests/smoke/interface_cycle_indirect_no_stack_overflow.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-cycle-no-assignment-cascade"
 path = "tests/smoke/interface_cycle_no_assignment_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-duplicate-alias-then-interface-no-cascade"
@@ -4328,42 +4328,42 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "interface-cycle-self-property-no-cascade"
 path = "tests/smoke/interface_cycle_self_property_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-cycle-self-optional-property-no-cascade"
 path = "tests/smoke/interface_cycle_self_optional_property_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-cycle-self-union-property-no-cascade"
 path = "tests/smoke/interface_cycle_self_union_property_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-cycle-indirect-property-no-cascade"
 path = "tests/smoke/interface_cycle_indirect_property_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-cycle-through-type-alias-no-cascade"
 path = "tests/smoke/interface_cycle_through_type_alias_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-cycle-type-alias-through-interface-no-cascade"
 path = "tests/smoke/interface_cycle_type_alias_through_interface_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-alias-cycle"]
+expected_diagnostics = ["surge::type-alias-cycle"]
 
 [[case]]
 name = "interface-cycle-function-parameter-no-cascade"
 path = "tests/smoke/interface_cycle_function_parameter_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-cycle-function-return-no-missing-return-cascade"
 path = "tests/smoke/interface_cycle_function_return_no_missing_return_cascade.ts"
-expected_diagnostics = ["typescript-rust::type-declaration-cycle"]
+expected_diagnostics = ["surge::type-declaration-cycle"]
 
 [[case]]
 name = "interface-optional-write-uses-declared-type"
@@ -5587,17 +5587,17 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "module-import-named-unresolved-type"
 path = "tests/smoke/module_import_named_unresolved_type.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
+expected_diagnostics = ["surge::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-import-type-named-unresolved-type"
 path = "tests/smoke/module_import_type_named_unresolved_type.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
+expected_diagnostics = ["surge::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-import-side-effect-valid"
 path = "tests/smoke/module_import_side_effect_valid.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = ["surge::unsupported-module-syntax"]
 
 [[case]]
 name = "module-export-interface-same-file-valid"
@@ -5622,17 +5622,17 @@ expected_diagnostics = []
 [[case]]
 name = "module-imported-type-no-cascade"
 path = "tests/smoke/module_imported_type_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
+expected_diagnostics = ["surge::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-import-named-unresolved-value"
 path = "tests/smoke/module_import_named_unresolved_value.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
+expected_diagnostics = ["surge::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-import-alias-unresolved-local-name"
 path = "tests/smoke/module_import_alias_unresolved_local_name.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
+expected_diagnostics = ["surge::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-export-variable-same-file-valid"
@@ -5662,7 +5662,7 @@ expected_diagnostics = []
 [[case]]
 name = "module-imported-function-no-cascade"
 path = "tests/smoke/module_imported_function_no_cascade.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax", "TS2304"]
+expected_diagnostics = ["surge::unsupported-module-syntax", "TS2304"]
 
 [[case]]
 name = "module-module-does-not-see-script-global"
@@ -5700,7 +5700,7 @@ expected_diagnostics = ["TS2307"]
 [[case]]
 name = "module-default-import-mixed-named-parser-safe-or-pinned"
 path = "tests/smoke/module_default_import_mixed_named_parser_safe_or_pinned.ts"
-expected_diagnostics = ["typescript-rust::unsupported-module-syntax"]
+expected_diagnostics = ["surge::unsupported-module-syntax"]
 
 # Mixed default + named relative imports against already-loaded modules.
 [[case]]
@@ -6219,7 +6219,7 @@ expected_diagnostics = ["TS2315"]
 [[case]]
 name = "generic-duplicate-type-parameter"
 path = "tests/smoke/generic_duplicate_type_parameter.ts"
-expected_diagnostics = ["typescript-rust::duplicate-type-parameter"]
+expected_diagnostics = ["surge::duplicate-type-parameter"]
 
 [[case]]
 name = "generic-module-type-only-import-value-usage-unresolved"
@@ -6574,7 +6574,7 @@ expected_codes = ["TS2307"]
 
 [[test]]
 file = "declaration_unsupported_declare_class_pinned.ts"
-expected_codes = ["typescript-rust::unsupported-declaration"]
+expected_codes = ["surge::unsupported-declaration"]
 
 [[test]]
 file = "declaration_declare_module_parser_safe.ts"

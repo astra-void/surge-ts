@@ -274,7 +274,7 @@ export function selectTargets(
 
 export function deriveSpanMatch(comparison: ComparisonResult): boolean {
   const onlyTs = comparison.details?.onlyTypeScript?.rawDiagnosticFingerprints ?? [];
-  const onlyRust = comparison.details?.onlyTypeScriptRust?.rawDiagnosticFingerprints ?? [];
+  const onlyRust = comparison.details?.onlySurgeTs?.rawDiagnosticFingerprints ?? [];
 
   const rustColumnsByLine = new Map<string, Set<number>>();
   for (const entry of onlyRust) {
@@ -302,8 +302,8 @@ export function deriveSpanMatch(comparison: ComparisonResult): boolean {
 }
 
 function sumBucketSurplus(
-  buckets: { typescript: number; typescriptRust: number }[],
-  pick: (bucket: { typescript: number; typescriptRust: number }) => number,
+  buckets: { typescript: number; surgeTs: number }[],
+  pick: (bucket: { typescript: number; surgeTs: number }) => number,
 ): number {
   return buckets.reduce((total, bucket) => total + Math.max(0, pick(bucket)), 0);
 }
@@ -332,9 +332,9 @@ export function deriveResult(
     kind: target.kind,
     passed,
     typescriptDiagnostics: comparison.typescript.total,
-    rustDiagnostics: comparison.typescriptRust.total,
-    onlyTsc: sumBucketSurplus(comparison.matches.onlyTypeScript, (b) => b.typescript - b.typescriptRust),
-    onlyRust: sumBucketSurplus(comparison.matches.onlyTypeScriptRust, (b) => b.typescriptRust - b.typescript),
+    rustDiagnostics: comparison.surgeTs.total,
+    onlyTsc: sumBucketSurplus(comparison.matches.onlyTypeScript, (b) => b.typescript - b.surgeTs),
+    onlyRust: sumBucketSurplus(comparison.matches.onlySurgeTs, (b) => b.surgeTs - b.typescript),
     fileCodeLineMatch,
     codeCountMatch,
     messageMatch,
@@ -438,18 +438,18 @@ function indent(text: string): string {
 
 function formatFailureDetail(comparison: ComparisonResult): string {
   const lines: string[] = [];
-  const pushBucket = (label: string, buckets: { key: string; typescript: number; typescriptRust: number }[]) => {
+  const pushBucket = (label: string, buckets: { key: string; typescript: number; surgeTs: number }[]) => {
     for (const bucket of buckets) {
-      lines.push(`${label} ${bucket.key} (tsc=${bucket.typescript} rust=${bucket.typescriptRust})`);
+      lines.push(`${label} ${bucket.key} (tsc=${bucket.typescript} rust=${bucket.surgeTs})`);
     }
   };
 
   pushBucket('ONLY_TSC', comparison.matches.onlyTypeScript);
-  pushBucket('ONLY_RUST', comparison.matches.onlyTypeScriptRust);
+  pushBucket('ONLY_RUST', comparison.matches.onlySurgeTs);
   pushBucket('FILE/CODE ONLY_TSC', comparison.matches.onlyTypeScriptFileCode);
-  pushBucket('FILE/CODE ONLY_RUST', comparison.matches.onlyTypeScriptRustFileCode);
+  pushBucket('FILE/CODE ONLY_RUST', comparison.matches.onlySurgeTsFileCode);
   pushBucket('FILE/CODE/LINE ONLY_TSC', comparison.matches.onlyTypeScriptFileCodeLine);
-  pushBucket('FILE/CODE/LINE ONLY_RUST', comparison.matches.onlyTypeScriptRustFileCodeLine);
+  pushBucket('FILE/CODE/LINE ONLY_RUST', comparison.matches.onlySurgeTsFileCodeLine);
 
   return lines.length > 0 ? lines.join('\n') : '(no code/file/line buckets to report)';
 }
