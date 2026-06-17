@@ -24,9 +24,11 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS7006 parameter implicitly any | parameter name span |
 | TS7031 binding element implicitly any | object binding element local name span |
 | TS7005 variable implicitly any | variable name span |
-| TS2451 duplicate block-scoped declaration | duplicate declaration name span |
-| TS2393 duplicate function implementation | duplicate function name span |
+| TS2451 duplicate block-scoped declaration | each conflicting declaration name span (original and duplicate) |
+| TS2393 duplicate function implementation | each conflicting function name span (original and duplicate) |
 | TS2300 duplicate type declaration | duplicate declaration name span |
+| TS2448 block-scoped variable used before declaration | offending read span |
+| TS2454 variable used before assignment | offending read span |
 | TS2588 assign to const | assignment target name span |
 | TS2322 variable initializer mismatch | initializer expression span |
 | TS2322 assignment mismatch | assignment value expression span |
@@ -44,7 +46,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2538 invalid index type | index expression span |
 | TS2353 excess object property | excess property name span |
 | TS2741 missing required property | object literal span |
-| TS2355/TS2366 missing return | function span if available, otherwise no span |
+| TS2355/TS2366 missing return | function/method name span when available, otherwise no span |
 | TS2362/TS2363 arithmetic operand mismatch | offending operand span |
 | TS2365 invalid operator | operator or whole expression span, pinned |
 | TS2367 no-overlap equality | operator or whole expression span, pinned |
@@ -78,6 +80,14 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
   separate span policy in this phase.
 - Duplicate generic type parameters use a custom checker diagnostic and should
   underline the repeated name span, not the declaration keyword.
+- TS2451 and TS2393 are emitted once per conflicting top-level declaration, not
+  only at the redeclaration. tsc flags every participating declaration, so two
+  `let x`/`function f` produce two diagnostics underlining each name span. The
+  first declaration's span is recorded as it is registered and back-emitted when
+  the duplicate is detected.
+- A block-scoped (`let`/`const`) read inside its temporal dead zone is also
+  definitely unassigned, so tsc reports both TS2448 and TS2454 at the same read.
+  Both underline the offending read span.
 - `TS7031` underlines the local binding name in object-pattern parameters.
   Aliases like `{ id: userId }` should underline `userId`, not `id`.
 - Call-expression type arguments are parsed for syntax stability, but v0.59
