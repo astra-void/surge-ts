@@ -10,7 +10,11 @@
 
 ## Verification
 
-- Rust crates: `cargo test`.
+- Rust crates: build the test binary first, then invoke it directly.
+  ```
+  cargo test --no-run 2>&1 | grep -oE '\(target/[^)]+\)' | tr -d '()' | xargs -I{} {}
+  ```
+  Use `-- --test-threads=1` or filter flags (e.g. `-- my_test_name`) after the binary path as needed.
 - Oracle harness tests: `pnpm run oracle:test`.
 - Single-target oracle check: `pnpm run oracle:compare -- --project <preset|tsconfig>`
   (or `--file <source.ts>`) to spot-check one fixture or project.

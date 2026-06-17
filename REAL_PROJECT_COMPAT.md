@@ -12,9 +12,11 @@ CLI binary are `surge-ts`.
 
 - auth-kit matches TypeScript exactly at 0/0 diagnostics under the measured
   command set.
-- The oracle preset sweep is 75/75 under the normal gate (diagnostic code-count
+- The oracle preset sweep is 76/76 under the normal gate (diagnostic code-count
   and file/code/line). Message-text and span/column drift are reported but
-  non-gating unless `--strictMessages` / `--strictSpans` are passed.
+  non-gating unless `--strictMessages` / `--strictSpans` are passed. The
+  `namespace-import-reexport-basic` preset pins re-export of namespace/named/
+  default import bindings (`import * as z; export { z }`).
 - The compact `diagnostics-pack` preset is green at exact 31/31 parity. It pins
   duplicate declaration / function-implementation parity (TS2451/TS2393 on every
   conflicting declaration), the TDZ TS2448+TS2454 pairing for block-scoped reads
@@ -37,6 +39,100 @@ CLI binary are `surge-ts`.
   higher (roughly `~0.6s` in the latest local measurement). Treat those older
   medians as historical and read current numbers from the latest
   `.bench/` measurement artifacts rather than the snapshot-era figures.
+
+## unnamed (Next.js real-project measurement)
+
+`unnamed` is the second real-project compatibility target after auth-kit: a local
+Next.js App-Router project (`moduleResolution: bundler`, `jsx: react-jsx`,
+`strict`, `paths: { "@/*": ["./*"] }`, `lib: dom/dom.iterable/esnext`, includes
+`.next/types/**`). It is **not** a parity claim — it is a measured baseline used
+to find the highest-impact compatibility blocker. Full Next.js / React / Prisma
+parity remains out of scope.
+
+- Command:
+  `pnpm run real:unnamed`
+  (`scripts/real-projects/measure-project.ts --project ../../nextjs/unnamed
+  --name unnamed --allowMissing`), plus
+  `pnpm run oracle:compare -- --project ../../nextjs/unnamed/tsconfig.json
+  --maxDiagnostics 200`.
+- Local project present: **yes** (`../../nextjs/unnamed`). Project source is never
+  copied into this repo; `--allowMissing` keeps the script honest when absent.
+- Artifacts: `.bench/real-projects/unnamed/` (`oracle-compare.json`,
+  `compat-report.json`, `timings.txt`, `measurement.md`).
+
+### Measured baseline
+
+| Metric | Value |
+| --- | ---: |
+| TypeScript (tsc) diagnostics | 0 |
+| surge-ts diagnostics (before this pass) | 259 |
+| surge-ts diagnostics (after this pass) | 230 |
+| raw oracle match | no (surge-ts over-reports; every surge-ts diagnostic is a false positive) |
+
+tsc reports a clean `0`, so all surge-ts diagnostics are over-reports. This is an
+honest "not close to parity" baseline, expected for a real Next.js app exercising
+React/JSX contextual typing, generated route types, and namespaces — all
+currently out of scope.
+
+### Drift categories (surge-only, after this pass; tsc = 0)
+
+| Code | Count | Category |
+| --- | ---: | --- |
+| TS7031 | 57 | JSX/React contextual callback param typing (implicit-any binding elements, e.g. `render={({ field }) => …}`) |
+| TS2339 | 49 | property access on narrowed/union and unmodelled-lib receivers |
+| TS7006 | 23 | JSX/React contextual callback param typing (implicit-any params, e.g. `onCheckedChange={(checked) => …}`) |
+| TS2304 | 21 | namespaces / generated globals (`Prisma`, Next generated `Display`/`NextFontWithVariable`) |
+| TS2536 | 19 | generated Next.js route types (`.next/types/validator.ts` `ParamMap` indexing) / namespace index access |
+| TS2345 | 17 | string-literal-union argument widening/narrowing (`as const` lookup tables) |
+| TS2305 | 11 | type-only re-exports of namespace values (`import type { z }`) and exported-type-with-unresolved-RHS (`Locale`) |
+| TS2322 | 10 | assignability after narrowing |
+| TS2349 | 10 | not-callable on unmodelled shapes |
+| TS2741 | 6 | missing required property |
+| TS2538 / TS2314 / TS2882 | 4 / 2 / 1 | misc index/generic-arity/side-effect-import |
+
+Dominant blockers (TS7031 + TS7006 = 80, ~35% of drift) are React/JSX contextual
+callback inference — explicitly out of scope for this pass (would require broad
+contextual-typing/generic-inference work). Generated-route-type (TS2536) and
+namespace (TS2304/`Prisma`) drift are also out of scope.
+
+### Blocker selected and fixed
+
+**Re-export of an imported binding** (`import * as z from "zod"; export { z }`).
+This was the root cause of the zod `z` over-reports: every form file does
+`import { z } from "zod"`, and zod's `index.d.cts` is
+`import * as z from "./v4/classic/external.cjs"; export { z }`. surge-ts resolved
+the namespace import for *expression* use (`z.object(...)` worked) but the
+`export { z }` named-re-export path did not recognize a namespace/named/default
+**import** binding as a valid local export source, so it emitted `TS2304 Cannot
+find name 'z'` on the re-export and `TS2305 … has no exported member 'z'` on every
+consumer. tsc accepts all three import forms re-exported by name.
+
+Fix (smallest reproduction: `tests/compat-projects/namespace-import-reexport-basic`,
+a relative-module shape derived from the drift category, not copied from
+`unnamed`): the final module export-table build now threads the file's resolved
+import symbols (`ModuleImportBindings.symbols`) into the `export { name }`
+re-export lookup, so a re-exported namespace/named/default import resolves to its
+real imported binding. The import symbols are used **only** for the named
+re-export fallback — not the general initializer-inference environment — so
+`export const X = ns.member()` initializer inference is unchanged (an earlier
+broader version surfaced one cascade false positive on
+`new $Class.getPrismaClientClass()(...)`; scoping the change to the re-export
+lookup removed it). Value re-exports now resolve with their precise type, not a
+fallback-to-`any`.
+
+Impact on `unnamed`: 259 → 230 surge-only diagnostics (−29, the zod `z` cascade:
+9 direct TS2305 plus ~18 downstream TS2339 and misc), **zero new false positives**.
+auth-kit stays exact `0/0`; the oracle preset sweep is **76/76** (75 prior + the
+new fixture) under the normal gate.
+
+### Remaining next recommended fix
+
+Type-only re-export of a namespace value (`import type { z } from "zod"` in the 3
+`*-form.tsx` files, plus the exported-type `Locale` whose RHS
+`(typeof routing.locales)[number]` is unresolved) — the type-side analogue of the
+value re-export fixed here. After that, the dominant remaining drift
+(TS7031/TS7006 React contextual callback inference) is the next high-impact but
+much larger area; it should not be attempted as a "small blocker".
 
 The version-tagged notes below are historical, recording how the checker reached
 this state. Their wall-clock medians and "synthetic built-ins" / "generated
