@@ -26,7 +26,7 @@ The benchmark compares **no-emit project checking** only:
 - `tsc --noEmit --pretty false --project <tsconfig>`
 - `tsgo --noEmit --pretty false --project <tsconfig>`
 - `surge-ts --project <tsconfig> --format json --maxDiagnostics 10000`
-- `surge-ts --project <tsconfig> --format json --maxDiagnostics 10000 --jobs <n>` for deterministic project-checking measurements with explicit Rust worker counts
+- `surge-ts --project <tsconfig> --format json --maxDiagnostics 10000 --jobs <auto|n>` for deterministic project-checking measurements; `auto` (the default) sizes workers by cores and workload, or pass an explicit count
 
 It does not measure watch mode, incremental builds, project references, emitting, or editor performance.
 
@@ -52,7 +52,7 @@ Change iterations, generate visual reports, and output JSON:
 pnpm run bench:compilers -- --preset current --iterations 10 --warmup 2 --json .bench/compiler-bench.json --chart .bench/compiler-bench.svg --html .bench/compiler-bench.html
 ```
 
-Measure Rust at a specific worker count:
+Measure Rust at a specific worker count (default is `auto`; pass `1` for serial or an explicit count to calibrate):
 
 ```bash
 pnpm run bench:compilers -- --project tests/compat-projects/parallel-ordering-basic/tsconfig.json --rustJobs 4

@@ -3,7 +3,7 @@ import path from 'node:path';
 
 export type BenchReportResult = {
   project: string;
-  rustJobs?: number;
+  rustJobs?: number | 'auto';
   stats: Record<string, { median: number; min: number; max: number; runs: number } | null>;
   drift: Record<string, string>;
 };

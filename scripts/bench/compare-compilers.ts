@@ -32,9 +32,11 @@ type RunStats = {
   runs: number;
 };
 
+type RustJobs = number | 'auto';
+
 type BenchResult = {
   project: string;
-  rustJobs: number;
+  rustJobs: RustJobs;
   stats: Record<Tool, RunStats | null>;
   drift: Record<Tool, string>;
 };
@@ -51,7 +53,7 @@ type ParsedArgs = {
   generate: string | null;
   files: number;
   symbols: number;
-  rustJobs: number;
+  rustJobs: RustJobs;
 };
 
 const presets: Record<string, string[]> = {
@@ -226,7 +228,7 @@ function checkTsgo(): boolean {
   }
 }
 
-function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rustJobs: number): { exitCode: number | null, stdout: string, stderr: string, times: number[] } {
+function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rustJobs: RustJobs): { exitCode: number | null, stdout: string, stderr: string, times: number[] } {
   const times: number[] = [];
   let lastOutput = { exitCode: 0 as number | null, stdout: '', stderr: '' };
   
@@ -264,7 +266,7 @@ function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rus
   return { ...lastOutput, times };
 }
 
-function runBenchmark(tool: Tool, tsconfig: string, iterations: number, warmup: number, rustJobs: number): RunStats {
+function runBenchmark(tool: Tool, tsconfig: string, iterations: number, warmup: number, rustJobs: RustJobs): RunStats {
   const { times } = runTool(tool, tsconfig, iterations, warmup, rustJobs);
   times.sort((a, b) => a - b);
   const median = times[Math.floor(times.length / 2)] / 1000;
@@ -353,7 +355,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     generate: null,
     files: 10,
     symbols: 50,
-    rustJobs: 1,
+    rustJobs: 'auto',
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -389,12 +391,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === '--symbols') {
       parsed.symbols = parseInt(argv[++i], 10);
     } else if (arg === '--rustJobs') {
-      parsed.rustJobs = parseInt(argv[++i], 10);
+      const value = argv[++i];
+      parsed.rustJobs = value === 'auto' ? 'auto' : parseInt(value, 10);
     }
   }
 
-  if (!Number.isInteger(parsed.rustJobs) || parsed.rustJobs <= 0) {
-    throw new Error('--rustJobs must be greater than 0');
+  if (parsed.rustJobs !== 'auto' && (!Number.isInteger(parsed.rustJobs) || parsed.rustJobs <= 0)) {
+    throw new Error('--rustJobs must be a positive integer or "auto"');
   }
 
   return parsed;
