@@ -83,6 +83,7 @@ pub(crate) fn check_function_declaration(
         type_parameters,
         parameters,
         return_type,
+        return_type_span,
         body,
         ..
     } = function;
@@ -139,7 +140,7 @@ pub(crate) fn check_function_declaration(
             &type_parameters,
             Some(signature_info),
             return_type.is_some(),
-            name_span,
+            return_type_span.or(name_span),
             ctx,
         );
     });
@@ -161,6 +162,7 @@ pub(crate) fn check_function_declaration_body(
         name_span,
         parameters,
         return_type,
+        return_type_span,
         body,
         ..
     } = function;
@@ -179,7 +181,7 @@ pub(crate) fn check_function_declaration_body(
         type_parameters,
         Some(signature_info),
         return_type.is_some(),
-        name_span,
+        return_type_span.or(name_span),
         ctx,
     );
     record_program_timing(ctx.timings.as_ref(), |timings| {

@@ -1082,7 +1082,7 @@ fn filter_conflicting_interface_members(
 /// A best-effort TypeScript-style rendering of a parsed type for conflict
 /// messages. Returns `None` for shapes whose display would not match the
 /// compiler exactly; the caller then keeps the first declaration silently.
-fn parsed_type_display(ty: &ParsedType) -> Option<String> {
+pub(crate) fn parsed_type_display(ty: &ParsedType) -> Option<String> {
     let rendered = match ty {
         ParsedType::String => "string".to_string(),
         ParsedType::Number => "number".to_string(),

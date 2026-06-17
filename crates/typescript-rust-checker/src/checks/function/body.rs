@@ -1020,7 +1020,8 @@ pub(crate) fn check_function_return_statement(
             }
 
             if !is_assignable_to(&source_type, &return_type) {
-                let source_type_name = source_type.name();
+                let source_type_name =
+                    crate::checks::expr::source_display_name(&source_type, &return_type);
                 let target_type_name = return_type.name();
                 let diagnostic =
                     Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());

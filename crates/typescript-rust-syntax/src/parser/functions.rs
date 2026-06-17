@@ -37,6 +37,10 @@ pub(crate) fn parse_function_declaration(
         .return_type
         .as_ref()
         .and_then(|annotation| parse_type_annotation(annotation));
+    let return_type_span = function
+        .return_type
+        .as_ref()
+        .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span()));
     let body = function
         .body
         .as_ref()
@@ -50,6 +54,7 @@ pub(crate) fn parse_function_declaration(
         type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
         parameters,
         return_type,
+        return_type_span,
         body,
     })
 }

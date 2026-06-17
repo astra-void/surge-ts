@@ -5,7 +5,7 @@ use typescript_rust_syntax::ParsedVariableDeclaration;
 use typescript_rust_types::{Type, is_assignable_to};
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type_anchored};
-use super::expr::{evaluate_expression, widen_type};
+use super::expr::{evaluate_expression, source_display_name, widen_type};
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::symbols::{SymbolInfo, SymbolInfoHandle, SymbolKind, SymbolTable, map_symbol_kind};
@@ -137,7 +137,8 @@ pub(crate) fn check_variable_declaration_against_symbols(
                     && !type_contains_unknown(inferred_initializer_type)
                     && !is_assignable_to(inferred_initializer_type, declared_type)
                 {
-                    let inferred_type_name = inferred_initializer_type.name();
+                    let inferred_type_name =
+                        source_display_name(inferred_initializer_type, declared_type);
                     let declared_type_name = declared_type.name();
                     let diagnostic = Diagnostic::ts2322(
                         &inferred_type_name,

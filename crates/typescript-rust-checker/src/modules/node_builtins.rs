@@ -1,15 +1,21 @@
-//! Node built-in module specifier recognition.
+//! Node built-in module specifier recognition, mirroring tsc's
+//! `nodeCoreModules` set and `getCannotResolveModuleNameErrorForSpecificModule`.
 //!
 //! TypeScript does not bridge `node:fs` to `fs` (or vice versa): each
-//! `declare module` is matched by exact specifier string, so a real
-//! `@types/node` ships both `declare module "fs"` and `declare module
-//! "node:fs"`. The only Node-protocol-specific behavior is the missing-module
-//! diagnostic: when an unresolved specifier names a Node built-in (bare or
-//! `node:`-prefixed), tsc reports the "install @types/node" hint (TS2580 /
-//! TS2591) instead of the generic TS2307. This list mirrors tsc 6.0.3's
-//! `nodeCoreModules` set so the TS2307-vs-hint boundary matches exactly.
+//! `declare module` is matched by exact specifier string. The only
+//! Node-protocol-specific behavior is the missing-module diagnostic: when an
+//! unresolved specifier names a Node built-in, tsc reports the install-node hint
+//! (TS2580 / TS2591) instead of the generic TS2307. The lists and the set
+//! construction below mirror tsc 6.0.3 exactly.
 
-const UNPREFIXED_NODE_CORE_MODULES: &[&str] = &[
+use std::collections::HashSet;
+use std::sync::LazyLock;
+
+use typescript_rust_diagnostics::Diagnostic;
+
+use crate::context::CheckerContext;
+
+const UNPREFIXED_NODE_CORE_MODULES_LIST: &[&str] = &[
     "assert",
     "assert/strict",
     "async_hooks",
@@ -74,19 +80,33 @@ const EXCLUSIVELY_PREFIXED_NODE_CORE_MODULES: &[&str] = &[
     "node:test/reporters",
 ];
 
-/// Whether `specifier` names a Node built-in module, matching tsc's
-/// `nodeCoreModules` set (bare names, their `node:`-prefixed forms, and the
-/// handful of names that exist only with the `node:` prefix).
-pub(crate) fn is_node_core_module(specifier: &str) -> bool {
-    if UNPREFIXED_NODE_CORE_MODULES.contains(&specifier) {
-        return true;
+static NODE_CORE_MODULES: LazyLock<HashSet<String>> = LazyLock::new(|| {
+    let mut set = HashSet::new();
+    for name in UNPREFIXED_NODE_CORE_MODULES_LIST {
+        set.insert((*name).to_string());
+        set.insert(format!("node:{name}"));
+    }
+    for name in EXCLUSIVELY_PREFIXED_NODE_CORE_MODULES {
+        set.insert((*name).to_string());
+    }
+    set
+});
+
+/// Mirrors tsc's `getCannotResolveModuleNameErrorForSpecificModule`: a Node
+/// built-in specifier yields the install-@types/node hint (TS2580 under a
+/// `types: ["*"]` wildcard, TS2591 otherwise); anything else yields `None` so
+/// the caller falls back to the generic TS2307.
+pub(crate) fn cannot_resolve_module_name_error_for_specific_module(
+    ctx: &CheckerContext,
+    module_specifier: &str,
+) -> Option<Diagnostic> {
+    if !NODE_CORE_MODULES.contains(module_specifier) {
+        return None;
     }
 
-    if let Some(rest) = specifier.strip_prefix("node:")
-        && UNPREFIXED_NODE_CORE_MODULES.contains(&rest)
-    {
-        return true;
-    }
-
-    EXCLUSIVELY_PREFIXED_NODE_CORE_MODULES.contains(&specifier)
+    Some(if ctx.options.types_uses_wildcard() {
+        Diagnostic::ts2580(module_specifier, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2591(module_specifier, ctx.file_name.clone())
+    })
 }

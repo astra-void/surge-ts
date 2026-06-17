@@ -886,10 +886,16 @@ pub(crate) fn rename_type_declaration(
 ) -> TypeDeclarationInfo {
     match declaration {
         TypeDeclarationInfo::Alias(mut alias) => {
+            if alias.declared_name.is_none() {
+                alias.declared_name = Some(alias.name.clone());
+            }
             alias.name = exported_name;
             TypeDeclarationInfo::Alias(alias)
         }
         TypeDeclarationInfo::Interface(mut interface) => {
+            if interface.declared_name.is_none() {
+                interface.declared_name = Some(interface.name.clone());
+            }
             interface.name = exported_name;
             TypeDeclarationInfo::Interface(interface)
         }

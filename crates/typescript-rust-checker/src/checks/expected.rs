@@ -382,7 +382,8 @@ fn evaluate_object_literal_with_expected_type(
                 );
                 record_assignability_check();
                 if !is_assignable_to(&actual_type, &expected_property_type) {
-                    let actual_type_name = actual_type.name();
+                    let actual_type_name =
+                        source_display_name(&actual_type, &expected_property_type);
                     let expected_type_name = expected_property_type.name();
                     let diagnostic = Diagnostic::ts2322(
                         &actual_type_name,
@@ -421,8 +422,11 @@ fn evaluate_object_literal_with_expected_type(
                     .any(|property| property.name == property_name.as_str())
             })
     {
-        let source_type_name =
-            object_literal_source_type_name(properties, &inferred_property_types).name();
+        let source_type_name = crate::checks::expr::widen_type(&object_literal_source_type_name(
+            properties,
+            &inferred_property_types,
+        ))
+        .name();
         let target_type_name =
             Type::Object(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
                 expected_object_type.clone()

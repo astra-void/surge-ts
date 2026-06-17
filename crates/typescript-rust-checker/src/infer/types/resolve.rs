@@ -774,10 +774,18 @@ pub(crate) fn resolve_named_type(
         None
     };
 
+    // tsc displays a generic instantiation by its alias form (`Box<string>`), not
+    // the structural expansion. Build that display name from the resolved type
+    // arguments (reusing the cache-key probe when present) and tag the resolved
+    // object with it for diagnostics. Display-only: `alias_name` is excluded from
+    // equality, and no `alias_id` is attached, so assignability is unaffected.
+    let alias_display_name =
+        generic_instantiation_display_name(&named_type, declaration.declared_name());
+
     let generic_cache_key = cached_arguments.as_ref().and(library_cache_key);
     if let (Some(key), Some(arguments)) = (generic_cache_key.as_ref(), cached_arguments.as_ref()) {
         if let Some(hit) = get_persistent_generic_resolution(ctx, key, arguments) {
-            return hit;
+            return tag_generic_object_alias(hit, alias_display_name.as_deref());
         }
     }
 
@@ -815,7 +823,7 @@ pub(crate) fn resolve_named_type(
             cache_persistent_generic_resolution(ctx, &key, arguments, &resolved);
         }
     }
-    resolved
+    tag_generic_object_alias(resolved, alias_display_name.as_deref())
 }
 
 fn declaration_file_is_library_scoped(
@@ -827,6 +835,45 @@ fn declaration_file_is_library_scoped(
         TypeDeclarationInfo::Interface(interface) => interface.file_name.as_str(),
     };
     ctx.is_library_scoped_file(file_name)
+}
+
+/// Builds the alias display name for a generic instantiation (`Box<string>`)
+/// from the *syntactic* type arguments. This renders arguments without resolving
+/// them, so it has no diagnostic or caching side effects and — like tsc — keeps a
+/// type-alias argument by its name rather than expanding it. Returns `None` when
+/// there are no type arguments or any argument is not a simple renderable form.
+fn generic_instantiation_display_name(
+    named_type: &ParsedNamedType,
+    declaration_name: &str,
+) -> Option<String> {
+    if named_type.type_arguments.is_empty() {
+        return None;
+    }
+
+    let mut names = Vec::with_capacity(named_type.type_arguments.len());
+    for argument in &named_type.type_arguments {
+        names.push(crate::driver::parsed_type_display(argument)?);
+    }
+
+    Some(format!("{}<{}>", declaration_name, names.join(", ")))
+}
+
+/// Tags a successfully-resolved generic object instantiation with its alias
+/// display name for diagnostics. Display-only: no `alias_id` is attached, so
+/// nominal assignability is unchanged. Non-object, errored, or already-named
+/// resolutions pass through unchanged.
+fn tag_generic_object_alias(resolved: ResolvedType, display_name: Option<&str>) -> ResolvedType {
+    match (display_name, &resolved.ty) {
+        (Some(name), Type::Object(object))
+            if !resolved.had_error && object.alias_name.is_none() =>
+        {
+            ResolvedType {
+                ty: Type::Object(object.clone().with_alias_name(name)),
+                had_error: resolved.had_error,
+            }
+        }
+        _ => resolved,
+    }
 }
 
 /// Tags a resolved object type with the interface/type-alias name it came from

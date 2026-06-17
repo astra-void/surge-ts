@@ -36,6 +36,11 @@ impl Clone for TypeAliasBody {
 #[derive(Debug)]
 pub(crate) struct TypeAliasInfo {
     pub(crate) name: String,
+    /// The name this declaration was originally declared under at its source,
+    /// captured the first time it is renamed by a re-export/import (`import type
+    /// { Box as ABox }`). Used only for diagnostic display so messages show the
+    /// original name (`Box<string>`) rather than the local binding (`ABox`).
+    pub(crate) declared_name: Option<String>,
     pub(crate) file_name: String,
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
@@ -53,6 +58,7 @@ impl TypeAliasInfo {
     ) -> Self {
         Self {
             name,
+            declared_name: None,
             file_name,
             name_span,
             resolution_scope,
@@ -69,6 +75,7 @@ impl Clone for TypeAliasInfo {
         crate::program::record_type_declaration_header_copy_count();
         Self {
             name: self.name.clone(),
+            declared_name: self.declared_name.clone(),
             file_name: self.file_name.clone(),
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
@@ -104,6 +111,9 @@ impl Clone for InterfaceBody {
 #[derive(Debug)]
 pub(crate) struct InterfaceInfo {
     pub(crate) name: String,
+    /// See [`TypeAliasInfo::declared_name`]. Original source name, captured on the
+    /// first re-export/import rename, for diagnostic display only.
+    pub(crate) declared_name: Option<String>,
     pub(crate) file_name: String,
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
@@ -125,6 +135,7 @@ impl InterfaceInfo {
     ) -> Self {
         Self {
             name,
+            declared_name: None,
             file_name,
             name_span,
             resolution_scope,
@@ -144,6 +155,7 @@ impl Clone for InterfaceInfo {
         crate::program::record_type_declaration_header_copy_count();
         Self {
             name: self.name.clone(),
+            declared_name: self.declared_name.clone(),
             file_name: self.file_name.clone(),
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
@@ -163,6 +175,19 @@ impl Clone for TypeDeclarationInfo {
         match self {
             Self::Alias(info) => Self::Alias(info.clone()),
             Self::Interface(info) => Self::Interface(info.clone()),
+        }
+    }
+}
+
+impl TypeDeclarationInfo {
+    /// The name this declaration was originally declared under at its source,
+    /// falling back to its current binding name when it was never renamed. Used
+    /// for diagnostic display so an import-renamed type shows its original name
+    /// (`Box`) rather than the local binding (`ABox`).
+    pub(crate) fn declared_name(&self) -> &str {
+        match self {
+            Self::Alias(info) => info.declared_name.as_deref().unwrap_or(&info.name),
+            Self::Interface(info) => info.declared_name.as_deref().unwrap_or(&info.name),
         }
     }
 }

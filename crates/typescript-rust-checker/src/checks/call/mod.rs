@@ -359,6 +359,22 @@ pub(crate) fn check_optional_call_like(
 /// parameter is declared as an array (`...inputs: string[]`); each supplied
 /// argument is checked against the element (`string`). Non-array types (e.g. an
 /// unresolved `any`) are kept as-is.
+/// The span tsc anchors a too-many-arguments (TS2554) error on: the range from
+/// the first excess argument through the last supplied argument. Returns `None`
+/// when the relevant argument spans are unavailable so the caller can fall back
+/// to the call/callee span.
+fn excess_argument_span(
+    arguments: &[ParsedCallArgument],
+    expected: usize,
+) -> Option<SyntaxTextSpan> {
+    let first = arguments.get(expected)?.span?;
+    let last = arguments.last().and_then(|argument| argument.span);
+    Some(SyntaxTextSpan {
+        start: first.start,
+        end: last.map(|span| span.end).unwrap_or(first.end),
+    })
+}
+
 fn rest_parameter_element_type(parameter_type: &Type) -> Type {
     match parameter_type {
         Type::Array(element) => element.as_ref().clone(),
@@ -380,15 +396,25 @@ pub(crate) fn check_function_type_call(
     let actual = arguments.len();
     let mut has_unresolved_argument = false;
 
-    if actual < required || (!function_type.is_variadic() && actual > expected) {
+    let too_many = !function_type.is_variadic() && actual > expected;
+    if actual < required || too_many {
         let expected_count = if actual < required {
             required
         } else {
             expected
         };
+        // tsc anchors a too-many-arguments error on the excess arguments (from the
+        // first excess argument through the last), not on the call expression.
+        let span = if too_many {
+            excess_argument_span(arguments, expected)
+                .or(call_span)
+                .or(callee_span)
+        } else {
+            call_span.or(callee_span)
+        };
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone()),
-            call_span.or(callee_span),
+            span,
         ));
         return None;
     }
