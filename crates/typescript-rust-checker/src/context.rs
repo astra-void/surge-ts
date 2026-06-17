@@ -108,6 +108,13 @@ pub(crate) enum DeclarationResolutionState {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct GenericInstantiationCacheEntry {
+    pub(crate) arguments: Vec<Type>,
+    pub(crate) ty: Type,
+    pub(crate) had_error: bool,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
     pub(crate) current_file_kind: FileKind,
@@ -120,6 +127,18 @@ pub(crate) struct CheckerContext {
     pub(crate) type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
     pub(crate) resolved_named_types:
         Arc<Mutex<HashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
+    /// Program-scoped cache for context-free *generic* library/dependency
+    /// instantiations, keyed by declaration and the resolved type arguments. The
+    /// real `lib*.d.ts` typed-array/iterator cluster (`Uint8Array`,
+    /// `ArrayIterator`, `IteratorObject`, …) is mutually recursive and generic, so
+    /// every signature mentioning it would otherwise re-expand the entire tree.
+    /// Each bucket is a small list of `(resolved args, resolution)` checked by
+    /// structural `Type` equality, so a fingerprint collision can never return a
+    /// wrong type. Only top-level (`resolving` empty) instantiations are stored, so
+    /// the cached value matches a standalone resolution. Never reset; shared via
+    /// `Arc` across all `CheckerContext` clones and jobs.
+    pub(crate) program_resolved_generic_types:
+        Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>>>,
     pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
     /// Module augmentations (`declare module "x"` in a file that is itself a
     /// module). Unlike ambient module declarations, these only merge into an
@@ -140,6 +159,14 @@ pub(crate) struct CheckerContext {
     /// they resolve to `unknown` without a TS2304 cascade — tsc resolves them
     /// against the full `@types/*`/generated namespace and reports nothing.
     pub(crate) namespace_member_resolution_depth: usize,
+    /// Lowest `resolving`-stack index that any cycle truncation has re-entered
+    /// since this field was last reset. A resolution that pushed its declaration
+    /// at stack depth `floor` is independent of the enclosing `resolving` context
+    /// — and therefore safe to memoize — only if every cycle it triggered
+    /// re-entered a frame at `floor` or deeper (an *internal* self/mutual cycle).
+    /// A cycle reaching below `floor` means the result depends on an outer frame.
+    /// See the generic instantiation cache in `resolve_named_type`.
+    pub(crate) lowest_cycle_target_index: usize,
     file_kinds: HashMap<String, FileKind>,
 }
 
@@ -165,6 +192,7 @@ impl CheckerContext {
             type_declarations: TypeDeclarationTable::new(),
             type_declaration_scope: None,
             resolved_named_types: Arc::new(Mutex::new(HashMap::new())),
+            program_resolved_generic_types: Arc::new(Mutex::new(HashMap::new())),
             ambient_modules: std::collections::HashMap::new(),
             module_augmentations: std::collections::HashMap::new(),
             ambient_global_symbols: SymbolTable::new(),
@@ -174,8 +202,13 @@ impl CheckerContext {
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
             namespace_member_resolution_depth: 0,
+            lowest_cycle_target_index: usize::MAX,
             file_kinds,
         }
+    }
+
+    pub(crate) fn note_resolution_cycle(&mut self, target_index: usize) {
+        self.lowest_cycle_target_index = self.lowest_cycle_target_index.min(target_index);
     }
 
     /// Whether unresolved type names should be silently treated as `unknown`
@@ -241,6 +274,26 @@ impl CheckerContext {
 
     pub(crate) fn set_symbols(&mut self, symbols: SymbolTable) {
         self.symbols = symbols;
+    }
+
+    /// Whether `file_name` is a trusted upstream library/dependency declaration
+    /// file. Resolutions of declarations in such files are context-free (their
+    /// bodies reference only the global ambient surface) and emit no use-site
+    /// diagnostics under `skipLibCheck`, so they are safe to memoize program-wide.
+    pub(crate) fn is_library_scoped_file(&self, file_name: &str) -> bool {
+        if crate::default_lib::is_physical_default_lib_file_name(file_name)
+            || crate::default_lib::is_generated_default_lib_file_name(file_name)
+        {
+            return true;
+        }
+        matches!(
+            self.file_kinds.get(file_name),
+            Some(
+                FileKind::DependencyDeclaration
+                    | FileKind::GeneratedDeclaration
+                    | FileKind::PhysicalDefaultLib
+            )
+        )
     }
 
     pub(crate) fn lookup_type_declaration(&self, name: &str) -> Option<&TypeDeclarationInfo> {

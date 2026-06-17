@@ -22,7 +22,8 @@ pub(crate) fn resolve_type_alias(
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     let declaration_key = declaration_resolution_key(&alias.file_name, &alias.name);
-    if resolving.iter().any(|name| name == &declaration_key) {
+    if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
+        ctx.note_resolution_cycle(index);
         emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
         return ResolvedType {
             ty: Type::Unknown,

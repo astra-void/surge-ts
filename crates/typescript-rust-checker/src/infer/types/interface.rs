@@ -22,7 +22,8 @@ pub(crate) fn resolve_interface(
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
     let declaration_key = declaration_resolution_key(&interface.file_name, &interface.name);
-    if resolving.iter().any(|name| name == &declaration_key) {
+    if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
+        ctx.note_resolution_cycle(index);
         emit_type_declaration_cycle(&interface.name, interface.name_span, ctx);
         return ResolvedType {
             ty: Type::Unknown,

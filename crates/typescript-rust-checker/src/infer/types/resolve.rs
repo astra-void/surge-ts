@@ -671,9 +671,12 @@ pub(crate) fn resolve_named_type(
         };
     }
 
-    let declaration = ctx.lookup_type_declaration(&named_type.name).cloned();
-
-    let Some(declaration) = declaration else {
+    // Classify the declaration through a borrow so a cache hit (the common case
+    // for shared library/dependency types) never deep-clones the full
+    // interface/alias payload. The owned clone below is taken only on a genuine
+    // resolution miss, where `resolve_interface`/`resolve_type_alias` need to own
+    // the declaration while `ctx` is borrowed mutably.
+    let Some(declaration_ref) = ctx.lookup_type_declaration(&named_type.name) else {
         // A qualified reference (`React.Foo`, `Prisma.Bar`) we cannot resolve is
         // treated as no-cascade: tsc resolves these against the full namespace
         // surface and reports nothing, so emitting TS2304 here would be a false
@@ -709,11 +712,15 @@ pub(crate) fn resolve_named_type(
     }
 
     if !has_type_arguments && !is_generic_declaration {
-        let cache_key = type_declaration_resolution_key(&declaration);
+        let cache_key = type_declaration_resolution_key(declaration_ref);
         if let Some(cached) = get_cached_named_type_resolution(ctx, &cache_key, resolving) {
             return cached;
         }
 
+        let declaration = ctx
+            .lookup_type_declaration(&named_type.name)
+            .cloned()
+            .expect("declaration present on non-generic resolution miss");
         mark_named_type_resolution_in_progress(ctx, &cache_key);
         let resolved = match declaration {
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
@@ -742,6 +749,59 @@ pub(crate) fn resolve_named_type(
         return resolved;
     }
 
+    // A generic library/dependency instantiation is context-free once its type
+    // arguments are fixed: its body binds against its own captured
+    // `resolution_scope` and references only the global ambient surface. The real
+    // lib typed-array/iterator cluster (`Uint8Array`, `ArrayIterator`,
+    // `IteratorObject`, …) is mutually recursive and generic, so without memoizing
+    // it every signature mentioning it re-expands the whole tree. Cache library
+    // instantiations program-wide, keyed by the resolved type arguments. The
+    // store is gated on the resolution being free of *external* cycles (see
+    // `lowest_cycle_target_index`) so a cached value matches a standalone
+    // resolution and never depends on what an enclosing frame had on the stack.
+    let library_scoped = declaration_file_is_library_scoped(declaration_ref, ctx);
+    let library_cache_key =
+        library_scoped.then(|| type_declaration_resolution_key(declaration_ref));
+    let cached_arguments = if library_scoped {
+        // Resolve the arguments to form the cache key. Discard any diagnostics this
+        // probe produces; the authoritative resolution below re-emits them.
+        let diagnostics_before = ctx.diagnostics().len();
+        let mut arguments = Vec::with_capacity(named_type.type_arguments.len());
+        let mut all_clean = true;
+        for argument in &named_type.type_arguments {
+            let resolved = resolve_parsed_type(argument.clone(), ctx, resolving, substitution);
+            if resolved.had_error {
+                all_clean = false;
+                break;
+            }
+            arguments.push(resolved.ty);
+        }
+        ctx.truncate_diagnostics(diagnostics_before);
+        all_clean.then_some(arguments)
+    } else {
+        None
+    };
+
+    let generic_cache_key = cached_arguments.as_ref().and(library_cache_key);
+    if let (Some(key), Some(arguments)) = (generic_cache_key.as_ref(), cached_arguments.as_ref()) {
+        if let Some(hit) = get_persistent_generic_resolution(ctx, key, arguments) {
+            return hit;
+        }
+    }
+
+    let declaration = ctx
+        .lookup_type_declaration(&named_type.name)
+        .cloned()
+        .expect("declaration present on generic resolution miss");
+
+    // Measure cycles triggered by this resolution alone. The declaration is pushed
+    // onto `resolving` (at index `floor`) inside `resolve_interface`/`resolve_type_alias`,
+    // so a re-entry at `floor` or deeper is an internal self/mutual cycle that
+    // resolves deterministically; a re-entry below `floor` reaches an outer frame.
+    let floor = resolving.len();
+    let saved_lowest_cycle = ctx.lowest_cycle_target_index;
+    ctx.lowest_cycle_target_index = usize::MAX;
+
     let resolved = match declaration {
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
             alias,
@@ -759,7 +819,27 @@ pub(crate) fn resolve_named_type(
             substitution,
         ),
     };
+
+    let subtree_lowest_cycle = ctx.lowest_cycle_target_index;
+    ctx.lowest_cycle_target_index = saved_lowest_cycle.min(subtree_lowest_cycle);
+
+    if subtree_lowest_cycle >= floor {
+        if let (Some(key), Some(arguments)) = (generic_cache_key, cached_arguments) {
+            cache_persistent_generic_resolution(ctx, &key, arguments, &resolved);
+        }
+    }
     resolved
+}
+
+fn declaration_file_is_library_scoped(
+    declaration: &TypeDeclarationInfo,
+    ctx: &CheckerContext,
+) -> bool {
+    let file_name = match declaration {
+        TypeDeclarationInfo::Alias(alias) => alias.file_name.as_str(),
+        TypeDeclarationInfo::Interface(interface) => interface.file_name.as_str(),
+    };
+    ctx.is_library_scoped_file(file_name)
 }
 
 /// Tags a resolved object type with the interface/type-alias name it came from

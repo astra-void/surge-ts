@@ -8,6 +8,7 @@ use typescript_rust_types::Type;
 
 use crate::context::{
     CheckerContext, DeclarationNamespace, DeclarationResolutionKey, DeclarationResolutionState,
+    GenericInstantiationCacheEntry,
 };
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::TypeDeclarationInfo;
@@ -85,6 +86,49 @@ pub(crate) fn cache_named_type_resolution(
                 had_error: resolved.had_error,
             },
         );
+    }
+}
+
+/// Upper bound on distinct instantiations memoized per generic declaration. The
+/// hot library types resolve to a handful of top-level argument sets; the cap is
+/// a defensive guard against a pathological declaration accumulating an
+/// unbounded bucket that linear-search would have to scan.
+const GENERIC_INSTANTIATION_BUCKET_CAP: usize = 64;
+
+pub(crate) fn get_persistent_generic_resolution(
+    ctx: &CheckerContext,
+    key: &DeclarationResolutionKey,
+    arguments: &[Type],
+) -> Option<ResolvedType> {
+    let cache = ctx.program_resolved_generic_types.lock().ok()?;
+    let bucket = cache.get(key)?;
+    bucket.iter().find_map(|entry| {
+        (entry.arguments == arguments).then(|| ResolvedType {
+            ty: entry.ty.clone(),
+            had_error: entry.had_error,
+        })
+    })
+}
+
+pub(crate) fn cache_persistent_generic_resolution(
+    ctx: &CheckerContext,
+    key: &DeclarationResolutionKey,
+    arguments: Vec<Type>,
+    resolved: &ResolvedType,
+) {
+    if let Ok(mut cache) = ctx.program_resolved_generic_types.lock() {
+        let bucket = cache.entry(key.clone()).or_default();
+        if bucket.iter().any(|entry| entry.arguments == arguments) {
+            return;
+        }
+        if bucket.len() >= GENERIC_INSTANTIATION_BUCKET_CAP {
+            return;
+        }
+        bucket.push(GenericInstantiationCacheEntry {
+            arguments,
+            ty: resolved.ty.clone(),
+            had_error: resolved.had_error,
+        });
     }
 }
 
