@@ -1,5 +1,13 @@
 # Real Project Compatibility
 
+This document measures `surge-ts` (a Rust-based TypeScript noEmit compatibility
+checker) against real projects and baseline compilers. `TypeScript`/`tsc` refer
+to the upstream compiler used as the oracle baseline. Historical version notes
+below may refer to the project by its earlier `surge-ts` / `ts-rust`
+labels; those are kept verbatim as measured-at-the-time records. The internal
+Cargo crates are still named `surge-ts-*`; current report output and the
+CLI binary are `surge-ts`.
+
 ## Current state
 
 - auth-kit matches TypeScript exactly at 0/0 diagnostics under the measured
@@ -60,8 +68,8 @@ no-cascade stand-in.
 v1.2.5 is a performance pass after v1.2.4, not a new TypeScript semantic phase.
 No new TypeScript surface was added and, on the latest auth-kit measurement,
 exact diagnostics remain 0 and raw oracle match stays yes. Four changes land:
-(1) path canonicalization is memoized per run in both `typescript-rust-checker`
-and `typescript-rust-config` so the repeated `std::fs::canonicalize` (realpath)
+(1) path canonicalization is memoized per run in both `surge-ts-checker`
+and `surge-ts-config` so the repeated `std::fs::canonicalize` (realpath)
 syscalls in type/module resolution and the project-discovery import-graph
 fixpoint are paid once instead of every probe; (2) the instrumentation counters
 that funnel through a single global `Mutex<ProgramCounters>` are gated behind
@@ -262,14 +270,14 @@ at `617.091ms`, and `flow_narrowing` at `598.324ms`. The counters now show
 `flow_local_name_clone_count=0`, `string_path_lookup_count=30470`, and
 `canonical_file_id_lookup_count=14574`. Exact diagnostics stayed at 0, raw
 oracle match stayed yes, and compatReport diagnosticsTotal stayed 0. Reviewers
-should inspect `crates/typescript-rust-checker/Cargo.toml`,
-`crates/typescript-rust-checker/src/arena.rs`,
-`crates/typescript-rust-checker/src/lib.rs`,
-`crates/typescript-rust-checker/src/symbols/type_declarations.rs`,
-`crates/typescript-rust-checker/src/program.rs`,
-`crates/typescript-rust-checker/ARENA_ID_PLAN.md`,
+should inspect `crates/surge-ts-checker/Cargo.toml`,
+`crates/surge-ts-checker/src/arena.rs`,
+`crates/surge-ts-checker/src/lib.rs`,
+`crates/surge-ts-checker/src/symbols/type_declarations.rs`,
+`crates/surge-ts-checker/src/program.rs`,
+`crates/surge-ts-checker/ARENA_ID_PLAN.md`,
 `REAL_PROJECT_COMPAT.md`,
-`crates/typescript-rust-checker/REAL_PROJECT_COMPAT.md`, and
+`crates/surge-ts-checker/REAL_PROJECT_COMPAT.md`, and
 `.bench/auth-kit-measurement.md` to verify the landing surface. The arena-backed
 slice now covers declaration keys plus declaration payloads, and payload
 cloning is no longer part of table cloning, even though direct payload clone
@@ -349,8 +357,8 @@ Preflight commands for future reruns:
 - `cargo test`
 - `pnpm run oracle:test`
 - `pnpm run bench:test`
-- `cargo run -q -p typescript-rust-cli -- --project /Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json --showConfig`
-- `cargo run -q -p typescript-rust-cli -- --project /Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json --compatReport --maxDiagnostics 200`
+- `cargo run -q -p surge-ts-cli -- --project /Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json --showConfig`
+- `cargo run -q -p surge-ts-cli -- --project /Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json --compatReport --maxDiagnostics 200`
 - `pnpm run oracle:compare -- --project /Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json --maxDiagnostics 200`
 
 Measured real-project state for `/Users/returnf4lse/Desktop/Workspace/typescript/auth-project/auth-kit/tsconfig.json`:
@@ -358,15 +366,15 @@ Measured real-project state for `/Users/returnf4lse/Desktop/Workspace/typescript
 | Metric | Value |
 | --- | ---: |
 | TypeScript diagnostics | 0 |
-| typescript-rust diagnostics, raw oracle compare | 0 |
-| typescript-rust diagnostics, compat-report JSON | 0 |
+| surge-ts diagnostics, raw oracle compare | 0 |
+| surge-ts diagnostics, compat-report JSON | 0 |
 | loaded files total | 65 |
 | root source files | 65 |
 | root declarations | 0 |
 | dependency declarations | 35 |
 | generated files | 231 |
 | diagnostics from dependency declarations | 0 |
-| Rust-only `typescript-rust::*` diagnostics in `tsc` profile | 20 |
+| Rust-only `surge::*` diagnostics in `tsc` profile | 20 |
 
 auth-kit currently matches TypeScript with 0 diagnostics under the measured
 command set.
@@ -420,7 +428,7 @@ Example:
 
 ```bash
 mkdir -p .local-projects
-cargo run -p typescript-rust-cli -- --project .local-projects/<project>/tsconfig.json --compatReport --maxDiagnostics 200
+cargo run -p surge-ts-cli -- --project .local-projects/<project>/tsconfig.json --compatReport --maxDiagnostics 200
 pnpm run oracle:compare -- --project .local-projects/<project>/tsconfig.json --maxDiagnostics 200
 pnpm run oracle:compare -- --file examples/basic.ts
 pnpm run oracle:compare -- --file examples/basic.ts --ignoreConfig
@@ -441,7 +449,7 @@ The report does not guarantee that a project is expected to pass.
 The oracle comparison is also raw measurement. It does not guarantee that
 message text or exact spans match; it starts with code, file, and line/column
 normalization first.
-Diagnostic codes and messages are catalog-driven in `typescript-rust-diagnostics`,
+Diagnostic codes and messages are catalog-driven in `surge-ts-diagnostics`,
 so catalog updates can legitimately move oracle output even when checker
 semantics stay the same.
 Use `--project` for `tsconfig.json`-based projects and `--file` for single
@@ -505,10 +513,10 @@ Type assertions (`as` expressions) were chosen for v0.73 because they are extrem
 v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics, full control-flow narrowing, `??=`, and non-null assertions remain unsupported.
 
 ## Note on Benchmark Harness (v0.75/v0.75.2)
-v0.75/v0.75.2 adds a compiler speed benchmark harness (`scripts/bench/compare-compilers.ts`) along with diagnostic-drift-aware reporting. This is a developer-facing regression tool comparing no-emit project checks across `tsc`, `tsgo` (optional), and the `typescript-rust-cli` release binary. It enforces a TS 7-oriented policy that avoids `ignoreDeprecations` in committed fixtures and requires looking at semantic equivalence alongside wall-clock performance. These are local-machine-relative developer aids; SVG/HTML reports are visualization aids, not marketing claims. Diagnostic drift must be read with timing.
+v0.75/v0.75.2 adds a compiler speed benchmark harness (`scripts/bench/compare-compilers.ts`) along with diagnostic-drift-aware reporting. This is a developer-facing regression tool comparing no-emit project checks across `tsc`, `tsgo` (optional), and the `surge-ts-cli` release binary. It enforces a TS 7-oriented policy that avoids `ignoreDeprecations` in committed fixtures and requires looking at semantic equivalence alongside wall-clock performance. These are local-machine-relative developer aids; SVG/HTML reports are visualization aids, not marketing claims. Diagnostic drift must be read with timing.
 
 ## Note on Type Operators (v0.78)
-v0.78 implements a parser-safe foundation for `typeof value`, `keyof T`, and the `keyof typeof constObject` pattern, in a narrow type-position subset. The `typeof` type query resolves top-level or in-scope values to their inferred types. `keyof` resolves object and interface types to string literal unions of their properties. If a value or type is unresolved or unsupported, `typescript-rust` defaults to parser-safe conservative emission, outputting `TS2304` or resolving to `Unknown` to match TypeScript's fallback behavior. Advanced types like `typeof import("pkg")`, namespace/class constructor `typeof`, conditional types, template literal types, index signatures, and exact intersection-of-keys semantics for unions remain unsupported.
+v0.78 implements a parser-safe foundation for `typeof value`, `keyof T`, and the `keyof typeof constObject` pattern, in a narrow type-position subset. The `typeof` type query resolves top-level or in-scope values to their inferred types. `keyof` resolves object and interface types to string literal unions of their properties. If a value or type is unresolved or unsupported, `surge-ts` defaults to parser-safe conservative emission, outputting `TS2304` or resolving to `Unknown` to match TypeScript's fallback behavior. Advanced types like `typeof import("pkg")`, namespace/class constructor `typeof`, conditional types, template literal types, index signatures, and exact intersection-of-keys semantics for unions remain unsupported.
 
 ## Note on Indexed Access Types (v0.79/v0.79.2)
 v0.79 implements a parser-safe indexed access type foundation (`T[K]`, `T[keyof T]`). It supports narrow indexed access types including object/interface string-literal property lookup, `T[keyof T]` value unions, and tuple numeric literal indexing. v0.79.2 fixes unresolved-key indexed access diagnostic parity and non-null assertion optional chain parity, ensuring that the default `tsc` profile emits `TS2304` and `TS2538` cascades correctly, and that optional chain `undefined` propagation behaves accurately around non-null assertions and `satisfies` expressions, matching TypeScript's cascading behavior. Advanced usages like conditional types, template literal types, index signatures, and generic indexed access remain unsupported at that historical point. v1.1 later adds a narrow concrete-substitution slice for `T["key"]`, `T[K]`, and `T[keyof T]`, so this note should be read as pre-v1.1 context only.

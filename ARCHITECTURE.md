@@ -1,6 +1,16 @@
 # Architecture
 
+`surge-ts` is a Rust-based TypeScript noEmit compatibility checker: it aims for
+tsc-compatible diagnostics in noEmit-style project checks. `TypeScript` below
+refers to the language/ecosystem being checked, not the project.
+
 This workspace is organized as small crates with stable public façades and internal modules that can evolve without forcing broad API churn.
+
+> Naming note: the public project and reports are named `surge-ts`, and the CLI
+> binary command is `surge`. The internal Cargo crates are named `surge-ts-*`
+> (e.g. `surge-ts-cli`, `surge-ts-checker`) and crate directories live under
+> `crates/surge-ts-*`. Custom diagnostic codes use the `surge::` namespace (e.g.
+> `surge::project-has-no-source-files`).
 
 ## Current compatibility baseline
 
@@ -37,16 +47,16 @@ v0.68.1 hardens diagnostic coverage metadata, ensuring that `support = "emitted"
 
 v0.48 introduced the crate-level module split across types, diagnostics, config, syntax, and checker. v0.48.1 finishes the checker/config/syntax hardening pass by moving the remaining internals into focused submodules while keeping the public crate-root APIs stable.
 
-v1.2.5 continues that direction inside `typescript-rust-checker` by decomposing the largest checker internals from single files into directory submodules, with no public-API change: `checks/call/` (`mod`, `builtins`, `property`, `instantiate`), `checks/function/` (`mod`, `signature`, `body`, `narrowing`), `infer/expression/` (`mod`, `literals`, `operators`, `access`, `functions`), `infer/types/` (`mod`, `resolve`, `interface`, `utility`, `cache`, `diagnostics`), `modules/` (`mod`, `imports`, `exports`, `resolution`, `diagnostics`), `program/` (`mod`, `binding`, `statements`, `globals`, `ambient`), and `flow/` (`mod`, `branch`, `expr`, `facts`). Counter instrumentation also moved into a dedicated `metrics` module gated behind `--timings`.
+v1.2.5 continues that direction inside `surge-ts-checker` by decomposing the largest checker internals from single files into directory submodules, with no public-API change: `checks/call/` (`mod`, `builtins`, `property`, `instantiate`), `checks/function/` (`mod`, `signature`, `body`, `narrowing`), `infer/expression/` (`mod`, `literals`, `operators`, `access`, `functions`), `infer/types/` (`mod`, `resolve`, `interface`, `utility`, `cache`, `diagnostics`), `modules/` (`mod`, `imports`, `exports`, `resolution`, `diagnostics`), `program/` (`mod`, `binding`, `statements`, `globals`, `ambient`), and `flow/` (`mod`, `branch`, `expr`, `facts`). Counter instrumentation also moved into a dedicated `metrics` module gated behind `--timings`.
 
 | Crate | Responsibility |
 | --- | --- |
-| `typescript-rust-syntax` | Parse TypeScript source into a simplified AST |
-| `typescript-rust-types` | Core type representation, display, unions, and assignability |
-| `typescript-rust-checker` | Semantic checking and diagnostic emission |
-| `typescript-rust-diagnostics` | Diagnostic codes, catalog, generated accessors, and rendering |
-| `typescript-rust-config` | `tsconfig.json` loading, normalization, and file discovery |
-| `typescript-rust-cli` | CLI orchestration |
+| `surge-ts-syntax` | Parse TypeScript source into a simplified AST |
+| `surge-ts-types` | Core type representation, display, unions, and assignability |
+| `surge-ts-checker` | Semantic checking and diagnostic emission |
+| `surge-ts-diagnostics` | Diagnostic codes, catalog, generated accessors, and rendering |
+| `surge-ts-config` | `tsconfig.json` loading, normalization, and file discovery |
+| `surge-ts-cli` | CLI orchestration |
 
 ## Boundary Rules
 
@@ -66,22 +76,22 @@ v1.2.5 continues that direction inside `typescript-rust-checker` by decomposing 
 
 ## Suggested Homes For Future Features
 
-- Interface parsing and checking: `typescript-rust-syntax` and `typescript-rust-checker`
-- Arrays and tuples: `typescript-rust-syntax`, `typescript-rust-types`, and `typescript-rust-checker`
-- Literal types: `typescript-rust-syntax`, `typescript-rust-types`, and `typescript-rust-checker`
-- Imports and exports: `typescript-rust-syntax`, `typescript-rust-checker`, and `typescript-rust-config`
-- Program checking: `typescript-rust-checker` and CLI project mode
-- Compatibility reporting and triage: `typescript-rust-cli` and `typescript-rust-checker`
+- Interface parsing and checking: `surge-ts-syntax` and `surge-ts-checker`
+- Arrays and tuples: `surge-ts-syntax`, `surge-ts-types`, and `surge-ts-checker`
+- Literal types: `surge-ts-syntax`, `surge-ts-types`, and `surge-ts-checker`
+- Imports and exports: `surge-ts-syntax`, `surge-ts-checker`, and `surge-ts-config`
+- Program checking: `surge-ts-checker` and CLI project mode
+- Compatibility reporting and triage: `surge-ts-cli` and `surge-ts-checker`
 - Oracle comparison: `scripts/oracle/compare-tsc.ts` for project and file mode
   validation (including --ignoreConfig for standalone file checking) plus diagnostic drift measurement
-- New diagnostics: `typescript-rust-diagnostics` (catalog-driven, including CLI-only diagnostics like TS5112)
-- New project-visibility diagnostics: `typescript-rust-cli` may emit a custom `typescript-rust::project-has-no-source-files` diagnostic when project discovery returns zero source files
-- Checker-local path normalization lives in `typescript-rust-checker`; config loading and normalization remain in `typescript-rust-config` for tsconfig discovery.
-- Default-lib loading lives in `typescript-rust-checker` and is shared by single-file and program checking. Project mode loads the physical `lib*.d.ts` graph from the local `typescript` package by default, feeding lib selection from tsconfig into the real ambient declarations; the generated subset is the fallback when that package is absent (and the single-file support path).
+- New diagnostics: `surge-ts-diagnostics` (catalog-driven, including CLI-only diagnostics like TS5112)
+- New project-visibility diagnostics: `surge-ts-cli` may emit a custom `surge::project-has-no-source-files` diagnostic when project discovery returns zero source files
+- Checker-local path normalization lives in `surge-ts-checker`; config loading and normalization remain in `surge-ts-config` for tsconfig discovery.
+- Default-lib loading lives in `surge-ts-checker` and is shared by single-file and program checking. Project mode loads the physical `lib*.d.ts` graph from the local `typescript` package by default, feeding lib selection from tsconfig into the real ambient declarations; the generated subset is the fallback when that package is absent (and the single-file support path).
 
 ## Diagnostics
 
-Diagnostics are catalog-driven in `typescript-rust-diagnostics`.
+Diagnostics are catalog-driven in `surge-ts-diagnostics`.
 The Rust accessors are generated from `diagnostic-messages.json`, and spans remain a checker/parser concern rather than a catalog concern.
 
 The default human-readable CLI output is `tsc`-compatible (`render_diagnostics_tsc`):
@@ -101,3 +111,26 @@ v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable be
 - A `declare module "pkg"` block in a module file augments an already-resolved target (merging exported interfaces, adding new exported functions/types); augmenting an unresolved target keeps the TS2307 no-cascade policy.
 - Unsupported declaration syntax stays parser-safe and emits a stable pinned diagnostic.
 - Current project mode supports focused declaration-side modern package resolution (conditional/pattern `exports`, `imports`, `typesVersions`, self-name), configured `@types`/`typeRoots`, class/static/constructor semantics, physical `lib*.d.ts` loading by default (generated subset as fallback), JSX props checking, and a narrow declaration-merging/module-augmentation slice. Full automatic `@types` discovery, full `lib.d.ts`/Node parity, and full TypeScript parity remain out of scope. `baseUrl` remains unsupported/deprecated.
+
+## Naming
+
+The public project and reports are named `surge-ts`; the CLI binary command is
+`surge`. The internal Cargo crates are `surge-ts-*` and live under
+`crates/surge-ts-*`, with `use surge_ts_*` import paths throughout `src/` and
+`tests/`. Custom diagnostic codes use the `surge::` namespace (e.g.
+`surge::project-has-no-source-files`), and runtime env vars use the `SURGE_`
+prefix (`SURGE_PHYSICAL_LIBS`, `SURGE_TIMINGS`).
+
+| Crate | Role |
+| --- | --- |
+| `surge-ts-cli` | CLI orchestration (binary `surge`) |
+| `surge-ts-checker` | Semantic checking and diagnostic emission |
+| `surge-ts-syntax` | Parsing into the simplified AST |
+| `surge-ts-types` | Core type representation |
+| `surge-ts-diagnostics` | Diagnostic codes, catalog, generated accessors |
+| `surge-ts-config` | `tsconfig.json` loading and discovery |
+| `surge-ts-diagnostics-codegen` | Catalog code generation |
+
+One internal stats key is intentionally left unchanged: the bench `ts-rust` key
+in saved benchmark archive JSON is kept stable so older archives remain
+readable.

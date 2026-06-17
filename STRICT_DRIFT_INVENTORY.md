@@ -56,7 +56,7 @@ under the normal gate (omitted from the table since it is uniformly *yes*).
 
 > Type 'string' is not assignable to type '{ hash: string; host: string; hostname: string; href: string; origin: string; password: string; pathname: string; port: string; protocol: string; search: string; searchParams: { append: (string, string) => void; delete: (string, string) => void; entries: () => { [key: string]: any; }; forEach: ((string, string, unknown) => void, any) => void; get: (string) => string | undefined; getAll: (string) => string[]; has: (string, string) => boolean; keys: () => { [key: string]: any; }; set: (string, string) => void; size: number; sort: () => void; toString: () => string; values: () => { [key: string]: any; }; }; toJSON: () => string; toString: () => string; username: string; }'.
 
-TypeScript prints the alias name `URL`; typescript-rust prints the fully expanded
+TypeScript prints the alias name `URL`; surge-ts prints the fully expanded
 structural object type (and renders method types without parameter names, e.g.
 `(string, string) => void`).
 
@@ -107,9 +107,9 @@ offset.
 
 **Span-anchor policy observed (consistent across all 35 rows):** for the same
 `(file, code, line)`, TypeScript anchors the diagnostic on the *left/target*
-syntactic node and typescript-rust anchors on the *right/value* node:
+syntactic node and surge-ts anchors on the *right/value* node:
 
-| Code / construct | TypeScript anchor | typescript-rust anchor |
+| Code / construct | TypeScript anchor | surge-ts anchor |
 | --- | --- | --- |
 | TS2322 on `let/const x: T = v` | declaration name `x` | initializer `v` |
 | TS2322 on object-literal member `k: v` | property key `k` | value `v` |
@@ -144,18 +144,18 @@ resolved type:
 
 - **Literal vs widened display** (16 "both" rows): tsc widens the source literal
   for the message (`123`→`number`, `"u1"`→`string`, `{ id: "u1"; }`→`{ id: string; }`),
-  typescript-rust prints the literal/narrow form. This is the known
+  surge-ts prints the literal/narrow form. This is the known
   display-widening policy gap; here it remains for TS2322/TS2741 on variable and
   object-literal assignments.
 - **Alias vs structural display** (TS2353 `Box<string>` vs `{ value: string; }`;
-  TS2322 `URL` vs full expansion): tsc prints the alias/named type, typescript-rust
+  TS2322 `URL` vs full expansion): tsc prints the alias/named type, surge-ts
   prints the expanded structural type.
 - **Optional-prop / member-order normalization** (jsx-intrinsic-elements:
   `{ disabled?: boolean | undefined; children?: unknown; }` vs
   `{ children?: unknown; disabled?: boolean; }`): member ordering differs and tsc
-  renders `boolean | undefined` for an optional where typescript-rust renders
+  renders `boolean | undefined` for an optional where surge-ts renders
   `boolean`.
-- **Parameter-name-less function display** (Detail D1): typescript-rust prints
+- **Parameter-name-less function display** (Detail D1): surge-ts prints
   `(string, string) => void` (no parameter names).
 
 All require type-formatting / diagnostic-argument improvements. **Do not fix in
@@ -371,13 +371,13 @@ match everywhere (normal gate stays **75 PASS / 0 FAIL**).
   tsc. Threaded a new `ParsedFunctionDeclaration.return_type_span` (captured from
   the oxc return-type annotation's inner type span) narrowly through the two
   function-declaration check paths to `emit_missing_return_diagnostic`, falling
-  back to the name span when absent. `typescript-rust-syntax` AST + parser,
+  back to the name span when absent. `surge-ts-syntax` AST + parser,
   `checks/function/mod.rs`.
 
 **Deferred (3 message-drift targets — alias/JSX/member-order display):**
 
 - `generic-cache-module-source-not-persisted-basic` (TS2353): tsc prints the
-  generic-alias target `Box<string>`; typescript-rust prints the structural
+  generic-alias target `Box<string>`; surge-ts prints the structural
   `{ value: string; }` / `{ item: string; }`. **Deferred** — requires the generic
   type-alias instantiation to retain the alias name *and* its instantiated type
   arguments on the resulting object type, plus a `Name<Args>` display path. The
@@ -385,7 +385,7 @@ match everywhere (normal gate stays **75 PASS / 0 FAIL**).
   arguments through instantiation is type-identity metadata, not a display-only
   change.
 - `jsx-dom-physical-lib-prop-basic` (TS2322): tsc prints the physical-lib nominal
-  `URL`; typescript-rust prints the full structural expansion (and renders
+  `URL`; surge-ts prints the full structural expansion (and renders
   method types without parameter names, e.g. `(string, string) => void`).
   **Deferred** — same nominal-name-retention gap as above, plus a separate
   function-type display change to emit parameter names.
