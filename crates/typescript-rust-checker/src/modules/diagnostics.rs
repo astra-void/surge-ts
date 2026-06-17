@@ -231,7 +231,7 @@ pub(crate) fn module_has_explicit_default_export(
     if program_files.iter().any(|file| {
         file.file_kind == FileKind::DependencyDeclaration
             && file.file_name.contains(module_specifier)
-            && file.source_text.contains("export default")
+            && file.has_export_default
     }) {
         return true;
     }
@@ -256,7 +256,7 @@ pub(crate) fn module_has_explicit_default_export(
 }
 
 pub(crate) fn file_has_explicit_default_export(file: &ParsedProgramFile) -> bool {
-    file.source_text.contains("export default")
+    file.has_export_default
 }
 
 pub(crate) fn allows_synthetic_default_import(

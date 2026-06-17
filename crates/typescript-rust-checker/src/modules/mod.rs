@@ -112,7 +112,7 @@ mod tests {
                 let parsed = typescript_rust_syntax::parse_source(source_text, file_name);
                 ParsedProgramFile {
                     file_name: parsed.file_name,
-                    source_text: (*source_text).to_string(),
+                    has_export_default: source_text.contains("export default"),
                     statements: parsed.statements,
                     parser_errors: parsed.parser_errors,
                     is_module: parsed.is_module,

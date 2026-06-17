@@ -49,8 +49,11 @@ pub(crate) struct FunctionDeclarationLocation {
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedProgramFile {
     pub(crate) file_name: String,
-    #[allow(dead_code)]
-    pub(crate) source_text: String,
+    /// Precomputed `source_text.contains("export default")`. The full source text
+    /// is dropped after parsing — it is only consumed by this textual heuristic
+    /// (diagnostic rendering uses the CLI's separate source map), and retaining a
+    /// copy of every dependency `.d.ts` here was a sizeable share of peak RSS.
+    pub(crate) has_export_default: bool,
     pub(crate) statements: Vec<ParsedStatement>,
     pub(crate) parser_errors: Vec<String>,
     pub(crate) is_module: bool,
@@ -130,7 +133,7 @@ pub fn check_program_with_stats_and_jobs(
     crate::modules::clear_relative_module_cache();
 
     let parse_start = Instant::now();
-    let parsed_files = parse_program_files(files, timings.as_ref());
+    let mut parsed_files = parse_program_files(files, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
         timings.parsing += parse_start.elapsed()
     });
@@ -343,6 +346,21 @@ pub fn check_program_with_stats_and_jobs(
         module_resolution_scopes,
     };
 
+    // All cross-file program state now lives in `shared_state`; the per-file check
+    // phase receives only the current file plus `shared_state`, never the file
+    // slice. Under `skipLibCheck`, that phase skips declaration files outright, so
+    // their parse trees are dead from here on. Releasing them before the heaviest
+    // checking phase removes the dependency `.d.ts` / default-lib ASTs that
+    // dominate peak RSS on dependency-heavy projects. Without `skipLibCheck` the
+    // check phase still walks declaration statements, so they are kept.
+    if ctx.options.skip_lib_check {
+        for parsed_file in parsed_files.iter_mut() {
+            if parsed_file.file_kind.is_declaration() {
+                parsed_file.statements = Vec::new();
+            }
+        }
+    }
+
     let file_results = if jobs <= 1 || parsed_files.len() <= 1 {
         check_program_files_serial(&parsed_files, &shared_state, &ctx, timings.clone())
     } else {
@@ -416,7 +434,7 @@ fn parse_program_files(
             });
             ParsedProgramFile {
                 file_name: file_name.clone(),
-                source_text: input.source_text,
+                has_export_default: input.source_text.contains("export default"),
                 statements: parsed.statements,
                 parser_errors: parsed.parser_errors,
                 is_module: parsed.is_module,

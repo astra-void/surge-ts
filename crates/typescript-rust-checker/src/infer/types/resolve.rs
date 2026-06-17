@@ -883,11 +883,15 @@ fn attach_object_alias_name(resolved: ResolvedType, name: &str, alias_id: &str) 
     match resolved.ty {
         // Tag the nominal identity even when the resolution errored (a cyclic
         // member may have collapsed to `unknown`): the object is still this named
-        // declaration, so assignability can recognise two of its resolutions. The
-        // display `alias_name` stays gated on success to preserve diagnostics.
+        // declaration, so assignability can recognise two of its resolutions.
         Type::Object(object) => {
             let object = object.with_alias_id(alias_id);
-            let object = if resolved.had_error {
+            // tsc displays a named type by its name even when a deeply cyclic
+            // member did not fully resolve (e.g. `URL`, whose `searchParams`
+            // cluster is mutually recursive). Keep the display name whenever the
+            // object resolved to a real shape; only a collapse to an empty object
+            // (no recoverable structure) falls back to the structural form.
+            let object = if resolved.had_error && object.properties.is_empty() {
                 object
             } else {
                 object.with_alias_name(name)

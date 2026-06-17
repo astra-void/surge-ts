@@ -97,7 +97,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
             let parsed = parse_source(&input.source_text, &input.file_name);
             crate::program::ParsedProgramFile {
                 file_name: parsed.file_name,
-                source_text: input.source_text,
+                has_export_default: input.source_text.contains("export default"),
                 statements: parsed.statements,
                 parser_errors: parsed.parser_errors,
                 is_module: parsed.is_module,
