@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typescript_rust_syntax::{ParsedType, ParsedTypeParameter};
+use typescript_rust_syntax::{ParsedType, ParsedTypeParameter, TextSpan};
 use typescript_rust_types::{Type, TypeCopyReason, with_type_copy_reason};
 
 use crate::program::{
@@ -45,6 +45,13 @@ pub(crate) struct SymbolTable {
     // mutates almost none of those clones, so sharing makes the clones
     // effectively free and the deep copy is deferred to the rare mutate path.
     symbols: Arc<HashMap<Arc<str>, SymbolInfoHandle>>,
+    // Name spans of the *first* block-scoped declaration (let/const or function
+    // implementation) registered in this scope, so a later redeclaration can
+    // back-emit the duplicate diagnostic (TS2451/TS2393) at the original site
+    // too — tsc flags every conflicting declaration, not just the latest. Shares
+    // the same copy-on-write discipline as `symbols`; empty in nearly every
+    // table, so the extra `Arc` clone is effectively free.
+    declaration_spans: Arc<HashMap<Arc<str>, TextSpan>>,
 }
 
 impl Clone for SymbolTable {
@@ -55,6 +62,7 @@ impl Clone for SymbolTable {
         // nothing.
         Self {
             symbols: Arc::clone(&self.symbols),
+            declaration_spans: Arc::clone(&self.declaration_spans),
         }
     }
 }
@@ -156,6 +164,26 @@ impl SymbolTable {
         self.symbols.get(name).is_some_and(|existing| {
             matches!(existing.as_ref().kind, SymbolKind::Let | SymbolKind::Const)
         })
+    }
+
+    /// Records the name span of the first declaration of `name` in this scope so
+    /// a later redeclaration can back-emit its duplicate diagnostic at the
+    /// original site. Only the first recording is kept.
+    pub(crate) fn record_declaration_span(&mut self, name: &str, span: TextSpan) {
+        if self.declaration_spans.contains_key(name) {
+            return;
+        }
+        Arc::make_mut(&mut self.declaration_spans).insert(name.into(), span);
+    }
+
+    /// Removes and returns the recorded first-declaration span for `name`, if
+    /// any. Removing ensures a third+ redeclaration does not re-emit at a site
+    /// already flagged.
+    pub(crate) fn take_declaration_span(&mut self, name: &str) -> Option<TextSpan> {
+        if !self.declaration_spans.contains_key(name) {
+            return None;
+        }
+        Arc::make_mut(&mut self.declaration_spans).remove(name)
     }
 }
 

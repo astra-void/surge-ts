@@ -691,20 +691,17 @@ pub(crate) fn resolve_named_type(
     };
 
     let has_type_arguments = !named_type.type_arguments.is_empty();
-    let is_generic_declaration = match &declaration {
+    let is_generic_declaration = match declaration_ref {
         TypeDeclarationInfo::Alias(alias) => !alias.type_parameters.is_empty(),
         TypeDeclarationInfo::Interface(interface) => !interface.type_parameters.is_empty(),
     };
 
     if has_type_arguments && !is_generic_declaration {
-        match declaration {
-            TypeDeclarationInfo::Alias(alias) => {
-                emit_type_is_not_generic(&alias.name, alias.name_span, ctx);
-            }
-            TypeDeclarationInfo::Interface(interface) => {
-                emit_type_is_not_generic(&interface.name, interface.name_span, ctx);
-            }
-        }
+        let name = match declaration_ref {
+            TypeDeclarationInfo::Alias(alias) => alias.name.clone(),
+            TypeDeclarationInfo::Interface(interface) => interface.name.clone(),
+        };
+        emit_type_is_not_generic(&name, named_type.span, ctx);
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,

@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,10 +12,6 @@ use crate::program::{
     record_flow_state_clone_count, record_flow_state_full_clone_avoided_count,
 };
 
-thread_local! {
-    static EMIT_USE_BEFORE_DECLARATION_AS_UNASSIGNED: Cell<bool> = const { Cell::new(false) };
-}
-
 mod branch;
 mod expr;
 mod facts;
@@ -24,17 +19,6 @@ mod facts;
 pub(crate) use branch::*;
 pub(crate) use expr::*;
 pub(crate) use facts::*;
-pub(crate) fn with_use_before_declaration_as_unassigned<R>(
-    enabled: bool,
-    f: impl FnOnce() -> R,
-) -> R {
-    EMIT_USE_BEFORE_DECLARATION_AS_UNASSIGNED.with(|flag| {
-        let previous = flag.replace(enabled);
-        let result = f();
-        flag.set(previous);
-        result
-    })
-}
 
 pub(crate) fn check_expression_flow(
     expression: &ParsedExpression,
@@ -44,10 +28,6 @@ pub(crate) fn check_expression_flow(
     ctx: &mut CheckerContext,
 ) -> FlowCheck {
     check_expression_flow_impl(expression, fallback_span, flow_state, statement_index, ctx)
-}
-
-fn should_emit_use_before_declaration_as_unassigned() -> bool {
-    EMIT_USE_BEFORE_DECLARATION_AS_UNASSIGNED.with(Cell::get)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

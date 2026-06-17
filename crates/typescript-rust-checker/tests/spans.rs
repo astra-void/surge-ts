@@ -290,7 +290,22 @@ fn span_ts2451_points_to_duplicate_variable_name() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2451", span_nth(source, "value", 1));
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![
+            (
+                "TS2451".to_string(),
+                "example.ts".to_string(),
+                Some(span_nth(source, "value", 1)),
+            ),
+            (
+                "TS2451".to_string(),
+                "example.ts".to_string(),
+                Some(span_nth(source, "value", 0)),
+            ),
+        ],
+        "source: {source}"
+    );
 }
 
 #[test]
@@ -309,7 +324,22 @@ fn span_ts2393_points_to_duplicate_function_name() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2393", span_nth(source, "greet", 1));
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![
+            (
+                "TS2393".to_string(),
+                "example.ts".to_string(),
+                Some(span_nth(source, "greet", 1)),
+            ),
+            (
+                "TS2393".to_string(),
+                "example.ts".to_string(),
+                Some(span_nth(source, "greet", 0)),
+            ),
+        ],
+        "source: {source}"
+    );
 }
 
 #[test]

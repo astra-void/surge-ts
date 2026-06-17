@@ -290,8 +290,8 @@ fn program_duplicate_function_same_file_still_ts2393() {
         "function getName(): string { return \"Ada\"; }\nfunction getName(): string { return \"Grace\"; }",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2393"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "a.ts"]);
 }
 
 #[test]
@@ -1230,8 +1230,8 @@ fn program_module_export_variable_duplicate_let_same_file() {
         "export let value: string = \"Ada\";\nexport let value: string = \"Grace\";",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2451"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2451", "TS2451"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "a.ts"]);
 }
 
 #[test]
@@ -1605,8 +1605,8 @@ fn program_module_duplicate_function_same_module_file_ts2393() {
         "export {};\nfunction getValue(): string { return \"Ada\"; }\nfunction getValue(): number { return 1; }",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2393"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "a.ts"]);
 }
 
 #[test]
@@ -1616,8 +1616,8 @@ fn program_module_duplicate_export_function_same_module_file_ts2393() {
         "export function getValue(): string { return \"Ada\"; }\nexport function getValue(): number { return 1; }",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2393"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "a.ts"]);
 }
 
 #[test]

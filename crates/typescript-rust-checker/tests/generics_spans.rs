@@ -72,7 +72,7 @@ fn span_generic_arity_missing_points_to_type_reference_name() {
         vec![(
             "TS2314".to_string(),
             "example.ts".to_string(),
-            Some(span(source, "Box")),
+            Some(span_nth(source, "Box", 1)),
         )]
     );
 }
@@ -175,7 +175,7 @@ fn span_generic_arity_too_many_points_to_type_reference_name() {
         },
     );
 
-    assert_single_span(source, diagnostics, "TS2314", span(source, "Box"));
+    assert_single_span(source, diagnostics, "TS2314", span_nth(source, "Box", 1));
 }
 
 #[test]
@@ -195,7 +195,7 @@ fn span_generic_non_generic_type_args_points_to_type_reference_name() {
         },
     );
 
-    assert_single_span(source, diagnostics, "TS2315", span(source, "Name"));
+    assert_single_span(source, diagnostics, "TS2315", span_nth(source, "Name", 1));
 }
 
 #[test]

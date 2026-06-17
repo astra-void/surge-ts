@@ -60,6 +60,12 @@ pub(crate) fn collect_function_declaration_signature(
         };
 
         ctx.push(diagnostic);
+
+        if let Some(first_span) = symbols.take_declaration_span(&function.name) {
+            ctx.push(Diagnostic::ts2393(ctx.file_name.clone()).with_span(convert_span(first_span)));
+        }
+    } else if let Some(span) = function.name_span {
+        symbols.record_declaration_span(&function.name, span);
     }
 
     function_type
@@ -111,6 +117,14 @@ pub(crate) fn check_function_declaration(
             };
 
             ctx.push(diagnostic);
+
+            if let Some(first_span) = ctx.symbols.take_declaration_span(&name) {
+                ctx.push(
+                    Diagnostic::ts2393(ctx.file_name.clone()).with_span(convert_span(first_span)),
+                );
+            }
+        } else if let Some(span) = name_span {
+            ctx.symbols.record_declaration_span(&name, span);
         }
 
         if is_declare {
@@ -125,6 +139,7 @@ pub(crate) fn check_function_declaration(
             &type_parameters,
             Some(signature_info),
             return_type.is_some(),
+            name_span,
             ctx,
         );
     });
@@ -143,6 +158,7 @@ pub(crate) fn check_function_declaration_body(
     let ParsedFunctionDeclaration {
         is_declare,
         name,
+        name_span,
         parameters,
         return_type,
         body,
@@ -163,6 +179,7 @@ pub(crate) fn check_function_declaration_body(
         type_parameters,
         Some(signature_info),
         return_type.is_some(),
+        name_span,
         ctx,
     );
     record_program_timing(ctx.timings.as_ref(), |timings| {

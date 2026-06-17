@@ -41,7 +41,28 @@ pub(crate) fn check_variable_declaration_with_symbols(
     options: VariableCheckOptions,
 ) -> Option<SymbolInfoHandle> {
     let variable_name = variable.name.clone();
+    let variable_name_span = variable.name_span;
+    let tracks_duplicates = options.report_duplicate_let_const
+        && !variable.is_declare
+        && matches!(
+            map_symbol_kind(variable.kind),
+            SymbolKind::Let | SymbolKind::Const
+        );
+    let is_duplicate = tracks_duplicates && symbols.contains_let_or_const(&variable_name);
+
     let symbol = check_variable_declaration_against_symbols(variable, symbols, ctx, options)?;
+
+    if is_duplicate {
+        if let Some(first_span) = symbols.take_declaration_span(&variable_name) {
+            let diagnostic = Diagnostic::ts2451(&variable_name, ctx.file_name.clone())
+                .with_span(convert_span(first_span));
+            ctx.push(diagnostic);
+        }
+    } else if tracks_duplicates {
+        if let Some(span) = variable_name_span {
+            symbols.record_declaration_span(&variable_name, span);
+        }
+    }
 
     symbols.insert_handle(variable_name, Arc::clone(&symbol));
     Some(symbol)

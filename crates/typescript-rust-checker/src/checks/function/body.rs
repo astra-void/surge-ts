@@ -66,14 +66,20 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
 
 pub(crate) fn emit_missing_return_diagnostic(
     body_flow: crate::flow::FunctionBodyFlow,
+    missing_return_span: Option<typescript_rust_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) {
+    let with_span = |diagnostic: Diagnostic| match missing_return_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    };
+
     if body_flow.contains_value_return {
         if !body_flow.guarantees_value_return {
-            ctx.push(Diagnostic::ts2366(ctx.file_name.clone()));
+            ctx.push(with_span(Diagnostic::ts2366(ctx.file_name.clone())));
         }
     } else {
-        ctx.push(Diagnostic::ts2355(ctx.file_name.clone()));
+        ctx.push(with_span(Diagnostic::ts2355(ctx.file_name.clone())));
     }
 }
 

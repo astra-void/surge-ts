@@ -66,17 +66,17 @@ expected_diagnostics = []
 [[case]]
 name = "duplicate-let-declaration"
 path = "tests/smoke/duplicate_let_declaration.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "duplicate-const-declaration"
 path = "tests/smoke/duplicate_const_declaration.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "duplicate-let-const-declaration"
 path = "tests/smoke/duplicate_let_const_declaration.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "duplicate-var-declaration-allowed"
@@ -652,7 +652,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "property-call-function-body-use-before-declaration-object"
 path = "tests/smoke/property_call_function_body_use_before_declaration_object.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "property-call-conditional-branch-valid"
@@ -1002,7 +1002,7 @@ expected_diagnostics = ["TS2339"]
 [[case]]
 name = "property-call-flow-object-use-before-declaration"
 path = "tests/smoke/property_call_flow_object_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "property-call-flow-argument-use-before-declaration"
@@ -2120,7 +2120,7 @@ expected_diagnostics = ["TS2366"]
 [[case]]
 name = "function-duplicate-implementation"
 path = "tests/smoke/function_duplicate_implementation.ts"
-expected_diagnostics = ["TS2393"]
+expected_diagnostics = ["TS2393", "TS2393"]
 
 [[case]]
 name = "no_implicit_any_variable"
@@ -2136,7 +2136,7 @@ expected_diagnostics = ["TS2454"]
 [[case]]
 name = "control-flow-initializer-use-before-declaration"
 path = "tests/smoke/control_flow_initializer_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "control-flow-initializer-used-before-assignment"
@@ -2181,7 +2181,7 @@ expected_diagnostics = ["TS2454"]
 [[case]]
 name = "control-flow-use-before-declaration"
 path = "tests/smoke/control_flow_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "control-flow-order-return-type-mismatch-before-missing-return"
@@ -3543,22 +3543,22 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "tuple-flow-element-use-before-declaration"
 path = "tests/smoke/tuple_flow_element_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "tuple-flow-index-receiver-use-before-declaration"
 path = "tests/smoke/tuple_flow_index_receiver_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "tuple-flow-index-expression-use-before-declaration"
 path = "tests/smoke/tuple_flow_index_expression_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "tuple-flow-nested-tuple-element-use-before-declaration"
 path = "tests/smoke/tuple_flow_nested_tuple_element_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "tuple-contextual-function-argument-element-mismatch"
@@ -3843,7 +3843,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "array-flow-element-use-before-declaration"
 path = "tests/smoke/array_flow_element_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "array-flow-element-declared-unassigned"
@@ -3853,12 +3853,12 @@ expected_diagnostics = ["TS2454"]
 [[case]]
 name = "array-flow-index-receiver-use-before-declaration"
 path = "tests/smoke/array_flow_index_receiver_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "array-flow-index-expression-use-before-declaration"
 path = "tests/smoke/array_flow_index_expression_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "array-flow-valid-after-assignment"
@@ -3878,7 +3878,7 @@ expected_diagnostics = ["TS2454"]
 [[case]]
 name = "array-flow-nested-array-element-use-before-declaration"
 path = "tests/smoke/array_flow_nested_array_element_use_before_declaration.ts"
-expected_diagnostics = ["TS2448"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "type-alias-duplicate-same-name-as-value-allowed"
@@ -3888,7 +3888,7 @@ expected_diagnostics = []
 [[case]]
 name = "type-alias-duplicate-value-duplicate-still-value-rule"
 path = "tests/smoke/type_alias_duplicate_value_duplicate_still_value_rule.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "type-alias-unknown-type-variable-no-cascade"

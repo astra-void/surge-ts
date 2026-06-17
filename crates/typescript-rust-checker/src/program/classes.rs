@@ -254,6 +254,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     &[],
                     None,
                     false,
+                    None,
                     Some(instance_type.clone()),
                     ctx,
                 );
@@ -279,6 +280,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     &method.type_parameters,
                     None,
                     method.return_type.is_some(),
+                    method.name_span,
                     Some(this_type),
                     ctx,
                 );

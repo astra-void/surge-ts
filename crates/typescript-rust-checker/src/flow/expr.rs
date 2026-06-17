@@ -2,7 +2,6 @@
 
 use super::*;
 
-use std::cell::Cell;
 use std::sync::Arc;
 
 use typescript_rust_diagnostics::Diagnostic;
@@ -15,10 +14,6 @@ use crate::program::{
     record_flow_expression_visit_count, record_flow_identifier_read_count,
     record_flow_truthiness_check_count,
 };
-
-thread_local! {
-    static EMIT_USE_BEFORE_DECLARATION_AS_UNASSIGNED: Cell<bool> = const { Cell::new(false) };
-}
 
 pub(crate) fn check_expression_flow_impl(
     expression: &ParsedExpression,
@@ -59,15 +54,13 @@ pub(crate) fn check_expression_flow_impl(
             }
 
             for argument in arguments {
-                if with_use_before_declaration_as_unassigned(true, || {
-                    check_expression_flow_impl(
-                        &argument.expression,
-                        argument.span.or(fallback_span),
-                        flow_state,
-                        statement_index,
-                        ctx,
-                    )
-                })
+                if check_expression_flow_impl(
+                    &argument.expression,
+                    argument.span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
                 .is_blocked()
                 {
                     return FlowCheck::Blocked;
@@ -95,15 +88,13 @@ pub(crate) fn check_expression_flow_impl(
             }
 
             for argument in arguments {
-                if with_use_before_declaration_as_unassigned(true, || {
-                    check_expression_flow_impl(
-                        &argument.expression,
-                        argument.span.or(fallback_span),
-                        flow_state,
-                        statement_index,
-                        ctx,
-                    )
-                })
+                if check_expression_flow_impl(
+                    &argument.expression,
+                    argument.span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
                 .is_blocked()
                 {
                     return FlowCheck::Blocked;
@@ -125,15 +116,13 @@ pub(crate) fn check_expression_flow_impl(
             }
 
             for argument in arguments {
-                if with_use_before_declaration_as_unassigned(true, || {
-                    check_expression_flow_impl(
-                        &argument.expression,
-                        argument.span.or(fallback_span),
-                        flow_state,
-                        statement_index,
-                        ctx,
-                    )
-                })
+                if check_expression_flow_impl(
+                    &argument.expression,
+                    argument.span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
                 .is_blocked()
                 {
                     return FlowCheck::Blocked;

@@ -2,7 +2,6 @@
 
 use super::*;
 
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,10 +15,6 @@ use crate::program::{
     record_flow_future_declaration_collection_count, record_flow_identifier_read_count,
     record_flow_return_analysis_walk_count,
 };
-
-thread_local! {
-    static EMIT_USE_BEFORE_DECLARATION_AS_UNASSIGNED: Cell<bool> = const { Cell::new(false) };
-}
 
 pub(crate) fn collect_function_flow_facts_from_body(
     body: &[ParsedFunctionBodyStatement],
@@ -268,20 +263,21 @@ pub(crate) fn report_read_flow(
             FlowCheck::Blocked
         }
         FlowReadOutcome::UseBeforeDeclaration => {
+            // A block-scoped (`let`/`const`) variable read before its declaration
+            // is necessarily in its temporal dead zone, so it is also definitely
+            // unassigned. tsc reports both TS2448 and TS2454 at every such read.
             let mut diagnostic = Diagnostic::ts2448(name, ctx.file_name.clone());
             if let Some(span) = span {
                 diagnostic = diagnostic.with_span(convert_span(span));
             }
-
             ctx.push(diagnostic);
-            if should_emit_use_before_declaration_as_unassigned() {
-                let mut diagnostic = Diagnostic::ts2454(name, ctx.file_name.clone());
-                if let Some(span) = span {
-                    diagnostic = diagnostic.with_span(convert_span(span));
-                }
 
-                ctx.push(diagnostic);
+            let mut diagnostic = Diagnostic::ts2454(name, ctx.file_name.clone());
+            if let Some(span) = span {
+                diagnostic = diagnostic.with_span(convert_span(span));
             }
+            ctx.push(diagnostic);
+
             FlowCheck::Blocked
         }
     }

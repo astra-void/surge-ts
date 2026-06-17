@@ -36,7 +36,7 @@ pub(crate) fn resolve_type_alias(
         &alias.type_parameters,
         type_arguments,
         &alias.name,
-        alias.name_span,
+        reference_span.or(alias.name_span),
         ctx,
         resolving,
         substitution,

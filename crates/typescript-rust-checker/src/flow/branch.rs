@@ -2,17 +2,12 @@
 
 use super::*;
 
-use std::cell::Cell;
 use std::sync::Arc;
 
 use crate::program::{
     record_flow_branch_merge_count, record_flow_branch_merge_fast_path_count,
     record_flow_branch_merge_local_iteration_count,
 };
-
-thread_local! {
-    static EMIT_USE_BEFORE_DECLARATION_AS_UNASSIGNED: Cell<bool> = const { Cell::new(false) };
-}
 
 pub(crate) fn merge_branch_deltas(
     flow_state: &mut FunctionFlowState,

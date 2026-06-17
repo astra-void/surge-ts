@@ -6,6 +6,7 @@ use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::{
     ParsedBindingName, ParsedFunctionBodyStatement, ParsedFunctionParameter,
     ParsedObjectBindingElement, ParsedObjectBindingPattern, ParsedType, ParsedTypeParameter,
+    TextSpan,
 };
 use typescript_rust_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
@@ -399,6 +400,7 @@ pub(crate) fn register_function_signature(
     duplicate
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_function_body_with_signature(
     name: String,
     parameters: Vec<ParsedFunctionParameter>,
@@ -407,6 +409,7 @@ pub(crate) fn check_function_body_with_signature(
     type_parameters: &[ParsedTypeParameter],
     function_signature: Option<FunctionSignatureInfo>,
     has_explicit_return_type: bool,
+    missing_return_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
     check_function_body_with_signature_and_this(
@@ -417,6 +420,7 @@ pub(crate) fn check_function_body_with_signature(
         type_parameters,
         function_signature,
         has_explicit_return_type,
+        missing_return_span,
         None,
         ctx,
     );
@@ -434,6 +438,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     type_parameters: &[ParsedTypeParameter],
     function_signature: Option<FunctionSignatureInfo>,
     has_explicit_return_type: bool,
+    missing_return_span: Option<TextSpan>,
     this_type: Option<Type>,
     ctx: &mut CheckerContext,
 ) {
@@ -485,7 +490,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     });
 
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
-        emit_missing_return_diagnostic(body_flow, ctx);
+        emit_missing_return_diagnostic(body_flow, missing_return_span, ctx);
     }
 }
 
