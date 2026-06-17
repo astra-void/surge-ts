@@ -396,7 +396,9 @@ fn span_ts2322_variable_initializer() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
+    // tsc anchors a variable-initializer assignability error on the declaration
+    // name, not the initializer value.
+    assert_single_span(source, diagnostics, "TS2322", span(source, "value"));
 }
 
 #[test]
@@ -453,7 +455,9 @@ fn span_ts2322_object_property_value() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "1"));
+    // tsc anchors an object-literal member assignability error on the property
+    // key, not the property value.
+    assert_single_span(source, diagnostics, "TS2322", span_nth(source, "name", 1));
 }
 
 #[test]
@@ -586,12 +590,7 @@ fn span_ts2322_property_call_return_initializer() {
             types: Vec::new(),
         },
     );
-    assert_single_span(
-        source,
-        diagnostics,
-        "TS2322",
-        span(source, "store.getName()"),
-    );
+    assert_single_span(source, diagnostics, "TS2322", span(source, "value"));
 }
 
 #[test]
@@ -610,7 +609,7 @@ fn span_ts2322_index_access_initializer() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "values[0]"));
+    assert_single_span(source, diagnostics, "TS2322", span_nth(source, "value", 1));
 }
 
 #[test]
@@ -743,7 +742,8 @@ fn span_ts2345_contextual_object_argument_property_value() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "1"));
+    // tsc anchors the object-literal member error on the argument property key.
+    assert_single_span(source, diagnostics, "TS2322", span_nth(source, "name", 1));
 }
 
 #[test]
@@ -1014,7 +1014,9 @@ fn span_ts2741_missing_required_object_literal() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2741", span(source, "{}"));
+    // tsc anchors a missing-required-property error on the declaration name, not
+    // the object literal.
+    assert_single_span(source, diagnostics, "TS2741", span(source, "user"));
 }
 
 #[test]
@@ -1742,7 +1744,7 @@ fn span_module_imported_type_mismatch_points_to_consumer_initializer() {
             "index.ts".to_string(),
             Some(span(
                 "import { User } from \"./user\"; let user: User = { name: 123 };",
-                "123",
+                "name",
             )),
         )]
     );
@@ -1790,7 +1792,7 @@ fn span_module_import_alias_usage_mismatch_points_to_consumer_expression() {
             "index.ts".to_string(),
             Some(span(
                 "import { User as LocalUser } from \"./user\"; let user: LocalUser = { name: 123 };",
-                "123",
+                "name",
             )),
         )]
     );
@@ -1833,7 +1835,7 @@ fn span_cross_file_consumer_error_points_to_consumer_file_expression() {
         vec![(
             "TS2322".to_string(),
             "b.ts".to_string(),
-            Some(span("let value: Name = 1;", "1")),
+            Some(span("let value: Name = 1;", "value")),
         )]
     );
 }

@@ -4,7 +4,7 @@ use typescript_rust_diagnostics::Diagnostic;
 use typescript_rust_syntax::ParsedVariableDeclaration;
 use typescript_rust_types::{Type, is_assignable_to};
 
-use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
+use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type_anchored};
 use super::expr::{evaluate_expression, widen_type};
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::{InferredExpression, map_parsed_type};
@@ -111,9 +111,10 @@ pub(crate) fn check_variable_declaration_against_symbols(
             .as_ref()
             .map(|initializer| {
                 if let Some(ref declared_type) = declared_type {
-                    evaluate_expression_with_expected_type(
+                    evaluate_expression_with_expected_type_anchored(
                         initializer,
                         variable.initializer_span,
+                        variable.name_span,
                         Some(declared_type),
                         ExpectedTypeDiagnostic::TypeNotAssignable,
                         symbols,
@@ -144,7 +145,8 @@ pub(crate) fn check_variable_declaration_against_symbols(
                         ctx.file_name.clone(),
                     );
 
-                    let diagnostic = match variable.initializer_span {
+                    let target_span = variable.name_span.or(variable.initializer_span);
+                    let diagnostic = match target_span {
                         Some(span) => diagnostic.with_span(convert_span(span)),
                         None => diagnostic,
                     };

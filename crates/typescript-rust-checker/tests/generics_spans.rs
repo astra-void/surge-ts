@@ -125,7 +125,7 @@ fn span_generic_type_alias_mismatch_points_to_initializer_value() {
             "index.ts".to_string(),
             Some(span(
                 "import { Box } from \"./box\"; let box: Box<string> = { value: 123 };",
-                "123",
+                "value",
             )),
         )]
     );
@@ -152,7 +152,7 @@ fn span_generic_module_import_mismatch_points_to_consumer_initializer() {
             "index.ts".to_string(),
             Some(span(
                 "import { Box } from \"./box\"; let box: Box<string> = { value: 123 };",
-                "123",
+                "value",
             )),
         )]
     );

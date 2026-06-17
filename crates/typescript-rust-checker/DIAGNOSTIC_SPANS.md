@@ -30,10 +30,10 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2448 block-scoped variable used before declaration | offending read span |
 | TS2454 variable used before assignment | offending read span |
 | TS2588 assign to const | assignment target name span |
-| TS2322 variable initializer mismatch | initializer expression span |
+| TS2322 variable initializer mismatch | declaration name span (the assignment target), falling back to the initializer expression span when no target name is available |
 | TS2322 assignment mismatch | assignment value expression span |
 | TS2322 return mismatch | return expression span |
-| TS2322 object property value mismatch | property value expression span |
+| TS2322 object property value mismatch | property key (name) span |
 | TS2322 array element mismatch | array element expression span |
 | TS2322 tuple element mismatch | tuple element expression span |
 | TS2322 tuple length mismatch | array literal span or extra element span, pinned |
@@ -45,7 +45,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2536 invalid generic indexed-access key | key type / index type span when available, otherwise indexed-access type span |
 | TS2538 invalid index type | index expression span |
 | TS2353 excess object property | excess property name span |
-| TS2741 missing required property | object literal span |
+| TS2741 missing required property | declaration name span (the assignment target) when available, otherwise the object literal span |
 | TS2355/TS2366 missing return | function/method name span when available, otherwise no span |
 | TS2362/TS2363 arithmetic operand mismatch | offending operand span |
 | TS2365 invalid operator | operator or whole expression span, pinned |
@@ -102,6 +102,16 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
   and use TS2305.
 - Duplicate ambient module/global behavior is pinned rather than merged, so spans stay attached to the first-wins declaration or duplicate site used by the checker.
 - Side-effect imports never bind names, so downstream unresolved-identifier diagnostics are still usage-site diagnostics.
+- Whole-value assignability errors anchor on the assignment target rather than
+  the value. A variable-initializer mismatch (TS2322) and a missing-required-property
+  error (TS2741) underline the declaration name, matching tsc; when no target span
+  is threaded (e.g. a bare assignment or return), they fall back to the value/initializer
+  span. The target span is plumbed through
+  `evaluate_expression_with_expected_type_anchored`.
+- Object-literal member mismatches anchor on the property key, not the property
+  value: a mismatched member (TS2322) underlines the property name token,
+  including for object arguments in a contextual call (TS2345 site). This matches
+  the existing excess-property (TS2353) policy, which already underlines the name.
 - Nested contextual errors should prefer the most specific span available inside arrays, tuples, objects, calls, and property accesses.
 - When the smaller span is unavailable, use the policy's pinned wrapper span and keep the code stable.
 - The span-focused regression tests in `tests/spans.rs` and `tests/example_spans.rs` are the baseline for this policy.

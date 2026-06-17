@@ -137,9 +137,11 @@ fn examples_basic_span_baseline() {
     let diagnostics =
         check_source_with_options(&source, "examples/basic.ts", CheckerOptions::default());
 
+    // `var a: string = 1;` — tsc anchors the assignability error on the
+    // declaration name `a`, not the initializer.
     assert_eq!(
         tuples(&diagnostics),
-        vec![("TS2322".to_string(), Some(span(&source, "1")))]
+        vec![("TS2322".to_string(), Some(span_nth(&source, "a", 1)))]
     );
 }
 

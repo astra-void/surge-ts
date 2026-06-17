@@ -27,6 +27,31 @@ pub(crate) fn evaluate_expression_with_expected_type(
     expression: &ParsedExpression,
     fallback_span: Option<SyntaxTextSpan>,
     expected_type: Option<&Type>,
+    expected_diagnostic: ExpectedTypeDiagnostic,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    evaluate_expression_with_expected_type_anchored(
+        expression,
+        fallback_span,
+        None,
+        expected_type,
+        expected_diagnostic,
+        symbols,
+        ctx,
+    )
+}
+
+/// Like [`evaluate_expression_with_expected_type`], but threads a `target_span`
+/// that whole-value assignability diagnostics (TS2741 missing property and the
+/// top-level object mismatch) anchor on, matching tsc which points such errors at
+/// the assignment target (e.g. the declaration name) rather than the value. When
+/// `target_span` is `None` the behavior is identical to the unanchored entry.
+pub(crate) fn evaluate_expression_with_expected_type_anchored(
+    expression: &ParsedExpression,
+    fallback_span: Option<SyntaxTextSpan>,
+    target_span: Option<SyntaxTextSpan>,
+    expected_type: Option<&Type>,
     _expected_diagnostic: ExpectedTypeDiagnostic,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -51,9 +76,10 @@ pub(crate) fn evaluate_expression_with_expected_type(
         expression: inner, ..
     } = expression
     {
-        return evaluate_expression_with_expected_type(
+        return evaluate_expression_with_expected_type_anchored(
             inner,
             fallback_span,
+            target_span,
             Some(expected_type),
             _expected_diagnostic,
             symbols,
@@ -105,6 +131,7 @@ pub(crate) fn evaluate_expression_with_expected_type(
             properties,
             expected_object_type,
             choose_span(*span, fallback_span),
+            target_span,
             _expected_diagnostic,
             symbols,
             ctx,
@@ -123,9 +150,10 @@ pub(crate) fn evaluate_expression_with_expected_type(
             .iter()
             .filter(|member| !matches!(member, Type::Undefined | Type::Void));
         if let (Some(member), None) = (non_nullish.next(), non_nullish.next()) {
-            return evaluate_expression_with_expected_type(
+            return evaluate_expression_with_expected_type_anchored(
                 expression,
                 fallback_span,
+                target_span,
                 Some(member),
                 _expected_diagnostic,
                 symbols,
@@ -268,6 +296,7 @@ fn evaluate_object_literal_with_expected_type(
     properties: &[ParsedObjectProperty],
     expected_object_type: &typescript_rust_types::ObjectType,
     fallback_span: Option<SyntaxTextSpan>,
+    target_span: Option<SyntaxTextSpan>,
     expected_diagnostic: ExpectedTypeDiagnostic,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -364,8 +393,11 @@ fn evaluate_object_literal_with_expected_type(
                     ctx.push(diagnostic_with_syntax_span(
                         diagnostic,
                         choose_span(
-                            property.value_span,
-                            choose_span(property.span, fallback_span),
+                            property.name_span,
+                            choose_span(
+                                property.value_span,
+                                choose_span(property.span, fallback_span),
+                            ),
                         ),
                     ));
                     return InferredExpression::Unknown;
@@ -427,7 +459,10 @@ fn evaluate_object_literal_with_expected_type(
             }
         };
 
-        ctx.push(diagnostic_with_syntax_span(diagnostic, fallback_span));
+        ctx.push(diagnostic_with_syntax_span(
+            diagnostic,
+            choose_span(target_span, fallback_span),
+        ));
         return InferredExpression::Unknown;
     }
 
