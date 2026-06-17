@@ -52,6 +52,15 @@ pub(crate) struct SymbolTable {
     // the same copy-on-write discipline as `symbols`; empty in nearly every
     // table, so the extra `Arc` clone is effectively free.
     declaration_spans: Arc<HashMap<Arc<str>, TextSpan>>,
+    // Optional read-only fallback consulted by lookups (`get`, `get_handle`,
+    // `contains_let_or_const`) when a name is absent from `symbols`. A function
+    // body's root scope sets this to the module/ambient environment instead of
+    // copying every visible symbol into its own map, so opening a scope inside a
+    // file with N module-level symbols stays O(1) rather than O(N) (and the COW
+    // on the first local insert clones only the small local map, not the parent).
+    // Mutations and `iter*` operate on `symbols` alone; `parent` is only ever set
+    // on transient, lookup-only scope roots that are never iterated.
+    parent: Option<Arc<SymbolTable>>,
 }
 
 impl Clone for SymbolTable {
@@ -63,6 +72,7 @@ impl Clone for SymbolTable {
         Self {
             symbols: Arc::clone(&self.symbols),
             declaration_spans: Arc::clone(&self.declaration_spans),
+            parent: self.parent.clone(),
         }
     }
 }
@@ -70,6 +80,23 @@ impl Clone for SymbolTable {
 impl SymbolTable {
     pub(crate) fn clone_with_reason(&self, reason: TypeCopyReason) -> Self {
         with_type_copy_reason(reason, || self.clone())
+    }
+
+    /// Build a lookup-only scope whose own map is empty and whose misses fall
+    /// through to `parent`. See the `parent` field. Used for function-body roots.
+    pub(crate) fn with_parent(parent: Arc<SymbolTable>) -> Self {
+        Self {
+            symbols: Arc::new(HashMap::new()),
+            declaration_spans: Arc::new(HashMap::new()),
+            parent: Some(parent),
+        }
+    }
+
+    /// Return this table (sharing its own map) with `parent` attached as the
+    /// lookup fallback. The own entries keep precedence over `parent`.
+    pub(crate) fn with_parent_fallback(mut self, parent: Arc<SymbolTable>) -> Self {
+        self.parent = Some(parent);
+        self
     }
 }
 
@@ -102,15 +129,21 @@ impl SymbolTable {
 
     pub(crate) fn get(&self, name: &str) -> Option<&SymbolInfo> {
         record_type_name_lookup_string_count(1);
-        self.symbols.get(name).map(Arc::as_ref)
+        match self.symbols.get(name) {
+            Some(symbol) => Some(symbol.as_ref()),
+            None => self.parent.as_ref().and_then(|parent| parent.get(name)),
+        }
     }
 
     pub(crate) fn get_handle(&self, name: &str) -> Option<SymbolInfoHandle> {
         record_type_name_lookup_string_count(1);
-        self.symbols.get(name).map(|symbol| {
+        if let Some(symbol) = self.symbols.get(name) {
             record_symbol_info_handle_copy_count(1);
-            Arc::clone(symbol)
-        })
+            return Some(Arc::clone(symbol));
+        }
+        self.parent
+            .as_ref()
+            .and_then(|parent| parent.get_handle(name))
     }
 
     pub(crate) fn get_shared(&self, name: &str) -> Option<SymbolInfoHandle> {
@@ -161,9 +194,12 @@ impl SymbolTable {
 
     pub(crate) fn contains_let_or_const(&self, name: &str) -> bool {
         record_type_name_lookup_string_count(1);
-        self.symbols.get(name).is_some_and(|existing| {
-            matches!(existing.as_ref().kind, SymbolKind::Let | SymbolKind::Const)
-        })
+        if let Some(existing) = self.symbols.get(name) {
+            return matches!(existing.as_ref().kind, SymbolKind::Let | SymbolKind::Const);
+        }
+        self.parent
+            .as_ref()
+            .is_some_and(|parent| parent.contains_let_or_const(name))
     }
 
     /// Records the name span of the first declaration of `name` in this scope so

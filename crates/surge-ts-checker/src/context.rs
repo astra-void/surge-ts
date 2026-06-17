@@ -120,6 +120,14 @@ pub(crate) struct CheckerContext {
     pub(crate) current_file_kind: FileKind,
     pub(crate) options: CheckerOptions,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    // Dedup index for `push`, mirroring the keys of `diagnostics`. `push` rejected
+    // duplicates by scanning the whole `diagnostics` vec (re-rendering every code
+    // to a `String` per comparison), so a context that emits D diagnostics was
+    // O(D^2) — e.g. a single file with thousands of unresolved-name reports. The
+    // set makes the check O(1); `diagnostic_keys_len` lets `push` detect when
+    // `diagnostics` was mutated directly (clear/take/truncate) and rebuild lazily.
+    diagnostic_keys: HashSet<(String, String, String, Option<surge_ts_diagnostics::TextSpan>)>,
+    diagnostic_keys_len: usize,
     pub(crate) stats: CompatibilityStats,
     pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
     pub(crate) symbols: SymbolTable,
@@ -139,14 +147,14 @@ pub(crate) struct CheckerContext {
     /// `Arc` across all `CheckerContext` clones and jobs.
     pub(crate) program_resolved_generic_types:
         Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>>>,
-    pub(crate) ambient_modules: std::collections::HashMap<String, ModuleExportTable>,
+    pub(crate) ambient_modules: Arc<std::collections::HashMap<String, ModuleExportTable>>,
     /// Module augmentations (`declare module "x"` in a file that is itself a
     /// module). Unlike ambient module declarations, these only merge into an
     /// already-resolved target; they do not make `"x"` resolvable on their own.
-    pub(crate) module_augmentations: std::collections::HashMap<String, ModuleExportTable>,
+    pub(crate) module_augmentations: Arc<std::collections::HashMap<String, ModuleExportTable>>,
     pub(crate) ambient_global_symbols: SymbolTable,
-    pub(crate) ambient_global_type_declarations: TypeDeclarationTable,
-    pub(crate) module_file_index_by_identity: HashMap<Arc<str>, usize>,
+    pub(crate) ambient_global_type_declarations: Arc<TypeDeclarationTable>,
+    pub(crate) module_file_index_by_identity: Arc<HashMap<Arc<str>, usize>>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     // Parallel to `type_parameter_scopes`: the declared constraint (if any) for
     // each in-scope type parameter, used to recognize `K extends keyof T` so a
@@ -167,7 +175,7 @@ pub(crate) struct CheckerContext {
     /// A cycle reaching below `floor` means the result depends on an outer frame.
     /// See the generic instantiation cache in `resolve_named_type`.
     pub(crate) lowest_cycle_target_index: usize,
-    file_kinds: HashMap<String, FileKind>,
+    file_kinds: Arc<HashMap<String, FileKind>>,
 }
 
 impl CheckerContext {
@@ -186,6 +194,8 @@ impl CheckerContext {
             current_file_kind,
             options,
             diagnostics: Vec::new(),
+            diagnostic_keys: HashSet::new(),
+            diagnostic_keys_len: 0,
             stats: CompatibilityStats::default(),
             utility_diagnostic_keys: HashSet::new(),
             symbols: SymbolTable::new(),
@@ -193,17 +203,17 @@ impl CheckerContext {
             type_declaration_scope: None,
             resolved_named_types: Arc::new(Mutex::new(HashMap::new())),
             program_resolved_generic_types: Arc::new(Mutex::new(HashMap::new())),
-            ambient_modules: std::collections::HashMap::new(),
-            module_augmentations: std::collections::HashMap::new(),
+            ambient_modules: Arc::new(std::collections::HashMap::new()),
+            module_augmentations: Arc::new(std::collections::HashMap::new()),
             ambient_global_symbols: SymbolTable::new(),
-            ambient_global_type_declarations: TypeDeclarationTable::new(),
-            module_file_index_by_identity: HashMap::new(),
+            ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
+            module_file_index_by_identity: Arc::new(HashMap::new()),
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
             namespace_member_resolution_depth: 0,
             lowest_cycle_target_index: usize::MAX,
-            file_kinds,
+            file_kinds: Arc::new(file_kinds),
         }
     }
 
@@ -341,7 +351,7 @@ impl CheckerContext {
         &mut self,
         module_file_index_by_identity: HashMap<Arc<str>, usize>,
     ) {
-        self.module_file_index_by_identity = module_file_index_by_identity;
+        self.module_file_index_by_identity = Arc::new(module_file_index_by_identity);
     }
 
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
@@ -350,18 +360,35 @@ impl CheckerContext {
             return;
         }
 
-        let duplicate = self.diagnostics.iter().any(|existing| {
-            existing.code.to_string() == diagnostic.code.to_string()
-                && existing.file_name == diagnostic.file_name
-                && existing.span == diagnostic.span
-                && existing.message == diagnostic.message
-        });
+        // `diagnostics` is also mutated directly elsewhere (clear / mem::take /
+        // truncate); if its length no longer matches what the index reflects, the
+        // index is stale, so rebuild it from the current diagnostics before use.
+        if self.diagnostic_keys_len != self.diagnostics.len() {
+            self.diagnostic_keys = self
+                .diagnostics
+                .iter()
+                .map(Self::diagnostic_dedup_key)
+                .collect();
+            self.diagnostic_keys_len = self.diagnostics.len();
+        }
 
-        if duplicate {
+        if !self.diagnostic_keys.insert(Self::diagnostic_dedup_key(&diagnostic)) {
             return;
         }
 
         self.diagnostics.push(diagnostic);
+        self.diagnostic_keys_len = self.diagnostics.len();
+    }
+
+    fn diagnostic_dedup_key(
+        diagnostic: &Diagnostic,
+    ) -> (String, String, String, Option<surge_ts_diagnostics::TextSpan>) {
+        (
+            diagnostic.code.to_string(),
+            diagnostic.file_name.clone(),
+            diagnostic.message.clone(),
+            diagnostic.span,
+        )
     }
 
     pub(crate) fn push_utility_diagnostic_once(&mut self, diagnostic: Diagnostic) {

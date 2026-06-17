@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -132,6 +132,8 @@ pub fn check_program_with_stats_and_jobs(
     reset_program_counters();
     crate::paths::clear_canonicalize_cache();
     crate::modules::clear_relative_module_cache();
+    crate::modules::clear_star_export_unresolved_cache();
+    crate::modules::clear_namespace_alias_table_cache();
 
     let parse_start = Instant::now();
     let mut parsed_files = parse_program_files(files, jobs, timings.as_ref());
@@ -375,8 +377,9 @@ pub fn check_program_with_stats_and_jobs(
         )
     };
 
+    let mut deduper = DiagnosticDeduper::with_existing(&ctx.diagnostics);
     for result in file_results {
-        extend_diagnostics_dedup(&mut ctx.diagnostics, result.diagnostics);
+        deduper.extend(&mut ctx.diagnostics, result.diagnostics);
         ctx.stats.suppressed_diagnostics_total += result.stats.suppressed_diagnostics_total;
         ctx.stats.suppressed_declaration_diagnostics_total +=
             result.stats.suppressed_declaration_diagnostics_total;
@@ -705,22 +708,57 @@ fn check_program_files_parallel(
     flattened
 }
 
+type DiagnosticDedupKey = (
+    String,
+    String,
+    String,
+    Option<surge_ts_diagnostics::TextSpan>,
+);
+
+fn diagnostic_dedup_key(diagnostic: &surge_ts_diagnostics::Diagnostic) -> DiagnosticDedupKey {
+    (
+        diagnostic.code.to_string(),
+        diagnostic.file_name.clone(),
+        diagnostic.message.clone(),
+        diagnostic.span,
+    )
+}
+
+/// Order-preserving diagnostic dedup backed by a key set. The previous
+/// implementation rescanned the whole accumulated `Vec` (and re-rendered every
+/// code to a `String`) for each incoming diagnostic, so merging N files' results
+/// was O(D^2) in the total diagnostic count. Hoisting the set across the merge
+/// keeps it O(D).
+#[derive(Default)]
+struct DiagnosticDeduper {
+    seen: HashSet<DiagnosticDedupKey>,
+}
+
+impl DiagnosticDeduper {
+    fn with_existing(diagnostics: &[surge_ts_diagnostics::Diagnostic]) -> Self {
+        Self {
+            seen: diagnostics.iter().map(diagnostic_dedup_key).collect(),
+        }
+    }
+
+    fn extend(
+        &mut self,
+        diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
+        new_diagnostics: Vec<surge_ts_diagnostics::Diagnostic>,
+    ) {
+        for diagnostic in new_diagnostics {
+            if self.seen.insert(diagnostic_dedup_key(&diagnostic)) {
+                diagnostics.push(diagnostic);
+            }
+        }
+    }
+}
+
 fn extend_diagnostics_dedup(
     diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
     new_diagnostics: Vec<surge_ts_diagnostics::Diagnostic>,
 ) {
-    for diagnostic in new_diagnostics {
-        if diagnostics.iter().any(|existing| {
-            existing.code.to_string() == diagnostic.code.to_string()
-                && existing.file_name == diagnostic.file_name
-                && existing.message == diagnostic.message
-                && existing.span == diagnostic.span
-        }) {
-            continue;
-        }
-
-        diagnostics.push(diagnostic);
-    }
+    DiagnosticDeduper::with_existing(diagnostics).extend(diagnostics, new_diagnostics);
 }
 
 fn check_program_file(
@@ -770,7 +808,7 @@ fn check_program_file(
             .unwrap_or_else(|| {
                 let mut layers = vec![module_analysis.local_type_declarations.clone()];
                 if let Some(imported_bindings) = imported_bindings {
-                    layers.push(imported_bindings.type_declarations.clone());
+                    layers.extend(imported_bindings.scope_layers());
                 }
                 record_module_scope_cache_miss();
                 Arc::new(TypeDeclarationScope::new(layers))

@@ -55,7 +55,7 @@ pub(crate) fn build_module_export_table(
     }
 
     ModuleExportTable {
-        type_declarations,
+        type_declarations: Arc::new(type_declarations),
         symbols,
         default_symbol,
         export_assignment_symbol,
@@ -237,7 +237,7 @@ pub(crate) fn resolve_module_export_table(
                     for specifier in specifiers {
                         let specifier_is_type_only = *is_type_only || specifier.is_type_only;
                         insert_unknown_type_import(
-                            &mut resolved_export_table.type_declarations,
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
                             &specifier.exported_name,
                             ctx.file_name.clone(),
                             specifier.name_span,
@@ -269,7 +269,7 @@ pub(crate) fn resolve_module_export_table(
                                 type_export,
                                 &specifier.exported_name,
                                 None,
-                                &mut resolved_export_table.type_declarations,
+                                Arc::make_mut(&mut resolved_export_table.type_declarations),
                             );
                             continue;
                         }
@@ -281,7 +281,7 @@ pub(crate) fn resolve_module_export_table(
                             specifier.name_span,
                         );
                         insert_unknown_type_import(
-                            &mut resolved_export_table.type_declarations,
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
                             &specifier.exported_name,
                             ctx.file_name.clone(),
                             specifier.name_span,
@@ -296,7 +296,7 @@ pub(crate) fn resolve_module_export_table(
                             type_export,
                             &specifier.exported_name,
                             None,
-                            &mut resolved_export_table.type_declarations,
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
                         );
                         found = true;
                     }
@@ -327,7 +327,7 @@ pub(crate) fn resolve_module_export_table(
                                 .unwrap_or(false)
                         {
                             insert_unknown_type_import(
-                                &mut resolved_export_table.type_declarations,
+                                Arc::make_mut(&mut resolved_export_table.type_declarations),
                                 &specifier.exported_name,
                                 ctx.file_name.clone(),
                                 specifier.name_span,
@@ -347,7 +347,7 @@ pub(crate) fn resolve_module_export_table(
                             parsed_files,
                         ) {
                             insert_unknown_type_import(
-                                &mut resolved_export_table.type_declarations,
+                                Arc::make_mut(&mut resolved_export_table.type_declarations),
                                 &specifier.exported_name,
                                 ctx.file_name.clone(),
                                 specifier.name_span,
@@ -368,7 +368,7 @@ pub(crate) fn resolve_module_export_table(
                             specifier.name_span,
                         );
                         insert_unknown_type_import(
-                            &mut resolved_export_table.type_declarations,
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
                             &specifier.exported_name,
                             ctx.file_name.clone(),
                             specifier.name_span,
@@ -464,15 +464,10 @@ pub(crate) fn resolve_module_export_table(
 
         ctx.set_file_name(parsed_file.file_name.clone());
 
+        let resolved_type_declarations = Arc::make_mut(&mut resolved_export_table.type_declarations);
         for (name, declaration) in target_export_table.type_declarations.iter() {
-            if resolved_export_table
-                .type_declarations
-                .get(name.as_ref())
-                .is_none()
-            {
-                let _ = resolved_export_table
-                    .type_declarations
-                    .insert(name.clone(), declaration.clone());
+            if resolved_type_declarations.get(name.as_ref()).is_none() {
+                let _ = resolved_type_declarations.insert(name.clone(), declaration.clone());
             }
         }
 

@@ -2,6 +2,8 @@
 
 use super::*;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -25,6 +27,7 @@ pub(crate) fn resolve_module_imports(
 ) -> ModuleImportBindings {
     let mut type_declarations = TypeDeclarationTable::new();
     let mut symbols = SymbolTable::new();
+    let mut namespace_alias_layers = Vec::new();
 
     for statement in &parsed_file.statements {
         let ParsedStatement::ImportDeclaration(import) = statement else {
@@ -39,6 +42,7 @@ pub(crate) fn resolve_module_imports(
             local_symbols,
             &mut type_declarations,
             &mut symbols,
+            &mut namespace_alias_layers,
             ctx,
         );
     }
@@ -46,6 +50,7 @@ pub(crate) fn resolve_module_imports(
     ModuleImportBindings {
         type_declarations: Arc::new(type_declarations),
         symbols,
+        namespace_alias_layers,
     }
 }
 
@@ -139,6 +144,7 @@ pub(crate) fn resolve_import_declaration(
     local_symbols: &SymbolTable,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
+    namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
     match &import.kind {
@@ -175,6 +181,7 @@ pub(crate) fn resolve_import_declaration(
             local_symbols,
             type_declarations,
             symbols,
+            namespace_alias_layers,
             ctx,
         ),
         ParsedImportKind::Equals { .. } => resolve_import_equals(
@@ -584,6 +591,70 @@ fn resolve_import_equals(
     }
 }
 
+thread_local! {
+    // `import * as ns from "m"` re-keys every type `m` exports under `ns.<member>`.
+    // The result depends only on the resolved module and the alias, so a barrel
+    // namespace-imported by many files (or the same module imported repeatedly)
+    // would otherwise rebuild an O(exports) table per importer. Cached by
+    // (resolved module index, alias) and cleared per run.
+    static NAMESPACE_ALIAS_TABLE_CACHE: RefCell<HashMap<(usize, String), Arc<TypeDeclarationTable>>> =
+        RefCell::new(HashMap::new());
+}
+
+pub(crate) fn clear_namespace_alias_table_cache() {
+    NAMESPACE_ALIAS_TABLE_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Build the `ns.<member>` type-declaration table for a namespace import. Mirrors
+/// the per-member `insert_type_export` the eager path used, but produces a
+/// standalone table that is appended to the resolution scope as a shared layer.
+fn build_namespace_alias_table(
+    export_table: &ModuleExportTable,
+    local_name: &str,
+    namespace_scope: Option<&Arc<TypeDeclarationScope>>,
+) -> Arc<TypeDeclarationTable> {
+    let mut table = TypeDeclarationTable::new();
+    for (key, declaration) in export_table.type_declarations.iter() {
+        let member = match key.as_str().split_once('.') {
+            Some((_namespace, rest)) => rest,
+            None => key.as_str(),
+        };
+        let local_key = format!("{local_name}.{member}");
+        if table.get(&local_key).is_none() {
+            crate::modules::exports::insert_type_export(
+                &mut table,
+                &local_key,
+                namespace_scope,
+                declaration.clone(),
+            );
+        }
+    }
+    Arc::new(table)
+}
+
+fn namespace_alias_table(
+    export_table: &ModuleExportTable,
+    local_name: &str,
+    namespace_scope: Option<&Arc<TypeDeclarationScope>>,
+    resolved_index: Option<usize>,
+) -> Arc<TypeDeclarationTable> {
+    let Some(index) = resolved_index else {
+        return build_namespace_alias_table(export_table, local_name, namespace_scope);
+    };
+
+    let cache_key = (index, local_name.to_string());
+    if let Some(cached) =
+        NAMESPACE_ALIAS_TABLE_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned())
+    {
+        return cached;
+    }
+    let table = build_namespace_alias_table(export_table, local_name, namespace_scope);
+    NAMESPACE_ALIAS_TABLE_CACHE.with(|cache| {
+        cache.borrow_mut().insert(cache_key, table.clone());
+    });
+    table
+}
+
 fn resolve_namespace_import(
     import: &ParsedImportDeclaration,
     program_files: &[ParsedProgramFile],
@@ -592,6 +663,7 @@ fn resolve_namespace_import(
     local_symbols: &SymbolTable,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
+    namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
     let ParsedImportKind::Namespace {
@@ -617,7 +689,7 @@ fn resolve_namespace_import(
         return;
     }
 
-    let (namespace_type, namespace_export_table, namespace_scope) =
+    let (namespace_type, namespace_export_table, namespace_scope, namespace_resolved_index) =
         if let Some((export_table, scope, resolved_index)) = try_resolve_module(
             &import.module_specifier,
             ctx,
@@ -635,7 +707,7 @@ fn resolve_namespace_import(
                 }
                 None => namespace_type,
             };
-            (namespace_type, Some(export_table), scope)
+            (namespace_type, Some(export_table), scope, resolved_index)
         } else {
             if resolve_relative_module(
                 &ctx.file_name,
@@ -658,24 +730,16 @@ fn resolve_namespace_import(
     // Re-expose the module's exported types under the namespace alias so qualified
     // type references resolve (`React.ComponentProps<...>`, `M.SomeType`). Members
     // of an `export = <namespace>` keep their `<ns>.<member>` keys here; the first
-    // segment is replaced with the local alias. Plain named type exports gain an
-    // `<alias>.<name>` entry. Only namespace-qualified access reaches these.
+    // segment is replaced with the local alias. Built once per (module, alias) and
+    // appended as a shared scope layer rather than copied into every importer's
+    // table, so `import * as` of a large barrel stays O(1) per importer.
     if let Some(export_table) = &namespace_export_table {
-        for (key, declaration) in export_table.type_declarations.iter() {
-            let member = match key.as_str().split_once('.') {
-                Some((_namespace, rest)) => rest,
-                None => key.as_str(),
-            };
-            let local_key = format!("{local_name}.{member}");
-            if type_declarations.get(&local_key).is_none() {
-                crate::modules::exports::insert_type_export(
-                    type_declarations,
-                    &local_key,
-                    namespace_scope.as_ref(),
-                    declaration.clone(),
-                );
-            }
-        }
+        namespace_alias_layers.push(namespace_alias_table(
+            export_table,
+            local_name,
+            namespace_scope.as_ref(),
+            namespace_resolved_index,
+        ));
     }
 
     if local_symbols.get(local_name).is_none() {

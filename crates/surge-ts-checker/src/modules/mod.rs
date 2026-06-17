@@ -30,7 +30,7 @@ pub(crate) struct ModuleResolution {
 
 #[derive(Debug, Default)]
 pub(crate) struct ModuleExportTable {
-    pub(crate) type_declarations: TypeDeclarationTable,
+    pub(crate) type_declarations: Arc<TypeDeclarationTable>,
     pub(crate) symbols: SymbolTable,
     pub(crate) default_symbol: Option<Arc<SymbolInfo>>,
     /// The value bound by a declaration-lite `export = identifier`. Consumed by
@@ -46,10 +46,12 @@ pub(crate) struct ModuleExportTable {
 impl Clone for ModuleExportTable {
     fn clone(&self) -> Self {
         crate::program::record_module_export_table_clone_count();
-        let entry_count =
-            self.symbols.iter_shared().count() as u64 + u64::from(self.default_symbol.is_some());
-        crate::program::record_module_export_entry_clone_count(entry_count);
-        crate::program::record_module_export_symbol_handle_copy_count(entry_count);
+        if crate::program::counters_enabled() {
+            let entry_count = self.symbols.iter_shared().count() as u64
+                + u64::from(self.default_symbol.is_some());
+            crate::program::record_module_export_entry_clone_count(entry_count);
+            crate::program::record_module_export_symbol_handle_copy_count(entry_count);
+        }
 
         Self {
             type_declarations: self.type_declarations.clone(),
@@ -89,11 +91,28 @@ impl ModuleExportTable {
 pub(crate) struct ModuleImportBindings {
     pub(crate) type_declarations: Arc<TypeDeclarationTable>,
     pub(crate) symbols: SymbolTable,
+    /// Per-namespace-import type layers (`import * as ns from "m"`). Each holds the
+    /// module's exported types re-keyed under the `ns.` alias. They are shared,
+    /// cached `Arc`s appended *after* `type_declarations` in the resolution scope
+    /// so an explicit local/named binding of the same qualified name still wins.
+    /// Materializing them as a scope layer (rather than copying every member into
+    /// `type_declarations`) keeps `import * as` of a large barrel O(1) per importer
+    /// instead of O(exports).
+    pub(crate) namespace_alias_layers: Vec<Arc<TypeDeclarationTable>>,
 }
 
 impl ModuleImportBindings {
     pub(crate) fn clone_with_reason(&self, reason: TypeCopyReason) -> Self {
         with_type_copy_reason(reason, || self.clone())
+    }
+
+    /// The type-declaration layers this binding contributes to a resolution scope,
+    /// ordered so the primary import table is consulted before namespace aliases.
+    pub(crate) fn scope_layers(&self) -> Vec<Arc<TypeDeclarationTable>> {
+        let mut layers = Vec::with_capacity(1 + self.namespace_alias_layers.len());
+        layers.push(self.type_declarations.clone());
+        layers.extend(self.namespace_alias_layers.iter().cloned());
+        layers
     }
 }
 

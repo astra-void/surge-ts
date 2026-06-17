@@ -64,7 +64,7 @@ pub(crate) fn collect_ambient_globals(
         // `interface Env`) contributes members from every declaration rather
         // than being dropped first-wins.
         crate::symbols::merge_shared_arena_table_into(
-            &mut ctx.ambient_global_type_declarations,
+            Arc::make_mut(&mut ctx.ambient_global_type_declarations),
             &ambient_td,
         );
 
@@ -364,10 +364,12 @@ pub(crate) fn collect_ambient_modules(
                 // `declare module "x"` inside a module file augments an existing
                 // module rather than declaring a new ambient one. It is merged
                 // into the resolved target on import, never made resolvable here.
-                match ctx.module_augmentations.get_mut(&module.module_specifier) {
+                match Arc::make_mut(&mut ctx.module_augmentations)
+                    .get_mut(&module.module_specifier)
+                {
                     Some(existing) => merge_module_export_tables(existing, &raw_export_table),
                     None => {
-                        ctx.module_augmentations
+                        Arc::make_mut(&mut ctx.module_augmentations)
                             .insert(module.module_specifier.clone(), raw_export_table);
                     }
                 }
@@ -379,12 +381,13 @@ pub(crate) fn collect_ambient_modules(
                     &mut ambient_module_entries[existing_index].raw_export_table,
                     &raw_export_table,
                 );
-                if let Some(existing_table) = ctx.ambient_modules.get_mut(&module.module_specifier)
+                if let Some(existing_table) =
+                    Arc::make_mut(&mut ctx.ambient_modules).get_mut(&module.module_specifier)
                 {
                     merge_module_export_tables(existing_table, &raw_export_table);
                 }
             } else {
-                ctx.ambient_modules
+                Arc::make_mut(&mut ctx.ambient_modules)
                     .insert(module.module_specifier.clone(), raw_export_table.clone());
                 ambient_module_indexes.insert(
                     module.module_specifier.clone(),
@@ -434,7 +437,7 @@ pub(crate) fn collect_ambient_modules(
             &mut resolving,
             ctx,
         ) {
-            ctx.ambient_modules
+            Arc::make_mut(&mut ctx.ambient_modules)
                 .insert(entry.module_specifier.clone(), resolved_export_table);
         }
     }
@@ -455,7 +458,7 @@ pub(crate) fn apply_module_augmentation(
 ) {
     for (name, declaration) in augmentation.type_declarations.iter() {
         crate::symbols::merge_type_declaration_into_table(
-            &mut base.type_declarations,
+            Arc::make_mut(&mut base.type_declarations),
             name.as_ref(),
             declaration,
         );
@@ -479,7 +482,7 @@ pub(crate) fn merge_module_export_tables(
     );
     for (name, declaration) in source.type_declarations.iter() {
         crate::symbols::merge_type_declaration_into_table(
-            &mut target.type_declarations,
+            Arc::make_mut(&mut target.type_declarations),
             name.as_ref(),
             declaration,
         );

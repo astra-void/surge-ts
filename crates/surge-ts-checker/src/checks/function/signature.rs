@@ -2,6 +2,8 @@
 
 use super::*;
 
+use std::sync::Arc;
+
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedBindingName, ParsedFunctionBodyStatement, ParsedFunctionParameter,
@@ -22,7 +24,6 @@ use crate::infer::{
 };
 use crate::symbols::{
     FunctionSignatureInfo, ScopeStack, SymbolInfo, SymbolKind, SymbolTable,
-    clone_symbol_info_handle,
 };
 
 pub(crate) fn emit_parameter_diagnostics(
@@ -495,12 +496,20 @@ pub(crate) fn check_function_body_with_signature_and_this(
 }
 
 pub(crate) fn merged_function_body_root_symbols(ctx: &CheckerContext) -> SymbolTable {
-    let mut root = ctx
-        .ambient_global_symbols
-        .clone_with_reason(TypeCopyReason::FunctionBodySetup);
-    for (name, symbol) in ctx.symbols.iter_handles() {
-        root.insert_handle(name.clone(), clone_symbol_info_handle(symbol));
-    }
-
-    root
+    // A function body sees its module's symbols layered over the ambient globals.
+    // Rather than copying every visible symbol into a fresh table on each function
+    // (O(module symbols) per function, so O(N^2) for a file with N functions), share
+    // them by `Arc` as a lookup-only parent chain: locals -> module -> ambient. The
+    // scope still inserts its own name/params/locals into the (empty) own map, so
+    // lookups and shadowing behave exactly as with the previously flattened table.
+    let ambient = Arc::new(
+        ctx.ambient_global_symbols
+            .clone_with_reason(TypeCopyReason::FunctionBodySetup),
+    );
+    let module_over_ambient = Arc::new(
+        ctx.symbols
+            .clone_with_reason(TypeCopyReason::FunctionBodySetup)
+            .with_parent_fallback(ambient),
+    );
+    SymbolTable::with_parent(module_over_ambient)
 }

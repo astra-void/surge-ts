@@ -327,6 +327,122 @@ pub(crate) fn merge_shared_arena_table_into(
     }
 }
 
+/// Bulk variant of [`merge_shared_arena_table_into`] that merges many sources into
+/// `dest` in one pass. Applying the single-source merge once per source rebuilds a
+/// growing interface's member list on every merge, so a global interface split
+/// across N files (`declare global { interface X { ... } }`) was O(N^2). Here each
+/// interface is folded into one owned accumulator whose property set is maintained
+/// incrementally, making the whole merge O(total members). The observable result
+/// is identical: same first-property-wins merge order, same first-wins for
+/// cross-kind names. Every source must share `dest`'s arena.
+pub(crate) fn merge_shared_arena_tables_into(
+    dest: &mut TypeDeclarationTable,
+    sources: &[TypeDeclarationTable],
+) {
+    let is_method = |member: &ParsedInterfaceMember| matches!(member.ty, ParsedType::Function(_));
+    // name -> (accumulated interface, its non-method property names)
+    let mut interfaces: HashMap<String, (InterfaceInfo, std::collections::HashSet<String>)> =
+        HashMap::new();
+
+    for source in sources {
+        debug_assert!(
+            dest.arena.ptr_eq(&source.arena),
+            "shared-arena merge requires dest and source to share one arena"
+        );
+
+        for (name, id) in source.declarations.iter() {
+            let name_ref = name.as_ref();
+            let incoming = source.get_by_id(*id);
+
+            let TypeDeclarationInfo::Interface(incoming_interface) = incoming else {
+                // A later non-interface never overrides an earlier binding (first
+                // wins), and an interface already accumulated for this name keeps it.
+                if dest.get(name_ref).is_some() || interfaces.contains_key(name_ref) {
+                    continue;
+                }
+                dest.push_shared_payload(name_ref, source.payload_ptr(*id));
+                continue;
+            };
+
+            if let Some((accumulator, seen)) = interfaces.get_mut(name_ref) {
+                fold_interface_declaration(accumulator, seen, incoming_interface, &is_method);
+                continue;
+            }
+
+            match dest.get(name_ref) {
+                Some(TypeDeclarationInfo::Interface(existing)) => {
+                    let mut accumulator = existing.clone();
+                    let mut seen: std::collections::HashSet<String> = existing
+                        .body
+                        .members
+                        .iter()
+                        .filter(|member| !is_method(member))
+                        .map(|member| member.name.clone())
+                        .collect();
+                    fold_interface_declaration(
+                        &mut accumulator,
+                        &mut seen,
+                        incoming_interface,
+                        &is_method,
+                    );
+                    interfaces.insert(name_ref.to_string(), (accumulator, seen));
+                }
+                // An existing non-interface binding wins over a later interface.
+                Some(_) => {}
+                None => {
+                    let seen: std::collections::HashSet<String> = incoming_interface
+                        .body
+                        .members
+                        .iter()
+                        .filter(|member| !is_method(member))
+                        .map(|member| member.name.clone())
+                        .collect();
+                    interfaces.insert(name_ref.to_string(), (incoming_interface.clone(), seen));
+                }
+            }
+        }
+    }
+
+    for (name, (accumulator, _)) in interfaces {
+        dest.upsert(&name, TypeDeclarationInfo::Interface(accumulator));
+    }
+}
+
+/// Append `incoming`'s members to `accumulator` in place, mirroring
+/// [`merge_interface_infos`] (methods always kept as overloads; a property already
+/// declared wins) but reusing the accumulator's member list instead of cloning it,
+/// and consulting an incrementally maintained `seen` set instead of rebuilding it.
+fn fold_interface_declaration(
+    accumulator: &mut InterfaceInfo,
+    seen: &mut std::collections::HashSet<String>,
+    incoming: &InterfaceInfo,
+    is_method: &impl Fn(&ParsedInterfaceMember) -> bool,
+) {
+    let body = Arc::make_mut(&mut accumulator.body);
+    for member in &incoming.body.members {
+        if !is_method(member) {
+            if seen.contains(member.name.as_str()) {
+                continue;
+            }
+            seen.insert(member.name.clone());
+        }
+        body.members.push(member.clone());
+    }
+    body.extends.extend(incoming.body.extends.iter().cloned());
+    if body.type_parameters.is_empty() {
+        body.type_parameters = incoming.body.type_parameters.clone();
+    }
+    if body.string_index_type.is_none() {
+        body.string_index_type = incoming.body.string_index_type.clone();
+    }
+    if body.call_signature.is_none() {
+        body.call_signature = incoming.body.call_signature.clone();
+    }
+    if accumulator.resolution_scope.is_none() {
+        accumulator.resolution_scope = incoming.resolution_scope.clone();
+    }
+}
+
 /// A borrowed, context-independent view of an arena-allocated declaration
 /// payload.
 ///
