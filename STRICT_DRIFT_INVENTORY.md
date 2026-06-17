@@ -405,3 +405,66 @@ pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans               
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans    # 72/3
 cargo fmt --check && cargo test --workspace && pnpm run oracle:test && pnpm run real:auth-kit   # all green, auth-kit 0/0
 ```
+
+## 9. After alias-aware message display pass
+
+Follow-up to §8's deferred message-drift rows (§4.3 alias/structural display).
+**Diagnostic display only — no checker semantics, type inference, diagnostic
+codes, fixtures, gates, libs, or TypeScript version changed.** `alias_name` is
+excluded from type equality and no `alias_id` is added on the new paths, so
+assignability is unchanged. Normal gate stays **75 PASS / 0 FAIL**; `--strictSpans`
+stays **75 PASS / 0 FAIL**.
+
+| Run | Before (after §8) | After |
+| --- | --- | --- |
+| Normal gate | 75 PASS / 0 FAIL | **75 PASS / 0 FAIL** |
+| `--strictMessages` | 72 PASS / 3 FAIL | **74 PASS / 1 FAIL** |
+| `--strictSpans` | 75 PASS / 0 FAIL | **75 PASS / 0 FAIL** |
+| both | 72 PASS / 3 FAIL | **74 PASS / 1 FAIL** |
+
+**Fixes (display only):**
+
+- **Generic-alias display** (`generic-cache-module-source-not-persisted-basic`,
+  TS2353). A generic instantiation's whole-type display now shows its alias form
+  `Box<string>` instead of the structural expansion `{ value: string; }`. The
+  display name is built from the *syntactic* type arguments (via the existing
+  `parsed_type_display`, which resolves nothing — no diagnostic or caching side
+  effects — and, like tsc, keeps a type-alias argument by name rather than
+  expanding it) and attached as the resolved object's `alias_name`.
+  `infer/types/resolve.rs`.
+- **Original declared name through import rename.** The same fixture imports
+  `Box as ABox`, and `rename_type_declaration` had overwritten the declaration's
+  `name` to the local binding, so the message showed `ABox<string>`. Added a
+  display-only `declared_name` to `TypeAliasInfo`/`InterfaceInfo` that captures the
+  pre-rename name on the first rename; the generic-alias display uses it so the
+  message shows the original `Box<string>` (matching tsc). `symbols/type_declarations.rs`,
+  `modules/exports.rs`.
+- **Nominal display for cyclic library interfaces** (`jsx-dom-physical-lib-prop-basic`,
+  TS2322). `URL` (whose `searchParams` cluster is mutually recursive) resolved with
+  `had_error`, which had gated off the display `alias_name`, so the message printed
+  the full structural expansion. Now the name is kept whenever the object resolved
+  to a real (non-empty) shape; only a collapse to an empty object falls back to the
+  structural form. `infer/types/resolve.rs`.
+
+**Deferred (1 message-drift target):**
+
+- `jsx-intrinsic-elements-basic` (TS2322): member ordering
+  (`{ disabled?...; children?...}` vs `{ children?...; disabled?...}`) and optional
+  rendering (`boolean | undefined` vs `boolean`). **Still deferred** — the object's
+  properties are stored in an alphabetical `BTreeMap` built through the arena
+  allocation path, so preserving declaration order needs a display-order field on
+  the core `ObjectType` populated at construction (the arena/body-sharing area is
+  off-limits) plus a global optional-`| undefined` rendering change. Both are
+  object-display-architecture changes disproportionate to a single fixture.
+
+**Commands run:**
+
+```bash
+pnpm run oracle:sweep -- --all --maxDiagnostics 200                                   # 75/75
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages                  # 74/1
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans                     # 75/75
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans    # 74/1
+cargo fmt --check && pnpm run oracle:test && pnpm run real:auth-kit                   # green, auth-kit 0/0
+# (cargo test --workspace skipped this pass at the user's request — runtime; the
+#  changes are display-only and validated through the oracle sweeps.)
+```
