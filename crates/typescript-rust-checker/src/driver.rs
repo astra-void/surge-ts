@@ -185,22 +185,19 @@ fn for_each_global_augmentation_block(
 }
 
 fn merge_global_augmentation_types(block_statements: &[ParsedStatement], ctx: &mut CheckerContext) {
-    let saved_type_declarations = std::mem::replace(
-        &mut ctx.type_declarations,
-        crate::symbols::TypeDeclarationTable::new(),
+    let shared = crate::symbols::TypeDeclarationTable::with_arena(
+        ctx.ambient_global_type_declarations.arena_handle(),
     );
+    let saved_type_declarations = std::mem::replace(&mut ctx.type_declarations, shared);
     let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
     ctx.type_declaration_scope = None;
 
     collect_type_declarations(block_statements, ctx);
-    let ambient_td = ctx.type_declarations.clone();
-    for (name, decl) in ambient_td.iter() {
-        crate::symbols::merge_type_declaration_into_table(
-            &mut ctx.ambient_global_type_declarations,
-            name.as_ref(),
-            decl,
-        );
-    }
+    let ambient_td = std::mem::take(&mut ctx.type_declarations);
+    crate::symbols::merge_shared_arena_table_into(
+        &mut ctx.ambient_global_type_declarations,
+        &ambient_td,
+    );
 
     ctx.type_declarations = saved_type_declarations;
     ctx.type_declaration_scope = saved_type_declaration_scope;
@@ -532,31 +529,31 @@ fn collect_namespace_type_declarations(
         match inner {
             ParsedStatement::InterfaceDeclaration(interface) => {
                 let qualified = format!("{}.{}", namespace.name, interface.name);
-                let info = InterfaceInfo {
-                    name: qualified.clone(),
-                    file_name: ctx.file_name.clone(),
-                    name_span: interface.name_span,
-                    type_parameters: interface.type_parameters.clone(),
-                    extends: interface.extends.clone(),
-                    members: interface.members.clone(),
-                    string_index_type: interface.string_index_type.clone(),
-                    call_signature: interface.call_signature.clone(),
-                    resolution_scope: None,
-                };
+                let info = InterfaceInfo::new(
+                    qualified.clone(),
+                    ctx.file_name.clone(),
+                    interface.name_span,
+                    interface.type_parameters.clone(),
+                    interface.extends.clone(),
+                    interface.members.clone(),
+                    interface.string_index_type.clone(),
+                    interface.call_signature.clone(),
+                    None,
+                );
                 let _ = ctx
                     .type_declarations
                     .insert(qualified, TypeDeclarationInfo::Interface(info));
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {
                 let qualified = format!("{}.{}", namespace.name, alias.name);
-                let info = TypeAliasInfo {
-                    name: qualified.clone(),
-                    file_name: ctx.file_name.clone(),
-                    name_span: alias.name_span,
-                    type_parameters: alias.type_parameters.clone(),
-                    ty: alias.ty.clone(),
-                    resolution_scope: None,
-                };
+                let info = TypeAliasInfo::new(
+                    qualified.clone(),
+                    ctx.file_name.clone(),
+                    alias.name_span,
+                    alias.type_parameters.clone(),
+                    alias.ty.clone(),
+                    None,
+                );
                 let _ = ctx
                     .type_declarations
                     .insert(qualified, TypeDeclarationInfo::Alias(info));
@@ -621,28 +618,28 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                         for specifier in specifiers {
                             if *is_type_only {
                                 let declaration = crate::symbols::TypeDeclarationInfo::Alias(
-                                    crate::symbols::TypeAliasInfo {
-                                        name: specifier.local_name.to_string(),
-                                        file_name: ctx.file_name.clone(),
-                                        name_span: specifier.name_span,
-                                        type_parameters: vec![],
-                                        ty: typescript_rust_syntax::ParsedType::Unknown,
-                                        resolution_scope: None,
-                                    },
+                                    crate::symbols::TypeAliasInfo::new(
+                                        specifier.local_name.to_string(),
+                                        ctx.file_name.clone(),
+                                        specifier.name_span,
+                                        vec![],
+                                        typescript_rust_syntax::ParsedType::Unknown,
+                                        None,
+                                    ),
                                 );
                                 let _ = ctx
                                     .type_declarations
                                     .insert(specifier.local_name.clone(), declaration);
                             } else {
                                 let declaration = crate::symbols::TypeDeclarationInfo::Alias(
-                                    crate::symbols::TypeAliasInfo {
-                                        name: specifier.local_name.to_string(),
-                                        file_name: ctx.file_name.clone(),
-                                        name_span: specifier.name_span,
-                                        type_parameters: vec![],
-                                        ty: typescript_rust_syntax::ParsedType::Unknown,
-                                        resolution_scope: None,
-                                    },
+                                    crate::symbols::TypeAliasInfo::new(
+                                        specifier.local_name.to_string(),
+                                        ctx.file_name.clone(),
+                                        specifier.name_span,
+                                        vec![],
+                                        typescript_rust_syntax::ParsedType::Unknown,
+                                        None,
+                                    ),
                                 );
                                 let _ = ctx
                                     .type_declarations
@@ -666,14 +663,14 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                     } => {
                         if *is_type_only {
                             let declaration = crate::symbols::TypeDeclarationInfo::Alias(
-                                crate::symbols::TypeAliasInfo {
-                                    name: local_name.clone(),
-                                    file_name: ctx.file_name.clone(),
-                                    name_span: *name_span,
-                                    type_parameters: vec![],
-                                    ty: typescript_rust_syntax::ParsedType::Unknown,
-                                    resolution_scope: None,
-                                },
+                                crate::symbols::TypeAliasInfo::new(
+                                    local_name.clone(),
+                                    ctx.file_name.clone(),
+                                    *name_span,
+                                    vec![],
+                                    typescript_rust_syntax::ParsedType::Unknown,
+                                    None,
+                                ),
                             );
                             let _ = ctx
                                 .type_declarations
@@ -692,28 +689,28 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                         for specifier in specifiers {
                             if *is_type_only {
                                 let declaration = crate::symbols::TypeDeclarationInfo::Alias(
-                                    crate::symbols::TypeAliasInfo {
-                                        name: specifier.local_name.to_string(),
-                                        file_name: ctx.file_name.clone(),
-                                        name_span: specifier.name_span,
-                                        type_parameters: vec![],
-                                        ty: typescript_rust_syntax::ParsedType::Unknown,
-                                        resolution_scope: None,
-                                    },
+                                    crate::symbols::TypeAliasInfo::new(
+                                        specifier.local_name.to_string(),
+                                        ctx.file_name.clone(),
+                                        specifier.name_span,
+                                        vec![],
+                                        typescript_rust_syntax::ParsedType::Unknown,
+                                        None,
+                                    ),
                                 );
                                 let _ = ctx
                                     .type_declarations
                                     .insert(specifier.local_name.clone(), declaration);
                             } else {
                                 let declaration = crate::symbols::TypeDeclarationInfo::Alias(
-                                    crate::symbols::TypeAliasInfo {
-                                        name: specifier.local_name.to_string(),
-                                        file_name: ctx.file_name.clone(),
-                                        name_span: specifier.name_span,
-                                        type_parameters: vec![],
-                                        ty: typescript_rust_syntax::ParsedType::Unknown,
-                                        resolution_scope: None,
-                                    },
+                                    crate::symbols::TypeAliasInfo::new(
+                                        specifier.local_name.to_string(),
+                                        ctx.file_name.clone(),
+                                        specifier.name_span,
+                                        vec![],
+                                        typescript_rust_syntax::ParsedType::Unknown,
+                                        None,
+                                    ),
                                 );
                                 let _ = ctx
                                     .type_declarations
@@ -746,14 +743,14 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                     } => {
                         if *is_type_only {
                             let declaration = crate::symbols::TypeDeclarationInfo::Alias(
-                                crate::symbols::TypeAliasInfo {
-                                    name: local_name.clone(),
-                                    file_name: ctx.file_name.clone(),
-                                    name_span: None,
-                                    type_parameters: vec![],
-                                    ty: typescript_rust_syntax::ParsedType::Unknown,
-                                    resolution_scope: None,
-                                },
+                                crate::symbols::TypeAliasInfo::new(
+                                    local_name.clone(),
+                                    ctx.file_name.clone(),
+                                    None,
+                                    vec![],
+                                    typescript_rust_syntax::ParsedType::Unknown,
+                                    None,
+                                ),
                             );
                             let _ = ctx
                                 .type_declarations
@@ -955,14 +952,14 @@ fn classify_file_kind(file_name: &str) -> FileKind {
 pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut CheckerContext) {
     report_duplicate_type_parameters(&alias.type_parameters, ctx);
 
-    let info = TypeAliasInfo {
-        name: alias.name.clone(),
-        file_name: ctx.file_name.clone(),
-        name_span: alias.name_span,
-        type_parameters: alias.type_parameters.clone(),
-        ty: alias.ty.clone(),
-        resolution_scope: None,
-    };
+    let info = TypeAliasInfo::new(
+        alias.name.clone(),
+        ctx.file_name.clone(),
+        alias.name_span,
+        alias.type_parameters.clone(),
+        alias.ty.clone(),
+        None,
+    );
 
     if ctx
         .type_declarations
@@ -982,30 +979,35 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
 pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mut CheckerContext) {
     report_duplicate_type_parameters(&interface.type_parameters, ctx);
 
-    let info = InterfaceInfo {
-        name: interface.name.clone(),
-        file_name: ctx.file_name.clone(),
-        name_span: interface.name_span,
-        type_parameters: interface.type_parameters.clone(),
-        extends: interface.extends.clone(),
-        members: interface.members.clone(),
-        string_index_type: interface.string_index_type.clone(),
-        call_signature: interface.call_signature.clone(),
-        resolution_scope: None,
-    };
+    let info = InterfaceInfo::new(
+        interface.name.clone(),
+        ctx.file_name.clone(),
+        interface.name_span,
+        interface.type_parameters.clone(),
+        interface.extends.clone(),
+        interface.members.clone(),
+        interface.string_index_type.clone(),
+        interface.call_signature.clone(),
+        None,
+    );
 
     enum Existing {
         None,
         NonInterface,
-        Interface(Box<InterfaceInfo>),
+        Interface(crate::symbols::TypeDeclarationHandle),
     }
 
-    let existing = match ctx.type_declarations.get(&interface.name) {
+    // Classify the existing entry through an arena-backed handle so the common
+    // declaration-merging case reads the previously accumulated interface in
+    // place instead of deep-cloning its (often large) member list. The handle
+    // keeps the backing arena alive and is decoupled from `ctx`, so the borrowed
+    // interface stays valid while `ctx` is borrowed mutably below.
+    let existing = match ctx.type_declarations.get_handle(&interface.name) {
         None => Existing::None,
-        Some(TypeDeclarationInfo::Interface(existing)) => {
-            Existing::Interface(Box::new(existing.clone()))
-        }
-        Some(_) => Existing::NonInterface,
+        Some(handle) => match handle.get() {
+            TypeDeclarationInfo::Interface(_) => Existing::Interface(handle),
+            _ => Existing::NonInterface,
+        },
     };
 
     match existing {
@@ -1014,9 +1016,12 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
                 .type_declarations
                 .insert(interface.name.clone(), TypeDeclarationInfo::Interface(info));
         }
-        Existing::Interface(existing) => {
-            let incoming = filter_conflicting_interface_members(&existing, info, ctx);
-            let merged = crate::symbols::merge_interface_infos(&existing, &incoming);
+        Existing::Interface(handle) => {
+            let TypeDeclarationInfo::Interface(existing) = handle.get() else {
+                unreachable!("handle classified as interface above")
+            };
+            let incoming = filter_conflicting_interface_members(existing, info, ctx);
+            let merged = crate::symbols::merge_interface_infos(existing, &incoming);
             ctx.type_declarations.upsert(
                 interface.name.clone(),
                 TypeDeclarationInfo::Interface(merged),
@@ -1043,30 +1048,33 @@ fn filter_conflicting_interface_members(
     mut incoming: InterfaceInfo,
     ctx: &mut CheckerContext,
 ) -> InterfaceInfo {
-    incoming.members.retain(|member| {
-        let Some(previous) = existing.members.iter().find(|m| m.name == member.name) else {
-            return true;
-        };
+    std::sync::Arc::make_mut(&mut incoming.body)
+        .members
+        .retain(|member| {
+            let Some(previous) = existing.body.members.iter().find(|m| m.name == member.name)
+            else {
+                return true;
+            };
 
-        let is_method = |ty: &ParsedType| matches!(ty, ParsedType::Function(_));
-        if is_method(&previous.ty) || is_method(&member.ty) || previous.ty == member.ty {
-            return true;
-        }
-
-        if let (Some(expected), Some(actual)) = (
-            parsed_type_display(&previous.ty),
-            parsed_type_display(&member.ty),
-        ) {
-            let mut diagnostic =
-                Diagnostic::ts2717(&member.name, expected, actual, ctx.file_name.clone());
-            if let Some(span) = member.name_span {
-                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            let is_method = |ty: &ParsedType| matches!(ty, ParsedType::Function(_));
+            if is_method(&previous.ty) || is_method(&member.ty) || previous.ty == member.ty {
+                return true;
             }
-            ctx.push(diagnostic);
-        }
 
-        false
-    });
+            if let (Some(expected), Some(actual)) = (
+                parsed_type_display(&previous.ty),
+                parsed_type_display(&member.ty),
+            ) {
+                let mut diagnostic =
+                    Diagnostic::ts2717(&member.name, expected, actual, ctx.file_name.clone());
+                if let Some(span) = member.name_span {
+                    diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                }
+                ctx.push(diagnostic);
+            }
+
+            false
+        });
 
     incoming
 }

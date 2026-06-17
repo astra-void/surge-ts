@@ -671,12 +671,11 @@ pub(crate) fn resolve_named_type(
         };
     }
 
-    // Classify the declaration through a borrow so a cache hit (the common case
-    // for shared library/dependency types) never deep-clones the full
-    // interface/alias payload. The owned clone below is taken only on a genuine
-    // resolution miss, where `resolve_interface`/`resolve_type_alias` need to own
-    // the declaration while `ctx` is borrowed mutably.
-    let Some(declaration_ref) = ctx.lookup_type_declaration(&named_type.name) else {
+    // Look up the declaration through a context-independent handle so resolution
+    // can read the (often large) interface/alias payload while `ctx` is borrowed
+    // mutably, without deep-cloning it. The handle keeps the backing arena alive;
+    // the borrowed declaration below is decoupled from `ctx`.
+    let Some(handle) = ctx.lookup_type_declaration_handle(&named_type.name) else {
         // A qualified reference (`React.Foo`, `Prisma.Bar`) we cannot resolve is
         // treated as no-cascade: tsc resolves these against the full namespace
         // surface and reports nothing, so emitting TS2304 here would be a false
@@ -689,19 +688,20 @@ pub(crate) fn resolve_named_type(
             had_error: true,
         };
     };
+    let declaration = handle.get();
 
     let has_type_arguments = !named_type.type_arguments.is_empty();
-    let is_generic_declaration = match declaration_ref {
-        TypeDeclarationInfo::Alias(alias) => !alias.type_parameters.is_empty(),
-        TypeDeclarationInfo::Interface(interface) => !interface.type_parameters.is_empty(),
+    let is_generic_declaration = match declaration {
+        TypeDeclarationInfo::Alias(alias) => !alias.body.type_parameters.is_empty(),
+        TypeDeclarationInfo::Interface(interface) => !interface.body.type_parameters.is_empty(),
     };
 
     if has_type_arguments && !is_generic_declaration {
-        let name = match declaration_ref {
-            TypeDeclarationInfo::Alias(alias) => alias.name.clone(),
-            TypeDeclarationInfo::Interface(interface) => interface.name.clone(),
+        let name = match declaration {
+            TypeDeclarationInfo::Alias(alias) => alias.name.as_str(),
+            TypeDeclarationInfo::Interface(interface) => interface.name.as_str(),
         };
-        emit_type_is_not_generic(&name, named_type.span, ctx);
+        emit_type_is_not_generic(name, named_type.span, ctx);
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,
@@ -709,15 +709,11 @@ pub(crate) fn resolve_named_type(
     }
 
     if !has_type_arguments && !is_generic_declaration {
-        let cache_key = type_declaration_resolution_key(declaration_ref);
+        let cache_key = type_declaration_resolution_key(declaration);
         if let Some(cached) = get_cached_named_type_resolution(ctx, &cache_key, resolving) {
             return cached;
         }
 
-        let declaration = ctx
-            .lookup_type_declaration(&named_type.name)
-            .cloned()
-            .expect("declaration present on non-generic resolution miss");
         mark_named_type_resolution_in_progress(ctx, &cache_key);
         let resolved = match declaration {
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
@@ -756,9 +752,8 @@ pub(crate) fn resolve_named_type(
     // store is gated on the resolution being free of *external* cycles (see
     // `lowest_cycle_target_index`) so a cached value matches a standalone
     // resolution and never depends on what an enclosing frame had on the stack.
-    let library_scoped = declaration_file_is_library_scoped(declaration_ref, ctx);
-    let library_cache_key =
-        library_scoped.then(|| type_declaration_resolution_key(declaration_ref));
+    let library_scoped = declaration_file_is_library_scoped(declaration, ctx);
+    let library_cache_key = library_scoped.then(|| type_declaration_resolution_key(declaration));
     let cached_arguments = if library_scoped {
         // Resolve the arguments to form the cache key. Discard any diagnostics this
         // probe produces; the authoritative resolution below re-emits them.
@@ -785,11 +780,6 @@ pub(crate) fn resolve_named_type(
             return hit;
         }
     }
-
-    let declaration = ctx
-        .lookup_type_declaration(&named_type.name)
-        .cloned()
-        .expect("declaration present on generic resolution miss");
 
     // Measure cycles triggered by this resolution alone. The declaration is pushed
     // onto `resolving` (at index `floor`) inside `resolve_interface`/`resolve_type_alias`,

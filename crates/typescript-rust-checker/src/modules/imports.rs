@@ -271,14 +271,14 @@ fn resolve_default_and_named_import(
         }
 
         if *is_type_only {
-            let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-                name: local_name.clone(),
-                file_name: ctx.file_name.clone(),
-                name_span: *name_span,
-                type_parameters: vec![],
-                ty: ParsedType::Unknown,
-                resolution_scope: None,
-            });
+            let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+                local_name.clone(),
+                ctx.file_name.clone(),
+                *name_span,
+                vec![],
+                ParsedType::Unknown,
+                None,
+            ));
             if type_declarations.get(local_name).is_none() {
                 let _ = type_declarations.insert(local_name.clone(), declaration);
             }
@@ -288,26 +288,26 @@ fn resolve_default_and_named_import(
 
         for specifier in specifiers {
             if *is_type_only {
-                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-                    name: specifier.local_name.to_string(),
-                    file_name: ctx.file_name.clone(),
-                    name_span: specifier.name_span,
-                    type_parameters: vec![],
-                    ty: ParsedType::Unknown,
-                    resolution_scope: None,
-                });
+                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+                    specifier.local_name.to_string(),
+                    ctx.file_name.clone(),
+                    specifier.name_span,
+                    vec![],
+                    ParsedType::Unknown,
+                    None,
+                ));
                 if type_declarations.get(&specifier.local_name).is_none() {
                     let _ = type_declarations.insert(specifier.local_name.clone(), declaration);
                 }
             } else {
-                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-                    name: specifier.local_name.to_string(),
-                    file_name: ctx.file_name.clone(),
-                    name_span: specifier.name_span,
-                    type_parameters: vec![],
-                    ty: ParsedType::Unknown,
-                    resolution_scope: None,
-                });
+                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+                    specifier.local_name.to_string(),
+                    ctx.file_name.clone(),
+                    specifier.name_span,
+                    vec![],
+                    ParsedType::Unknown,
+                    None,
+                ));
                 if type_declarations.get(&specifier.local_name).is_none() {
                     let _ = type_declarations.insert(specifier.local_name.clone(), declaration);
                 }
@@ -325,14 +325,14 @@ fn resolve_default_and_named_import(
     match export_table.get_shared_value("default") {
         Some(default_symbol) => {
             if *is_type_only {
-                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-                    name: local_name.clone(),
-                    file_name: ctx.file_name.clone(),
-                    name_span: *name_span,
-                    type_parameters: vec![],
-                    ty: ParsedType::Unknown,
-                    resolution_scope: None,
-                });
+                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+                    local_name.clone(),
+                    ctx.file_name.clone(),
+                    *name_span,
+                    vec![],
+                    ParsedType::Unknown,
+                    None,
+                ));
                 if type_declarations.get(local_name).is_none() {
                     let _ = type_declarations.insert(local_name.clone(), declaration);
                 }
@@ -352,14 +352,14 @@ fn resolve_default_and_named_import(
             }
 
             if *is_type_only {
-                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-                    name: local_name.clone(),
-                    file_name: ctx.file_name.clone(),
-                    name_span: *name_span,
-                    type_parameters: vec![],
-                    ty: ParsedType::Unknown,
-                    resolution_scope: None,
-                });
+                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+                    local_name.clone(),
+                    ctx.file_name.clone(),
+                    *name_span,
+                    vec![],
+                    ParsedType::Unknown,
+                    None,
+                ));
                 if type_declarations.get(local_name).is_none() {
                     let _ = type_declarations.insert(local_name.clone(), declaration);
                 }
@@ -605,14 +605,14 @@ fn resolve_namespace_import(
         return;
     };
     if *is_type_only {
-        let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-            name: local_name.clone(),
-            file_name: ctx.file_name.clone(),
-            name_span: None,
-            type_parameters: vec![],
-            ty: ParsedType::Unknown,
-            resolution_scope: None,
-        });
+        let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+            local_name.clone(),
+            ctx.file_name.clone(),
+            None,
+            vec![],
+            ParsedType::Unknown,
+            None,
+        ));
         if type_declarations.get(local_name).is_none() {
             let _ = type_declarations.insert(local_name.clone(), declaration);
         }

@@ -34,17 +34,17 @@ pub(crate) fn class_instance_interface_info(
         .filter_map(class_member_to_interface_member)
         .collect();
 
-    InterfaceInfo {
-        name: class.name.clone(),
+    InterfaceInfo::new(
+        class.name.clone(),
         file_name,
-        name_span: class.name_span,
-        type_parameters: class.type_parameters.clone(),
-        extends: class.extends.clone(),
+        class.name_span,
+        class.type_parameters.clone(),
+        class.extends.clone(),
         members,
-        string_index_type: None,
-        call_signature: None,
-        resolution_scope: None,
-    }
+        None,
+        None,
+        None,
+    )
 }
 
 fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<ParsedInterfaceMember> {

@@ -15,7 +15,7 @@ use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default
 use crate::symbols::InterfaceInfo;
 
 pub(crate) fn resolve_interface(
-    interface: InterfaceInfo,
+    interface: &InterfaceInfo,
     type_arguments: Vec<ParsedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
@@ -33,7 +33,7 @@ pub(crate) fn resolve_interface(
 
     resolving.push(declaration_key.clone());
     let Some(local_substitution) = bind_type_arguments(
-        &interface.type_parameters,
+        &interface.body.type_parameters,
         type_arguments,
         &interface.name,
         interface.name_span,
@@ -129,10 +129,10 @@ pub(crate) fn resolve_interface(
     let resolved = with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &interface.file_name, |ctx| {
             resolve_interface_declaration(
-                &interface.extends,
-                &interface.members,
-                interface.string_index_type.as_ref(),
-                interface.call_signature.as_ref(),
+                &interface.body.extends,
+                &interface.body.members,
+                interface.body.string_index_type.as_ref(),
+                interface.body.call_signature.as_ref(),
                 ctx,
                 resolving,
                 &local_substitution,

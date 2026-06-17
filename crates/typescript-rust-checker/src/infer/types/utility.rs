@@ -14,7 +14,7 @@ use crate::default_lib::is_generated_default_lib_file_name;
 use crate::symbols::TypeAliasInfo;
 
 pub(crate) fn resolve_type_alias(
-    alias: TypeAliasInfo,
+    alias: &TypeAliasInfo,
     type_arguments: Vec<ParsedType>,
     reference_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
@@ -33,7 +33,7 @@ pub(crate) fn resolve_type_alias(
 
     resolving.push(declaration_key.clone());
     let Some(local_substitution) = bind_type_arguments(
-        &alias.type_parameters,
+        &alias.body.type_parameters,
         type_arguments,
         &alias.name,
         reference_span.or(alias.name_span),
@@ -75,7 +75,12 @@ pub(crate) fn resolve_type_alias(
     }
     let resolved = with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &alias.file_name, |ctx| {
-            resolve_parsed_type_with_substitution(alias.ty, ctx, resolving, &local_substitution)
+            resolve_parsed_type_with_substitution(
+                alias.body.ty.clone(),
+                ctx,
+                resolving,
+                &local_substitution,
+            )
         })
     });
     if is_namespace_member {

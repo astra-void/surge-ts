@@ -41,8 +41,9 @@ pub(crate) fn collect_ambient_globals(
         let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
         ctx.type_declaration_scope = None;
 
-        let saved_type_declarations =
-            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+        let shared =
+            TypeDeclarationTable::with_arena(ctx.ambient_global_type_declarations.arena_handle());
+        let saved_type_declarations = std::mem::replace(&mut ctx.type_declarations, shared);
         let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
         let ambient_td = std::mem::take(&mut ctx.type_declarations);
@@ -62,13 +63,10 @@ pub(crate) fn collect_ambient_globals(
         // interface (a default lib's `Window`, or a project's split global
         // `interface Env`) contributes members from every declaration rather
         // than being dropped first-wins.
-        for (name, decl) in ambient_td.iter() {
-            crate::symbols::merge_type_declaration_into_table(
-                &mut ctx.ambient_global_type_declarations,
-                name.as_ref(),
-                decl,
-            );
-        }
+        crate::symbols::merge_shared_arena_table_into(
+            &mut ctx.ambient_global_type_declarations,
+            &ambient_td,
+        );
 
         ctx.type_declarations = saved_type_declarations;
         ctx.type_declaration_scope = saved_type_declaration_scope;

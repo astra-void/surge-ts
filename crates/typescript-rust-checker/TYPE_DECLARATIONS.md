@@ -56,6 +56,22 @@ Design note:
 - interface names are not preserved in downstream diagnostics today because the
   checker resolves them to object types before assignability and display.
 
+Representation note:
+
+- `TypeAliasInfo` and `InterfaceInfo` split into a small per-binding header
+  (`name`, `file_name`, `name_span`, `resolution_scope`) and an immutable
+  `Arc`-shared body (`TypeAliasBody` / `InterfaceBody`) holding the heavy parsed
+  tree (type parameters, members, extends, etc.). Re-export/import rebinding only
+  rewrites the header, so it shares the body by pointer instead of deep-cloning
+  it; bodies are built once via `TypeAliasInfo::new` / `InterfaceInfo::new` and
+  never mutated after declaration collection (declaration merging builds a fresh
+  body). The `--timings` counters distinguish `type_declaration_header_copy_count`
+  (cheap header clones) from `type_declaration_payload_deep_clone_count` (true body
+  clones). `TypeDeclarationHandle` lets resolution read a declaration while the
+  checker context is borrowed mutably, avoiding a payload clone at the lookup site,
+  and `merge_shared_arena_table_into` merges global-augmentation tables that share
+  the ambient arena by pointer-copy.
+
 ## Type Operators
 
 Type operators provide a parser-safe foundation for common compatibility patterns.

@@ -25,6 +25,7 @@ pub(crate) struct ProgramCounters {
     pub(crate) arena_type_declaration_payload_alloc_count: u64,
     pub(crate) arena_object_type_payload_alloc_count: u64,
     pub(crate) type_declaration_payload_deep_clone_count: u64,
+    pub(crate) type_declaration_header_copy_count: u64,
     pub(crate) object_type_payload_deep_clone_count: u64,
     pub(crate) object_type_alloc_count: u64,
     pub(crate) union_type_alloc_count: u64,
@@ -450,6 +451,10 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     eprintln!(
         "    type_declaration_payload_deep_clone_count: {}",
         counters.type_declaration_payload_deep_clone_count
+    );
+    eprintln!(
+        "    type_declaration_header_copy_count: {}",
+        counters.type_declaration_header_copy_count
     );
     eprintln!(
         "    object_type_payload_deep_clone_count: {}",
@@ -1094,6 +1099,10 @@ pub(crate) fn record_arena_object_type_payload_alloc_count() {
 
 pub(crate) fn record_type_declaration_payload_deep_clone_count() {
     record_program_counter(|c| c.type_declaration_payload_deep_clone_count += 1);
+}
+
+pub(crate) fn record_type_declaration_header_copy_count() {
+    record_program_counter(|c| c.type_declaration_header_copy_count += 1);
 }
 
 #[allow(dead_code)]

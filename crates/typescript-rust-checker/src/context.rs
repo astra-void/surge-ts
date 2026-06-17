@@ -313,6 +313,30 @@ impl CheckerContext {
         self.ambient_global_type_declarations.get(name)
     }
 
+    /// Like [`lookup_type_declaration`](Self::lookup_type_declaration) but returns
+    /// a [`TypeDeclarationHandle`] whose borrow is decoupled from `self`, so
+    /// resolution can read the declaration while `self` is borrowed mutably
+    /// without deep-cloning the payload.
+    pub(crate) fn lookup_type_declaration_handle(
+        &self,
+        name: &str,
+    ) -> Option<crate::symbols::TypeDeclarationHandle> {
+        if let Some(handle) = self.type_declarations.get_handle(name) {
+            crate::program::record_type_declaration_lookup(1);
+            return Some(handle);
+        }
+
+        if let Some(scope) = self.type_declaration_scope.as_ref() {
+            if let Some(handle) = scope.get_handle(name) {
+                crate::program::record_type_declaration_lookup(2);
+                return Some(handle);
+            }
+        }
+
+        crate::program::record_type_declaration_lookup(3);
+        self.ambient_global_type_declarations.get_handle(name)
+    }
+
     pub(crate) fn set_module_file_index_by_identity(
         &mut self,
         module_file_index_by_identity: HashMap<Arc<str>, usize>,

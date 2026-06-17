@@ -41,6 +41,10 @@ impl CheckerArena {
         }
     }
 
+    pub(crate) fn ptr_eq(&self, other: &CheckerArena) -> bool {
+        Arc::ptr_eq(&self.allocator, &other.allocator)
+    }
+
     pub(crate) fn alloc_str(&self, value: &str) -> &str {
         record_checker_arena_alloc_count();
         record_arena_declaration_key_alloc_count();

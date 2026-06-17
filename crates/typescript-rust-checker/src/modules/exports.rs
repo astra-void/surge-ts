@@ -849,13 +849,18 @@ pub(crate) fn export_local_type_name(
     type_declarations: &mut TypeDeclarationTable,
     ctx: &mut CheckerContext,
 ) {
-    let Some(local_declaration) = local_type_declarations.get(local_name).cloned() else {
+    // Read the local declaration through an arena-backed handle so re-export
+    // binding hands `export_local_type_declaration` a borrow instead of a deep
+    // clone. The rename/scope rewrite there still takes one owned copy; this
+    // removes the redundant second clone this path previously paid per
+    // re-exported type.
+    let Some(handle) = local_type_declarations.get_handle(local_name) else {
         push_unresolved_export_diagnostic(ctx, local_name, *name_span);
         return;
     };
 
     export_local_type_declaration(
-        &local_declaration,
+        handle.get(),
         exported_name,
         resolution_scope,
         type_declarations,
@@ -910,14 +915,14 @@ pub(crate) fn insert_unknown_type_import(
     file_name: String,
     name_span: Option<TextSpan>,
 ) {
-    let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo {
-        name: local_name.to_string(),
+    let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+        local_name.to_string(),
         file_name,
         name_span,
-        type_parameters: vec![],
-        ty: ParsedType::Unknown,
-        resolution_scope: None,
-    });
+        vec![],
+        ParsedType::Unknown,
+        None,
+    ));
 
     let _ = type_declarations.insert(local_name.to_string(), declaration);
 }

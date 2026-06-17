@@ -156,7 +156,7 @@ pub(crate) fn validate_local_type_declaration(
     match declaration {
         TypeDeclarationInfo::Alias(alias) => {
             let mut substitution = TypeParameterSubstitution::new();
-            for type_parameter in &alias.type_parameters {
+            for type_parameter in &alias.body.type_parameters {
                 substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
             }
 
@@ -164,7 +164,7 @@ pub(crate) fn validate_local_type_declaration(
             with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &alias.file_name, |ctx| {
                     resolve_parsed_type_with_substitution(
-                        alias.ty.clone(),
+                        alias.body.ty.clone(),
                         ctx,
                         &mut resolving,
                         &substitution,
@@ -174,7 +174,7 @@ pub(crate) fn validate_local_type_declaration(
         }
         TypeDeclarationInfo::Interface(interface) => {
             let mut substitution = TypeParameterSubstitution::new();
-            for type_parameter in &interface.type_parameters {
+            for type_parameter in &interface.body.type_parameters {
                 substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
             }
 
@@ -182,10 +182,10 @@ pub(crate) fn validate_local_type_declaration(
             with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &interface.file_name, |ctx| {
                     resolve_interface_declaration(
-                        &interface.extends,
-                        &interface.members,
-                        interface.string_index_type.as_ref(),
-                        interface.call_signature.as_ref(),
+                        &interface.body.extends,
+                        &interface.body.members,
+                        interface.body.string_index_type.as_ref(),
+                        interface.body.call_signature.as_ref(),
                         ctx,
                         &mut resolving,
                         &substitution,
