@@ -24,6 +24,7 @@ pub(crate) fn build_module_export_table(
     parsed_file: &ParsedProgramFile,
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
+    imported_symbols: &SymbolTable,
     resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ctx: &mut CheckerContext,
 ) -> ModuleExportTable {
@@ -43,6 +44,7 @@ pub(crate) fn build_module_export_table(
         collect_exports_from_statement(
             statement,
             &exportable_values,
+            imported_symbols,
             local_type_declarations,
             local_symbols,
             resolution_scope.as_ref(),
@@ -632,6 +634,7 @@ fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
 pub(crate) fn collect_exports_from_statement(
     statement: &ParsedStatement,
     exportable_values: &SymbolTable,
+    imported_symbols: &SymbolTable,
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
     resolution_scope: Option<&Arc<TypeDeclarationScope>>,
@@ -648,6 +651,7 @@ pub(crate) fn collect_exports_from_statement(
         }) => collect_exports_from_statement(
             declaration.as_ref(),
             exportable_values,
+            imported_symbols,
             local_type_declarations,
             local_symbols,
             resolution_scope,
@@ -718,7 +722,10 @@ pub(crate) fn collect_exports_from_statement(
                     found = true;
                 }
 
-                if let Some(symbol) = exportable_values.get_shared(&specifier.local_name) {
+                if let Some(symbol) = exportable_values
+                    .get_shared(&specifier.local_name)
+                    .or_else(|| imported_symbols.get_shared(&specifier.local_name))
+                {
                     if symbols.get(&specifier.exported_name).is_none() {
                         symbols.insert_shared(specifier.exported_name.clone(), symbol);
                     }

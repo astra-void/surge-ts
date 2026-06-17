@@ -1,3 +1,7 @@
+# pnpm reruns a lockfile vs node_modules check before every `pnpm run`/`pnpm exec`
+# (default on). On this workspace it costs ~10s per invocation and dominates
+# oracle:* / real:* startup. Disabled here; run `pnpm install` after changing deps.
+verifyDepsBeforeRun: false
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:

@@ -554,25 +554,28 @@ fn run_project_mode(
         return exit_code;
     }
 
-    let mut inputs = Vec::with_capacity(loaded.files.len());
-    let mut sources = Vec::with_capacity(loaded.files.len());
-
     let file_discovery_start = Instant::now();
-    for file_path in &loaded.files {
-        let source_text = match fs::read_to_string(&file_path) {
-            Ok(source_text) => source_text,
-            Err(error) => {
-                eprintln!("failed to read {}: {error}", file_path.display());
-                return ExitCode::from(1);
-            }
-        };
+    let read_workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .max(jobs)
+        .min(loaded.files.len());
+    let source_entries = match read_project_sources(&loaded.files, read_workers) {
+        Ok(entries) => entries,
+        Err((file_path, error)) => {
+            eprintln!("failed to read {}: {error}", file_path.display());
+            return ExitCode::from(1);
+        }
+    };
 
-        let file_name = canonicalize_if_exists_string(file_path);
+    let mut inputs = Vec::with_capacity(source_entries.len());
+    let mut sources = Vec::with_capacity(source_entries.len());
+    for (file_path, file_name, source_text) in source_entries {
         inputs.push(SourceFileInput {
             file_name: file_name.clone(),
             source_text: source_text.clone(),
         });
-        sources.push((file_path.clone(), file_name, source_text));
+        sources.push((file_path, file_name, source_text));
     }
     if timings_enabled {
         timings.file_discovery += file_discovery_start.elapsed();
@@ -604,21 +607,6 @@ fn run_project_mode(
     let default_lib_inputs = default_lib_load.inputs;
     if timings_enabled {
         timings.default_lib_loading += default_lib_loading_start.elapsed();
-    }
-
-    if !default_lib_inputs.is_empty() {
-        let default_lib_sources = default_lib_inputs
-            .iter()
-            .map(|input| {
-                (
-                    PathBuf::from(&input.file_name),
-                    input.file_name.clone(),
-                    input.source_text.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-        inputs.splice(0..0, default_lib_inputs);
-        sources.splice(0..0, default_lib_sources);
     }
 
     let mut resolved_modules = std::collections::HashMap::new();
@@ -689,6 +677,26 @@ fn run_project_mode(
         if graph_loaded == 0 && inputs.len() == files_before {
             break;
         }
+    }
+
+    // Default-lib sources never contribute project imports or package specifiers,
+    // so they stay out of the package-declaration / import-graph scan above (which
+    // would otherwise re-parse ~3MB of lib `.d.ts` on every pass). Splice them to
+    // the front now, preserving the original `[default libs..., project files...]`
+    // order the checker expects.
+    if !default_lib_inputs.is_empty() {
+        let default_lib_sources = default_lib_inputs
+            .iter()
+            .map(|input| {
+                (
+                    PathBuf::from(&input.file_name),
+                    input.file_name.clone(),
+                    input.source_text.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        inputs.splice(0..0, default_lib_inputs);
+        sources.splice(0..0, default_lib_sources);
     }
 
     let reference_type_resolution = reference_type_resolver.into_resolution();
@@ -779,6 +787,49 @@ fn run_project_mode(
         render_cli_timings(&timings);
     }
     exit_code
+}
+
+type ProjectSource = (PathBuf, String, String);
+
+fn read_one_source(file_path: &PathBuf) -> Result<ProjectSource, (PathBuf, std::io::Error)> {
+    match fs::read_to_string(file_path) {
+        Ok(source_text) => {
+            let file_name = canonicalize_if_exists_string(file_path);
+            Ok((file_path.clone(), file_name, source_text))
+        }
+        Err(error) => Err((file_path.clone(), error)),
+    }
+}
+
+// Project source reads are I/O-bound and independent, so reading them across a
+// few threads overlaps the waits. Contiguous chunks keep the original file
+// ordering, which the checker relies on.
+fn read_project_sources(
+    files: &[PathBuf],
+    workers: usize,
+) -> Result<Vec<ProjectSource>, (PathBuf, std::io::Error)> {
+    if workers <= 1 || files.len() <= 1 {
+        return files.iter().map(read_one_source).collect();
+    }
+
+    let chunk_size = (files.len() + workers - 1) / workers;
+    let chunk_results: Vec<Result<Vec<ProjectSource>, (PathBuf, std::io::Error)>> =
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = files
+                .chunks(chunk_size)
+                .map(|chunk| scope.spawn(move || chunk.iter().map(read_one_source).collect()))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("source reader thread panicked"))
+                .collect()
+        });
+
+    let mut sources = Vec::with_capacity(files.len());
+    for chunk in chunk_results {
+        sources.extend(chunk?);
+    }
+    Ok(sources)
 }
 
 /// `0` is the checker's sentinel for automatic worker-count selection, so `auto`

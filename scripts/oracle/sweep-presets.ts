@@ -12,6 +12,7 @@ import {
   renderComparisonText,
   resolveFilePath,
   resolveProjectPresetOrPath,
+  resolveSurgeBin,
   resolveWorkspacePath,
 } from './compare-tsc';
 import type { ComparisonResult } from './compare-tsc';
@@ -20,6 +21,10 @@ const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
 const workspaceRoot = path.resolve(scriptDir, '../..');
 const compareScript = path.join(scriptDir, 'compare-tsc.ts');
+// Spawn the local tsx binary directly instead of `pnpm exec tsx`: pnpm reruns
+// its verify-deps-before-run check (lockfile vs node_modules across the whole
+// workspace) on every invocation, costing ~10s per child here.
+const tsxBin = path.join(workspaceRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
 
 export type TargetKind = 'preset' | 'project' | 'file';
 
@@ -461,6 +466,10 @@ function runTarget(target: SweepTarget, args: SweepArgs): Promise<RunOutcome> {
       childArgs.push('--file', target.value);
     } else {
       childArgs.push('--project', target.value);
+      // Pin each child's surge run to a single thread so many sweep workers can
+      // run concurrently without nested oversubscription (worker count × surge's
+      // own job count). Diagnostics are independent of --rustJobs.
+      childArgs.push('--rustJobs', '1');
     }
     childArgs.push('--json');
     if (args.maxDiagnostics !== undefined) {
@@ -468,7 +477,7 @@ function runTarget(target: SweepTarget, args: SweepArgs): Promise<RunOutcome> {
     }
 
     const started = Date.now();
-    const child = spawn('pnpm', ['exec', 'tsx', ...childArgs], {
+    const child = spawn(tsxBin, childArgs, {
       cwd: workspaceRoot,
     });
 
@@ -503,7 +512,7 @@ function runTarget(target: SweepTarget, args: SweepArgs): Promise<RunOutcome> {
 }
 
 async function runSweep(selected: SweepTarget[], args: SweepArgs): Promise<RunOutcome[]> {
-  const defaultJobs = Math.min(os.cpus().length || 1, 4);
+  const defaultJobs = os.cpus().length || 1;
   const jobs = Math.max(1, Math.min(args.jobs ?? defaultJobs, selected.length));
   const outcomes = new Array<RunOutcome>(selected.length);
   let nextIndex = 0;
@@ -566,6 +575,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   if (!args.json || args.verbose) {
     process.stderr.write(`Running ${selection.selected.length} target(s)...\n`);
   }
+
+  // Build the CLI once in the parent, then point every child at the prebuilt
+  // binary and skip their own build step. Children inherit this environment via
+  // spawn, so the cargo freshness check runs once instead of per target.
+  const surgeBin = resolveSurgeBin();
+  process.env.SURGE_TS_BIN = surgeBin;
+  process.env.SURGE_TS_SKIP_BUILD = '1';
 
   const started = Date.now();
   const outcomes = await runSweep(selection.selected, args);

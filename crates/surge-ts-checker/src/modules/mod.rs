@@ -267,6 +267,7 @@ mod tests {
                     file,
                     &local_types,
                     &local_symbols,
+                    &SymbolTable::new(),
                     None,
                     &mut ctx,
                 ))
@@ -309,6 +310,7 @@ mod tests {
                 Some(build_module_export_table(
                     file,
                     &TypeDeclarationTable::new(),
+                    &SymbolTable::new(),
                     &SymbolTable::new(),
                     None,
                     &mut ctx,

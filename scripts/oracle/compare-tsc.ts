@@ -161,11 +161,60 @@ const packageManagerArgsPrefix = process.env.npm_execpath ? [process.env.npm_exe
 const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
 const subprocessMaxBuffer = 50 * 1024 * 1024;
 
+const surgeBinExt = process.platform === 'win32' ? '.exe' : '';
+const defaultSurgeBin = path.join(workspaceRoot, 'target', 'debug', `surge${surgeBinExt}`);
+
+let resolvedSurgeBin: string | null = null;
+
+// Resolve the surge-ts CLI binary once per process. Previously every comparison
+// shelled out to `cargo run`, which re-runs cargo's freshness check on each
+// invocation (multiplied across the sweep's child processes). Building once and
+// then executing the binary directly keeps the same freshness guarantee while
+// dropping the per-fixture cargo overhead. SURGE_TS_BIN points at a prebuilt
+// binary; SURGE_TS_SKIP_BUILD=1 skips the build (set by callers that already built).
+export function resolveSurgeBin(): string {
+  if (resolvedSurgeBin) {
+    return resolvedSurgeBin;
+  }
+
+  const override = process.env.SURGE_TS_BIN;
+  if (override) {
+    if (!existsSync(override)) {
+      throw new Error(`SURGE_TS_BIN points to a missing binary: ${override}`);
+    }
+    resolvedSurgeBin = override;
+    return override;
+  }
+
+  if (process.env.SURGE_TS_SKIP_BUILD !== '1') {
+    const build = spawnSync('cargo', ['build', '-q', '-p', 'surge-ts-cli'], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      maxBuffer: subprocessMaxBuffer,
+    });
+    if (build.error) {
+      throw new Error(`failed to build surge-ts-cli: ${build.error.message}`);
+    }
+    if (build.status !== 0) {
+      throw new Error(`failed to build surge-ts-cli:\n${build.stderr ?? ''}`);
+    }
+  }
+
+  if (!existsSync(defaultSurgeBin)) {
+    throw new Error(
+      `surge-ts-cli binary not found at ${defaultSurgeBin}; run \`cargo build -p surge-ts-cli\``,
+    );
+  }
+  resolvedSurgeBin = defaultSurgeBin;
+  return defaultSurgeBin;
+}
+
 export const fixturePresets: Record<string, string> = {
   'declarations-basic': path.join(workspaceRoot, 'tests/compat-projects/declarations-basic/tsconfig.json'),
   'declarations-hardening': path.join(workspaceRoot, 'tests/compat-projects/declarations-hardening/tsconfig.json'),
   'module-export-visibility-hardening': path.join(workspaceRoot, 'tests/compat-projects/module-export-visibility-hardening/tsconfig.json'),
   'declaration-reexports-hardening': path.join(workspaceRoot, 'tests/compat-projects/declaration-reexports-hardening/tsconfig.json'),
+  'namespace-import-reexport-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-import-reexport-basic/tsconfig.json'),
   'package-exports-types-hardening': path.join(workspaceRoot, 'tests/compat-projects/package-exports-types-hardening/tsconfig.json'),
   'diagnostics-pack': path.join(workspaceRoot, 'tests/compat-projects/diagnostics-pack/tsconfig.json'),
   'generics-basic': path.join(workspaceRoot, 'tests/compat-projects/generics-basic/tsconfig.json'),
@@ -520,15 +569,8 @@ export function runSurgeTs(
   maxDiagnostics?: number,
   rustJobs?: number,
 ): RunResult {
-  const args = [
-    'run',
-    '-q',
-    '--manifest-path',
-    path.join(workspaceRoot, 'Cargo.toml'),
-    '-p',
-    'surge-ts-cli',
-    '--',
-  ];
+  const exePath = resolveSurgeBin();
+  const args: string[] = [];
 
   // Argument order mirrors buildSurgeTsCommand so the printed command
   // matches what actually runs. The positional source file must come last.
@@ -557,7 +599,7 @@ export function runSurgeTs(
     args.push(mode.resolvedFile);
   }
 
-  const result = spawnSync('cargo', args, {
+  const result = spawnSync(exePath, args, {
     cwd: workspaceRoot,
     encoding: 'utf8',
     maxBuffer: subprocessMaxBuffer,

@@ -65,6 +65,7 @@ pub(crate) fn collect_preliminary_module_type_bindings(
             parsed_file,
             local_type_declarations.as_ref(),
             &SymbolTable::new(), // empty symbols
+            &SymbolTable::new(), // imports not resolved yet in the preliminary pass
             None,
             ctx,
         );
@@ -205,10 +206,15 @@ pub(crate) fn collect_module_analyses_with_bindings(
         // `var x: ImportedType` still resolves through the module's imports.
         lower_global_augmentation_values_from_statements(&parsed_file.statements, ctx);
 
+        let imported_symbols = preliminary_module_import_bindings[file_index]
+            .as_ref()
+            .map(|bindings| &bindings.symbols);
+        let empty_imported_symbols = SymbolTable::new();
         let export_table = build_module_export_table(
             parsed_file,
             local_type_declarations.as_ref(),
             &local_symbols,
+            imported_symbols.unwrap_or(&empty_imported_symbols),
             Some(full_type_declarations_scope),
             ctx,
         );

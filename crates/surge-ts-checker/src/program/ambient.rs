@@ -353,6 +353,7 @@ pub(crate) fn collect_ambient_modules(
                 &temp_file,
                 &current_type_declarations,
                 &current_symbols,
+                &SymbolTable::new(),
                 Some(current_type_declarations_scope),
                 ctx,
             );

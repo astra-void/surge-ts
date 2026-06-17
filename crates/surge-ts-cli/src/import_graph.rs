@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,7 @@ pub fn expand_project_inputs(
 
     let mut added = 0usize;
     let mut index = 0usize;
+    let mut probe_cache: HashMap<String, bool> = HashMap::new();
 
     while index < sources.len() {
         let (file_path, file_name, source_text) = {
@@ -37,9 +38,9 @@ pub fn expand_project_inputs(
             };
 
             let candidate = if is_relative_specifier(&module_specifier) {
-                resolve_relative_candidate(&file_path, &module_specifier)
+                resolve_relative_candidate(&file_path, &module_specifier, &mut probe_cache)
             } else {
-                resolve_paths_alias_candidate(&module_specifier, paths, root_dir)
+                resolve_paths_alias_candidate(&module_specifier, paths, root_dir, &mut probe_cache)
             };
 
             let Some(candidate) = candidate else {
@@ -90,7 +91,11 @@ fn module_specifier_from_statement(statement: &ParsedStatement) -> Option<String
     }
 }
 
-fn resolve_relative_candidate(importer_file: &Path, specifier: &str) -> Option<PathBuf> {
+fn resolve_relative_candidate(
+    importer_file: &Path,
+    specifier: &str,
+    probe_cache: &mut HashMap<String, bool>,
+) -> Option<PathBuf> {
     let importer_dir = importer_file.parent().unwrap_or_else(|| Path::new(""));
     let normalized_specifier = normalize_path_string(specifier);
     let joined = normalize_path_string(&importer_dir.join(&normalized_specifier).to_string_lossy());
@@ -130,7 +135,7 @@ fn resolve_relative_candidate(importer_file: &Path, specifier: &str) -> Option<P
 
     for candidate in candidate_paths {
         let candidate = PathBuf::from(candidate);
-        if !(candidate.exists() && candidate.is_file()) {
+        if !candidate_is_existing_file(&candidate, probe_cache) {
             continue;
         }
 
@@ -148,6 +153,7 @@ fn resolve_paths_alias_candidate(
     specifier: &str,
     paths: &[PathMapping],
     root_dir: &Path,
+    probe_cache: &mut HashMap<String, bool>,
 ) -> Option<PathBuf> {
     for mapping in paths {
         let is_wildcard = mapping.pattern.contains('*');
@@ -208,7 +214,7 @@ fn resolve_paths_alias_candidate(
 
             for candidate in candidate_paths {
                 let candidate = PathBuf::from(candidate);
-                if !(candidate.exists() && candidate.is_file()) {
+                if !candidate_is_existing_file(&candidate, probe_cache) {
                     continue;
                 }
 
@@ -224,6 +230,22 @@ fn resolve_paths_alias_candidate(
     }
 
     None
+}
+
+// Each probe previously issued two stat syscalls (`exists()` then `is_file()`).
+// A single `metadata` call answers both, and most extensionless specifiers fan
+// out to ~15 candidate paths, so caching by path collapses repeated probes for
+// modules imported from many files.
+fn candidate_is_existing_file(candidate: &Path, cache: &mut HashMap<String, bool>) -> bool {
+    let key = candidate.to_string_lossy();
+    if let Some(&hit) = cache.get(key.as_ref()) {
+        return hit;
+    }
+    let is_file = fs::metadata(candidate)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false);
+    cache.insert(key.into_owned(), is_file);
+    is_file
 }
 
 fn is_loadable_graph_file(path: &Path) -> bool {
