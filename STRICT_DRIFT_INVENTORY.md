@@ -326,3 +326,82 @@ pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages            
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans    # 63/12
 cargo fmt --check && cargo test --workspace && pnpm run oracle:test && pnpm run real:auth-kit   # all green, auth-kit 0/0
 ```
+
+## 8. After strict diagnostic polish bundle
+
+Follow-up to tasks §4.1 (literal-vs-widened display) and §4 "not recommended"
+(TS2554 excess-arg span, TS2355 return-type span). **Diagnostic display/span only
+— no checker semantics, type inference, diagnostic codes, fixtures, gates, libs,
+or TypeScript version changed.** Diagnostic code-count and file/code/line still
+match everywhere (normal gate stays **75 PASS / 0 FAIL**).
+
+| Run | Before (after §7) | After |
+| --- | --- | --- |
+| Normal gate | 75 PASS / 0 FAIL | **75 PASS / 0 FAIL** |
+| `--strictMessages` | 63 PASS / 12 FAIL | **72 PASS / 3 FAIL** |
+| `--strictSpans` | 74 PASS / 1 FAIL | **75 PASS / 0 FAIL** |
+| both | 63 PASS / 12 FAIL | **72 PASS / 3 FAIL** |
+
+**Fixes (display/span only):**
+
+- **Literal-vs-widened display** (clears all 9 literal/widened message targets:
+  `declarations-basic`, `generic-cache-dependency-instantiation-basic`,
+  `package-declarations`, `parallel-ordering-basic`, `interface-merging-basic`,
+  `interface-merging-across-files-basic`, `module-augmentation-package-interface-basic`,
+  `ambient-module-reopen-merge-basic`, plus the co-located rows in
+  `diagnostics-pack`). The source-side type in TS2322/TS2741 messages now widens
+  fresh literals for display (`123`→`number`, `"wrong"`→`string`,
+  `{ id: "u1"; }`→`{ id: string; }`) the way tsc does, while the resolved type and
+  assignability are unchanged. Implemented by routing the previously-raw
+  `inferred_type.name()` source displays through the existing
+  `source_display_name(source, target)` helper (which keeps the literal when the
+  *target* is literal-like, e.g. `let x: "a" = "b"`), and by widening the
+  object-literal source type for the TS2741 missing-property message.
+  - `checks/var.rs` (variable-initializer TS2322 source),
+    `checks/expected.rs` (object-literal property TS2322 + TS2741 missing-property
+    source), `checks/function/body.rs` (return-statement TS2322 source).
+- **TS2554 excess-argument span** (`diagnostics-pack` `src/calls.ts`). A too-many-
+  arguments error now anchors the excess-argument range (first excess argument
+  through the last supplied argument) instead of the call expression, matching
+  tsc (`greet("a", "b")` → col 12, the `"b"`). Too-few-argument errors keep the
+  call/callee anchor. `checks/call/mod.rs` (`excess_argument_span` helper).
+- **TS2355 missing-return span** (`diagnostics-pack` `src/functions.ts`). A
+  missing-return error now anchors the return-type annotation
+  (`function f(): number {}` → the `number`) instead of the function name, matching
+  tsc. Threaded a new `ParsedFunctionDeclaration.return_type_span` (captured from
+  the oxc return-type annotation's inner type span) narrowly through the two
+  function-declaration check paths to `emit_missing_return_diagnostic`, falling
+  back to the name span when absent. `typescript-rust-syntax` AST + parser,
+  `checks/function/mod.rs`.
+
+**Deferred (3 message-drift targets — alias/JSX/member-order display):**
+
+- `generic-cache-module-source-not-persisted-basic` (TS2353): tsc prints the
+  generic-alias target `Box<string>`; typescript-rust prints the structural
+  `{ value: string; }` / `{ item: string; }`. **Deferred** — requires the generic
+  type-alias instantiation to retain the alias name *and* its instantiated type
+  arguments on the resulting object type, plus a `Name<Args>` display path. The
+  existing `ObjectType.alias_name` only carries a non-generic name; threading type
+  arguments through instantiation is type-identity metadata, not a display-only
+  change.
+- `jsx-dom-physical-lib-prop-basic` (TS2322): tsc prints the physical-lib nominal
+  `URL`; typescript-rust prints the full structural expansion (and renders
+  method types without parameter names, e.g. `(string, string) => void`).
+  **Deferred** — same nominal-name-retention gap as above, plus a separate
+  function-type display change to emit parameter names.
+- `jsx-intrinsic-elements-basic` (TS2322): member ordering
+  (`{ disabled?...; children?...}` vs `{ children?...; disabled?...}`) and optional
+  rendering (`boolean | undefined` vs `boolean`). **Deferred** — member-order
+  normalization and optional-`| undefined` rendering are object-display policy
+  changes that touch every structural-object message, out of scope for this
+  localized polish.
+
+**Commands run:**
+
+```bash
+pnpm run oracle:sweep -- --all --maxDiagnostics 200                                   # 75/75
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages                  # 72/3
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans                     # 75/75
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans    # 72/3
+cargo fmt --check && cargo test --workspace && pnpm run oracle:test && pnpm run real:auth-kit   # all green, auth-kit 0/0
+```
