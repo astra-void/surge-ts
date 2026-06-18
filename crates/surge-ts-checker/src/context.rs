@@ -273,6 +273,19 @@ impl CheckerContext {
         None
     }
 
+    /// Whether the in-scope type parameter `name` was declared with any
+    /// `extends` constraint. A constrained parameter's valid index keys depend
+    /// on its (often complex, library-generated) constraint, which we do not
+    /// fully resolve; tsc validates the access against that constraint, so an
+    /// indexed access through a constrained parameter must not cascade into a
+    /// `TS2536`/`TS2538` false positive.
+    pub(crate) fn type_parameter_has_constraint(&self, name: &str) -> bool {
+        self.type_parameter_constraint_scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains_key(name))
+    }
+
     pub(crate) fn set_file_name(&mut self, file_name: String) {
         self.current_file_kind = self
             .file_kinds

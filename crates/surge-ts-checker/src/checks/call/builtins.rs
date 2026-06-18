@@ -11,6 +11,20 @@ use crate::infer::InferredExpression;
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 
+/// The `(element, index, array)` parameter list for an array iteration
+/// callback. Supplying all three (rather than just the element) lets a
+/// `(v, i) => …` callback contextually type its index as `number` instead of
+/// leaving it implicitly `any` (`TS7006`).
+fn array_iteration_callback_parameters(element_type: &Type) -> Vec<Type> {
+    let element = with_type_copy_reason(TypeCopyReason::PropertyCallResolution, || {
+        element_type.clone()
+    });
+    let array = with_type_copy_reason(TypeCopyReason::PropertyCallResolution, || {
+        Type::Array(Box::new(element_type.clone()))
+    });
+    vec![element, Type::Number, array]
+}
+
 pub(crate) fn check_array_map_call(
     element_type: &Type,
     property_span: Option<SyntaxTextSpan>,
@@ -28,10 +42,7 @@ pub(crate) fn check_array_map_call(
     }
 
     let callback_type = Type::Function(alloc_function_type(
-        vec![with_type_copy_reason(
-            TypeCopyReason::PropertyCallResolution,
-            || element_type.clone(),
-        )],
+        array_iteration_callback_parameters(element_type),
         Type::Any,
         false,
         1,
@@ -78,10 +89,7 @@ pub(crate) fn check_array_find_call(
     }
 
     let callback_type = Type::Function(alloc_function_type(
-        vec![with_type_copy_reason(
-            TypeCopyReason::PropertyCallResolution,
-            || element_type.clone(),
-        )],
+        array_iteration_callback_parameters(element_type),
         Type::Boolean,
         false,
         1,

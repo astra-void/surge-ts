@@ -26,6 +26,7 @@ pub(crate) fn infer_arrow_function(
                 match &parameter.binding_name {
                     surge_ts_syntax::ParsedBindingName::Identifier { .. } => Type::Any,
                     surge_ts_syntax::ParsedBindingName::ObjectPattern(_) => Type::Any,
+                    surge_ts_syntax::ParsedBindingName::ArrayPattern(_) => Type::Any,
                     surge_ts_syntax::ParsedBindingName::Unsupported { .. } => Type::Any,
                 }
             }

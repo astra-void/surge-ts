@@ -117,10 +117,25 @@ pub(crate) fn resolve_parsed_type(
                 };
             };
 
-            ResolvedType {
-                ty: symbol.ty,
-                had_error: false,
+            // `typeof NS.Root` walks the dotted member path off the base symbol's
+            // type. Any segment we cannot model (a non-object base, or a missing
+            // property on a namespace whose shape we don't fully reconstruct)
+            // degrades to `Unknown` silently rather than emitting a false
+            // positive, since the base name itself was resolved.
+            let mut ty = symbol.ty;
+            for member in &type_of.members {
+                match ty.get_property_access_type(member) {
+                    Some(member_ty) => ty = member_ty,
+                    None => {
+                        return ResolvedType {
+                            ty: Type::Unknown,
+                            had_error: false,
+                        };
+                    }
+                }
             }
+
+            ResolvedType { ty, had_error: false }
         }
         ParsedType::KeyOf(inner) => {
             let resolved_inner = resolve_parsed_type(*inner, ctx, resolving, substitution);
@@ -1245,6 +1260,19 @@ fn resolve_indexed_access_type(
     let index_is_valid_generic_key =
         index_is_keyof_same_placeholder || index_constraint_satisfies_object;
 
+    // An index access through a *constrained* type parameter (`T extends …`,
+    // `K extends Key`, `strict extends Boolean`, …) is validated by tsc against
+    // that constraint. We do not fully resolve those (often library-generated)
+    // constraints, so verifying the key here would only ever produce false
+    // `TS2536`/`TS2538`s. An unconstrained `T[K]` is still a genuine error and
+    // is left to the checks below.
+    let involves_constrained_type_parameter = object_placeholder_name
+        .as_deref()
+        .is_some_and(|name| ctx.type_parameter_has_constraint(name))
+        || index_placeholder_name
+            .as_deref()
+            .is_some_and(|name| ctx.type_parameter_has_constraint(name));
+
     if object_is_concrete_substitution {
         record_generic_indexed_access_substituted_receiver();
     }
@@ -1288,7 +1316,34 @@ fn resolve_indexed_access_type(
         };
     }
 
-    if object_placeholder_name.is_some() && index_is_valid_generic_key {
+    if (object_placeholder_name.is_some() && index_is_valid_generic_key)
+        || involves_constrained_type_parameter
+    {
+        if generic_indexed_access {
+            record_generic_indexed_access_unknown_fallback();
+        }
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    }
+
+    // A receiver that *resolved* to `unknown` (e.g. `typeof external` whose
+    // value type could not be reconstructed, or a generic alias whose body we do
+    // not model) cannot have its index validated, so indexing it degrades to
+    // `unknown` rather than a false `TS2536`/`TS2538`. Excluded:
+    // - a naked type-parameter receiver (`object_placeholder`): unconstrained
+    //   `T[K]` is a genuine error handled below;
+    // - an *explicit* `unknown`/`any` keyword receiver (`unknown["x"]`): tsc does
+    //   report `TS2339`/`TS2538` there, so it must not be suppressed.
+    let object_is_explicit_top_keyword = matches!(
+        object_type_for_placeholder.as_ref(),
+        ParsedType::Unknown | ParsedType::Any
+    );
+    if matches!(resolved_object.ty, Type::Unknown)
+        && object_placeholder_name.is_none()
+        && !object_is_explicit_top_keyword
+    {
         if generic_indexed_access {
             record_generic_indexed_access_unknown_fallback();
         }
@@ -1349,16 +1404,47 @@ fn resolve_indexed_access_type(
                 }
             }
         }
+        // A numeric-literal index keys an object by its stringified value:
+        // `{ 0: 1; 1: 0 }[0]` reads the `"0"` property. Object literals with
+        // numeric keys are common in library-generated conditional-type tables
+        // (e.g. Prisma's `{ 0: …; 1: … }[B]`).
+        (Type::Object(object_type), Type::NumberLiteral(num)) => {
+            if let Some(property_ty) = object_type.get_property_access_type(&num.value) {
+                if generic_indexed_access {
+                    record_generic_indexed_access_success();
+                }
+                ResolvedType {
+                    ty: property_ty,
+                    had_error: false,
+                }
+            } else {
+                let mut diagnostic =
+                    Diagnostic::ts2339(&num.value, &resolved_object.ty.name(), ctx.file_name.clone());
+                if let Some(span) = indexed_access.span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
+                ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                }
+            }
+        }
         (Type::Object(object_type), Type::Union(union_ty)) => {
             let mut types = Vec::new();
             let mut had_error = false;
             for key_ty in union_ty.types() {
-                if let Type::StringLiteral(key) = key_ty {
-                    if let Some(property_ty) = object_type.get_property_access_type(key) {
+                let key = match key_ty {
+                    Type::StringLiteral(key) => Some(key.clone()),
+                    Type::NumberLiteral(num) => Some(num.value.clone()),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    if let Some(property_ty) = object_type.get_property_access_type(&key) {
                         types.push(property_ty);
                     } else {
                         let mut diagnostic = Diagnostic::ts2339(
-                            key,
+                            &key,
                             &resolved_object.ty.name(),
                             ctx.file_name.clone(),
                         );

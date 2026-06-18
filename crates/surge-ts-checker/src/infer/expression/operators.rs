@@ -54,6 +54,7 @@ pub(crate) fn infer_unary_expression(
 }
 
 pub(crate) fn infer_logical_expression(
+    operator: surge_ts_syntax::ParsedLogicalOperator,
     left: &ParsedExpression,
     right: &ParsedExpression,
     symbols: &SymbolTable,
@@ -66,7 +67,17 @@ pub(crate) fn infer_logical_expression(
         (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
             if left_ty != Type::Unknown && right_ty != Type::Unknown =>
         {
-            InferredExpression::Known(Type::Boolean)
+            // `a || b` -> `NonNullable<a> | b`; `a && b` -> `a | b`. See
+            // `ops::evaluate_logical_expression`.
+            let result = match operator {
+                surge_ts_syntax::ParsedLogicalOperator::Or => {
+                    union_type(vec![surge_ts_types::remove_nullish(&left_ty), right_ty])
+                }
+                surge_ts_syntax::ParsedLogicalOperator::And => {
+                    union_type(vec![left_ty, right_ty])
+                }
+            };
+            InferredExpression::Known(result)
         }
         _ => InferredExpression::Unknown,
     }
@@ -84,8 +95,17 @@ pub(crate) fn infer_conditional_expression(
         return InferredExpression::Unknown;
     }
 
-    let true_type = infer_expression(when_true, symbols, ctx);
-    let false_type = infer_expression(when_false, symbols, ctx);
+    // Narrow a discriminated union for each branch: `x.kind === "a" ? x.a : x.b`
+    // sees `x` as the `"a"` member in `when_true` and its complement in
+    // `when_false`.
+    let true_symbols = crate::checks::function::narrow_condition_symbol_table(
+        condition, symbols, true,
+    );
+    let false_symbols = crate::checks::function::narrow_condition_symbol_table(
+        condition, symbols, false,
+    );
+    let true_type = infer_expression(when_true, true_symbols.as_ref().unwrap_or(symbols), ctx);
+    let false_type = infer_expression(when_false, false_symbols.as_ref().unwrap_or(symbols), ctx);
 
     match (true_type, false_type) {
         (InferredExpression::Known(Type::Any), _) | (_, InferredExpression::Known(Type::Any)) => {
@@ -119,7 +139,8 @@ pub(crate) fn infer_binary_expression(
         | ParsedBinaryOperator::LessThan
         | ParsedBinaryOperator::LessThanEquals
         | ParsedBinaryOperator::GreaterThan
-        | ParsedBinaryOperator::GreaterThanEquals => InferredExpression::Known(Type::Boolean),
+        | ParsedBinaryOperator::GreaterThanEquals
+        | ParsedBinaryOperator::In => InferredExpression::Known(Type::Boolean),
         ParsedBinaryOperator::Add => {
             let left_type = infer_expression(left, symbols, ctx);
             let right_type = infer_expression(right, symbols, ctx);

@@ -130,9 +130,12 @@ pub(crate) fn infer_expression(
             right,
             ..
         } => infer_binary_expression(*operator, left, right, symbols, ctx),
-        ParsedExpression::Logical { left, right, .. } => {
-            infer_logical_expression(left, right, symbols, ctx)
-        }
+        ParsedExpression::Logical {
+            operator,
+            left,
+            right,
+            ..
+        } => infer_logical_expression(*operator, left, right, symbols, ctx),
         ParsedExpression::Conditional {
             condition,
             when_true,
@@ -158,6 +161,12 @@ pub(crate) fn infer_expression(
             index,
             index_span,
         } => infer_index_access(object_name, object_span, index, index_span, symbols, ctx),
+        ParsedExpression::ElementAccess {
+            object,
+            object_span,
+            index,
+            index_span,
+        } => infer_element_access(object, object_span, index, index_span, symbols, ctx),
         ParsedExpression::OptionalPropertyAccess {
             object,
             object_span,
