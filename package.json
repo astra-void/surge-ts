@@ -17,7 +17,8 @@
 		"real:test": "tsx --test scripts/real-projects/measure-project.test.ts",
 		"real:auth-kit": "tsx scripts/real-projects/measure-project.ts --name auth-kit --authKitFallback",
 		"real:trpc": "tsx scripts/real-projects/measure-project.ts --project .local-projects/trpc --name trpc --allowMissing",
-		"real:unnamed": "tsx scripts/real-projects/measure-project.ts --project ../../nextjs/unnamed --name unnamed --allowMissing"
+		"real:unnamed": "tsx scripts/real-projects/measure-project.ts --project ../../nextjs/unnamed --name unnamed --allowMissing",
+		"real:zod": "tsx scripts/real-projects/measure-project.ts --project .local-projects/zod --name zod --allowMissing"
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.3",
