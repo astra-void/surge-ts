@@ -152,7 +152,7 @@ pub fn object_assignability_failure(
 mod tests {
     use super::*;
     use crate::{FunctionType, NumberLiteralType, ObjectProperty, ObjectType, union_type};
-    use std::collections::BTreeMap;
+    use crate::PropertyMap;
 
     fn function_type(
         parameters: Vec<Type>,
@@ -262,13 +262,13 @@ mod tests {
 
     #[test]
     fn literal_object_assignability() {
-        let mut source_properties = BTreeMap::new();
+        let mut source_properties = PropertyMap::new();
         source_properties.insert(
             "kind".to_string(),
             ObjectProperty::required(Type::StringLiteral("click".to_string())),
         );
 
-        let mut target_properties = BTreeMap::new();
+        let mut target_properties = PropertyMap::new();
         target_properties.insert("kind".to_string(), ObjectProperty::required(Type::String));
 
         assert!(is_assignable_to(
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn tuple_type_name_object_element() {
-        let mut properties = BTreeMap::new();
+        let mut properties = PropertyMap::new();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(

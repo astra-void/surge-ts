@@ -67,7 +67,7 @@ impl Type {
             "Uint8Array" => Some(Type::Array(Box::new(Type::Number))),
             "Map" => Some(Type::Object(ObjectType::new(
                 {
-                    let mut properties = std::collections::BTreeMap::new();
+                    let mut properties = crate::PropertyMap::new();
                     properties.insert(
                         "get".to_string(),
                         crate::ObjectProperty::required(function_type(
@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn array_type_name_object() {
-        let mut properties = std::collections::BTreeMap::new();
+        let mut properties = crate::PropertyMap::new();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn tuple_type_name_object_element() {
-        let mut properties = std::collections::BTreeMap::new();
+        let mut properties = crate::PropertyMap::new();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(

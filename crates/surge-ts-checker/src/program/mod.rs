@@ -866,16 +866,29 @@ fn check_program_file(
             timings.utility_alias_validation += utility_validation_start.elapsed()
         });
 
-        ctx.symbols = saved_symbols;
+        let validation_symbols = std::mem::replace(&mut ctx.symbols, saved_symbols);
 
         let mut signature_ctx = ctx.clone();
         signature_ctx.diagnostics.clear();
         signature_ctx.utility_diagnostic_keys.clear();
         signature_ctx.resolved_named_types =
             std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+        // Seed from `validation_symbols` rather than `merged_symbols`: it carries
+        // the local `const`/`let`/`var` value symbols inferred during declaration
+        // validation, so `typeof <localConst>` resolves inside parameter type
+        // annotations (function signatures see them, not just type aliases).
+        //
+        // Only the file's own top-level function declarations are skipped (they
+        // are re-registered below, and re-seeding them would trip the duplicate
+        // signature check). Imported and global functions are kept so that
+        // `typeof <importedFn>` in a parameter annotation still resolves.
         let mut signature_local_symbols = crate::symbols::SymbolTable::new();
-        for (name, symbol) in merged_symbols.iter_shared() {
-            if !matches!(symbol.kind, crate::symbols::SymbolKind::Function) {
+        for (name, symbol) in validation_symbols.iter_shared() {
+            let is_local_function_declaration = matches!(
+                symbol.kind,
+                crate::symbols::SymbolKind::Function
+            ) && module_analysis.local_symbols.get(name).is_some();
+            if !is_local_function_declaration {
                 signature_local_symbols.insert_shared(name.clone(), symbol.clone());
             }
         }

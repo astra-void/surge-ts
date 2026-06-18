@@ -1,11 +1,18 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
+
+use indexmap::IndexMap;
 
 use crate::{FunctionType, Type, union_type};
 
+/// Property map preserving declaration order, which tsc relies on when rendering
+/// object types in diagnostics (`{ disabled?: boolean; children?: unknown }`).
+/// Equality is order-independent, matching the previous `BTreeMap` semantics, so
+/// structural comparisons and type caching are unaffected.
+pub type PropertyMap = IndexMap<String, ObjectProperty>;
+
 #[derive(Debug)]
 pub struct ObjectType {
-    pub properties: Arc<BTreeMap<String, ObjectProperty>>,
+    pub properties: Arc<PropertyMap>,
     pub string_index_type: Option<Arc<Type>>,
     /// Name of the interface or type alias this object was resolved from, used
     /// only for diagnostic display (tsc shows `'StrictObj'`, not the structural
@@ -74,10 +81,7 @@ impl ObjectProperty {
 }
 
 impl ObjectType {
-    pub fn new(
-        properties: BTreeMap<String, ObjectProperty>,
-        string_index_type: Option<Type>,
-    ) -> Self {
+    pub fn new(properties: PropertyMap, string_index_type: Option<Type>) -> Self {
         Self {
             properties: Arc::new(properties),
             string_index_type: string_index_type.map(Arc::new),

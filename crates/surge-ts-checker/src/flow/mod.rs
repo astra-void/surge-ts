@@ -32,6 +32,7 @@ pub(crate) fn check_expression_flow(
 pub(crate) struct FunctionBodyFlow {
     pub(crate) contains_value_return: bool,
     pub(crate) guarantees_value_return: bool,
+    pub(crate) guarantees_exit: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -145,6 +146,7 @@ pub(crate) fn analyze_function_body_flow(body: &[ParsedFunctionBodyStatement]) -
     FunctionBodyFlow {
         contains_value_return: summary.contains_value_return,
         guarantees_value_return: summary.guarantees_value_return,
+        guarantees_exit: summary.guarantees_exit,
     }
 }
 
@@ -444,4 +446,10 @@ pub(crate) struct ReturnFlowSummary {
     contains_value_return: bool,
     contains_throw: bool,
     guarantees_value_return: bool,
+    /// Every path through the body leaves the current straight-line flow without
+    /// falling through — via `return`/`throw` (exits the function) or
+    /// `continue`/`break` (exits the enclosing loop/switch). Strictly weaker than
+    /// `guarantees_value_return`: a bare `return;` or a `continue;` sets this but
+    /// not that. Used to narrow code after `if (cond) <diverge>;` guards.
+    guarantees_exit: bool,
 }

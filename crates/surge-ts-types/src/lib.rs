@@ -17,11 +17,11 @@ pub use union::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use crate::PropertyMap;
 
     #[test]
     fn crate_root_reexports_still_work() {
-        let mut properties = BTreeMap::new();
+        let mut properties = PropertyMap::new();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         let ty = Type::Object(ObjectType::new(properties, None));
@@ -32,7 +32,7 @@ mod tests {
 
     #[test]
     fn optional_property_access_widens_to_undefined() {
-        let mut properties = BTreeMap::new();
+        let mut properties = PropertyMap::new();
         properties.insert("name".to_string(), ObjectProperty::optional(Type::String));
 
         let ty = ObjectType::new(properties, None);

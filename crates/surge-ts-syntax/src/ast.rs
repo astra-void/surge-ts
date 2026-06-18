@@ -782,6 +782,13 @@ pub enum ParsedFunctionBodyStatement {
     ForOf(ParsedForOfStatement),
     Switch(ParsedSwitchStatement),
     Try(ParsedTryStatement),
+    /// `continue;` — diverts straight-line flow back to the enclosing loop head.
+    /// Carries no label/target; modelled only so flow analysis knows the branch
+    /// does not fall through (enabling post-guard narrowing of `if (c) continue;`).
+    Continue,
+    /// `break;` — exits the enclosing loop/switch. Modelled for the same
+    /// flow-divergence reason as [`ParsedFunctionBodyStatement::Continue`].
+    Break,
 }
 
 #[derive(Debug, Clone, PartialEq)]

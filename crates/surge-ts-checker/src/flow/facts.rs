@@ -70,6 +70,7 @@ pub(crate) fn collect_function_flow_facts_from_statement(
         ParsedFunctionBodyStatement::Expression(_) => {
             facts.has_identifier_reads = true;
         }
+        ParsedFunctionBodyStatement::Continue | ParsedFunctionBodyStatement::Break => {}
         ParsedFunctionBodyStatement::Block(block_body) => {
             collect_function_flow_facts_from_body(block_body, facts);
         }
@@ -114,6 +115,7 @@ pub(crate) fn summarize_function_body_flow(
         summary.contains_value_return |= statement_summary.contains_value_return;
         summary.contains_throw |= statement_summary.contains_throw;
         summary.guarantees_value_return |= statement_summary.guarantees_value_return;
+        summary.guarantees_exit |= statement_summary.guarantees_exit;
     }
 
     summary
@@ -127,12 +129,22 @@ pub(crate) fn summarize_function_statement_flow(
             contains_value_return: return_statement.expression.is_some(),
             contains_throw: false,
             guarantees_value_return: return_statement.expression.is_some(),
+            guarantees_exit: true,
         },
         ParsedFunctionBodyStatement::Throw(_) => ReturnFlowSummary {
             contains_value_return: true,
             contains_throw: true,
             guarantees_value_return: true,
+            guarantees_exit: true,
         },
+        ParsedFunctionBodyStatement::Continue | ParsedFunctionBodyStatement::Break => {
+            ReturnFlowSummary {
+                contains_value_return: false,
+                contains_throw: false,
+                guarantees_value_return: false,
+                guarantees_exit: true,
+            }
+        }
         ParsedFunctionBodyStatement::Block(block_body) => summarize_function_body_flow(block_body),
         ParsedFunctionBodyStatement::If(if_statement) => {
             let then_summary = summarize_function_body_flow(&if_statement.then_body);
@@ -145,6 +157,9 @@ pub(crate) fn summarize_function_statement_flow(
                 guarantees_value_return: !if_statement.else_body.is_empty()
                     && then_summary.guarantees_value_return
                     && else_summary.guarantees_value_return,
+                guarantees_exit: !if_statement.else_body.is_empty()
+                    && then_summary.guarantees_exit
+                    && else_summary.guarantees_exit,
             }
         }
         ParsedFunctionBodyStatement::While(while_statement) => {
@@ -153,6 +168,7 @@ pub(crate) fn summarize_function_statement_flow(
                 contains_value_return: body_summary.contains_value_return,
                 contains_throw: body_summary.contains_throw,
                 guarantees_value_return: false,
+                guarantees_exit: false,
             }
         }
         ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
@@ -161,6 +177,7 @@ pub(crate) fn summarize_function_statement_flow(
                 contains_value_return: body_summary.contains_value_return,
                 contains_throw: body_summary.contains_throw,
                 guarantees_value_return: false,
+                guarantees_exit: false,
             }
         }
         ParsedFunctionBodyStatement::Switch(switch_statement) => {
@@ -179,6 +196,7 @@ pub(crate) fn summarize_function_statement_flow(
                 contains_value_return,
                 contains_throw,
                 guarantees_value_return,
+                guarantees_exit: false,
             }
         }
         ParsedFunctionBodyStatement::Try(try_statement) => {
@@ -206,6 +224,7 @@ pub(crate) fn summarize_function_statement_flow(
                     || finalizer_summary.contains_throw,
                 guarantees_value_return: handler_guarantees
                     && (block_summary.guarantees_value_return || block_summary.contains_throw),
+                guarantees_exit: false,
             }
         }
         ParsedFunctionBodyStatement::VariableDeclaration(_)

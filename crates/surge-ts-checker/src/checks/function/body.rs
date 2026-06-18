@@ -162,6 +162,7 @@ pub(crate) fn check_function_body_statement(
                 ctx,
             );
         }
+        ParsedFunctionBodyStatement::Continue | ParsedFunctionBodyStatement::Break => {}
         ParsedFunctionBodyStatement::Assignment(assignment) => {
             let start = Instant::now();
             check_function_assignment(assignment, statement_index, scopes, flow_state, ctx);
@@ -338,8 +339,13 @@ pub(crate) fn check_function_if_statement(
 ) {
     check_obvious_truthiness_condition(&if_statement.condition, if_statement.condition_span, ctx);
 
-    let then_guarantees_value_return =
-        analyze_function_body_flow(&if_statement.then_body).guarantees_value_return;
+    let then_flow = analyze_function_body_flow(&if_statement.then_body);
+    let then_guarantees_value_return = then_flow.guarantees_value_return;
+    // The code after `if (cond) <body>` sees `!cond` whenever the then-branch
+    // cannot fall through — that includes `continue`/`break` (which only
+    // `guarantees_exit` reports), not just a value `return`. Gating narrowing on
+    // either keeps the old return-based behavior and adds early-`continue` guards.
+    let then_diverts_control = then_guarantees_value_return || then_flow.guarantees_exit;
     let has_else_body = !if_statement.else_body.is_empty();
 
     let flow_active = flow_state.tracked_local_count() > 0;
@@ -378,24 +384,25 @@ pub(crate) fn check_function_if_statement(
             ctx,
         );
         let mut then_delta = flow_state.finish_branch_capture();
-        then_delta.continues = !then_guarantees_value_return;
+        then_delta.continues = !then_diverts_control;
         scopes.pop_child();
         branch_deltas.push(then_delta);
 
         if has_else_body {
-            let else_guarantees_value_return =
-                analyze_function_body_flow(&if_statement.else_body).guarantees_value_return;
+            let else_flow = analyze_function_body_flow(&if_statement.else_body);
+            let else_diverts_control =
+                else_flow.guarantees_value_return || else_flow.guarantees_exit;
             scopes.push_child();
             narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
             flow_state.begin_branch_capture();
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let mut else_delta = flow_state.finish_branch_capture();
-            else_delta.continues = !else_guarantees_value_return;
+            else_delta.continues = !else_diverts_control;
             scopes.pop_child();
             branch_deltas.push(else_delta);
         }
 
-        if !has_else_body && then_guarantees_value_return {
+        if !has_else_body && then_diverts_control {
             narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
             narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
         }
@@ -420,7 +427,7 @@ pub(crate) fn check_function_if_statement(
             scopes.pop_child();
         }
 
-        if !has_else_body && then_guarantees_value_return {
+        if !has_else_body && then_diverts_control {
             narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
             narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
         }

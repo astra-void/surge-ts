@@ -99,6 +99,8 @@ fn parse_function_body_statement(
             .map(|try_statement| vec![ParsedFunctionBodyStatement::Try(try_statement)]),
         Statement::ReturnStatement(_) => parse_return_statement(statement)
             .map(|return_statement| vec![ParsedFunctionBodyStatement::Return(return_statement)]),
+        Statement::ContinueStatement(_) => Some(vec![ParsedFunctionBodyStatement::Continue]),
+        Statement::BreakStatement(_) => Some(vec![ParsedFunctionBodyStatement::Break]),
         Statement::ExpressionStatement(expression_statement) => {
             parse_expression_statement_as_function_body(expression_statement)
         }

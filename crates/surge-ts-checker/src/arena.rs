@@ -1,10 +1,9 @@
-use std::collections::BTreeMap;
 use std::hash::Hasher;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 use oxc_allocator::Allocator;
-use surge_ts_types::{FunctionType, ObjectProperty, ObjectType, Type};
+use surge_ts_types::{FunctionType, ObjectProperty, ObjectType, PropertyMap, Type};
 
 use crate::program::{
     record_arena_declaration_key_alloc_count, record_arena_object_type_payload_alloc_count,
@@ -60,7 +59,7 @@ impl CheckerArena {
 }
 
 pub(crate) fn alloc_object_type(
-    properties: BTreeMap<String, ObjectProperty>,
+    properties: PropertyMap,
     string_index_type: Option<Type>,
 ) -> ObjectType {
     record_checker_arena_alloc_count();
