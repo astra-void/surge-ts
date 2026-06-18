@@ -1,9 +1,7 @@
 use std::time::Instant;
 
-use std::collections::BTreeMap;
-
 use surge_ts_syntax::ParsedExpression;
-use surge_ts_types::{NumberLiteralType, ObjectType, Type, union_type};
+use surge_ts_types::{NumberLiteralType, ObjectType, PropertyMap, Type, union_type};
 
 use crate::context::CheckerContext;
 use crate::infer::map_parsed_type;
@@ -353,7 +351,7 @@ pub(crate) fn infer_expression(
 /// resolve the `JSX` namespace or validate intrinsic element props — both are out
 /// of scope for this slice.
 pub(crate) fn jsx_element_type() -> Type {
-    Type::Object(ObjectType::new(BTreeMap::new(), None).with_alias_name("Element"))
+    Type::Object(ObjectType::new(PropertyMap::new(), None).with_alias_name("Element"))
 }
 
 pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {

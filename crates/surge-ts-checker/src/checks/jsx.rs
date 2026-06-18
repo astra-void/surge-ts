@@ -5,7 +5,7 @@ use surge_ts_syntax::{
     ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind, ParsedJsxChild,
     ParsedNamedType, ParsedType, TextSpan as SyntaxTextSpan,
 };
-use surge_ts_types::{ObjectProperty, ObjectType, Type, is_assignable_to, union_type};
+use surge_ts_types::{ObjectProperty, ObjectType, PropertyMap, Type, is_assignable_to, union_type};
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use super::expr::{evaluate_expression, source_display_name};
@@ -128,7 +128,7 @@ fn component_props_type(component_type: &Type) -> Option<Type> {
                 .parameters()
                 .first()
                 .cloned()
-                .unwrap_or_else(|| Type::Object(alloc_object_type(BTreeMap::new(), None))),
+                .unwrap_or_else(|| Type::Object(alloc_object_type(PropertyMap::new(), None))),
         ),
         _ => None,
     }
@@ -451,7 +451,7 @@ fn source_object_name(attribute_types: &BTreeMap<String, Type>) -> String {
     let properties = attribute_types
         .iter()
         .map(|(name, ty)| (name.clone(), ObjectProperty::required(ty.clone())))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<PropertyMap>();
     Type::Object(alloc_object_type(properties, None)).name()
 }
 
@@ -467,7 +467,7 @@ fn present_attribute_object_name(attributes: &[ParsedJsxAttribute]) -> String {
                 ObjectProperty::required(Type::Unknown),
             )
         })
-        .collect::<BTreeMap<_, _>>();
+        .collect::<PropertyMap>();
 
     if properties.is_empty() {
         return "{}".to_string();

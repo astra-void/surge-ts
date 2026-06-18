@@ -6,14 +6,13 @@
 //! construct signature, registered as a value symbol so `new Class(...)`,
 //! `Class.staticMember`, and `typeof Class` all work).
 
-use std::collections::BTreeMap;
 
 use surge_ts_syntax::{
     ParsedBindingName, ParsedClassAccessor, ParsedClassDeclaration, ParsedClassMember,
     ParsedClassMethod, ParsedClassProperty, ParsedFunctionParameter, ParsedFunctionType,
     ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedNamedType, ParsedType,
 };
-use surge_ts_types::{FunctionType, ObjectProperty, ObjectType, Type};
+use surge_ts_types::{FunctionType, ObjectProperty, ObjectType, PropertyMap, Type};
 
 use crate::checks::function::{
     check_function_body_with_signature_and_this, map_function_signature,
@@ -136,7 +135,7 @@ pub(crate) fn build_class_value_symbol(
     let instance_type = class_instance_type(class, ctx);
     let construct_signature = class_construct_signature(class, instance_type, ctx);
 
-    let mut properties = BTreeMap::new();
+    let mut properties = PropertyMap::new();
     for member in &class.members {
         match member {
             ParsedClassMember::Property(property) if property.is_static => {

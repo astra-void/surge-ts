@@ -2,10 +2,9 @@
 
 use super::*;
 
-use std::collections::BTreeMap;
 
 use surge_ts_syntax::{ParsedFunctionType, ParsedInterfaceMember, ParsedNamedType, ParsedType};
-use surge_ts_types::{FunctionType, ObjectProperty, Type};
+use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type};
 
 use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::{CheckerContext, DeclarationResolutionKey};
@@ -21,11 +20,20 @@ pub(crate) fn resolve_interface(
 ) -> ResolvedType {
     let declaration_key = declaration_resolution_key(&interface.file_name, &interface.name);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
+        // A recursive interface (`interface Node { next: Node }`, and the mutually
+        // recursive DOM/typed-array/iterator clusters React's event types pull in)
+        // is valid in tsc — only the self-referential edge is left unexpanded. The
+        // internal cycle marker is still emitted (cycle detection / cascade
+        // guarding), but the back-edge resolves to a clean `unknown` with
+        // `had_error: false` so the cycle does not poison the enclosing type: a
+        // generic instantiation whose argument transitively recurses must still
+        // resolve its other members rather than collapse to `unknown` in
+        // `bind_type_arguments`.
         ctx.note_resolution_cycle(index);
         emit_type_declaration_cycle(&interface.name, interface.name_span, ctx);
         return ResolvedType {
             ty: Type::Unknown,
-            had_error: true,
+            had_error: false,
         };
     }
 
@@ -120,9 +128,14 @@ pub(crate) fn resolve_interface(
         }
     }
 
-    let is_namespace_member = interface.name.contains('.');
-    if is_namespace_member {
+    let namespace_prefix = interface
+        .name
+        .rsplit_once('.')
+        .map(|(prefix, _)| prefix.to_string());
+    let is_namespace_member = namespace_prefix.is_some();
+    if let Some(prefix) = namespace_prefix {
         ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix);
     }
     let resolved = with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
         with_file_name(ctx, &interface.file_name, |ctx| {
@@ -139,6 +152,7 @@ pub(crate) fn resolve_interface(
     });
     if is_namespace_member {
         ctx.namespace_member_resolution_depth -= 1;
+        ctx.namespace_member_prefix_stack.pop();
     }
     resolving.pop();
 
@@ -154,7 +168,7 @@ pub(crate) fn resolve_interface_declaration(
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
-    let mut properties = BTreeMap::new();
+    let mut properties = PropertyMap::new();
     let mut had_error = false;
     let mut inherited_index_type: Option<Type> = None;
     // A base that resolves to `any` (e.g. a mixin) leaves the derived member set
@@ -305,7 +319,7 @@ fn is_declaration_file_name(file_name: &str) -> bool {
 }
 
 pub(crate) fn generated_default_lib_map_instance_type() -> Type {
-    let mut properties = BTreeMap::new();
+    let mut properties = PropertyMap::new();
     properties.insert(
         "get".to_string(),
         ObjectProperty::required(Type::Function(alloc_function_type(

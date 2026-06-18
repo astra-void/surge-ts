@@ -3,7 +3,6 @@
 use super::*;
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{ParsedCallArgument, ParsedObjectType, ParsedType, TextSpan};
 use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
@@ -465,7 +464,7 @@ pub(crate) fn widen_candidate_type(ty: &Type) -> Type {
                         },
                     )
                 })
-                .collect::<BTreeMap<_, _>>();
+                .collect::<surge_ts_types::PropertyMap>();
 
             Type::Object(alloc_object_type(properties, None))
         }

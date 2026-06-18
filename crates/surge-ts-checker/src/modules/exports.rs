@@ -593,7 +593,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
 fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
     use surge_ts_types::{FunctionType, ObjectProperty};
 
-    let mut properties = std::collections::BTreeMap::new();
+    let mut properties = surge_ts_types::PropertyMap::new();
     for statement in &namespace.statements {
         let inner = match statement {
             ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
@@ -999,7 +999,7 @@ pub(crate) fn namespace_export_object_type(export_table: &ModuleExportTable) -> 
 
 pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTable) -> Type {
     crate::program::record_module_export_namespace_export_object_materialization_count();
-    let mut properties = std::collections::BTreeMap::new();
+    let mut properties = surge_ts_types::PropertyMap::new();
     let mut property_count = 0u64;
 
     for (name, symbol) in export_table.symbols.iter() {

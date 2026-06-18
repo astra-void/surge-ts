@@ -508,7 +508,7 @@ fn object_literal_source_type_name(
                 .unwrap_or(Type::Unknown);
             (property.name.clone(), ObjectProperty::required(ty))
         })
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<surge_ts_types::PropertyMap>();
 
     Type::Object(alloc_object_type(properties, None))
 }

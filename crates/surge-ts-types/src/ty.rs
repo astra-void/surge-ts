@@ -149,7 +149,7 @@ impl Type {
                     .iter()
                     .map(|(name, property)| {
                         if property.is_optional() {
-                            format!("{name}?: {}", property.ty.name())
+                            format!("{name}?: {}", optional_property_display(&property.ty))
                         } else {
                             format!("{name}: {}", property.ty.name())
                         }
@@ -415,6 +415,20 @@ fn array_element_name(element: &Type) -> String {
     match element {
         Type::Union(_) | Type::Function(_) => format!("({})", element.name()),
         _ => element.name(),
+    }
+}
+
+/// Renders the type of an optional property as tsc does in diagnostics: outside
+/// `exactOptionalPropertyTypes`, an optional property's printed type gains
+/// `| undefined`. `unknown`/`any` already absorb `undefined`, and a union that
+/// already includes it needs no addition.
+fn optional_property_display(ty: &Type) -> String {
+    match ty {
+        Type::Any | Type::Unknown | Type::Undefined => ty.name(),
+        Type::Union(union) if union.types().iter().any(|m| matches!(m, Type::Undefined)) => {
+            ty.name()
+        }
+        _ => format!("{} | undefined", ty.name()),
     }
 }
 

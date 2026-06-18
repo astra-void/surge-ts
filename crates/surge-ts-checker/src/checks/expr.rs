@@ -31,7 +31,7 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
         // it (and its alias name) as-is rather than widening its members.
         Type::Object(obj) if obj.alias_name.is_some() => ty.clone(),
         Type::Object(obj) => {
-            let mut new_props = std::collections::BTreeMap::new();
+            let mut new_props = surge_ts_types::PropertyMap::new();
             for (k, v) in obj.properties.iter() {
                 new_props.insert(
                     k.clone(),
@@ -166,7 +166,7 @@ pub(crate) fn evaluate_const_expression(
             result
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
-            let mut props = std::collections::BTreeMap::new();
+            let mut props = surge_ts_types::PropertyMap::new();
             for property in properties {
                 let inferred = evaluate_const_expression(
                     &property.value,

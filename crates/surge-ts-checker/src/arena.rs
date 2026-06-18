@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 use oxc_allocator::Allocator;
-use surge_ts_types::{FunctionType, ObjectProperty, ObjectType, PropertyMap, Type};
+use surge_ts_types::{FunctionType, ObjectType, PropertyMap, Type};
 
 use crate::program::{
     record_arena_declaration_key_alloc_count, record_arena_object_type_payload_alloc_count,

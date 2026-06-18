@@ -2,7 +2,6 @@
 
 use super::*;
 
-use std::collections::BTreeMap;
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
@@ -11,7 +10,8 @@ use surge_ts_syntax::{
     ParsedTemplateLiteralType, ParsedType, ParsedTypeParameter, TextSpan,
 };
 use surge_ts_types::{
-    NumberLiteralType, ObjectProperty, Type, TypeCopyReason, is_assignable_to, union_type,
+    NumberLiteralType, ObjectProperty, PropertyMap, Type, TypeCopyReason, is_assignable_to,
+    union_type,
     with_type_copy_reason,
 };
 
@@ -513,7 +513,7 @@ pub(crate) fn resolve_object_type(
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
-    let mut properties = BTreeMap::new();
+    let mut properties = PropertyMap::new();
     let mut had_error = false;
 
     for property in object_type.properties {
@@ -643,7 +643,7 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         .collect();
 
     if !object_members.is_empty() {
-        let mut properties: BTreeMap<String, ObjectProperty> = BTreeMap::new();
+        let mut properties: PropertyMap = PropertyMap::new();
         let mut string_index_type: Option<Type> = None;
 
         for object in &object_members {
@@ -963,7 +963,7 @@ pub(crate) fn resolve_mapped_type(
         }
     };
 
-    let mut properties = std::collections::BTreeMap::new();
+    let mut properties = PropertyMap::new();
     let mut had_error = false;
 
     for key in keys {

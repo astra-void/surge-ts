@@ -2,11 +2,10 @@
 
 use super::*;
 
-use std::collections::BTreeMap;
 use std::time::Instant;
 
 use surge_ts_syntax::{ParsedArrayElement, ParsedExpression, ParsedObjectProperty};
-use surge_ts_types::{ObjectProperty, Type, TypeCopyReason, union_type, with_type_copy_reason};
+use surge_ts_types::{ObjectProperty, PropertyMap, Type, TypeCopyReason, union_type, with_type_copy_reason};
 
 use crate::arena::alloc_object_type;
 use crate::checks::function::check_arrow_function_expression;
@@ -24,7 +23,7 @@ pub(crate) fn infer_object_literal(
     ctx: &mut CheckerContext,
 ) -> Type {
     let object_literal_start = Instant::now();
-    let mut merged_properties: BTreeMap<String, ObjectProperty> = BTreeMap::new();
+    let mut merged_properties: PropertyMap = PropertyMap::new();
     for property in properties {
         record_property_lookup();
         record_object_literal_property_check();

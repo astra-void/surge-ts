@@ -314,9 +314,9 @@ fn lower_global_augmentation_values(
 }
 
 pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
-    use std::collections::BTreeMap;
+    use surge_ts_types::PropertyMap;
 
-    let mut properties = BTreeMap::new();
+    let mut properties = PropertyMap::new();
     for (name, symbol) in ctx.ambient_global_symbols.iter() {
         if name.as_ref() == "globalThis" {
             continue;

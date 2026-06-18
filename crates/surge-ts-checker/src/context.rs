@@ -167,6 +167,12 @@ pub(crate) struct CheckerContext {
     /// they resolve to `unknown` without a TS2304 cascade — tsc resolves them
     /// against the full `@types/*`/generated namespace and reports nothing.
     pub(crate) namespace_member_resolution_depth: usize,
+    /// Stack of namespace prefixes for the member bodies currently being
+    /// resolved (e.g. `"React"` while expanding `React.ChangeEventHandler`).
+    /// Namespace members are stored under qualified names but reference their
+    /// siblings unqualified (`EventHandler<…>` inside `React.ChangeEventHandler`),
+    /// so a bare name that does not resolve is retried against these prefixes.
+    pub(crate) namespace_member_prefix_stack: Vec<String>,
     /// Lowest `resolving`-stack index that any cycle truncation has re-entered
     /// since this field was last reset. A resolution that pushed its declaration
     /// at stack depth `floor` is independent of the enclosing `resolving` context
@@ -212,6 +218,7 @@ impl CheckerContext {
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
             namespace_member_resolution_depth: 0,
+            namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
             file_kinds: Arc::new(file_kinds),
         }
@@ -320,6 +327,18 @@ impl CheckerContext {
     }
 
     pub(crate) fn lookup_type_declaration(&self, name: &str) -> Option<&TypeDeclarationInfo> {
+        if let Some(declaration) = self.lookup_type_declaration_exact(name) {
+            return Some(declaration);
+        }
+        for candidate in self.namespace_qualified_candidates(name) {
+            if let Some(declaration) = self.lookup_type_declaration_exact(&candidate) {
+                return Some(declaration);
+            }
+        }
+        None
+    }
+
+    fn lookup_type_declaration_exact(&self, name: &str) -> Option<&TypeDeclarationInfo> {
         if let Some(declaration) = self.type_declarations.get(name) {
             crate::program::record_type_declaration_lookup(1);
             return Some(declaration);
@@ -336,11 +355,50 @@ impl CheckerContext {
         self.ambient_global_type_declarations.get(name)
     }
 
+    /// Candidate qualified names for a bare reference made inside a namespace
+    /// member body: the innermost active prefix and each enclosing one, joined to
+    /// `name` (`React.X`; `A.B.X` then `A.X`). Empty unless a namespace member is
+    /// being resolved, or when `name` is already qualified.
+    fn namespace_qualified_candidates(&self, name: &str) -> Vec<String> {
+        if name.contains('.') {
+            return Vec::new();
+        }
+        let Some(prefix) = self.namespace_member_prefix_stack.last() else {
+            return Vec::new();
+        };
+
+        let mut candidates = Vec::new();
+        let mut remaining = prefix.as_str();
+        loop {
+            candidates.push(format!("{remaining}.{name}"));
+            match remaining.rsplit_once('.') {
+                Some((outer, _)) => remaining = outer,
+                None => break,
+            }
+        }
+        candidates
+    }
+
     /// Like [`lookup_type_declaration`](Self::lookup_type_declaration) but returns
     /// a [`TypeDeclarationHandle`] whose borrow is decoupled from `self`, so
     /// resolution can read the declaration while `self` is borrowed mutably
     /// without deep-cloning the payload.
     pub(crate) fn lookup_type_declaration_handle(
+        &self,
+        name: &str,
+    ) -> Option<crate::symbols::TypeDeclarationHandle> {
+        if let Some(handle) = self.lookup_type_declaration_handle_exact(name) {
+            return Some(handle);
+        }
+        for candidate in self.namespace_qualified_candidates(name) {
+            if let Some(handle) = self.lookup_type_declaration_handle_exact(&candidate) {
+                return Some(handle);
+            }
+        }
+        None
+    }
+
+    fn lookup_type_declaration_handle_exact(
         &self,
         name: &str,
     ) -> Option<crate::symbols::TypeDeclarationHandle> {
