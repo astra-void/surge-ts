@@ -24,19 +24,34 @@ pub(crate) fn infer_object_literal(
     ctx: &mut CheckerContext,
 ) -> Type {
     let object_literal_start = Instant::now();
-    let properties = properties
-        .iter()
-        .map(|property| {
-            record_property_lookup();
-            record_object_literal_property_check();
-            (
-                property.name.clone(),
-                ObjectProperty::required(infer_object_property_type(property, symbols, ctx)),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut merged_properties: BTreeMap<String, ObjectProperty> = BTreeMap::new();
+    for property in properties {
+        record_property_lookup();
+        record_object_literal_property_check();
 
-    let result = Type::Object(alloc_object_type(properties, None));
+        if property.is_spread {
+            // `{ ...source }` merges `source`'s own properties; later properties
+            // (including later spreads) override earlier ones, matching tsc's
+            // left-to-right spread semantics. A spread whose type we cannot model
+            // as an object is skipped rather than collapsing the whole literal.
+            match infer_object_property_value(&property.value, symbols, ctx) {
+                Type::Object(source) => {
+                    for (name, source_property) in source.properties.iter() {
+                        merged_properties.insert(name.clone(), source_property.clone());
+                    }
+                }
+                _ => continue,
+            }
+            continue;
+        }
+
+        merged_properties.insert(
+            property.name.clone(),
+            ObjectProperty::required(infer_object_property_type(property, symbols, ctx)),
+        );
+    }
+
+    let result = Type::Object(alloc_object_type(merged_properties, None));
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.object_literal_checking += object_literal_start.elapsed()
     });
@@ -69,7 +84,13 @@ pub(crate) fn infer_array_literal(
         }
     }
 
-    InferredExpression::Known(Type::Array(Box::new(union_type(element_types))))
+    // A bare array literal widens its element literals like tsc does
+    // (`["a", "b"]` -> `string[]`, not `("a" | "b")[]`), so methods such as
+    // `["a","b"].includes(someString)` accept a widened argument. Contextual
+    // typing against a literal-union target goes through a different path and is
+    // unaffected.
+    let element_type = crate::checks::expr::widen_type(&union_type(element_types));
+    InferredExpression::Known(Type::Array(Box::new(element_type)))
 }
 
 pub(crate) fn infer_object_property_value(

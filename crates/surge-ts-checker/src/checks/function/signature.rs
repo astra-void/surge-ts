@@ -7,7 +7,8 @@ use std::sync::Arc;
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedBindingName, ParsedFunctionBodyStatement, ParsedFunctionParameter,
-    ParsedObjectBindingElement, ParsedObjectBindingPattern, ParsedType, ParsedTypeParameter,
+    ParsedArrayBindingPattern, ParsedObjectBindingElement, ParsedObjectBindingPattern, ParsedType,
+    ParsedTypeParameter,
     TextSpan,
 };
 use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
@@ -56,6 +57,44 @@ pub(crate) fn emit_parameter_diagnostics(
             }
             emit_object_binding_pattern_diagnostics(pattern, ctx);
         }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            if contextual_type.is_some() {
+                return;
+            }
+            emit_array_binding_pattern_diagnostics(pattern, ctx);
+        }
+        ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
+pub(crate) fn emit_array_binding_pattern_diagnostics(
+    pattern: &ParsedArrayBindingPattern,
+    ctx: &mut CheckerContext,
+) {
+    for element in pattern.elements.iter().flatten() {
+        emit_array_binding_element_diagnostic(element, ctx);
+    }
+}
+
+fn emit_array_binding_element_diagnostic(
+    binding_name: &ParsedBindingName,
+    ctx: &mut CheckerContext,
+) {
+    match binding_name {
+        ParsedBindingName::Identifier { name, span } => {
+            let diagnostic = Diagnostic::ts7031(name, "any", ctx.file_name.clone());
+            let diagnostic = match span {
+                Some(span) => diagnostic.with_span(convert_span(*span)),
+                None => diagnostic,
+            };
+            ctx.push(diagnostic);
+        }
+        ParsedBindingName::ObjectPattern(pattern) => {
+            emit_object_binding_pattern_diagnostics(pattern, ctx);
+        }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            emit_array_binding_pattern_diagnostics(pattern, ctx);
+        }
         ParsedBindingName::Unsupported { .. } => {}
     }
 }
@@ -88,6 +127,9 @@ pub(crate) fn emit_object_binding_element_diagnostic(
         ParsedBindingName::ObjectPattern(pattern) => {
             emit_object_binding_pattern_diagnostics(pattern, ctx);
         }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            emit_array_binding_pattern_diagnostics(pattern, ctx);
+        }
         ParsedBindingName::Unsupported { .. } => {}
     }
 }
@@ -107,7 +149,9 @@ pub(crate) fn parameter_scope_type(
         ParsedBindingName::Identifier { .. } => {
             with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone())
         }
-        ParsedBindingName::ObjectPattern(_) | ParsedBindingName::Unsupported { .. } => Type::Any,
+        ParsedBindingName::ObjectPattern(_)
+        | ParsedBindingName::ArrayPattern(_)
+        | ParsedBindingName::Unsupported { .. } => Type::Any,
     }
 }
 
@@ -130,7 +174,48 @@ pub(crate) fn insert_binding_name(
         ParsedBindingName::ObjectPattern(pattern) => {
             insert_object_binding_pattern_bindings(pattern, ty, scopes);
         }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            insert_array_binding_pattern_bindings(pattern, ty, scopes);
+        }
         ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
+/// The element type a destructuring position reads: the tuple element at `index`
+/// for a tuple source, the element type for an array source, and `any`/`unknown`
+/// otherwise (conservative — keeps the binding in scope without cascading).
+fn array_binding_element_type(source: &Type, index: usize) -> Type {
+    match source {
+        Type::Tuple(elements) => elements.get(index).cloned().unwrap_or(Type::Undefined),
+        Type::Array(element) => (**element).clone(),
+        Type::Any => Type::Any,
+        _ => Type::Any,
+    }
+}
+
+pub(crate) fn insert_array_binding_pattern_bindings(
+    pattern: &ParsedArrayBindingPattern,
+    source_type: Type,
+    scopes: &mut ScopeStack,
+) {
+    for (index, element) in pattern.elements.iter().enumerate() {
+        if let Some(element) = element {
+            let element_type = array_binding_element_type(&source_type, index);
+            insert_binding_name(element, element_type, scopes);
+        }
+    }
+    if let Some(rest) = &pattern.rest {
+        // `[a, ...rest]` binds `rest` to the remaining elements. We model it as
+        // an array of the source element type (or the source as-is) — precise
+        // enough to keep `rest` usable without an exact `slice` shape.
+        let rest_type = match &source_type {
+            Type::Array(_) => source_type.clone(),
+            Type::Tuple(elements) => Type::Array(Box::new(
+                elements.last().cloned().unwrap_or(Type::Any),
+            )),
+            _ => Type::Any,
+        };
+        insert_binding_name(rest, rest_type, scopes);
     }
 }
 
@@ -188,6 +273,9 @@ pub(crate) fn insert_object_binding_element_binding(
         }
         ParsedBindingName::ObjectPattern(pattern) => {
             insert_object_binding_pattern_bindings(pattern, parameter_type, scopes);
+        }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            insert_array_binding_pattern_bindings(pattern, parameter_type, scopes);
         }
         ParsedBindingName::Unsupported { .. } => {}
     }

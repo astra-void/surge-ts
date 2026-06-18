@@ -1,5 +1,5 @@
-function listener(): void {}
+function listener(value: string): void {}
 
-let listeners: (() => void)[] = [listener];
+let listeners: ((value: string) => void)[] = [listener];
 let first = listeners[0];
-let value: (value: string) => void = first;
+let value: () => void = first;

@@ -301,6 +301,32 @@ pub(crate) fn check_expression_flow_impl(
                 ctx,
             )
         }
+        ParsedExpression::ElementAccess {
+            object,
+            object_span,
+            index,
+            index_span,
+        } => {
+            if check_expression_flow_impl(
+                object,
+                object_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+            .is_blocked()
+            {
+                return FlowCheck::Blocked;
+            }
+
+            check_expression_flow_impl(
+                index,
+                index_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+        }
         ParsedExpression::TypeAssertion {
             expression,
             expression_span,

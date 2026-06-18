@@ -368,6 +368,7 @@ pub(crate) fn check_function_if_statement(
     if flow_active {
         let mut branch_deltas = Vec::new();
         scopes.push_child();
+        narrow_discriminant_in_scope(&if_statement.condition, scopes, true);
         flow_state.begin_branch_capture();
         check_function_body(
             if_statement.then_body,
@@ -385,6 +386,7 @@ pub(crate) fn check_function_if_statement(
             let else_guarantees_value_return =
                 analyze_function_body_flow(&if_statement.else_body).guarantees_value_return;
             scopes.push_child();
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
             flow_state.begin_branch_capture();
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let mut else_delta = flow_state.finish_branch_capture();
@@ -395,11 +397,13 @@ pub(crate) fn check_function_if_statement(
 
         if !has_else_body && then_guarantees_value_return {
             narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
         }
 
         merge_branch_deltas(flow_state, &branch_deltas, !has_else_body);
     } else {
         scopes.push_child();
+        narrow_discriminant_in_scope(&if_statement.condition, scopes, true);
         check_function_body(
             if_statement.then_body,
             with_type_copy_reason(TypeCopyReason::ReturnChecking, || return_type.clone()),
@@ -411,12 +415,14 @@ pub(crate) fn check_function_if_statement(
 
         if has_else_body {
             scopes.push_child();
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             scopes.pop_child();
         }
 
         if !has_else_body && then_guarantees_value_return {
             narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
         }
     }
 }

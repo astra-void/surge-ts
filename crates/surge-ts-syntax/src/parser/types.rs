@@ -142,15 +142,45 @@ fn parse_conditional_type(conditional_type: &TSConditionalType<'_>) -> Option<Pa
 }
 
 fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
-    let name = match &type_query.expr_name {
-        TSTypeQueryExprName::IdentifierReference(identifier) => identifier,
-        _ => return None, // Fallback for unsupported typeof targets
-    };
+    match &type_query.expr_name {
+        TSTypeQueryExprName::IdentifierReference(identifier) => {
+            Some(ParsedType::TypeOf(ParsedTypeOfType {
+                name: identifier.name.to_string(),
+                name_span: Some(text_span_from_oxc_span(identifier.span)),
+                members: Vec::new(),
+            }))
+        }
+        TSTypeQueryExprName::QualifiedName(qualified_name) => {
+            let mut members = Vec::new();
+            let (base, base_span) = flatten_qualified_type_name(qualified_name, &mut members)?;
+            Some(ParsedType::TypeOf(ParsedTypeOfType {
+                name: base,
+                name_span: Some(text_span_from_oxc_span(base_span)),
+                members,
+            }))
+        }
+        // `typeof import('foo')` and `typeof this` are not modelled.
+        _ => None,
+    }
+}
 
-    Some(ParsedType::TypeOf(ParsedTypeOfType {
-        name: name.name.to_string(),
-        name_span: Some(text_span_from_oxc_span(name.span)),
-    }))
+/// Flattens a left-nested `TSQualifiedName` (`A.B.C`) into its leftmost
+/// identifier (base) plus the trailing member segments in source order. Returns
+/// `None` if the leftmost element is not a plain identifier (e.g. `this.x`),
+/// which we do not model.
+fn flatten_qualified_type_name(
+    qualified_name: &oxc_ast::ast::TSQualifiedName<'_>,
+    members: &mut Vec<String>,
+) -> Option<(String, oxc_span::Span)> {
+    let base = match &qualified_name.left {
+        TSTypeName::IdentifierReference(identifier) => {
+            (identifier.name.to_string(), identifier.span)
+        }
+        TSTypeName::QualifiedName(inner) => flatten_qualified_type_name(inner, members)?,
+        TSTypeName::ThisExpression(_) => return None,
+    };
+    members.push(qualified_name.right.name.to_string());
+    Some(base)
 }
 
 fn parse_type_operator(type_operator: &TSTypeOperator<'_>) -> Option<ParsedType> {
@@ -158,7 +188,13 @@ fn parse_type_operator(type_operator: &TSTypeOperator<'_>) -> Option<ParsedType>
         TSTypeOperatorOperator::Keyof => {
             parse_type(&type_operator.type_annotation).map(|ty| ParsedType::KeyOf(Box::new(ty)))
         }
-        _ => None,
+        // `readonly T[]` / `readonly [A, B]` are not distinguished from their
+        // mutable forms here; lowering to the inner array/tuple keeps the
+        // annotation intact instead of dropping it (which would cascade into
+        // `TS7006`/`TS7031` on the annotated binding). `unique symbol` has no
+        // modelled representation, so it degrades to `Unknown`.
+        TSTypeOperatorOperator::Readonly => parse_type(&type_operator.type_annotation),
+        TSTypeOperatorOperator::Unique => Some(ParsedType::Unknown),
     }
 }
 

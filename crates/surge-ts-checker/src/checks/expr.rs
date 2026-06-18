@@ -358,16 +358,27 @@ pub(crate) fn evaluate_expression(
         ParsedExpression::Logical {
             left,
             left_span,
-            operator: _,
+            operator,
             operator_span: _,
             right,
             right_span,
         } => {
             let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
-            let right_result =
-                evaluate_expression(right, right_span.or(fallback_span), symbols, ctx);
+            // `a && b` only evaluates `b` when `a` is truthy, so narrow `b` by the
+            // `a` guard (`x.kind === "k" && x.k`, `"p" in x && x.p`).
+            let narrowed = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::And)
+                .then(|| {
+                    crate::checks::function::narrow_condition_symbol_table(left, symbols, true)
+                })
+                .flatten();
+            let right_result = evaluate_expression(
+                right,
+                right_span.or(fallback_span),
+                narrowed.as_ref().unwrap_or(symbols),
+                ctx,
+            );
 
-            ops::evaluate_logical_expression(left_result, right_result)
+            ops::evaluate_logical_expression(*operator, left_result, right_result)
         }
         ParsedExpression::Binary {
             left,
@@ -418,10 +429,25 @@ pub(crate) fn evaluate_expression(
         } => {
             let condition_result =
                 evaluate_expression(condition, condition_span.or(fallback_span), symbols, ctx);
-            let true_result =
-                evaluate_expression(when_true, when_true_span.or(fallback_span), symbols, ctx);
-            let false_result =
-                evaluate_expression(when_false, when_false_span.or(fallback_span), symbols, ctx);
+            // Narrow a discriminated union per branch so `x.kind === "a" ? x.a :
+            // x.b` checks `x.a` against the `"a"` member only.
+            let true_symbols =
+                crate::checks::function::narrow_condition_symbol_table(condition, symbols, true);
+            let false_symbols = crate::checks::function::narrow_condition_symbol_table(
+                condition, symbols, false,
+            );
+            let true_result = evaluate_expression(
+                when_true,
+                when_true_span.or(fallback_span),
+                true_symbols.as_ref().unwrap_or(symbols),
+                ctx,
+            );
+            let false_result = evaluate_expression(
+                when_false,
+                when_false_span.or(fallback_span),
+                false_symbols.as_ref().unwrap_or(symbols),
+                ctx,
+            );
 
             ops::evaluate_conditional_expression(condition_result, true_result, false_result)
         }

@@ -2701,9 +2701,9 @@ path = "tests/smoke/array_literal_unresolved_element_no_cascade.ts"
 expected_diagnostics = ["TS2304"]
 
 [[case]]
-name = "array-literal-preserves-const-literal-element"
+name = "array-literal-widens-literal-element"
 path = "tests/smoke/array_literal_preserves_const_literal_element.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "array-literal-let-widening-when-assigned-to-let"

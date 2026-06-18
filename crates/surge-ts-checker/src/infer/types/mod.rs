@@ -163,12 +163,18 @@ pub(crate) fn validate_local_type_declaration(
             let mut resolving = Vec::new();
             with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &alias.file_name, |ctx| {
+                    // Register the parameter constraints so indexed access through
+                    // a constrained parameter (`T extends …`) is not falsely
+                    // flagged. Placeholder detection still flows through the
+                    // substitution above.
+                    ctx.push_type_parameter_scope(&alias.body.type_parameters, None);
                     resolve_parsed_type_with_substitution(
                         alias.body.ty.clone(),
                         ctx,
                         &mut resolving,
                         &substitution,
-                    )
+                    );
+                    ctx.pop_type_parameter_scope();
                 })
             });
         }
@@ -181,6 +187,7 @@ pub(crate) fn validate_local_type_declaration(
             let mut resolving = Vec::new();
             with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &interface.file_name, |ctx| {
+                    ctx.push_type_parameter_scope(&interface.body.type_parameters, None);
                     resolve_interface_declaration(
                         &interface.body.extends,
                         &interface.body.members,
@@ -189,7 +196,8 @@ pub(crate) fn validate_local_type_declaration(
                         ctx,
                         &mut resolving,
                         &substitution,
-                    )
+                    );
+                    ctx.pop_type_parameter_scope();
                 })
             });
         }

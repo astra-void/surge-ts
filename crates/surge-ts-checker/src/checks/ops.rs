@@ -59,18 +59,42 @@ pub(crate) fn evaluate_binary_expression(
             operator_span.or(fallback_span),
             ctx,
         ),
+        // `"prop" in obj` is a boolean property-presence test. The operands are
+        // already evaluated by the caller; the result is simply `boolean`.
+        ParsedBinaryOperator::In => InferredExpression::Known(Type::Boolean),
     }
 }
 
 pub(crate) fn evaluate_logical_expression(
+    operator: surge_ts_syntax::ParsedLogicalOperator,
     left_result: InferredExpression,
     right_result: InferredExpression,
 ) -> InferredExpression {
-    if !is_known_non_unknown(&left_result) || !is_known_non_unknown(&right_result) {
+    let (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty)) =
+        (&left_result, &right_result)
+    else {
+        return InferredExpression::Unknown;
+    };
+    if *left_ty == Type::Unknown || *right_ty == Type::Unknown {
         return InferredExpression::Unknown;
     }
 
-    InferredExpression::Known(Type::Boolean)
+    // A logical expression yields one of its operand *values*, not `boolean`:
+    // `a || b` is `NonNullable<a> | b` (the left's nullish branch is gone when it
+    // falls through), and `a && b` is `a | b` (`a` when falsy, otherwise `b`).
+    // `??` has its own handler. Modelling the operand union avoids false
+    // assignability errors like `string | undefined || "x"` being treated as
+    // `boolean`.
+    let result = match operator {
+        surge_ts_syntax::ParsedLogicalOperator::Or => surge_ts_types::union_type(vec![
+            surge_ts_types::remove_nullish(left_ty),
+            right_ty.clone(),
+        ]),
+        surge_ts_syntax::ParsedLogicalOperator::And => {
+            surge_ts_types::union_type(vec![left_ty.clone(), right_ty.clone()])
+        }
+    };
+    InferredExpression::Known(result)
 }
 
 pub(crate) fn evaluate_conditional_expression(
@@ -445,5 +469,6 @@ fn binary_operator_text(operator: ParsedBinaryOperator) -> &'static str {
         | ParsedBinaryOperator::StrictNotEquals
         | ParsedBinaryOperator::Equals
         | ParsedBinaryOperator::NotEquals => "==",
+        ParsedBinaryOperator::In => "in",
     }
 }

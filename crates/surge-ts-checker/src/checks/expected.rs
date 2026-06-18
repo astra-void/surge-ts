@@ -306,11 +306,20 @@ fn evaluate_object_literal_with_expected_type(
     // The empty object type `{}` (no properties, no string index) accepts any
     // object literal without excess-property errors, matching tsc. Library
     // signatures like `Object.keys(o: {})` rely on this.
+    // A `{ ...source }` spread contributes `source`'s properties under an empty
+    // name; it is neither an excess key nor a single checkable property here, and
+    // it may supply required properties we don't track by name. Skip spreads in
+    // the excess-property scan and, when any spread is present, in the missing
+    // required-property scan below (conservative: under-check rather than emit a
+    // false `TS2353`/`TS2741`).
+    let has_spread = properties.iter().any(|property| property.is_spread);
     if !expected_object_type.allows_string_index_access()
         && !expected_object_type.properties.is_empty()
         && let Some(property) = properties
             .iter()
-            .find(|property| !expected_object_type.contains_property(&property.name))
+            .find(|property| {
+                !property.is_spread && !expected_object_type.contains_property(&property.name)
+            })
     {
         let diagnostic = Diagnostic::ts2353(
             &property.name,
@@ -332,6 +341,9 @@ fn evaluate_object_literal_with_expected_type(
     }
 
     for property in properties {
+        if property.is_spread {
+            continue;
+        }
         record_object_literal_property_check();
         let expected_property = if let Some(expected_property) =
             expected_object_type.get_property(&property.name).cloned()
@@ -413,14 +425,17 @@ fn evaluate_object_literal_with_expected_type(
         }
     }
 
-    if let Some((property_name, _)) =
-        expected_object_type
-            .required_properties()
-            .find(|(property_name, _)| {
-                !properties
-                    .iter()
-                    .any(|property| property.name == property_name.as_str())
-            })
+    if let Some((property_name, _)) = (!has_spread)
+        .then(|| {
+            expected_object_type
+                .required_properties()
+                .find(|(property_name, _)| {
+                    !properties
+                        .iter()
+                        .any(|property| property.name == property_name.as_str())
+                })
+        })
+        .flatten()
     {
         let source_type_name = crate::checks::expr::widen_type(&object_literal_source_type_name(
             properties,
@@ -518,10 +533,19 @@ fn evaluate_conditional_expression_with_expected_type(
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
 
+    // Narrow a discriminated union for each branch (`x.kind === "a" ? … : …`).
+    let true_symbols =
+        crate::checks::function::narrow_condition_symbol_table(condition, symbols, true);
+    let false_symbols =
+        crate::checks::function::narrow_condition_symbol_table(condition, symbols, false);
+    let true_symbols = true_symbols.as_ref().unwrap_or(symbols);
+    let false_symbols = false_symbols.as_ref().unwrap_or(symbols);
+
     if *expected_type == Type::Any {
         let _ = evaluate_expression(condition, condition_span.or(fallback_span), symbols, ctx);
-        let _ = evaluate_expression(when_true, when_true_span.or(fallback_span), symbols, ctx);
-        let _ = evaluate_expression(when_false, when_false_span.or(fallback_span), symbols, ctx);
+        let _ = evaluate_expression(when_true, when_true_span.or(fallback_span), true_symbols, ctx);
+        let _ =
+            evaluate_expression(when_false, when_false_span.or(fallback_span), false_symbols, ctx);
 
         return InferredExpression::Known(Type::Any);
     }
@@ -533,7 +557,7 @@ fn evaluate_conditional_expression_with_expected_type(
         when_true_span.or(fallback_span),
         Some(expected_type),
         expected_diagnostic,
-        symbols,
+        true_symbols,
         ctx,
     );
     let false_result = evaluate_expression_with_expected_type(
@@ -541,7 +565,7 @@ fn evaluate_conditional_expression_with_expected_type(
         when_false_span.or(fallback_span),
         Some(expected_type),
         expected_diagnostic,
-        symbols,
+        false_symbols,
         ctx,
     );
 

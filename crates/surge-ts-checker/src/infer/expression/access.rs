@@ -263,6 +263,49 @@ pub(crate) fn infer_property_call(
     result
 }
 
+/// Non-optional element access on an arbitrary object expression (`expr[index]`).
+/// Mirrors tuple/array indexing without the `| undefined` that optional access
+/// adds, so a destructured `const [, setX] = useState()` reads the exact element
+/// type (the setter) rather than `setter | undefined`.
+pub(crate) fn infer_element_access(
+    object: &ParsedExpression,
+    _object_span: &Option<TextSpan>,
+    index: &ParsedExpression,
+    index_span: &Option<TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let object_type = match infer_expression(object, symbols, ctx) {
+        InferredExpression::Known(ty) => ty,
+        InferredExpression::UnresolvedIdentifier { name, span } => {
+            return InferredExpression::UnresolvedIdentifier { name, span };
+        }
+        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+            return InferredExpression::Unknown;
+        }
+    };
+
+    match &object_type {
+        Type::Any => InferredExpression::Known(Type::Any),
+        Type::Tuple(elements) => {
+            infer_tuple_index_access(elements, index, index_span, symbols, ctx)
+        }
+        Type::Array(element_type) => {
+            if matches!(element_type.as_ref(), Type::Unknown) {
+                return InferredExpression::Unknown;
+            }
+            match infer_expression(index, symbols, ctx) {
+                InferredExpression::Known(Type::NumberLiteral(_))
+                | InferredExpression::Known(Type::Number) => {
+                    InferredExpression::Known((**element_type).clone())
+                }
+                _ => InferredExpression::Unknown,
+            }
+        }
+        _ => InferredExpression::Unknown,
+    }
+}
+
 pub(crate) fn infer_optional_index_access(
     object: &ParsedExpression,
     _object_span: &Option<TextSpan>,
