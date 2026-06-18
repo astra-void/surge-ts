@@ -2,7 +2,9 @@ use std::path::Path;
 
 use crate::SourceFileInput;
 
-use super::physical::{default_full_lib_seed_for_target, resolve_physical_default_libs};
+use super::physical::{
+    DefaultLibIoStats, default_full_lib_seed_for_target, resolve_physical_default_libs,
+};
 use super::registry::selected_default_lib_sources;
 use super::source::default_lib_selection_from_tsconfig;
 
@@ -33,6 +35,9 @@ pub struct DefaultLibLoad {
     pub used_physical: bool,
     /// `compilerOptions.lib` entries with no matching `lib*.d.ts` file.
     pub unknown_libs: Vec<String>,
+    /// Filesystem I/O incurred while resolving the physical lib graph. Zero on
+    /// the generated-subset fallback, which serves embedded sources.
+    pub io_stats: DefaultLibIoStats,
 }
 
 /// Load the default libs for a project, preferring the real physical TypeScript
@@ -47,6 +52,7 @@ pub fn load_default_lib_inputs(request: DefaultLibRequest<'_>) -> DefaultLibLoad
             inputs: resolution.inputs,
             used_physical: true,
             unknown_libs: resolution.unknown_libs,
+            io_stats: resolution.io_stats,
         };
     }
 
@@ -54,6 +60,7 @@ pub fn load_default_lib_inputs(request: DefaultLibRequest<'_>) -> DefaultLibLoad
         inputs: load_generated_default_lib_inputs(request.no_lib, Some(request.lib_entries)),
         used_physical: false,
         unknown_libs: Vec::new(),
+        io_stats: DefaultLibIoStats::default(),
     }
 }
 

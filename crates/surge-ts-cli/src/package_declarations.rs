@@ -166,9 +166,11 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                 resolved_packages.insert(req.specifier.clone(), normalized_file_name.clone());
 
                 if !known_file_names.contains(&normalized_file_name) {
+                    let read_start = std::time::Instant::now();
                     let Ok(source_text) = std::fs::read_to_string(&path) else {
                         continue;
                     };
+                    crate::io_stats::record_expansion_read(source_text.len(), read_start.elapsed());
 
                     known_file_names.insert(normalized_file_name.clone());
                     inputs.push(SourceFileInput {
@@ -496,6 +498,7 @@ fn discover_wildcard_type_names(
     let mut seen: HashSet<String> = HashSet::new();
 
     for root in roots {
+        crate::io_stats::record_read_dir();
         let Ok(entries) = std::fs::read_dir(root) else {
             continue;
         };
@@ -600,9 +603,11 @@ fn load_type_package_file(
         return;
     }
 
+    let read_start = std::time::Instant::now();
     let Ok(source_text) = std::fs::read_to_string(&canonical_path) else {
         return;
     };
+    crate::io_stats::record_expansion_read(source_text.len(), read_start.elapsed());
 
     inputs.push(SourceFileInput {
         file_name: normalized_file_name.clone(),
@@ -1053,6 +1058,7 @@ fn read_package_json(
         return cached.clone();
     }
 
+    crate::io_stats::record_package_json_read();
     let parsed = std::fs::read_to_string(pkg_json_path)
         .ok()
         .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok());
@@ -1075,6 +1081,7 @@ fn resolve_declaration_or_runtime_candidate(path: &Path) -> Option<PackageEntryp
 
 fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
     for candidate in runtime_javascript_candidates(path.to_path_buf()) {
+        crate::io_stats::record_existence_probe();
         if candidate.exists() && candidate.is_file() {
             return Some(PackageEntrypointResolution {
                 path: candidate,
@@ -1094,11 +1101,15 @@ fn types_package_name(package_name: &str) -> String {
 }
 
 fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
-    if is_declaration_file_path(path) && path.exists() && path.is_file() {
-        return Some(path.to_path_buf());
+    if is_declaration_file_path(path) {
+        crate::io_stats::record_existence_probe();
+        if path.exists() && path.is_file() {
+            return Some(path.to_path_buf());
+        }
     }
 
     for candidate in declaration_candidates(path.to_path_buf()) {
+        crate::io_stats::record_existence_probe();
         if candidate.exists() && candidate.is_file() {
             return Some(candidate);
         }

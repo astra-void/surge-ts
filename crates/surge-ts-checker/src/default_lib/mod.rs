@@ -8,6 +8,7 @@ pub use loader::{
 };
 pub(crate) use physical::is_physical_default_lib_file_name;
 pub use physical::{
-    PhysicalLibResolution, default_full_lib_seed_for_target, resolve_physical_default_libs,
+    DefaultLibIoStats, PhysicalLibResolution, default_full_lib_seed_for_target,
+    resolve_physical_default_libs,
 };
 pub(crate) use source::is_generated_default_lib_file_name;

@@ -74,6 +74,10 @@ pub(crate) struct ProgramCounters {
     pub(crate) flow_local_name_clone_count: u64,
     pub(crate) string_path_lookup_count: u64,
     pub(crate) canonical_file_id_lookup_count: u64,
+    pub(crate) canonicalize_call_count: u64,
+    pub(crate) canonicalize_cache_hit_count: u64,
+    pub(crate) canonicalize_syscall_count: u64,
+    pub(crate) canonicalize_syscall_nanos: u64,
     pub(crate) function_type_copy_from_expression_identifier_count: u64,
     pub(crate) function_type_copy_from_expression_call_return_count: u64,
     pub(crate) function_type_copy_from_expression_optional_call_return_count: u64,
@@ -389,6 +393,45 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    flow_narrowing: {}",
         format_duration(timings.flow_narrowing)
     );
+
+    let io_counters = snapshot_program_counters();
+    eprintln!("  io:");
+    eprintln!(
+        "    canonicalize_calls: {}",
+        io_counters.canonicalize_call_count
+    );
+    eprintln!(
+        "    canonicalize_cache_hits: {}",
+        io_counters.canonicalize_cache_hit_count
+    );
+    eprintln!(
+        "    canonicalize_syscalls: {}",
+        io_counters.canonicalize_syscall_count
+    );
+    let canonicalize_hit_rate = if io_counters.canonicalize_call_count == 0 {
+        0.0
+    } else {
+        io_counters.canonicalize_cache_hit_count as f64
+            / io_counters.canonicalize_call_count as f64
+            * 100.0
+    };
+    eprintln!("    canonicalize_cache_hit_rate: {canonicalize_hit_rate:.1}%");
+    eprintln!(
+        "    canonicalize_syscall_time: {}",
+        format_duration(Duration::from_nanos(io_counters.canonicalize_syscall_nanos))
+    );
+    let canonicalize_avg_syscall = if io_counters.canonicalize_syscall_count == 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_nanos(
+            io_counters.canonicalize_syscall_nanos / io_counters.canonicalize_syscall_count,
+        )
+    };
+    eprintln!(
+        "    canonicalize_avg_syscall_time: {}",
+        format_duration(canonicalize_avg_syscall)
+    );
+
     if !timings.file_metrics.is_empty() {
         let mut file_metrics = timings.file_metrics.iter().collect::<Vec<_>>();
         file_metrics.sort_by(|(file_a, metrics_a), (file_b, metrics_b)| {
@@ -977,6 +1020,21 @@ pub(crate) fn record_string_path_lookup() {
 
 pub(crate) fn record_canonical_file_id_lookup() {
     record_program_counter(|c| c.canonical_file_id_lookup_count += 1);
+}
+
+pub(crate) fn record_canonicalize_call() {
+    record_program_counter(|c| c.canonicalize_call_count += 1);
+}
+
+pub(crate) fn record_canonicalize_cache_hit() {
+    record_program_counter(|c| c.canonicalize_cache_hit_count += 1);
+}
+
+pub(crate) fn record_canonicalize_syscall(elapsed: Duration) {
+    record_program_counter(|c| {
+        c.canonicalize_syscall_count += 1;
+        c.canonicalize_syscall_nanos += elapsed.as_nanos() as u64;
+    });
 }
 
 pub(crate) fn record_declaration_lookup(layer_count: usize) {

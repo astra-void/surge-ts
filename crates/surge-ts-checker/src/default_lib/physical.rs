@@ -17,8 +17,23 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::SourceFileInput;
+
+/// Filesystem I/O incurred while discovering and loading the physical lib graph.
+///
+/// Default-lib loading runs before `check_program` enables the program-wide
+/// counters (which are also reset there), so these stats are returned by value
+/// rather than recorded through the global counter table.
+#[derive(Debug, Clone, Default)]
+pub struct DefaultLibIoStats {
+    pub read_io: Duration,
+    pub files_read: u64,
+    pub bytes_read: u64,
+    pub existence_probes: u64,
+    pub canonicalize_syscalls: u64,
+}
 
 /// Marks a file path as a physical TypeScript default-lib declaration file.
 ///
@@ -45,6 +60,8 @@ pub struct PhysicalLibResolution {
     /// Requested `compilerOptions.lib` entries that could not be mapped to a
     /// real `lib*.d.ts` file.
     pub unknown_libs: Vec<String>,
+    /// Filesystem I/O incurred while discovering and loading the lib graph.
+    pub io_stats: DefaultLibIoStats,
 }
 
 /// Resolve and load the physical default libs for a project rooted at
@@ -64,10 +81,14 @@ pub fn resolve_physical_default_libs(
     lib_entries: &[String],
     default_seed: &str,
 ) -> Option<PhysicalLibResolution> {
-    let lib_dir = find_typescript_lib_dir(root_dir)?;
+    let mut io_stats = DefaultLibIoStats::default();
+    let lib_dir = find_typescript_lib_dir(root_dir, &mut io_stats)?;
 
     if no_lib {
-        return Some(PhysicalLibResolution::default());
+        return Some(PhysicalLibResolution {
+            io_stats,
+            ..Default::default()
+        });
     }
 
     let mut seeds: Vec<String> = Vec::new();
@@ -81,18 +102,19 @@ pub fn resolve_physical_default_libs(
         }
     }
 
-    let mut loader = ReferenceGraphLoader::new(lib_dir);
+    let mut loader = ReferenceGraphLoader::new(lib_dir, io_stats);
     for seed in &seeds {
         if !loader.enqueue_lib_name(seed) {
             unknown_libs.push(seed.clone());
         }
     }
-    let (inputs, loaded_files) = loader.run();
+    let (inputs, loaded_files, io_stats) = loader.run();
 
     Some(PhysicalLibResolution {
         inputs,
         loaded_files,
         unknown_libs,
+        io_stats,
     })
 }
 
@@ -116,10 +138,11 @@ pub fn default_full_lib_seed_for_target(target: &str) -> String {
 }
 
 /// Walk up from `root_dir` looking for `node_modules/typescript/lib`.
-fn find_typescript_lib_dir(root_dir: &Path) -> Option<PathBuf> {
+fn find_typescript_lib_dir(root_dir: &Path, io_stats: &mut DefaultLibIoStats) -> Option<PathBuf> {
     let mut current: Option<&Path> = Some(root_dir);
     while let Some(dir) = current {
         let candidate = dir.join("node_modules").join("typescript").join("lib");
+        io_stats.existence_probes += 1;
         if candidate.join("lib.es5.d.ts").is_file() {
             return Some(candidate);
         }
@@ -140,10 +163,11 @@ struct ReferenceGraphLoader {
     seen_names: BTreeSet<String>,
     inputs: Vec<SourceFileInput>,
     loaded_files: Vec<String>,
+    io_stats: DefaultLibIoStats,
 }
 
 impl ReferenceGraphLoader {
-    fn new(lib_dir: PathBuf) -> Self {
+    fn new(lib_dir: PathBuf, io_stats: DefaultLibIoStats) -> Self {
         Self {
             lib_dir,
             queue: Vec::new(),
@@ -151,6 +175,7 @@ impl ReferenceGraphLoader {
             seen_names: BTreeSet::new(),
             inputs: Vec::new(),
             loaded_files: Vec::new(),
+            io_stats,
         }
     }
 
@@ -158,6 +183,7 @@ impl ReferenceGraphLoader {
     /// if the name does not map to an existing `lib*.d.ts` file.
     fn enqueue_lib_name(&mut self, name: &str) -> bool {
         let normalized = normalize_lib_name(name);
+        self.io_stats.existence_probes += 1;
         if !self.lib_file_path(&normalized).is_file() {
             return false;
         }
@@ -174,7 +200,7 @@ impl ReferenceGraphLoader {
     /// Process the queue depth-first: each file is loaded, then its referenced
     /// libs are expanded before continuing, yielding dependency-first order
     /// that mirrors how `tsc` materializes the lib graph.
-    fn run(mut self) -> (Vec<SourceFileInput>, Vec<String>) {
+    fn run(mut self) -> (Vec<SourceFileInput>, Vec<String>, DefaultLibIoStats) {
         // Use an explicit work-list so references discovered while loading a
         // file are processed before the rest of the original queue (depth
         // first), matching `tsc`'s recursive include order.
@@ -182,24 +208,30 @@ impl ReferenceGraphLoader {
         for name in initial {
             self.load_recursive(&name);
         }
-        (self.inputs, self.loaded_files)
+        (self.inputs, self.loaded_files, self.io_stats)
     }
 
     fn load_recursive(&mut self, normalized_name: &str) {
         let path = self.lib_file_path(normalized_name);
+        self.io_stats.canonicalize_syscalls += 1;
         let canonical = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         if !self.visited_paths.insert(canonical.clone()) {
             return;
         }
 
+        let read_start = Instant::now();
         let Ok(source_text) = fs::read_to_string(&path) else {
             return;
         };
+        self.io_stats.read_io += read_start.elapsed();
+        self.io_stats.files_read += 1;
+        self.io_stats.bytes_read += source_text.len() as u64;
 
         // Expand referenced libs first so dependencies are emitted before the
         // file that requires them.
         for referenced in scan_reference_libs(&source_text) {
             let referenced_normalized = normalize_lib_name(&referenced);
+            self.io_stats.existence_probes += 1;
             if !self.lib_file_path(&referenced_normalized).is_file() {
                 continue;
             }

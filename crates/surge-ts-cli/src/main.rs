@@ -1,4 +1,5 @@
 mod import_graph;
+mod io_stats;
 mod package_declarations;
 mod package_resolution;
 mod path_mapping;
@@ -134,7 +135,24 @@ struct CliTimings {
     default_lib_loading: std::time::Duration,
     package_declaration_discovery: std::time::Duration,
     import_graph_expansion: std::time::Duration,
+    path_mapping_resolution: std::time::Duration,
+    checking: std::time::Duration,
     diagnostic_rendering: std::time::Duration,
+    total: std::time::Duration,
+    source_read_io: std::time::Duration,
+    source_files_read: u64,
+    source_bytes_read: u64,
+    default_lib_files_read: u64,
+    default_lib_bytes_read: u64,
+    default_lib_read_io: std::time::Duration,
+    default_lib_existence_probes: u64,
+    default_lib_canonicalize_syscalls: u64,
+    expansion_read_io: std::time::Duration,
+    expansion_files_read: u64,
+    expansion_bytes_read: u64,
+    package_json_reads: u64,
+    fs_existence_probes: u64,
+    fs_read_dir_count: u64,
 }
 
 #[derive(Debug, Parser)]
@@ -512,7 +530,8 @@ fn run_project_mode(
 ) -> ExitCode {
     let mut timings = CliTimings::default();
 
-    let config_start = Instant::now();
+    let run_start = Instant::now();
+    let config_start = run_start;
     let loaded = load_tsconfig(TsConfigLoadOptions { project });
     if timings_enabled {
         timings.config_project_loading += config_start.elapsed();
@@ -526,6 +545,7 @@ fn run_project_mode(
         let config = build_show_config_json(&loaded);
         println!("{}", serde_json::to_string_pretty(&config).unwrap());
         if timings_enabled {
+            timings.total = run_start.elapsed();
             render_cli_timings(&timings);
         }
         return ExitCode::SUCCESS;
@@ -549,6 +569,7 @@ fn run_project_mode(
             &mut timings,
         );
         if timings_enabled {
+            timings.total = run_start.elapsed();
             render_cli_timings(&timings);
         }
         return exit_code;
@@ -560,7 +581,9 @@ fn run_project_mode(
         .unwrap_or(1)
         .max(jobs)
         .min(loaded.files.len());
-    let source_entries = match read_project_sources(&loaded.files, read_workers) {
+    let source_read_nanos = std::sync::atomic::AtomicU64::new(0);
+    let source_entries = match read_project_sources(&loaded.files, read_workers, &source_read_nanos)
+    {
         Ok(entries) => entries,
         Err((file_path, error)) => {
             eprintln!("failed to read {}: {error}", file_path.display());
@@ -579,6 +602,14 @@ fn run_project_mode(
     }
     if timings_enabled {
         timings.file_discovery += file_discovery_start.elapsed();
+        timings.source_read_io += std::time::Duration::from_nanos(
+            source_read_nanos.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        timings.source_files_read += inputs.len() as u64;
+        timings.source_bytes_read += inputs
+            .iter()
+            .map(|input| input.source_text.len() as u64)
+            .sum::<u64>();
     }
 
     let default_lib_loading_start = Instant::now();
@@ -604,9 +635,18 @@ fn run_project_mode(
             "warning: --physicalLibs requested but no TypeScript package was found under node_modules; falling back to the generated default-lib subset"
         );
     }
+    let default_lib_io = default_lib_load.io_stats;
     let default_lib_inputs = default_lib_load.inputs;
     if timings_enabled {
         timings.default_lib_loading += default_lib_loading_start.elapsed();
+        timings.default_lib_files_read += default_lib_inputs.len() as u64;
+        timings.default_lib_bytes_read += default_lib_inputs
+            .iter()
+            .map(|input| input.source_text.len() as u64)
+            .sum::<u64>();
+        timings.default_lib_read_io += default_lib_io.read_io;
+        timings.default_lib_existence_probes += default_lib_io.existence_probes;
+        timings.default_lib_canonicalize_syscalls += default_lib_io.canonicalize_syscalls;
     }
 
     let mut resolved_modules = std::collections::HashMap::new();
@@ -679,6 +719,16 @@ fn run_project_mode(
         }
     }
 
+    if timings_enabled {
+        let io = io_stats::snapshot();
+        timings.expansion_read_io += io.expansion_read_io;
+        timings.expansion_files_read += io.expansion_files_read;
+        timings.expansion_bytes_read += io.expansion_bytes_read;
+        timings.package_json_reads += io.package_json_reads;
+        timings.fs_existence_probes += io.fs_existence_probes;
+        timings.fs_read_dir_count += io.fs_read_dir_count;
+    }
+
     // Default-lib sources never contribute project imports or package specifiers,
     // so they stay out of the package-declaration / import-graph scan above (which
     // would otherwise re-parse ~3MB of lib `.d.ts` on every pass). Splice them to
@@ -721,6 +771,7 @@ fn run_project_mode(
         checker_types.push("*".to_string());
     }
 
+    let path_mapping_start = Instant::now();
     let path_modules = path_mapping::resolve_path_mappings(
         &inputs,
         &loaded.compiler_options.paths,
@@ -729,6 +780,9 @@ fn run_project_mode(
 
     for (k, v) in path_modules {
         resolved_modules.insert(k, v);
+    }
+    if timings_enabled {
+        timings.path_mapping_resolution += path_mapping_start.elapsed();
     }
 
     let checker_options = CheckerOptions {
@@ -741,7 +795,11 @@ fn run_project_mode(
         diagnostic_profile,
     };
 
+    let checking_start = Instant::now();
     let result = check_program_with_stats_and_jobs(inputs, checker_options, jobs);
+    if timings_enabled {
+        timings.checking += checking_start.elapsed();
+    }
     let mut diagnostics = apply_project_no_lib_compatibility_diagnostics(
         result.diagnostics,
         loaded.compiler_options.no_lib,
@@ -784,6 +842,7 @@ fn run_project_mode(
         &mut timings,
     );
     if timings_enabled {
+        timings.total = run_start.elapsed();
         render_cli_timings(&timings);
     }
     exit_code
@@ -791,8 +850,17 @@ fn run_project_mode(
 
 type ProjectSource = (PathBuf, String, String);
 
-fn read_one_source(file_path: &PathBuf) -> Result<ProjectSource, (PathBuf, std::io::Error)> {
-    match fs::read_to_string(file_path) {
+fn read_one_source(
+    file_path: &PathBuf,
+    read_nanos: &std::sync::atomic::AtomicU64,
+) -> Result<ProjectSource, (PathBuf, std::io::Error)> {
+    let read_start = Instant::now();
+    let read = fs::read_to_string(file_path);
+    read_nanos.fetch_add(
+        read_start.elapsed().as_nanos() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    match read {
         Ok(source_text) => {
             let file_name = canonicalize_if_exists_string(file_path);
             Ok((file_path.clone(), file_name, source_text))
@@ -807,9 +875,10 @@ fn read_one_source(file_path: &PathBuf) -> Result<ProjectSource, (PathBuf, std::
 fn read_project_sources(
     files: &[PathBuf],
     workers: usize,
+    read_nanos: &std::sync::atomic::AtomicU64,
 ) -> Result<Vec<ProjectSource>, (PathBuf, std::io::Error)> {
     if workers <= 1 || files.len() <= 1 {
-        return files.iter().map(read_one_source).collect();
+        return files.iter().map(|f| read_one_source(f, read_nanos)).collect();
     }
 
     let chunk_size = (files.len() + workers - 1) / workers;
@@ -817,7 +886,11 @@ fn read_project_sources(
         std::thread::scope(|scope| {
             let handles: Vec<_> = files
                 .chunks(chunk_size)
-                .map(|chunk| scope.spawn(move || chunk.iter().map(read_one_source).collect()))
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk.iter().map(|f| read_one_source(f, read_nanos)).collect()
+                    })
+                })
                 .collect();
             handles
                 .into_iter()
@@ -1076,9 +1149,80 @@ fn render_cli_timings(timings: &CliTimings) {
         format_duration(timings.import_graph_expansion)
     );
     eprintln!(
+        "  path_mapping_resolution: {}",
+        format_duration(timings.path_mapping_resolution)
+    );
+    eprintln!("  checking: {}", format_duration(timings.checking));
+    eprintln!(
         "  diagnostic_rendering: {}",
         format_duration(timings.diagnostic_rendering)
     );
+    let accounted = timings.config_project_loading
+        + timings.file_discovery
+        + timings.default_lib_loading
+        + timings.package_declaration_discovery
+        + timings.import_graph_expansion
+        + timings.path_mapping_resolution
+        + timings.checking
+        + timings.diagnostic_rendering;
+    eprintln!("  total: {}", format_duration(timings.total));
+    eprintln!(
+        "  unaccounted: {}",
+        format_duration(timings.total.saturating_sub(accounted))
+    );
+    eprintln!("  io:");
+    eprintln!(
+        "    source_read_io: {}",
+        format_duration(timings.source_read_io)
+    );
+    eprintln!("    source_files_read: {}", timings.source_files_read);
+    eprintln!(
+        "    source_bytes_read: {} ({})",
+        timings.source_bytes_read,
+        format_throughput(timings.source_bytes_read, timings.source_read_io)
+    );
+    eprintln!(
+        "    default_lib_files_read: {}",
+        timings.default_lib_files_read
+    );
+    eprintln!(
+        "    default_lib_bytes_read: {}",
+        timings.default_lib_bytes_read
+    );
+    eprintln!(
+        "    default_lib_read_io: {}",
+        format_duration(timings.default_lib_read_io)
+    );
+    eprintln!(
+        "    default_lib_existence_probes: {}",
+        timings.default_lib_existence_probes
+    );
+    eprintln!(
+        "    default_lib_canonicalize_syscalls: {}",
+        timings.default_lib_canonicalize_syscalls
+    );
+    eprintln!(
+        "    expansion_read_io: {}",
+        format_duration(timings.expansion_read_io)
+    );
+    eprintln!("    expansion_files_read: {}", timings.expansion_files_read);
+    eprintln!(
+        "    expansion_bytes_read: {} ({})",
+        timings.expansion_bytes_read,
+        format_throughput(timings.expansion_bytes_read, timings.expansion_read_io)
+    );
+    eprintln!("    package_json_reads: {}", timings.package_json_reads);
+    eprintln!("    fs_existence_probes: {}", timings.fs_existence_probes);
+    eprintln!("    fs_read_dir_count: {}", timings.fs_read_dir_count);
+}
+
+fn format_throughput(bytes: u64, elapsed: std::time::Duration) -> String {
+    let seconds = elapsed.as_secs_f64();
+    if seconds <= 0.0 || bytes == 0 {
+        return "-".to_string();
+    }
+    let mib_per_sec = (bytes as f64 / (1024.0 * 1024.0)) / seconds;
+    format!("{mib_per_sec:.1} MiB/s")
 }
 
 fn format_duration(duration: std::time::Duration) -> String {

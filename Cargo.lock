@@ -772,6 +772,9 @@ dependencies = [
 [[package]]
 name = "surge-ts-types"
 version = "0.1.0"
+dependencies = [
+ "indexmap",
+]
 
 [[package]]
 name = "syn"

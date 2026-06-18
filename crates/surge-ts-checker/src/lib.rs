@@ -14,8 +14,9 @@ mod symbols;
 
 pub use context::{CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind};
 pub use default_lib::{
-    DefaultLibLoad, DefaultLibRequest, PhysicalLibResolution, default_full_lib_seed_for_target,
-    load_default_lib_inputs, load_generated_default_lib_inputs, resolve_physical_default_libs,
+    DefaultLibIoStats, DefaultLibLoad, DefaultLibRequest, PhysicalLibResolution,
+    default_full_lib_seed_for_target, load_default_lib_inputs, load_generated_default_lib_inputs,
+    resolve_physical_default_libs,
 };
 pub use driver::{check_source, check_source_with_options};
 pub use program::{

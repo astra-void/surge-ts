@@ -23,8 +23,10 @@ pub(crate) fn clear_canonicalize_cache() {
 
 pub(crate) fn canonicalize_if_exists_string(path: &Path) -> String {
     crate::program::record_string_path_lookup();
+    crate::program::record_canonicalize_call();
     CANONICALIZE_CACHE.with(|cache| {
         if let Some(cached) = cache.borrow().get(path) {
+            crate::program::record_canonicalize_cache_hit();
             return cached.clone();
         }
         let result = canonicalize_if_exists(path)
@@ -45,10 +47,14 @@ pub(crate) fn normalize_path_string(path: &str) -> String {
 }
 
 fn canonicalize_if_exists(path: &Path) -> PathBuf {
-    if let Ok(canonical) = std::fs::canonicalize(path) {
-        normalize_path_buf(&canonical)
-    } else {
-        normalize_path_buf(path)
+    let start = crate::program::counters_enabled().then(std::time::Instant::now);
+    let canonical = std::fs::canonicalize(path);
+    if let Some(start) = start {
+        crate::program::record_canonicalize_syscall(start.elapsed());
+    }
+    match canonical {
+        Ok(canonical) => normalize_path_buf(&canonical),
+        Err(_) => normalize_path_buf(path),
     }
 }
 

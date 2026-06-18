@@ -59,9 +59,11 @@ pub fn expand_project_inputs(
                 continue;
             }
 
+            let read_start = std::time::Instant::now();
             let Ok(source_text) = fs::read_to_string(&canonical) else {
                 continue;
             };
+            crate::io_stats::record_expansion_read(source_text.len(), read_start.elapsed());
 
             let file_name = canonical.to_string_lossy().into_owned();
             inputs.push(SourceFileInput {
@@ -241,6 +243,7 @@ fn candidate_is_existing_file(candidate: &Path, cache: &mut HashMap<String, bool
     if let Some(&hit) = cache.get(key.as_ref()) {
         return hit;
     }
+    crate::io_stats::record_existence_probe();
     let is_file = fs::metadata(candidate)
         .map(|metadata| metadata.is_file())
         .unwrap_or(false);
