@@ -135,6 +135,9 @@ pub struct ParsedIndexedAccessType {
 pub struct ParsedTypeOfType {
     pub name: String,
     pub name_span: Option<TextSpan>,
+    /// Dotted member path following the base `name` for qualified queries such
+    /// as `typeof NS.Root` (`members == ["Root"]`). Empty for a plain `typeof x`.
+    pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,9 +177,21 @@ pub enum ParsedBindingName {
         span: Option<TextSpan>,
     },
     ObjectPattern(ParsedObjectBindingPattern),
+    ArrayPattern(ParsedArrayBindingPattern),
     Unsupported {
         span: Option<TextSpan>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedArrayBindingPattern {
+    /// Each position binds the corresponding element; `None` is an elision hole
+    /// (`[, b]`). The element type is the source tuple element at that index, or
+    /// the array element type for a non-tuple source.
+    pub elements: Vec<Option<ParsedBindingName>>,
+    /// The `...rest` binding of `[a, ...rest]`, if present.
+    pub rest: Option<Box<ParsedBindingName>>,
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -502,6 +517,16 @@ pub enum ParsedExpression {
         index: Box<ParsedExpression>,
         index_span: Option<TextSpan>,
     },
+    /// Element access on an arbitrary object expression (`expr[index]`), as
+    /// opposed to [`IndexAccess`] whose object is a bare identifier. Currently
+    /// produced when desugaring array destructuring of a non-identifier
+    /// initializer (`const [a, b] = useState()` -> `b = useState()[1]`).
+    ElementAccess {
+        object: Box<ParsedExpression>,
+        object_span: Option<TextSpan>,
+        index: Box<ParsedExpression>,
+        index_span: Option<TextSpan>,
+    },
     Call {
         callee_name: String,
         callee_span: Option<TextSpan>,
@@ -658,6 +683,10 @@ pub struct ParsedObjectProperty {
     /// The `value` is lowered to an arrow function so it reuses arrow checking, but the
     /// declared parameter/return types must be honored when inferring the property type.
     pub is_method: bool,
+    /// True for a spread element (`{ ...source }`). `name` is empty and `value`
+    /// is the spread argument expression; inference merges the argument's own
+    /// object properties into the result.
+    pub is_spread: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -682,6 +711,9 @@ pub enum ParsedBinaryOperator {
     BitwiseOR,
     BitwiseXOR,
     BitwiseAnd,
+    /// The `in` operator (`"prop" in obj`). Evaluates to `boolean`; used as a
+    /// property-presence type guard for narrowing.
+    In,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

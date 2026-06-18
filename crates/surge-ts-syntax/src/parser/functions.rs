@@ -9,7 +9,8 @@ use oxc_span::GetSpan;
 use crate::{
     ParsedBindingName, ParsedExpression, ParsedForOfStatement, ParsedFunctionBodyStatement,
     ParsedFunctionDeclaration, ParsedFunctionParameter, ParsedIfStatement,
-    ParsedObjectBindingElement, ParsedObjectBindingPattern, ParsedReturnStatement,
+    ParsedArrayBindingPattern, ParsedObjectBindingElement, ParsedObjectBindingPattern,
+    ParsedReturnStatement,
     ParsedSwitchCase, ParsedSwitchStatement, ParsedThisPropertyAssignment, ParsedThrowStatement,
     ParsedTryStatement, ParsedWhileStatement,
 };
@@ -401,9 +402,26 @@ pub(crate) fn parse_binding_name(binding: &BindingPattern<'_>) -> ParsedBindingN
         BindingPattern::AssignmentPattern(assignment_pattern) => {
             parse_binding_name(&assignment_pattern.left)
         }
-        BindingPattern::ArrayPattern(array_pattern) => ParsedBindingName::Unsupported {
-            span: Some(text_span_from_oxc_span(array_pattern.span)),
-        },
+        BindingPattern::ArrayPattern(array_pattern) => {
+            ParsedBindingName::ArrayPattern(parse_array_binding_pattern(array_pattern))
+        }
+    }
+}
+
+fn parse_array_binding_pattern(
+    array_pattern: &oxc_ast::ast::ArrayPattern<'_>,
+) -> ParsedArrayBindingPattern {
+    ParsedArrayBindingPattern {
+        elements: array_pattern
+            .elements
+            .iter()
+            .map(|element| element.as_ref().map(|element| parse_binding_name(element)))
+            .collect(),
+        rest: array_pattern
+            .rest
+            .as_deref()
+            .map(|rest| Box::new(parse_binding_name(&rest.argument))),
+        span: Some(text_span_from_oxc_span(array_pattern.span)),
     }
 }
 
@@ -448,6 +466,7 @@ fn parse_object_binding_element(
     let name_span = match &binding_name {
         ParsedBindingName::Identifier { span, .. } => *span,
         ParsedBindingName::ObjectPattern(pattern) => pattern.span,
+        ParsedBindingName::ArrayPattern(pattern) => pattern.span,
         ParsedBindingName::Unsupported { span } => *span,
     };
 

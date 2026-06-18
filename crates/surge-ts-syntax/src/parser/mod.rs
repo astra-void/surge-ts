@@ -344,7 +344,15 @@ fn parse_array_pattern_declarations(
                 index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
                 index_span: initializer_span,
             },
-            _ => initializer.clone(),
+            // A non-identifier initializer (`const [a, b] = useState()`) indexes
+            // the source expression directly so each binding gets its own element
+            // type (e.g. the `Dispatch` setter), instead of the whole source.
+            _ => ParsedExpression::ElementAccess {
+                object: Box::new(initializer.clone()),
+                object_span: initializer_span,
+                index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
+                index_span: initializer_span,
+            },
         };
 
         declarations.extend(parse_binding_pattern_declarations(

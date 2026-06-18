@@ -831,6 +831,7 @@ fn parse_binary_expression(binary_expression: &BinaryExpression<'_>) -> Option<P
         BinaryOperator::BitwiseOR => ParsedBinaryOperator::BitwiseOR,
         BinaryOperator::BitwiseXOR => ParsedBinaryOperator::BitwiseXOR,
         BinaryOperator::BitwiseAnd => ParsedBinaryOperator::BitwiseAnd,
+        BinaryOperator::In => ParsedBinaryOperator::In,
         _ => return None,
     };
 
@@ -927,8 +928,20 @@ pub(crate) fn parse_object_properties(
         .properties
         .iter()
         .filter_map(|property_kind| {
-            let ObjectPropertyKind::ObjectProperty(property) = property_kind else {
-                return None;
+            let property = match property_kind {
+                ObjectPropertyKind::ObjectProperty(property) => property,
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    let (value, value_span) = parse_expression(&spread.argument);
+                    return Some(ParsedObjectProperty {
+                        name: String::new(),
+                        name_span: None,
+                        value,
+                        value_span: Some(text_span_from_oxc_span(value_span)),
+                        span: Some(text_span_from_oxc_span(spread.span)),
+                        is_method: false,
+                        is_spread: true,
+                    });
+                }
             };
 
             let PropertyKey::StaticIdentifier(key) = &property.key else {
@@ -952,6 +965,7 @@ pub(crate) fn parse_object_properties(
                 value_span: Some(text_span_from_oxc_span(value_span)),
                 span: Some(text_span_from_oxc_span(property.span)),
                 is_method: false,
+                is_spread: false,
             })
         })
         .collect()
@@ -1002,6 +1016,7 @@ fn parse_object_method_shorthand(
         value_span: Some(text_span_from_oxc_span(function.span)),
         span: Some(text_span_from_oxc_span(property.span)),
         is_method: true,
+        is_spread: false,
     })
 }
 
