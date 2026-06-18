@@ -80,7 +80,13 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
 }
 
 fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bool {
-    if source.parameters().len() != target.parameters().len() {
+    // A source function may declare fewer parameters than the target expects —
+    // the surplus arguments the target would pass are simply ignored — but it
+    // must not *require* more parameters than the target can ever supply. This
+    // mirrors how tsc accepts `(v) => …` and `(v, i) => …` for an
+    // `(element, index, array) => …` callback slot. The shared parameter prefix
+    // is still checked bivariantly.
+    if !target.is_variadic() && source.required_parameter_count() > target.parameters().len() {
         return false;
     }
 
@@ -328,9 +334,22 @@ mod tests {
     }
 
     #[test]
-    fn function_type_not_assignable_different_arity() {
+    fn function_type_assignable_fewer_source_parameters() {
+        // A callback declaring fewer parameters than the target expects is
+        // assignable: the surplus arguments are simply ignored (e.g. `(v) => …`
+        // for an `(element, index) => …` slot).
         let source = function_type(vec![Type::String], Type::Number, false, 1);
         let target = function_type(vec![Type::String, Type::Number], Type::Number, false, 2);
+
+        assert!(is_assignable_to(&source, &target));
+    }
+
+    #[test]
+    fn function_type_not_assignable_more_required_source_parameters() {
+        // The source requires two parameters but the target only ever supplies
+        // one, so it cannot be called safely.
+        let source = function_type(vec![Type::String, Type::Number], Type::Number, false, 2);
+        let target = function_type(vec![Type::String], Type::Number, false, 1);
 
         assert!(!is_assignable_to(&source, &target));
     }

@@ -196,32 +196,58 @@ impl Type {
 fn string_property_access_type(name: &str) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
-        "replace" => Some(function_type(
-            vec![Type::String, Type::String],
+        // `searchValue` may be a string or a `RegExp`, and `replacer` a string or
+        // a function, so both arguments are modelled permissively to avoid false
+        // `TS2345`s on regex/function arguments.
+        "replace" | "replaceAll" => Some(function_type(
+            vec![Type::Any, Type::Any],
             Type::String,
             false,
             2,
         )),
-        "indexOf" => Some(function_type(vec![Type::String], Type::Number, true, 1)),
+        "indexOf" | "lastIndexOf" => {
+            Some(function_type(vec![Type::String], Type::Number, true, 1))
+        }
+        "search" => Some(function_type(vec![Type::Any], Type::Number, false, 1)),
+        // `match`/`matchAll` return regex match data we do not model; `Any` keeps
+        // any downstream access conservative rather than cascading.
+        "match" | "matchAll" => Some(function_type(vec![Type::Any], Type::Any, false, 1)),
         "split" => Some(function_type(
-            vec![Type::String],
+            vec![Type::Any],
             Type::Array(Box::new(Type::String)),
             true,
             1,
         )),
-        "slice" => Some(function_type(vec![Type::Number], Type::String, true, 1)),
-        "startsWith" | "endsWith" => {
+        "slice" | "substring" | "substr" => {
+            Some(function_type(vec![Type::Number], Type::String, true, 1))
+        }
+        "startsWith" | "endsWith" | "includes" => {
             Some(function_type(vec![Type::String], Type::Boolean, true, 1))
         }
-        "toLowerCase" | "toUpperCase" => Some(function_type(vec![], Type::String, false, 0)),
-        "toString" => Some(function_type(vec![], Type::String, false, 0)),
-        "padStart" => Some(function_type(
+        "toLowerCase" | "toUpperCase" | "toLocaleLowerCase" | "toLocaleUpperCase"
+        | "trim" | "trimStart" | "trimEnd" | "trimLeft" | "trimRight" | "normalize" => {
+            Some(function_type(vec![], Type::String, false, 0))
+        }
+        "toString" | "valueOf" => Some(function_type(vec![], Type::String, false, 0)),
+        "repeat" => Some(function_type(vec![Type::Number], Type::String, false, 1)),
+        "concat" => Some(function_type(vec![Type::String], Type::String, true, 0)),
+        "charAt" => Some(function_type(vec![Type::Number], Type::String, true, 0)),
+        "at" => Some(function_type(
+            vec![Type::Number],
+            Type::Union(UnionType::new(vec![Type::String, Type::Undefined])),
+            false,
+            1,
+        )),
+        "padStart" | "padEnd" => Some(function_type(
             vec![Type::Number, Type::String],
             Type::String,
             true,
             1,
         )),
-        "charCodeAt" => Some(function_type(vec![Type::Number], Type::Number, false, 1)),
+        "charCodeAt" | "codePointAt" => {
+            Some(function_type(vec![Type::Number], Type::Number, false, 1))
+        }
+        "localeCompare" => Some(function_type(vec![Type::String], Type::Number, true, 1)),
         _ => None,
     }
 }
@@ -240,45 +266,147 @@ fn tuple_property_access_type(name: &str) -> Option<Type> {
     }
 }
 
+/// The `(element, index, array)` callback signature shared by the array
+/// iteration methods. Modelling all three parameters (rather than just the
+/// element) lets a `(v, i) => …` callback type its index parameter as `number`
+/// and stay assignable, instead of cascading into `TS7006`/`TS2345`.
+fn array_iteration_callback(element: &Type, return_type: Type) -> Type {
+    function_type(
+        vec![
+            element.clone(),
+            Type::Number,
+            Type::Array(Box::new(element.clone())),
+        ],
+        return_type,
+        false,
+        1,
+    )
+}
+
+fn element_or_undefined(element: &Type) -> Type {
+    Type::Union(UnionType::new(vec![element.clone(), Type::Undefined]))
+}
+
 fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
         "map" => Some(function_type(
-            vec![function_type(vec![element.clone()], Type::Any, false, 1)],
+            vec![array_iteration_callback(element, Type::Any)],
             Type::Array(Box::new(Type::Any)),
             false,
             1,
         )),
         "find" => Some(function_type(
-            vec![function_type(
-                vec![element.clone()],
-                Type::Boolean,
-                false,
-                1,
-            )],
-            Type::Union(UnionType::new(vec![element.clone(), Type::Undefined])),
+            vec![array_iteration_callback(element, Type::Boolean)],
+            element_or_undefined(element),
+            false,
+            1,
+        )),
+        "findLast" => Some(function_type(
+            vec![array_iteration_callback(element, Type::Boolean)],
+            element_or_undefined(element),
+            false,
+            1,
+        )),
+        "findIndex" | "findLastIndex" => Some(function_type(
+            vec![array_iteration_callback(element, Type::Boolean)],
+            Type::Number,
             false,
             1,
         )),
         "filter" => Some(function_type(
-            vec![function_type(
-                vec![element.clone()],
-                Type::Boolean,
-                false,
-                1,
-            )],
+            vec![array_iteration_callback(element, Type::Boolean)],
             Type::Array(Box::new(element.clone())),
             false,
             1,
         )),
-        "join" => Some(function_type(vec![Type::String], Type::String, true, 0)),
-        "push" => Some(function_type(vec![element.clone()], Type::Number, true, 1)),
-        "includes" => Some(function_type(
-            vec![element.clone()],
+        "some" | "every" => Some(function_type(
+            vec![array_iteration_callback(element, Type::Boolean)],
             Type::Boolean,
             false,
             1,
         )),
+        "forEach" => Some(function_type(
+            vec![array_iteration_callback(element, Type::Any)],
+            Type::Void,
+            false,
+            1,
+        )),
+        "flatMap" => Some(function_type(
+            vec![array_iteration_callback(element, Type::Any)],
+            Type::Array(Box::new(Type::Any)),
+            false,
+            1,
+        )),
+        "flat" => Some(function_type(
+            vec![Type::Number],
+            Type::Array(Box::new(Type::Any)),
+            true,
+            0,
+        )),
+        // `reduce`/`reduceRight` carry an accumulator type we do not infer; the
+        // callback and result degrade to `Any` so chained access stays
+        // conservative rather than cascading.
+        "reduce" | "reduceRight" => {
+            Some(function_type(vec![Type::Any], Type::Any, true, 1))
+        }
+        "join" => Some(function_type(vec![Type::String], Type::String, true, 0)),
+        "concat" => Some(function_type(
+            vec![Type::Any],
+            Type::Array(Box::new(element.clone())),
+            true,
+            0,
+        )),
+        "slice" => Some(function_type(
+            vec![Type::Number],
+            Type::Array(Box::new(element.clone())),
+            true,
+            0,
+        )),
+        // `sort`'s optional comparator is `(a, b) => number`; modelling both
+        // parameters lets `(left, right) => …` type them as the element type
+        // instead of cascading into `TS7006`.
+        "sort" => Some(function_type(
+            vec![function_type(
+                vec![element.clone(), element.clone()],
+                Type::Number,
+                false,
+                2,
+            )],
+            Type::Array(Box::new(element.clone())),
+            true,
+            0,
+        )),
+        "reverse" => Some(function_type(
+            vec![],
+            Type::Array(Box::new(element.clone())),
+            false,
+            0,
+        )),
+        "fill" => Some(function_type(
+            vec![element.clone()],
+            Type::Array(Box::new(element.clone())),
+            true,
+            1,
+        )),
+        "splice" => Some(function_type(
+            vec![Type::Number],
+            Type::Array(Box::new(element.clone())),
+            true,
+            0,
+        )),
+        "push" | "unshift" => Some(function_type(vec![element.clone()], Type::Number, true, 1)),
+        "pop" | "shift" => Some(function_type(vec![], element_or_undefined(element), false, 0)),
+        "at" => Some(function_type(
+            vec![Type::Number],
+            element_or_undefined(element),
+            false,
+            1,
+        )),
+        "indexOf" | "lastIndexOf" => {
+            Some(function_type(vec![element.clone()], Type::Number, true, 1))
+        }
+        "includes" => Some(function_type(vec![element.clone()], Type::Boolean, true, 1)),
         _ => None,
     }
 }
