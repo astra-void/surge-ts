@@ -85,9 +85,9 @@ test('bench script fromJson generates chart and html', () => {
       rustJobs: 4,
       stats: {
         tsc: { median: 1, min: 1, max: 1, runs: 1 },
-        'ts-rust': { median: 1, min: 1, max: 1, runs: 1 }
+        'surge-ts': { median: 1, min: 1, max: 1, runs: 1 }
       },
-      drift: { tsc: "baseline", 'ts-rust': "exact vs tsc" }
+      drift: { tsc: "baseline", 'surge-ts': "exact vs tsc" }
     }]));
   }
 

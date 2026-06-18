@@ -211,7 +211,7 @@ export function peakRssMb(bytes: number | null): number | null {
 
 function defaultReportPath(): string {
   reportPathCounter += 1;
-  return path.join(os.tmpdir(), `ts-rust-rss-${process.pid}-${reportPathCounter}.txt`);
+  return path.join(os.tmpdir(), `surge-ts-rss-${process.pid}-${reportPathCounter}.txt`);
 }
 
 function defaultReadReport(reportPath: string): string | null {

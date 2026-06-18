@@ -23,7 +23,7 @@ const workspaceRoot = path.resolve(scriptDir, '../..');
 const packageManagerExecutable = process.env.npm_execpath ? process.execPath : 'pnpm';
 const packageManagerArgsPrefix = process.env.npm_execpath ? [process.env.npm_execpath] : [];
 
-type Tool = 'tsc' | 'tsgo' | 'tsgo-singleThreaded' | 'ts-rust';
+type Tool = 'tsc' | 'tsgo' | 'tsgo-singleThreaded' | 'surge-ts';
 
 type RunStats = {
   median: number;
@@ -136,8 +136,8 @@ function main(argv = process.argv.slice(2)): void {
     const benchRes: BenchResult = {
       project: projectName,
       rustJobs: args.rustJobs,
-      stats: { tsc: null, tsgo: null, 'tsgo-singleThreaded': null, 'ts-rust': null },
-      drift: { tsc: 'baseline', tsgo: 'skipped', 'tsgo-singleThreaded': 'skipped', 'ts-rust': 'not compared' },
+      stats: { tsc: null, tsgo: null, 'tsgo-singleThreaded': null, 'surge-ts': null },
+      drift: { tsc: 'baseline', tsgo: 'skipped', 'tsgo-singleThreaded': 'skipped', 'surge-ts': 'not compared' },
     };
 
     console.log(`Benchmarking ${projectDisplay}...`);
@@ -172,23 +172,23 @@ function main(argv = process.argv.slice(2)): void {
        console.log(`  tsgo skipped (not installed). Use pnpm add -g @typescript/native-preview to install.`);
     }
 
-    // 3. surge-ts (internal tool key: ts-rust)
+    // 3. surge-ts
     console.log(`  Running surge-ts baseline...`);
-    const rustOutput = runTool('ts-rust', resolvedTsconfig, 1, 0, args.rustJobs);
+    const rustOutput = runTool('surge-ts', resolvedTsconfig, 1, 0, args.rustJobs);
     const rustDiagnosticsOutput = rustOutput.stdout.trim() ? rustOutput.stdout : rustOutput.stderr;
     try {
       const rustDiagnostics = parseSurgeTsDiagnostics(rustDiagnosticsOutput, path.dirname(resolvedTsconfig));
       const rustCompare = compareDiagnostics('project', projectDisplay, tscDiagnostics, rustDiagnostics);
       if (rustCompare.summary.byCodeMatch && rustCompare.summary.byFileCodeMatch) {
-         benchRes.drift['ts-rust'] = 'exact vs tsc';
+         benchRes.drift['surge-ts'] = 'exact vs tsc';
       } else {
-         benchRes.drift['ts-rust'] = 'known delta';
+         benchRes.drift['surge-ts'] = 'known delta';
       }
     } catch (e) {
-      benchRes.drift['ts-rust'] = 'parse failed';
+      benchRes.drift['surge-ts'] = 'parse failed';
     }
-    
-    benchRes.stats['ts-rust'] = runBenchmark('ts-rust', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
+
+    benchRes.stats['surge-ts'] = runBenchmark('surge-ts', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
 
     results.push(benchRes);
   }
@@ -242,7 +242,7 @@ function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rus
       res = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, 'exec', 'tsgo', '--noEmit', '--pretty', 'false', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
     } else if (tool === 'tsgo-singleThreaded') {
       res = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, 'exec', 'tsgo', '--noEmit', '--pretty', 'false', '--singleThreaded', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
-    } else if (tool === 'ts-rust') {
+    } else if (tool === 'surge-ts') {
       let exePath = path.join(workspaceRoot, 'target/release/surge');
       if (process.platform === 'win32') exePath += '.exe';
       if (!existsSync(exePath)) {
@@ -322,10 +322,10 @@ function printResults(results: BenchResult[]) {
   console.log('\nPerformance:');
   console.log(`${`project`.padEnd(30) + `tool`.padEnd(25) + `median`.padEnd(10) + `min`.padEnd(10) + `max`.padEnd(10)}runs`);
   for (const r of results) {
-    for (const tool of ['tsc', 'tsgo', 'tsgo-singleThreaded', 'ts-rust'] as Tool[]) {
+    for (const tool of ['tsc', 'tsgo', 'tsgo-singleThreaded', 'surge-ts'] as Tool[]) {
       if (r.stats[tool]) {
         const s = r.stats[tool]!;
-        const toolLabel = tool === 'ts-rust' ? `${toolDisplayLabel(tool)} (jobs=${r.rustJobs})` : toolDisplayLabel(tool);
+        const toolLabel = tool === 'surge-ts' ? `${toolDisplayLabel(tool)} (jobs=${r.rustJobs})` : toolDisplayLabel(tool);
         console.log(`${`${r.project.padEnd(30)}${toolLabel.padEnd(25)}${s.median.toFixed(2)}s`.padEnd(65) + `${s.min.toFixed(2)}s`.padEnd(10) + `${s.max.toFixed(2)}s`.padEnd(10)}${s.runs}`);
       }
     }
@@ -334,7 +334,7 @@ function printResults(results: BenchResult[]) {
   console.log('\nDiagnostic drift:');
   console.log(`${`project`.padEnd(30) + `tool`.padEnd(25)}status`);
   for (const r of results) {
-    for (const tool of ['tsgo', 'tsgo-singleThreaded', 'ts-rust'] as Tool[]) {
+    for (const tool of ['tsgo', 'tsgo-singleThreaded', 'surge-ts'] as Tool[]) {
       if (r.drift[tool] !== 'skipped') {
          console.log(`${r.project.padEnd(30)}${toolDisplayLabel(tool).padEnd(25)}${r.drift[tool]}`);
       }

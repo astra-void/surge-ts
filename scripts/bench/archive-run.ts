@@ -65,7 +65,7 @@ export type ArchiveSummary = {
   parseWarnings: string[];
 };
 
-const BENCH_TOOLS = ['tsc', 'tsgo', 'tsgo-singleThreaded', 'ts-rust'] as const;
+const BENCH_TOOLS = ['tsc', 'tsgo', 'tsgo-singleThreaded', 'surge-ts'] as const;
 
 export function parseArgs(argv: string[]): ArchiveArgs {
   const parsed: ArchiveArgs = {

@@ -84,7 +84,7 @@ test('extractBenchMedians pulls medians per tool', () => {
       project: 'demo',
       stats: {
         tsc: { median: 1.23, min: 1, max: 2, runs: 5 },
-        'ts-rust': { median: 0.21, min: 0, max: 1, runs: 5 },
+        'surge-ts': { median: 0.21, min: 0, max: 1, runs: 5 },
         tsgo: null,
       },
     },
@@ -92,7 +92,7 @@ test('extractBenchMedians pulls medians per tool', () => {
   assert.strictEqual(medians.length, 1);
   assert.strictEqual(medians[0].project, 'demo');
   assert.strictEqual(medians[0].medians.tsc, 1.23);
-  assert.strictEqual(medians[0].medians['ts-rust'], 0.21);
+  assert.strictEqual(medians[0].medians['surge-ts'], 0.21);
   assert.strictEqual(medians[0].medians.tsgo, null);
 });
 
@@ -126,7 +126,7 @@ test('buildSummary produces the expected JSON shape', () => {
     commands: [
       { name: 'bench-compilers', command: 'pnpm run bench:compilers', exitCode: 0, ok: true, logFile: 'bench.txt', jsonFile: 'bench.json' },
     ],
-    medians: [{ project: 'demo', medians: { tsc: 1.0, tsgo: null, 'tsgo-singleThreaded': null, 'ts-rust': 0.2 } }],
+    medians: [{ project: 'demo', medians: { tsc: 1.0, tsgo: null, 'tsgo-singleThreaded': null, 'surge-ts': 0.2 } }],
     authKit: null,
     parseWarnings: [],
   });
