@@ -1,5 +1,5 @@
-function f(value: string): number {
+function f(value: string, count: number): number {
   return 1;
 }
 
-let fn: (value: string, count: number) => number = f;
+let fn: (value: string) => number = f;

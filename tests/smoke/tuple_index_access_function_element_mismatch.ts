@@ -1,4 +1,4 @@
-function listener(): void {}
+function listener(value: string): void {}
 
-let pair: [() => void, string] = [listener, "ready"];
-let fn: (value: string) => void = pair[0];
+let pair: [(value: string) => void, string] = [listener, "ready"];
+let fn: () => void = pair[0];
