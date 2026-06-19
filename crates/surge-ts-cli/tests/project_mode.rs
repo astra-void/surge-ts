@@ -294,6 +294,22 @@ fn project_mode_physical_libs_new_promise_void_executor() {
 }
 
 #[test]
+fn project_mode_physical_libs_required_omit_pick() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // `Required<Omit<T, K>> & Pick<T, K>` (ky's `InternalRetryOptions`) must
+    // resolve: `Required` makes each property required while keeping an explicit
+    // `| undefined` member, so the object literal is assignable. tsc reports
+    // nothing. Regression for the spurious TS2353 ('limit' missing).
+    assert_eq!(
+        run_physical_fixture_codes("physical-lib-required-omit-pick-basic"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn project_mode_physical_libs_no_lib_disables_globals() {
     if !typescript_lib_available() {
         eprintln!("skipping: node_modules/typescript not installed");
