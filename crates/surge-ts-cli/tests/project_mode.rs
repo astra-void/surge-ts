@@ -3955,6 +3955,41 @@ fn cli_tuple_exposes_array_methods() {
 }
 
 #[test]
+fn cli_string_keyed_mapped_type_resolves_to_index_signature() {
+    // `{ [P in string]: T }` (and `Record<string, T>` routed through its mapped
+    // body) must resolve to a string index signature, not collapse to `unknown`.
+    // Regression for ky's `SearchParamsOption` union rendering a `Record` member
+    // as `unknown`. Probe: the index value type must be `number`, so assigning it
+    // to `string` is a genuine TS2322 — which only appears if it did NOT collapse
+    // to `unknown` (surge treats `unknown` leniently and would emit nothing).
+    let root = temp_dir("mapped-index-sig");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        type Idx = { [P in string]: number };
+        const d = {} as Idx;
+        export const mismatch: string = d.anyKey;
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(
+        codes.contains(&"TS2322".to_string()),
+        "index value type must resolve to `number` (not `unknown`), got {codes:?}"
+    );
+}
+
+#[test]
 fn cli_random_return_flow_authkit_shape_does_not_emit_ts2366() {
     let parsed = run_cli_json(&[
         "--project",

@@ -1174,6 +1174,24 @@ pub(crate) fn resolve_mapped_type(
         };
     }
 
+    // A `string` (non-literal) key constraint maps to a string index signature:
+    // `{ [P in string]: T }` is `{ [k: string]: T }`. This is how `Record<string,
+    // T>` resolves when it routes through its mapped-type body (physical libs)
+    // rather than the built-in `resolve_record_utility_type` fast path. Without
+    // this the mapped type collapsed to `unknown`, which surfaced as a spurious
+    // missing-property error wherever the `Record` was a union member.
+    if matches!(resolved_constraint.ty, Type::String) {
+        let mut value_substitution =
+            substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+        value_substitution.insert(mapped.key_name.clone(), Type::String);
+        let resolved_value =
+            resolve_parsed_type(*mapped.value_type, ctx, resolving, &value_substitution);
+        return ResolvedType {
+            ty: Type::Object(alloc_object_type(PropertyMap::new(), Some(resolved_value.ty))),
+            had_error: resolved_value.had_error,
+        };
+    }
+
     let keys = match resolved_constraint.ty {
         Type::StringLiteral(s) => vec![s],
         Type::Union(union) => {
