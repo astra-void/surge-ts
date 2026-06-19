@@ -60,6 +60,32 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
 
+    // `new C(...)` contextually typed by a generic instance reference (e.g.
+    // `Promise<void>`) lets the constructor infer its type arguments. Route it
+    // through `check_new_like` with the (un-peeled) expected reference so the
+    // executor's callback parameters are typed.
+    if let ParsedExpression::New {
+        callee,
+        callee_span,
+        type_arguments,
+        arguments,
+    } = expression
+    {
+        return match super::call::check_new_like(
+            callee,
+            *callee_span,
+            None,
+            type_arguments,
+            arguments,
+            Some(expected_type),
+            symbols,
+            ctx,
+        ) {
+            Some(result_type) => InferredExpression::Known(result_type),
+            None => InferredExpression::Unknown,
+        };
+    }
+
     // A generic expected type (`Props`, `Box<T>`, …) is a nominal
     // `Type::Reference`; peel it to its structural shape so the contextual-typing
     // dispatch below (function/tuple/array/object/union) sees the real form

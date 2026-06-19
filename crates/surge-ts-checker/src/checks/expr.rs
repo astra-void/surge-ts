@@ -262,6 +262,7 @@ pub(crate) fn evaluate_expression(
             None,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         ) {

@@ -277,6 +277,23 @@ fn project_mode_physical_libs_resolve_index_signature() {
 }
 
 #[test]
+fn project_mode_physical_libs_new_promise_void_executor() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // A `Promise<void>` executor (contextual or explicit `<void>`) may call
+    // `resolve()` with no argument: the constructor infers `T = void` from the
+    // expected type, so the executor's `resolve: (value: void | PromiseLike<void>)`
+    // parameter is optional. `new Promise<number>(r => r(5))` stays valid too.
+    // tsc reports nothing here.
+    assert_eq!(
+        run_physical_fixture_codes("physical-lib-new-promise-executor-basic"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn project_mode_physical_libs_no_lib_disables_globals() {
     if !typescript_lib_available() {
         eprintln!("skipping: node_modules/typescript not installed");

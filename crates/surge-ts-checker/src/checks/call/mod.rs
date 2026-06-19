@@ -240,6 +240,7 @@ pub(crate) fn check_new_like(
     call_span: Option<SyntaxTextSpan>,
     type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
+    expected_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -262,22 +263,59 @@ pub(crate) fn check_new_like(
             _ => None,
         };
         if let Some(arity) = physical_interface_arity {
-            // Check the arguments against the constructor value's construct
-            // signature (e.g. `PromiseConstructor`'s `new <T>(executor): …`) so
-            // callback parameters — a `Promise` executor's `(resolve, reject)` —
-            // get contextual types instead of collapsing to implicit `any`. When
-            // no construct signature is reachable, evaluate the arguments bare.
-            let construct_signature = match evaluate_expression(callee, callee_span, symbols, ctx) {
-                InferredExpression::Known(ty) => match ty.peeled() {
-                    Type::Object(object) => object.construct_signature().cloned(),
-                    _ => None,
-                },
+            // The constructor value (e.g. `Promise` typed `PromiseConstructor`)
+            // carries the construct signature. Keep its full type so we can re-read
+            // the declaring constructor-interface's generic construct signature.
+            let constructor_type = match evaluate_expression(callee, callee_span, symbols, ctx) {
+                InferredExpression::Known(ty) => Some(ty),
                 _ => None,
             };
+            let construct_signature = constructor_type.as_ref().and_then(|ty| match ty.peeled() {
+                Type::Object(object) => object.construct_signature().cloned(),
+                _ => None,
+            });
+
+            // Resolve the constructor's type arguments: explicit `new Promise<void>()`
+            // first, else infer from a contextual expected type that is a reference
+            // to this same interface (`const p: Promise<void> = new Promise(...)`).
+            // These pin the generic construct signature so the executor's callback
+            // parameters are typed (`resolve: (value: T | PromiseLike<T>) => void`
+            // becomes `... void | PromiseLike<void> ...`, making `resolve()` valid).
+            let explicit_args: Option<Vec<Type>> = if !type_arguments.is_empty() {
+                Some(
+                    type_arguments
+                        .iter()
+                        .map(|argument| crate::infer::map_parsed_type(argument.clone(), ctx))
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            let contextual_instance = if explicit_args.is_none() && arity > 0 {
+                expected_type
+                    .and_then(|expected| contextual_instance_reference(name, arity, expected))
+            } else {
+                None
+            };
+            let substitution_args = explicit_args.clone().or_else(|| {
+                contextual_instance
+                    .as_ref()
+                    .map(|(_, arguments)| arguments.clone())
+            });
+
+            // Check the arguments against the construct signature so callback
+            // parameters get contextual types instead of collapsing to implicit
+            // `any`. When no construct signature is reachable, evaluate bare.
             if let Some(construct_signature) = construct_signature {
+                let substituted = substitution_args.as_ref().and_then(|args| {
+                    constructor_type.as_ref().and_then(|ctor_ty| {
+                        substituted_construct_signature(ctor_ty, &construct_signature, args, ctx)
+                    })
+                });
+                let effective_signature = substituted.as_ref().unwrap_or(&construct_signature);
                 with_type_copy_reason(TypeCopyReason::CallResolution, || {
                     check_function_type_call(
-                        &construct_signature,
+                        effective_signature,
                         callee_span,
                         call_span,
                         type_arguments,
@@ -291,12 +329,17 @@ pub(crate) fn check_new_like(
                     let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
                 }
             }
+
+            // The contextual expected reference IS the instance type when present.
+            if let Some((instance, _)) = contextual_instance {
+                return Some(instance);
+            }
+
             // Build the instance interface type (`Map<K, V>`) so lib methods carry
             // meaningful types. With explicit type arguments use them; otherwise
-            // default each missing argument to `any` — surge does not yet infer a
-            // generic constructor's type arguments from its call arguments, and a
-            // bare `Set<>` would trip the generic-arity TS2314, while `Set<any>`
-            // stays assignable to whatever the use site expects.
+            // default each missing argument to `any` — a bare `Set<>` would trip
+            // the generic-arity TS2314, while `Set<any>` stays assignable to
+            // whatever the use site expects.
             let type_arguments = if type_arguments.is_empty() && arity > 0 {
                 vec![ParsedType::Any; arity]
             } else {
@@ -456,10 +499,19 @@ pub(crate) fn check_function_type_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    let required = function_type.required_parameter_count();
     let expected = function_type.parameters().len();
     let actual = arguments.len();
     let mut has_unresolved_argument = false;
+
+    // A trailing parameter typed `void` (or a union containing `void`) is optional
+    // at the call site — `cb()` is valid for `cb: (x: void) => void`, and a
+    // `Promise<void>` executor's `resolve: (value: void | PromiseLike<void>) => void`
+    // accepts `resolve()`.
+    let parameters = function_type.parameters();
+    let mut required = function_type.required_parameter_count();
+    while required > 0 && parameter_is_void_optional(&parameters[required - 1]) {
+        required -= 1;
+    }
 
     let too_many = !function_type.is_variadic() && actual > expected;
     if actual < required || too_many {
@@ -543,6 +595,91 @@ pub(crate) fn check_function_type_call(
         TypeCopyReason::CallResolution,
         || function_type.return_type().clone(),
     ))
+}
+
+/// When `expected` is a nominal reference to the interface `name` with `arity`
+/// type arguments (e.g. the contextual `Promise<void>` for an un-annotated
+/// `new Promise(...)`), returns that reference (the instance type) together with
+/// its resolved type arguments.
+fn contextual_instance_reference(
+    name: &str,
+    arity: usize,
+    expected: &Type,
+) -> Option<(Type, Vec<Type>)> {
+    let Type::Reference(reference) = expected else {
+        return None;
+    };
+    let display = reference.display.as_ref();
+    let base = display.split('<').next().unwrap_or(display);
+    if base != name || reference.arguments.len() != arity {
+        return None;
+    }
+    Some((expected.clone(), reference.arguments.to_vec()))
+}
+
+/// Re-resolves a generic construct signature with `type_arguments` substituted
+/// for its per-signature type parameters, by re-reading the declaring
+/// constructor interface's parsed construct signature (`PromiseConstructor`'s
+/// `new <T>(executor): Promise<T>`). Returns `None` when the interface has no
+/// matching generic construct signature, so callers fall back to the
+/// (un-substituted) resolved signature.
+fn substituted_construct_signature(
+    constructor_type: &Type,
+    base_signature: &FunctionType,
+    type_arguments: &[Type],
+    ctx: &mut CheckerContext,
+) -> Option<FunctionType> {
+    let constructor_name = constructor_type.name();
+    let parsed = match ctx.lookup_type_declaration(&constructor_name) {
+        Some(crate::symbols::TypeDeclarationInfo::Interface(info)) => info
+            .body
+            .construct_signatures
+            .iter()
+            .find(|signature| {
+                !signature.type_parameters.is_empty()
+                    && signature.type_parameters.len() == type_arguments.len()
+                    && signature.parameters.len() == base_signature.parameters().len()
+            })
+            .cloned(),
+        _ => None,
+    }?;
+
+    let signature_info = crate::symbols::FunctionSignatureInfo {
+        type_parameters: parsed.type_parameters.clone(),
+        parameter_types: parsed
+            .parameters
+            .iter()
+            .map(|parameter| Some(parameter.ty.clone()))
+            .collect(),
+        return_type: Some((*parsed.return_type).clone()),
+    };
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    for (type_parameter, argument) in parsed.type_parameters.iter().zip(type_arguments.iter()) {
+        substitution.insert(type_parameter.name.clone(), argument.clone());
+    }
+
+    Some(
+        instantiate_function_type_with_substitution(
+            base_signature,
+            &signature_info,
+            &substitution,
+            false,
+            ctx,
+        )
+        .into_owned(),
+    )
+}
+
+/// Whether a parameter of this type may be omitted at a call site. tsc treats a
+/// parameter typed `void` — or a union with a `void` member (e.g. a `Promise<void>`
+/// executor's `resolve: (value: void | PromiseLike<void>) => void`) — as
+/// optional, but not `undefined`.
+fn parameter_is_void_optional(ty: &Type) -> bool {
+    match ty {
+        Type::Void => true,
+        Type::Union(union) => union.types().iter().any(|member| matches!(member, Type::Void)),
+        _ => false,
+    }
 }
 
 fn type_contains_unknown(ty: &Type) -> bool {
