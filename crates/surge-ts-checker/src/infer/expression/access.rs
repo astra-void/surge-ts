@@ -102,6 +102,7 @@ pub(crate) fn infer_index_access(
         | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
+        | Type::Reference(_)
         | Type::Undefined => InferredExpression::Unknown,
     }
 }

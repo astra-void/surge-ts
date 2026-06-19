@@ -39,6 +39,7 @@ pub(crate) fn resolve_type_alias(
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
+    pre_resolved_arguments: Option<&[Type]>,
 ) -> ResolvedType {
     let declaration_key = declaration_resolution_key(&alias.file_name, &alias.name);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
@@ -68,6 +69,7 @@ pub(crate) fn resolve_type_alias(
         ctx,
         resolving,
         substitution,
+        pre_resolved_arguments,
     ) else {
         resolving.pop();
         return ResolvedType {
@@ -149,7 +151,7 @@ pub(crate) fn resolve_partial_utility_type(
         };
     };
 
-    let Type::Object(object_type) = source_type else {
+    let Type::Object(object_type) = source_type.peeled() else {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,
@@ -219,7 +221,7 @@ pub(crate) fn resolve_pick_utility_type(
         };
     };
 
-    let Type::Object(object_type) = source_type else {
+    let Type::Object(object_type) = source_type.peeled() else {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,
@@ -274,7 +276,7 @@ pub(crate) fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution
         };
     };
 
-    let Type::Object(object_type) = source_type else {
+    let Type::Object(object_type) = source_type.peeled() else {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,
@@ -320,7 +322,7 @@ pub(crate) fn resolve_parameters_utility_type(
         };
     };
 
-    let Type::Function(function_type) = source_type else {
+    let Type::Function(function_type) = source_type.peeled() else {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,
@@ -343,7 +345,7 @@ pub(crate) fn resolve_return_type_utility_type(
         };
     };
 
-    let Type::Function(function_type) = source_type else {
+    let Type::Function(function_type) = source_type.peeled() else {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,

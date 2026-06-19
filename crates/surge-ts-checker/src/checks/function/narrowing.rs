@@ -124,7 +124,7 @@ pub(crate) fn truthy_guard_base_identifier(expression: &ParsedExpression) -> Opt
 }
 
 pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type {
-    let narrowed_base = surge_ts_types::remove_undefined(ty);
+    let narrowed_base = surge_ts_types::remove_undefined(&ty.peeled());
 
     match narrowed_base {
         Type::Object(mut object_type) => {
@@ -174,7 +174,10 @@ fn literal_expression_value(expression: &ParsedExpression) -> Option<Type> {
 }
 
 fn discriminant_match(member: &Type, property: &str, literal: &Type) -> DiscriminantMatch {
-    let Type::Object(object) = member else {
+    // A discriminated-union member is often a named type (nominal reference);
+    // peel it to read its discriminant property.
+    let member = member.peeled();
+    let Type::Object(object) = &member else {
         return DiscriminantMatch::Unknown;
     };
     let Some(property_type) = object.properties.get(property) else {
@@ -320,7 +323,10 @@ pub(crate) fn narrow_discriminant_symbol_table(
                 return None;
             };
             let symbol = symbols.get(name)?;
-            let Type::Object(object_type) = &symbol.ty else {
+            // `draft` may be typed by a named declaration (nominal reference);
+            // peel it to narrow its discriminant property (`draft.identity`).
+            let symbol_ty = symbol.ty.peeled();
+            let Type::Object(object_type) = &symbol_ty else {
                 return None;
             };
             let base_property_type = object_type.properties.get(base_property)?;
@@ -478,7 +484,10 @@ pub(crate) fn narrow_discriminant_in_scope(
             let Some(symbol) = scopes.resolve(name) else {
                 return;
             };
-            let Type::Object(object_type) = &symbol.ty else {
+            // Peel a named-typed base (`draft: Draft`) to narrow its discriminant
+            // property in scope.
+            let symbol_ty = symbol.ty.peeled();
+            let Type::Object(object_type) = &symbol_ty else {
                 return;
             };
             let Some(base_property_type) = object_type.properties.get(base_property) else {

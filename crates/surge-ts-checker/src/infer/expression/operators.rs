@@ -48,6 +48,7 @@ pub(crate) fn infer_unary_expression(
             | InferredExpression::Known(Type::Tuple(_))
             | InferredExpression::Known(Type::Function(_))
             | InferredExpression::Known(Type::Never)
+            | InferredExpression::Known(Type::Reference(_))
             | InferredExpression::Known(Type::Union(_)) => InferredExpression::Unknown,
         },
     }

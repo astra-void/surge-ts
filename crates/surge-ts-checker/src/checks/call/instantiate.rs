@@ -208,8 +208,12 @@ pub(crate) fn enforce_explicit_keyof_constraints(
             continue;
         };
 
-        let Some(Type::Object(object_type)) = substitution.get(&constraint_target.name).cloned()
-        else {
+        let Some(constraint_value) = substitution.get(&constraint_target.name).cloned() else {
+            continue;
+        };
+        // `T` may be bound to a nominal reference (`get<User, …>`); peel it to read
+        // the constrained object's keys.
+        let Type::Object(object_type) = constraint_value.peeled() else {
             continue;
         };
         let Some(key_type) = substitution.get(&type_parameter.name).cloned() else {

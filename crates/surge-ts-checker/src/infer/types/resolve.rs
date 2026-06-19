@@ -140,7 +140,8 @@ pub(crate) fn resolve_parsed_type(
         ParsedType::KeyOf(inner) => {
             let resolved_inner = resolve_parsed_type(*inner, ctx, resolving, substitution);
             let mut keys = Vec::new();
-            match &resolved_inner.ty {
+            // Peel a nominal reference (`keyof User`) to read the named type's keys.
+            match &resolved_inner.ty.peeled() {
                 Type::Object(object_type) => {
                     for key in object_type.properties.keys() {
                         keys.push(Type::StringLiteral(key.clone()));
@@ -634,6 +635,10 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
             .join(" & ")
     });
 
+    // Peel reference operands (`StudentBulkImportRow & { … }`) so a named object
+    // member contributes its properties to the merged intersection surface.
+    let members: Vec<Type> = members.iter().map(Type::peeled).collect();
+
     let object_members: Vec<_> = members
         .iter()
         .filter_map(|ty| match ty {
@@ -738,6 +743,7 @@ pub(crate) fn resolve_named_type(
                 ctx,
                 resolving,
                 substitution,
+                None,
             ),
             TypeDeclarationInfo::Interface(interface) => resolve_interface(
                 interface,
@@ -745,6 +751,7 @@ pub(crate) fn resolve_named_type(
                 ctx,
                 resolving,
                 substitution,
+                None,
             ),
         };
         // tsc displays a non-generic interface/type-alias by its name in
@@ -753,6 +760,12 @@ pub(crate) fn resolve_named_type(
         // assignability recognise two resolutions of the same declaration.
         let alias_id = format!("{}\u{0}{}", cache_key.file_name, cache_key.name);
         let resolved = attach_object_alias_name(resolved, &named_type.name, &alias_id);
+        // Wrap the named object in a lazy nominal reference. A non-generic
+        // declaration is concrete and context-independent, so its expansion is
+        // interned (the wrapped object keeps its `alias_id`/`alias_name`, so a
+        // peeled reference still compares nominally and displays by name).
+        let resolved =
+            wrap_named_object_reference(resolved, &named_type.name, &alias_id, &cache_key, ctx);
         cache_named_type_resolution(ctx, &cache_key, &resolved);
         return resolved;
     }
@@ -769,9 +782,17 @@ pub(crate) fn resolve_named_type(
     // resolution and never depends on what an enclosing frame had on the stack.
     let library_scoped = declaration_file_is_library_scoped(declaration, ctx);
     let library_cache_key = library_scoped.then(|| type_declaration_resolution_key(declaration));
-    let cached_arguments = if library_scoped {
-        // Resolve the arguments to form the cache key. Discard any diagnostics this
-        // probe produces; the authoritative resolution below re-emits them.
+    let decl_key = type_declaration_resolution_key(declaration);
+    let reference_id = format!("{}\u{0}{}", decl_key.file_name, decl_key.name);
+    // Resolve the type arguments once. The result is reused for the library cache
+    // key, the nominal reference identity, AND — via `pre_resolved` below — the
+    // authoritative `bind_type_arguments`, so a generic instantiation resolves its
+    // arguments exactly once. Resolving them a second time in the authoritative
+    // pass is exponential on deeply nested generics. Probe diagnostics are
+    // discarded (`truncate_diagnostics` also releases the once-guard keys) so the
+    // authoritative pass re-reports an unresolved argument rather than suppressing
+    // it as a duplicate.
+    let resolved_arguments: Option<Vec<Type>> = {
         let diagnostics_before = ctx.diagnostics().len();
         let mut arguments = Vec::with_capacity(named_type.type_arguments.len());
         let mut all_clean = true;
@@ -783,24 +804,62 @@ pub(crate) fn resolve_named_type(
             }
             arguments.push(resolved.ty);
         }
-        ctx.truncate_diagnostics(diagnostics_before);
+        ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
         all_clean.then_some(arguments)
+    };
+    let cached_arguments = if library_scoped {
+        resolved_arguments.clone()
     } else {
         None
     };
+    let reference_arguments = resolved_arguments;
 
     // tsc displays a generic instantiation by its alias form (`Box<string>`), not
     // the structural expansion. Build that display name from the resolved type
-    // arguments (reusing the cache-key probe when present) and tag the resolved
-    // object with it for diagnostics. Display-only: `alias_name` is excluded from
-    // equality, and no `alias_id` is attached, so assignability is unaffected.
+    // arguments and tag the resolved object with it for diagnostics.
     let alias_display_name =
         generic_instantiation_display_name(&named_type, declaration.declared_name());
+
+    // An instantiation is only interned/short-circuited when no type parameters
+    // are in scope. Inside a generic body, a placeholder argument (`Pick<T, K>`)
+    // collapses to `unknown` when resolved, so two structurally-distinct
+    // instantiations would share an interner key and a reused entry would return
+    // the wrong type. Only a fully concrete instantiation is context-independent.
+    let concrete_instantiation = ctx.type_parameter_scopes.is_empty();
+
+    // Perf short-circuit: reuse a previously-interned instantiation with the same
+    // resolved arguments without re-expanding the body. The interner holds only
+    // diagnostic-free, cycle-independent, concrete expansions (see
+    // `tag_generic_object_reference`), so a reused entry cannot drop a body
+    // diagnostic — the hazard that makes a naive generic cache unsound.
+    if concrete_instantiation
+        && let (Some(display), Some(arguments)) =
+            (alias_display_name.as_deref(), reference_arguments.as_ref())
+        && let Some(entry) = lookup_instantiation(ctx, &decl_key, arguments)
+    {
+        return ResolvedType {
+            ty: make_type_reference(
+                reference_id.clone(),
+                display.to_string(),
+                arguments.clone(),
+                entry.resolved,
+            ),
+            had_error: false,
+        };
+    }
 
     let generic_cache_key = cached_arguments.as_ref().and(library_cache_key);
     if let (Some(key), Some(arguments)) = (generic_cache_key.as_ref(), cached_arguments.as_ref()) {
         if let Some(hit) = get_persistent_generic_resolution(ctx, key, arguments) {
-            return tag_generic_object_alias(hit, alias_display_name.as_deref());
+            return tag_generic_object_reference(
+                hit,
+                alias_display_name.as_deref(),
+                &reference_id,
+                &decl_key,
+                reference_arguments.clone(),
+                true,
+                ctx,
+            );
         }
     }
 
@@ -811,6 +870,11 @@ pub(crate) fn resolve_named_type(
     let floor = resolving.len();
     let saved_lowest_cycle = ctx.lowest_cycle_target_index;
     ctx.lowest_cycle_target_index = usize::MAX;
+    // An instantiation is only safe to intern (and later short-circuit) if its body
+    // resolution emitted no diagnostics: reusing one that emits would drop the
+    // diagnostic. Track both the plain-diagnostic vector and the once-guard set.
+    let diagnostics_before_body = ctx.diagnostics().len();
+    let utility_keys_before_body = ctx.utility_diagnostic_keys.len();
 
     let resolved = match declaration {
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
@@ -820,6 +884,7 @@ pub(crate) fn resolve_named_type(
             ctx,
             resolving,
             substitution,
+            reference_arguments.as_deref(),
         ),
         TypeDeclarationInfo::Interface(interface) => resolve_interface(
             interface,
@@ -827,18 +892,108 @@ pub(crate) fn resolve_named_type(
             ctx,
             resolving,
             substitution,
+            reference_arguments.as_deref(),
         ),
     };
 
     let subtree_lowest_cycle = ctx.lowest_cycle_target_index;
     ctx.lowest_cycle_target_index = saved_lowest_cycle.min(subtree_lowest_cycle);
 
+    let body_emitted_diagnostics = ctx.diagnostics().len() != diagnostics_before_body
+        || ctx.utility_diagnostic_keys.len() != utility_keys_before_body;
+    let cacheable = concrete_instantiation
+        && subtree_lowest_cycle >= floor
+        && !body_emitted_diagnostics
+        && !resolved.had_error;
+
     if subtree_lowest_cycle >= floor {
         if let (Some(key), Some(arguments)) = (generic_cache_key, cached_arguments) {
             cache_persistent_generic_resolution(ctx, &key, arguments, &resolved);
         }
     }
-    tag_generic_object_alias(resolved, alias_display_name.as_deref())
+    tag_generic_object_reference(
+        resolved,
+        alias_display_name.as_deref(),
+        &reference_id,
+        &decl_key,
+        reference_arguments,
+        cacheable,
+        ctx,
+    )
+}
+
+/// Wraps a successfully-resolved generic *object* instantiation in a
+/// lazy/nominal [`Type::Reference`] over its interned structural expansion, so it
+/// carries nominal identity (declaration + resolved arguments) and a `Box<T>`
+/// display form without forcing re-expansion at later use sites. Non-object,
+/// errored, argument-unresolved, or display-less resolutions fall back to the
+/// previous structural object tagging.
+fn tag_generic_object_reference(
+    resolved: ResolvedType,
+    display_name: Option<&str>,
+    reference_id: &str,
+    decl_key: &DeclarationResolutionKey,
+    arguments: Option<Vec<Type>>,
+    cacheable: bool,
+    ctx: &CheckerContext,
+) -> ResolvedType {
+    match (display_name, arguments, &resolved.ty) {
+        (Some(display), Some(arguments), Type::Object(object)) if !resolved.had_error => {
+            // Tag the structural object with the instantiation's display name so a
+            // site that peels the reference (e.g. the TS2353 excess-property
+            // message) still renders the nominal `Box<string>` form tsc uses,
+            // rather than the structural expansion.
+            let structural = Type::Object(object.clone().with_alias_name(display));
+            // Only intern (making this instantiation reusable by the short-circuit)
+            // when it is diagnostic-free and cycle-independent; otherwise keep a
+            // private expansion so no other site reuses a context-dependent or
+            // diagnostic-suppressing result.
+            let interned = if cacheable {
+                intern_instantiation(ctx, decl_key, &arguments, structural)
+            } else {
+                std::sync::Arc::new(structural)
+            };
+            ResolvedType {
+                ty: make_type_reference(
+                    reference_id.to_string(),
+                    display.to_string(),
+                    arguments,
+                    interned,
+                ),
+                had_error: resolved.had_error,
+            }
+        }
+        (display_name, _, _) => tag_generic_object_alias(resolved, display_name),
+    }
+}
+
+/// Wraps a successfully-resolved *non-generic* named object (interface or type
+/// alias) in a lazy nominal [`Type::Reference`] over its interned expansion. The
+/// reference carries the declaration name for display and the qualified
+/// `file\0name` identity for nominal equality. Non-object or errored resolutions
+/// pass through unchanged so a `type Id = string` alias stays a plain `string`.
+fn wrap_named_object_reference(
+    resolved: ResolvedType,
+    display: &str,
+    reference_id: &str,
+    decl_key: &DeclarationResolutionKey,
+    ctx: &CheckerContext,
+) -> ResolvedType {
+    match &resolved.ty {
+        Type::Object(_) if !resolved.had_error => {
+            let interned = intern_instantiation(ctx, decl_key, &[], resolved.ty.clone());
+            ResolvedType {
+                ty: make_type_reference(
+                    reference_id.to_string(),
+                    display.to_string(),
+                    Vec::new(),
+                    interned,
+                ),
+                had_error: resolved.had_error,
+            }
+        }
+        _ => resolved,
+    }
 }
 
 fn declaration_file_is_library_scoped(
@@ -1016,6 +1171,7 @@ pub(crate) fn bind_type_arguments(
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     parent_substitution: &TypeParameterSubstitution,
+    pre_resolved: Option<&[Type]>,
 ) -> Option<TypeParameterSubstitution> {
     if type_parameters.is_empty() {
         if !type_arguments.is_empty() {
@@ -1035,16 +1191,26 @@ pub(crate) fn bind_type_arguments(
 
     for (index, parameter) in type_parameters.iter().enumerate() {
         if let Some(argument) = type_arguments.get(index) {
-            let resolved_argument =
-                resolve_parsed_type(argument.clone(), ctx, resolving, parent_substitution);
-            if resolved_argument.had_error {
-                return None;
-            }
+            // Reuse the caller's already-resolved argument when available instead
+            // of resolving the `ParsedType` a second time. The redundant
+            // resolution is exponential on deeply nested generics (each level
+            // re-resolves its arguments), so reusing the probe result is what keeps
+            // a nominal-reference instantiation linear.
+            let resolved_ty = if let Some(pre) = pre_resolved.and_then(|pre| pre.get(index)) {
+                pre.clone()
+            } else {
+                let resolved_argument =
+                    resolve_parsed_type(argument.clone(), ctx, resolving, parent_substitution);
+                if resolved_argument.had_error {
+                    return None;
+                }
+                resolved_argument.ty
+            };
 
             if parsed_type_is_placeholder_reference(argument, parent_substitution) {
-                substitution.insert_placeholder(parameter.name.clone(), resolved_argument.ty);
+                substitution.insert_placeholder(parameter.name.clone(), resolved_ty);
             } else {
-                substitution.insert(parameter.name.clone(), resolved_argument.ty);
+                substitution.insert(parameter.name.clone(), resolved_ty);
             }
             continue;
         }
@@ -1282,6 +1448,12 @@ fn resolve_indexed_access_type(
 
     let resolved_object =
         resolve_parsed_type(*indexed_access.object_type, ctx, resolving, substitution);
+    // Peel a nominal reference receiver (`User["id"]`) to its structural object so
+    // the index lookup below reads its properties instead of failing to match.
+    let resolved_object = ResolvedType {
+        ty: resolved_object.ty.peeled(),
+        had_error: resolved_object.had_error,
+    };
 
     let resolved_index = resolve_parsed_type(
         *indexed_access.index_type.clone(),

@@ -3,6 +3,9 @@ name = "surge-ts-syntax"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+doctest = false
+
 [dependencies]
 oxc_allocator = "0.128.0"
 oxc_ast = "0.128.0"

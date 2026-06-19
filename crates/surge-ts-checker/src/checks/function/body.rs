@@ -58,6 +58,7 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
                     .is_some_and(type_contains_unknown)
         }
         Type::Union(union) => union.types().iter().any(type_contains_unknown),
+        Type::Reference(reference) => type_contains_unknown(&reference.resolve()),
         _ => false,
     }
 }
