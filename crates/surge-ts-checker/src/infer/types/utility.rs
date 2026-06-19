@@ -105,7 +105,11 @@ pub(crate) fn resolve_type_alias(
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
     }
-    let resolved = with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
+    let effective_scope = alias
+        .resolution_scope
+        .clone()
+        .or_else(|| ctx.module_scope_for_file(&alias.file_name));
+    let resolved = with_type_declaration_scope(&effective_scope, ctx, |ctx| {
         with_file_name(ctx, &alias.file_name, |ctx| {
             resolve_parsed_type_with_substitution(
                 alias.body.ty.clone(),

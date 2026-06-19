@@ -333,6 +333,16 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
+    let module_scope_by_file = parsed_files
+        .iter()
+        .zip(module_resolution_scopes.iter())
+        .filter_map(|(parsed_file, scope)| {
+            scope
+                .as_ref()
+                .map(|scope| (Arc::from(parsed_file.file_name.as_str()), scope.clone()))
+        })
+        .collect();
+    ctx.set_module_scope_by_file(module_scope_by_file);
     sync_global_this_symbol(&mut ctx);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
