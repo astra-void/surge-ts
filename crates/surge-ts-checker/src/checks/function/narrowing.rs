@@ -625,18 +625,97 @@ fn narrow_instanceof_symbol_table(
     Some(narrowed_symbols)
 }
 
+/// Parses an `Array.isArray(x)` guard, returning the argument expression.
+fn parse_array_isarray_condition(condition: &ParsedExpression) -> Option<&ParsedExpression> {
+    let ParsedExpression::PropertyCall {
+        object,
+        property_name,
+        arguments,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+        return None;
+    };
+    if name != "Array" || property_name != "isArray" || arguments.len() != 1 {
+        return None;
+    }
+    Some(&arguments[0].expression)
+}
+
+/// Narrows a union by `Array.isArray(x)`. `keep_arrays` keeps the array/tuple
+/// members (the `=== true` branch); otherwise removes them. `any`/`unknown`
+/// members are kept either way.
+fn narrow_union_by_arrayness(ty: &Type, keep_arrays: bool) -> Option<Type> {
+    let Type::Union(union) = ty else {
+        return None;
+    };
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| match member {
+            Type::Any | Type::Unknown => true,
+            Type::Array(_) | Type::Tuple(_) => keep_arrays,
+            _ => !keep_arrays,
+        })
+        .cloned()
+        .collect();
+
+    if kept.is_empty() || kept.len() == union.types().len() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
+/// Builds a symbol table narrowed by an `Array.isArray(x)` guard for the branch.
+fn narrow_array_isarray_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let operand = parse_array_isarray_condition(condition)?;
+    let ParsedExpression::Identifier { name, .. } = operand else {
+        return None;
+    };
+    let symbol = symbols.get(name)?;
+    let narrowed = narrow_union_by_arrayness(&symbol.ty, branch_is_true)?;
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    narrowed_symbols.insert(
+        name.clone(),
+        SymbolInfo {
+            ty: narrowed,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        },
+    );
+    Some(narrowed_symbols)
+}
+
 /// Narrows for a branch by any recognized type guard: a discriminated-union
 /// equality test (`x.kind === "a"`), a `typeof x === "tag"` test, an
-/// `x instanceof Ctor` test, or an `in` property-presence test (`"prop" in x`).
-/// Returns `None` if none apply.
+/// `x instanceof Ctor` test, an `Array.isArray(x)` test, or an `in`
+/// property-presence test (`"prop" in x`). Returns `None` if none apply.
 pub(crate) fn narrow_condition_symbol_table(
     condition: &ParsedExpression,
     symbols: &SymbolTable,
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
+    // `!guard` narrows the opposite branch.
+    if let ParsedExpression::Unary {
+        operator: ParsedUnaryOperator::Not,
+        operand,
+        ..
+    } = condition
+    {
+        return narrow_condition_symbol_table(operand, symbols, !branch_is_true);
+    }
+
     narrow_discriminant_symbol_table(condition, symbols, branch_is_true)
         .or_else(|| narrow_typeof_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_instanceof_symbol_table(condition, symbols, branch_is_true))
+        .or_else(|| narrow_array_isarray_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_property_presence_symbol_table(condition, symbols, branch_is_true))
 }
 
@@ -648,10 +727,24 @@ pub(crate) fn narrow_discriminant_in_scope(
     scopes: &mut ScopeStack,
     branch_is_true: bool,
 ) {
+    // `!guard` narrows the opposite branch.
+    if let ParsedExpression::Unary {
+        operator: ParsedUnaryOperator::Not,
+        operand,
+        ..
+    } = condition
+    {
+        narrow_discriminant_in_scope(operand, scopes, !branch_is_true);
+        return;
+    }
+
     if narrow_typeof_in_scope(condition, scopes, branch_is_true) {
         return;
     }
     if narrow_instanceof_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
+    if narrow_array_isarray_in_scope(condition, scopes, branch_is_true) {
         return;
     }
 
@@ -798,6 +891,35 @@ fn narrow_instanceof_in_scope(
     true
 }
 
+/// Applies `Array.isArray(x)` narrowing in place to a `ScopeStack`. Returns
+/// whether the condition was such a guard over a bare identifier.
+fn narrow_array_isarray_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let Some(operand) = parse_array_isarray_condition(condition) else {
+        return false;
+    };
+    let ParsedExpression::Identifier { name, .. } = operand else {
+        return false;
+    };
+    let Some(symbol) = scopes.resolve(name) else {
+        return true;
+    };
+    let Some(narrowed) = narrow_union_by_arrayness(&symbol.ty, branch_is_true) else {
+        return true;
+    };
+    let narrowed_symbol = SymbolInfo {
+        ty: narrowed,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let name = name.clone();
+    let _ = scopes.insert_current(name, narrowed_symbol);
+    true
+}
+
 pub(crate) fn evaluate_condition_expression_with_truthy_guards(
     expression: &ParsedExpression,
     fallback_span: Option<surge_ts_syntax::TextSpan>,
@@ -882,4 +1004,53 @@ pub(crate) fn narrow_truthy_guarded_symbol_table(
     }
 
     narrowed_symbols
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use surge_ts_types::union_type;
+
+    fn union3() -> Type {
+        union_type(vec![
+            Type::String,
+            Type::Number,
+            Type::Array(Box::new(Type::Number)),
+        ])
+    }
+
+    #[test]
+    fn typeof_keeps_matching_member_in_true_branch() {
+        let narrowed = narrow_union_by_typeof(&union3(), "number", true).unwrap();
+        assert_eq!(narrowed, Type::Number);
+    }
+
+    #[test]
+    fn typeof_removes_matching_member_in_false_branch() {
+        let narrowed = narrow_union_by_typeof(&union3(), "string", false).unwrap();
+        assert_eq!(
+            narrowed,
+            union_type(vec![Type::Number, Type::Array(Box::new(Type::Number))])
+        );
+    }
+
+    #[test]
+    fn arrayness_keeps_array_member_in_true_branch() {
+        let narrowed = narrow_union_by_arrayness(&union3(), true).unwrap();
+        assert_eq!(narrowed, Type::Array(Box::new(Type::Number)));
+    }
+
+    #[test]
+    fn arrayness_removes_array_member_in_false_branch() {
+        let narrowed = narrow_union_by_arrayness(&union3(), false).unwrap();
+        assert_eq!(narrowed, union_type(vec![Type::String, Type::Number]));
+    }
+
+    #[test]
+    fn narrowing_returns_none_when_nothing_changes() {
+        // No member has tag "boolean", so the true branch would be empty -> None.
+        assert!(narrow_union_by_typeof(&union3(), "boolean", true).is_none());
+        // A non-union type is never narrowed.
+        assert!(narrow_union_by_arrayness(&Type::String, true).is_none());
+    }
 }
