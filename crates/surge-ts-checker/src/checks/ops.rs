@@ -59,9 +59,11 @@ pub(crate) fn evaluate_binary_expression(
             operator_span.or(fallback_span),
             ctx,
         ),
-        // `"prop" in obj` is a boolean property-presence test. The operands are
-        // already evaluated by the caller; the result is simply `boolean`.
-        ParsedBinaryOperator::In => InferredExpression::Known(Type::Boolean),
+        // `"prop" in obj` / `x instanceof Ctor` are boolean type-guard tests. The
+        // operands are already evaluated by the caller; the result is `boolean`.
+        ParsedBinaryOperator::In | ParsedBinaryOperator::Instanceof => {
+            InferredExpression::Known(Type::Boolean)
+        }
     }
 }
 
@@ -471,5 +473,6 @@ fn binary_operator_text(operator: ParsedBinaryOperator) -> &'static str {
         | ParsedBinaryOperator::Equals
         | ParsedBinaryOperator::NotEquals => "==",
         ParsedBinaryOperator::In => "in",
+        ParsedBinaryOperator::Instanceof => "instanceof",
     }
 }

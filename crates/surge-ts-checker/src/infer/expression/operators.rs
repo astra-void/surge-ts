@@ -142,7 +142,8 @@ pub(crate) fn infer_binary_expression(
         | ParsedBinaryOperator::LessThanEquals
         | ParsedBinaryOperator::GreaterThan
         | ParsedBinaryOperator::GreaterThanEquals
-        | ParsedBinaryOperator::In => InferredExpression::Known(Type::Boolean),
+        | ParsedBinaryOperator::In
+        | ParsedBinaryOperator::Instanceof => InferredExpression::Known(Type::Boolean),
         ParsedBinaryOperator::Add => {
             let left_type = infer_expression(left, symbols, ctx);
             let right_type = infer_expression(right, symbols, ctx);

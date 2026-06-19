@@ -3890,6 +3890,42 @@ fn cli_typeof_guard_narrows_union_in_all_branches() {
 }
 
 #[test]
+fn cli_instanceof_guard_narrows_union() {
+    // `x instanceof Ctor` narrows a union nominally in then/else/early-return.
+    let root = temp_dir("instanceof-narrowing");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        class Cat { meow(): number { return 1; } }
+        class Dog { bark(): number { return 2; } }
+        export function sound(animal: Cat | Dog) {
+          if (animal instanceof Cat) { return animal.meow(); }
+          return animal.bark();
+        }
+        export function withElse(animal: Cat | Dog) {
+          if (animal instanceof Dog) { return animal.bark(); }
+          else { return animal.meow(); }
+        }
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(
+        !json_diagnostic_codes(&parsed).contains(&"TS2339".to_string()),
+        "instanceof guards must narrow the union in every branch"
+    );
+}
+
+#[test]
 fn cli_tuple_exposes_array_methods() {
     // A tuple (e.g. `[...] as const`) is an array and carries array methods.
     let root = temp_dir("tuple-array-methods");
@@ -3915,6 +3951,41 @@ fn cli_tuple_exposes_array_methods() {
     assert!(
         !json_diagnostic_codes(&parsed).contains(&"TS2339".to_string()),
         "tuple array methods must resolve"
+    );
+}
+
+#[test]
+fn cli_string_keyed_mapped_type_resolves_to_index_signature() {
+    // `{ [P in string]: T }` (and `Record<string, T>` routed through its mapped
+    // body) must resolve to a string index signature, not collapse to `unknown`.
+    // Regression for ky's `SearchParamsOption` union rendering a `Record` member
+    // as `unknown`. Probe: the index value type must be `number`, so assigning it
+    // to `string` is a genuine TS2322 — which only appears if it did NOT collapse
+    // to `unknown` (surge treats `unknown` leniently and would emit nothing).
+    let root = temp_dir("mapped-index-sig");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        type Idx = { [P in string]: number };
+        const d = {} as Idx;
+        export const mismatch: string = d.anyKey;
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(
+        codes.contains(&"TS2322".to_string()),
+        "index value type must resolve to `number` (not `unknown`), got {codes:?}"
     );
 }
 
