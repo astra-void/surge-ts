@@ -1075,11 +1075,29 @@ fn evaluate_index_access(
         | Type::Undefined
         | Type::Reference(_)
         | Type::Union(_) => {
-            let object_type_name = symbol.ty.name();
-            ctx.push(diagnostic_with_syntax_span(
-                Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone()),
-                choose_span(object_span, fallback_span),
-            ));
+            let index_result =
+                evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
+            let index_type = match index_result {
+                InferredExpression::Known(ty) => ty,
+                _ => return InferredExpression::Unknown,
+            };
+
+            // A literal index names a concrete property that must exist on the
+            // receiver; a missing one is a real TS2339. A *non-literal* computed
+            // key (plain `string`/`number`, `keyof T`, a type parameter, `symbol`,
+            // …) resolves to an indexed-access type (`T[K]`, an index-signature
+            // value, …) and is NOT a missing-property error — emitting one here was
+            // a false positive that mis-named the receiver as the absent property.
+            if matches!(
+                index_type,
+                Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+            ) {
+                let object_type_name = symbol.ty.name();
+                ctx.push(diagnostic_with_syntax_span(
+                    Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone()),
+                    choose_span(object_span, fallback_span),
+                ));
+            }
             InferredExpression::Unknown
         }
     }
