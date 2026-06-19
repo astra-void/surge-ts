@@ -142,6 +142,7 @@ pub(crate) fn evaluate_unary_expression(
                 InferredExpression::Unknown
             }
         }
+        ParsedUnaryOperator::Typeof => InferredExpression::Known(Type::String),
         ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus => {
             let Some(operand_type) = inferred_type(&operand_result) else {
                 return InferredExpression::Unknown;

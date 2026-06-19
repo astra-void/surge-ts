@@ -903,10 +903,10 @@ pub(crate) fn parse_unary_expression(
         UnaryOperator::LogicalNot => ParsedUnaryOperator::Not,
         UnaryOperator::UnaryPlus => ParsedUnaryOperator::Plus,
         UnaryOperator::UnaryNegation => ParsedUnaryOperator::Minus,
-        UnaryOperator::BitwiseNot
-        | UnaryOperator::Typeof
-        | UnaryOperator::Void
-        | UnaryOperator::Delete => {
+        // `typeof` is preserved (its operand drives type-guard narrowing); it
+        // evaluates to `string`. The other operators have no modelled result.
+        UnaryOperator::Typeof => ParsedUnaryOperator::Typeof,
+        UnaryOperator::BitwiseNot | UnaryOperator::Void | UnaryOperator::Delete => {
             return Some(ParsedExpression::Unknown);
         }
     };
