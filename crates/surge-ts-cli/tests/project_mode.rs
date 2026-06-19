@@ -3810,6 +3810,124 @@ fn cli_function_body_resolves_later_module_const() {
 }
 
 #[test]
+fn cli_typeof_value_in_type_query_resolves_via_module_table() {
+    // A `typeof X` type query resolving a value during statement checking must
+    // consult the module's full value table, not just the active type-resolution
+    // scope. Regression for ky's `readonly retry: typeof retry` (TS2304) and zod's
+    // `(typeof ZodString)["create"]`: the value binding isn't in the active scope
+    // when the query is resolved, but it is a module value.
+    let root = temp_dir("typeof-value-query");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        export class Foo {
+          static create(x: number) { return new Foo(); }
+        }
+        export const coerce = {
+          make: ((a) => Foo.create(a)) as (typeof Foo)["create"],
+        };
+        export const missing = (() => 0) as typeof totallyUndefined;
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    // `typeof Foo` resolves (no TS2304 for it); only the genuinely-undefined
+    // `typeof totallyUndefined` reports, and exactly once.
+    let ts2304_count = codes.iter().filter(|c| *c == "TS2304").count();
+    assert_eq!(
+        ts2304_count, 1,
+        "only the genuinely-missing typeof target should report TS2304, got {codes:?}"
+    );
+}
+
+#[test]
+fn cli_any_typed_callee_is_callable() {
+    // Calling an `any`-typed value is allowed and yields `any` — it must not
+    // report TS2349. Regression for ky's `for (const hook of hooks?.init ?? [])
+    // hook(opts)`, where `?? []` widens the iterated element to `any`.
+    let root = temp_dir("any-callee");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        type Hook = (x: number) => void;
+        declare const hooks: { init?: Hook[] };
+        export function run() {
+          for (const hook of hooks.init ?? []) {
+            hook(1);
+          }
+        }
+        declare const f: any;
+        export const r = f(1, 2, 3);
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(
+        !codes.contains(&"TS2349".to_string()),
+        "calling an any-typed value must not report TS2349, got {codes:?}"
+    );
+}
+
+#[test]
+fn cli_or_of_instanceof_guards_narrows_union() {
+    // `if (x instanceof A || x instanceof B)` narrows `x` to `A | B` in the
+    // then-branch (dropping other members). Regression for ky's
+    // `body instanceof ArrayBuffer || ArrayBuffer.isView(body)` (TS2339 on a
+    // non-narrowed `ReadableStream` member).
+    let root = temp_dir("or-instanceof-narrow");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        class A { byteLength = 2; }
+        class B { byteLength = 3; }
+        type U = A | B | string;
+        export const orNarrow = (x: U): number => {
+          if (x instanceof A || x instanceof B) {
+            return x.byteLength;
+          }
+          return 0;
+        };
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(
+        !codes.contains(&"TS2339".to_string()),
+        "an `||` of instanceof guards must narrow the union, got {codes:?}"
+    );
+}
+
+#[test]
 fn cli_computed_key_index_on_object_is_not_missing_property() {
     // `obj[k]` where `k` is a non-literal computed key (`keyof T` or a type
     // parameter `K extends keyof T`) resolves to an indexed-access type — it is
