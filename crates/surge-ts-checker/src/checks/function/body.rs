@@ -341,8 +341,14 @@ pub(crate) fn check_function_variable_declaration(
             check_initializer: !initializer_flow_blocked,
         },
     ) {
+        apply_variable_declaration_state(
+            variable_kind,
+            local_name.as_str(),
+            has_initializer,
+            Some(&symbol.ty),
+            flow_state,
+        );
         scopes.insert_current_handle(local_name.as_str(), symbol);
-        apply_variable_declaration_state(variable_kind, local_name, has_initializer, flow_state);
     }
 }
 

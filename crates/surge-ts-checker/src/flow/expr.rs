@@ -515,6 +515,7 @@ pub(crate) fn apply_variable_declaration_state(
     variable_kind: surge_ts_syntax::ParsedVariableKind,
     variable_name: impl Into<Arc<str>>,
     has_initializer: bool,
+    declared_type: Option<&surge_ts_types::Type>,
     flow_state: &mut FunctionFlowState,
 ) {
     if !matches!(
@@ -524,13 +525,27 @@ pub(crate) fn apply_variable_declaration_state(
         return;
     }
 
-    let state = if has_initializer {
+    // tsc skips definite-assignment analysis for a binding whose declared type
+    // already permits `undefined` (`any`, or any union containing `undefined`):
+    // reading it before assignment yields `undefined`, which the type allows, so
+    // no TS2454. Track such a binding as already assigned so an unassigned read
+    // stays clear (a use-before-declaration TDZ read is still caught by position).
+    let state = if has_initializer || declared_type.is_some_and(type_permits_undefined) {
         AssignmentState::Assigned
     } else {
         AssignmentState::DeclaredUnassigned
     };
 
     flow_state.declare_current(variable_name, state);
+}
+
+fn type_permits_undefined(ty: &surge_ts_types::Type) -> bool {
+    use surge_ts_types::Type;
+    match ty {
+        Type::Any | Type::Undefined => true,
+        Type::Union(union) => union.types().iter().any(type_permits_undefined),
+        _ => false,
+    }
 }
 
 pub(crate) fn check_obvious_truthiness_condition(
