@@ -150,6 +150,7 @@ pub(crate) fn resolve_interface(
                 &interface.body.members,
                 interface.body.string_index_type.as_ref(),
                 interface.body.call_signature.as_ref(),
+                &interface.body.construct_signatures,
                 ctx,
                 resolving,
                 &local_substitution,
@@ -170,6 +171,7 @@ pub(crate) fn resolve_interface_declaration(
     members: &[ParsedInterfaceMember],
     string_index_type: Option<&ParsedType>,
     call_signature: Option<&ParsedFunctionType>,
+    construct_signatures: &[ParsedFunctionType],
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
@@ -279,6 +281,30 @@ pub(crate) fn resolve_interface_declaration(
         if let Type::Function(function_type) = resolved.ty {
             object_type = object_type.with_call_signature(function_type);
         }
+    }
+
+    // Resolve every construct-signature overload and fold them into one permissive
+    // signature (matching how method overloads are merged), so a call matching any
+    // overload's arity/arguments is accepted (`new Uint8Array(8)` and
+    // `new Uint8Array([1,2,3])` both work).
+    let mut merged_construct: Option<FunctionType> = None;
+    for construct_signature in construct_signatures {
+        let resolved = resolve_parsed_type(
+            ParsedType::Function(construct_signature.clone()),
+            ctx,
+            resolving,
+            substitution,
+        );
+        had_error |= resolved.had_error;
+        if let Type::Function(function_type) = resolved.ty {
+            merged_construct = Some(match merged_construct {
+                Some(existing) => merge_overload_signatures(&existing, &function_type),
+                None => function_type,
+            });
+        }
+    }
+    if let Some(construct_signature) = merged_construct {
+        object_type = object_type.with_construct_signature(construct_signature);
     }
 
     ResolvedType {

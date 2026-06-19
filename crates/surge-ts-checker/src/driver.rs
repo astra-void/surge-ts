@@ -575,6 +575,7 @@ fn collect_namespace_type_declarations_prefixed(
                         interface.members.clone(),
                         interface.string_index_type.clone(),
                         interface.call_signature.clone(),
+                        interface.construct_signatures.clone(),
                         None,
                     );
                     let _ = ctx
@@ -1032,6 +1033,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         interface.members.clone(),
         interface.string_index_type.clone(),
         interface.call_signature.clone(),
+        interface.construct_signatures.clone(),
         None,
     );
 
