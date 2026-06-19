@@ -86,6 +86,13 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
             .iter()
             .any(|to_ty| is_assignable_to(from_ty, to_ty)),
         (Type::Object(_), Type::Object(_)) => object_assignability_failure(from, to).is_none(),
+        // An object type carrying a call signature (e.g. `BooleanConstructor`,
+        // or any `typeof fn` whose value also has properties) is assignable to a
+        // function type when its call signature is. tsc treats such objects as
+        // callable; without this an idiom like `arr.filter(Boolean)` is rejected.
+        (Type::Object(source), Type::Function(target)) => source
+            .call_signature()
+            .is_some_and(|call_signature| is_function_assignable_to(call_signature, target)),
         _ => false,
     }
 }
@@ -106,7 +113,14 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
         .iter()
         .zip(target.parameters().iter())
         .all(|(source_parameter, target_parameter)| {
+            // A source parameter typed `unknown`/`any` accepts whatever argument
+            // the target would supply, so it is contravariantly compatible with
+            // any target parameter. This is what makes a generic call signature
+            // whose unconstrained type parameter collapsed to `unknown` (e.g.
+            // `BooleanConstructor`'s `<T>(value?: T) => boolean`) usable as a
+            // typed callback such as an array predicate.
             source_parameter == target_parameter
+                || matches!(source_parameter, Type::Unknown | Type::Any)
                 || (is_assignable_to(source_parameter, target_parameter)
                     && is_assignable_to(target_parameter, source_parameter))
         });
