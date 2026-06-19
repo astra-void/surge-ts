@@ -111,39 +111,41 @@ pub(crate) fn collect_function_signature_from_statement(
             let symbol = super::build_class_value_symbol(class, ctx);
             symbols.insert(class.name.clone(), symbol);
         }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Class(class),
-            ..
-        }) => {
-            let symbol = super::build_class_value_symbol(class, ctx);
-            symbols.insert(class.name.clone(), symbol);
-        }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-            declaration,
-            ..
-        }) => collect_function_signature_from_statement(
-            declaration.as_ref(),
-            file_index,
-            statement_index,
-            symbols,
-            function_signatures,
-            ctx,
-        ),
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Function(function),
-            ..
-        }) => {
-            let function_type =
-                check_function::collect_function_declaration_signature(function, symbols, ctx);
-            function_signatures.insert(
-                FunctionDeclarationLocation {
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Class(class),
+                ..
+            } => {
+                let symbol = super::build_class_value_symbol(class, ctx);
+                symbols.insert(class.name.clone(), symbol);
+            }
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                collect_function_signature_from_statement(
+                    declaration.as_ref(),
                     file_index,
                     statement_index,
-                },
-                function_type,
-            );
-        }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default { .. }) => {}
+                    symbols,
+                    function_signatures,
+                    ctx,
+                )
+            }
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Function(function),
+                ..
+            } => {
+                let function_type =
+                    check_function::collect_function_declaration_signature(function, symbols, ctx);
+                function_signatures.insert(
+                    FunctionDeclarationLocation {
+                        file_index,
+                        statement_index,
+                    },
+                    function_type,
+                );
+            }
+            ParsedExportDeclaration::Default { .. } => {}
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -166,11 +168,15 @@ pub(crate) fn collect_global_variables(
         for statement in &parsed_file.statements {
             let var = match statement {
                 ParsedStatement::VariableDeclaration(var) => Some(var),
-                ParsedStatement::ExportDeclaration(
-                    surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. },
-                ) => {
-                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
-                        Some(var)
+                ParsedStatement::ExportDeclaration(export) => {
+                    if let surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } =
+                        export.as_ref()
+                    {
+                        if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                            Some(var)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -268,9 +274,13 @@ pub(crate) fn collect_local_value_symbols_from_statement(
                 },
             );
         }
-        ParsedStatement::ExportDeclaration(
-            surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. },
-        ) => collect_local_value_symbols_from_statement(declaration.as_ref(), symbols, ctx),
+        ParsedStatement::ExportDeclaration(export) => {
+            if let surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } =
+                export.as_ref()
+            {
+                collect_local_value_symbols_from_statement(declaration.as_ref(), symbols, ctx)
+            }
+        }
         _ => {}
     }
 }

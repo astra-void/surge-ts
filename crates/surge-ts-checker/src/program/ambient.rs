@@ -100,11 +100,15 @@ pub(crate) fn collect_ambient_globals(
         for stmt in &parsed_file.statements {
             let var = match stmt {
                 ParsedStatement::VariableDeclaration(var) => Some(var),
-                ParsedStatement::ExportDeclaration(
-                    surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. },
-                ) => {
-                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
-                        Some(var)
+                ParsedStatement::ExportDeclaration(export) => {
+                    if let surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } =
+                        export.as_ref()
+                    {
+                        if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                            Some(var)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -139,21 +143,20 @@ pub(crate) fn collect_ambient_globals(
         for (loc, fun_ty) in local_function_signatures {
             let name = match &parsed_file.statements[loc.statement_index] {
                 ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
-                ParsedStatement::ExportDeclaration(
+                ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
                     surge_ts_syntax::ParsedExportDeclaration::Default {
                         declaration: surge_ts_syntax::ParsedDefaultExportDeclaration::Function(f),
                         ..
-                    },
-                ) => f.name.clone(),
-                ParsedStatement::ExportDeclaration(
-                    surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. },
-                ) => {
-                    if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
-                        f.name.clone()
-                    } else {
-                        "unknown".to_string()
+                    } => f.name.clone(),
+                    surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } => {
+                        if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
+                            f.name.clone()
+                        } else {
+                            "unknown".to_string()
+                        }
                     }
-                }
+                    _ => "unknown".to_string(),
+                },
                 _ => "unknown".to_string(),
             };
 
@@ -175,11 +178,15 @@ pub(crate) fn collect_ambient_globals(
         for stmt in &parsed_file.statements {
             let class = match stmt {
                 ParsedStatement::ClassDeclaration(class) => Some(class),
-                ParsedStatement::ExportDeclaration(
-                    surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. },
-                ) => {
-                    if let ParsedStatement::ClassDeclaration(class) = declaration.as_ref() {
-                        Some(class)
+                ParsedStatement::ExportDeclaration(export) => {
+                    if let surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } =
+                        export.as_ref()
+                    {
+                        if let ParsedStatement::ClassDeclaration(class) = declaration.as_ref() {
+                            Some(class)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -304,10 +311,13 @@ pub(crate) fn collect_ambient_modules(
                             );
                         }
                     }
-                    ParsedStatement::ExportDeclaration(
-                        surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. },
-                    ) => {
-                        if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                    ParsedStatement::ExportDeclaration(export) => {
+                        if let surge_ts_syntax::ParsedExportDeclaration::Statement {
+                            declaration,
+                            ..
+                        } = export.as_ref()
+                            && let ParsedStatement::VariableDeclaration(var) = declaration.as_ref()
+                        {
                             if ctx.symbols.get(&var.name).is_none() {
                                 let ty = var
                                     .declared_type

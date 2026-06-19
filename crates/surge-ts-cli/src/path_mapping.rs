@@ -36,18 +36,20 @@ pub fn resolve_path_mappings(
                         specifiers_to_resolve.insert(import.module_specifier.clone());
                     }
                 }
-                ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
-                    module_specifier: Some(module_specifier),
-                    ..
-                })
-                | ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
-                    module_specifier,
-                    ..
-                }) => {
-                    if is_external_specifier(&module_specifier) {
-                        specifiers_to_resolve.insert(module_specifier.clone());
+                ParsedStatement::ExportDeclaration(export) => match *export {
+                    ParsedExportDeclaration::Named {
+                        module_specifier: Some(module_specifier),
+                        ..
                     }
-                }
+                    | ParsedExportDeclaration::All {
+                        module_specifier, ..
+                    } => {
+                        if is_external_specifier(&module_specifier) {
+                            specifiers_to_resolve.insert(module_specifier.clone());
+                        }
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }

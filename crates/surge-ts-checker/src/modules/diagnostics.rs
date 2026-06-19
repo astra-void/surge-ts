@@ -115,10 +115,12 @@ pub(crate) fn module_has_unresolved_star_export(
     }
 
     let result = parsed_files[file_index].statements.iter().any(|statement| {
-        let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
-            module_specifier,
-            ..
-        }) = statement
+        let ParsedStatement::ExportDeclaration(export) = statement else {
+            return false;
+        };
+        let ParsedExportDeclaration::All {
+            module_specifier, ..
+        } = export.as_ref()
         else {
             return false;
         };
@@ -170,11 +172,14 @@ pub(crate) fn statement_has_unsupported_declaration_surface(statement: &ParsedSt
         ParsedStatement::ImportDeclaration(import) => {
             matches!(import.kind, ParsedImportKind::Unsupported)
         }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { .. }) => true,
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Unsupported { .. },
-            ..
-        }) => true,
+        ParsedStatement::ExportDeclaration(export) => matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Unsupported { .. }
+                | ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Unsupported { .. },
+                    ..
+                }
+        ),
         ParsedStatement::DeclareModuleDeclaration(module) => module
             .statements
             .iter()

@@ -86,19 +86,19 @@ fn parse_function_body_statement(
             parse_block_statement_as_function_body(block),
         )]),
         Statement::IfStatement(if_statement) => parse_if_statement(if_statement)
-            .map(|if_statement| vec![ParsedFunctionBodyStatement::If(if_statement)]),
+            .map(|if_statement| vec![ParsedFunctionBodyStatement::If(Box::new(if_statement))]),
         Statement::WhileStatement(while_statement) => parse_while_statement(while_statement)
-            .map(|while_statement| vec![ParsedFunctionBodyStatement::While(while_statement)]),
+            .map(|while_statement| vec![ParsedFunctionBodyStatement::While(Box::new(while_statement))]),
         Statement::ForOfStatement(for_of_statement) => parse_for_of_statement(for_of_statement)
-            .map(|for_of_statement| vec![ParsedFunctionBodyStatement::ForOf(for_of_statement)]),
+            .map(|for_of_statement| vec![ParsedFunctionBodyStatement::ForOf(Box::new(for_of_statement))]),
         Statement::SwitchStatement(switch_statement) => parse_switch_statement(switch_statement)
-            .map(|switch_statement| vec![ParsedFunctionBodyStatement::Switch(switch_statement)]),
+            .map(|switch_statement| vec![ParsedFunctionBodyStatement::Switch(Box::new(switch_statement))]),
         Statement::ThrowStatement(throw_statement) => parse_throw_statement(throw_statement)
-            .map(|throw_statement| vec![ParsedFunctionBodyStatement::Throw(throw_statement)]),
+            .map(|throw_statement| vec![ParsedFunctionBodyStatement::Throw(Box::new(throw_statement))]),
         Statement::TryStatement(try_statement) => parse_try_statement(try_statement)
-            .map(|try_statement| vec![ParsedFunctionBodyStatement::Try(try_statement)]),
+            .map(|try_statement| vec![ParsedFunctionBodyStatement::Try(Box::new(try_statement))]),
         Statement::ReturnStatement(_) => parse_return_statement(statement)
-            .map(|return_statement| vec![ParsedFunctionBodyStatement::Return(return_statement)]),
+            .map(|return_statement| vec![ParsedFunctionBodyStatement::Return(Box::new(return_statement))]),
         Statement::ContinueStatement(_) => Some(vec![ParsedFunctionBodyStatement::Continue]),
         Statement::BreakStatement(_) => Some(vec![ParsedFunctionBodyStatement::Break]),
         Statement::ExpressionStatement(expression_statement) => {
@@ -146,12 +146,12 @@ fn parse_expression_statement_as_function_body(
         Expression::AssignmentExpression(assignment) => {
             if let Some(this_assignment) = parse_this_property_assignment(assignment) {
                 return Some(vec![ParsedFunctionBodyStatement::ThisPropertyAssignment(
-                    this_assignment,
+                    Box::new(this_assignment),
                 )]);
             }
 
             super::parse_assignment_expression(assignment)
-                .map(|assignment| vec![ParsedFunctionBodyStatement::Assignment(assignment)])
+                .map(|assignment| vec![ParsedFunctionBodyStatement::Assignment(Box::new(assignment))])
         }
         _ => {
             let (expression, _) = parse_expression(&expression_statement.expression);
@@ -160,7 +160,7 @@ fn parse_expression_statement_as_function_body(
                 return None;
             }
 
-            Some(vec![ParsedFunctionBodyStatement::Expression(expression)])
+            Some(vec![ParsedFunctionBodyStatement::Expression(Box::new(expression))])
         }
     }
 }

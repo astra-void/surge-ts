@@ -72,6 +72,11 @@ impl Type {
             Type::Tuple(_) => tuple_property_access_type(name),
             Type::String | Type::StringLiteral(_) => string_property_access_type(name),
             Type::Number | Type::NumberLiteral(_) => number_property_access_type(name),
+            // Any property of `any` is `any`. A lazy reference can resolve to `any`
+            // (e.g. `Promise<any>` collapses to its awaited `any`); without this arm
+            // the access falls through to `None` and is misreported as a missing
+            // property, where the old eager `any` shape emitted nothing.
+            Type::Any => Some(Type::Any),
             Type::Reference(reference) => reference.resolve().get_property_access_type(name),
             _ => None,
         }

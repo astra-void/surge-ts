@@ -10,7 +10,19 @@
 
 ## Verification
 
-- Rust crates: build the test binary first, then invoke it directly.
+- Rust crates: run the workspace tests with nextest.
+
+  ```sh
+  cargo nextest run --workspace
+  ```
+
+  Scope with `-p <crate>`, a substring filter (`cargo nextest run my_test_name`),
+  or the filterset DSL (`-E 'test(my_test_name)'`). `fail-fast` is off by
+  default (see `.config/nextest.toml`), so a run reports every failure.
+  The first run after a rebuild can stall briefly while macOS Gatekeeper
+  assesses the freshly built test binaries — environmental, not a hang.
+
+  Fallback without nextest — build the test binary, then invoke it directly:
 
   ```sh
   cargo test --no-run 2>&1 | grep -oE '\(target/[^)]+\)' | tr -d '()' | xargs -I{} {}

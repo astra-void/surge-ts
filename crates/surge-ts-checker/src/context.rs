@@ -198,6 +198,13 @@ pub(crate) struct CheckerContext {
     /// A cycle reaching below `floor` means the result depends on an outer frame.
     /// See the generic instantiation cache in `resolve_named_type`.
     pub(crate) lowest_cycle_target_index: usize,
+    /// Shared, immutable snapshot of this context used to resolve a lazy library
+    /// [`Type::Reference`] body on demand (see the lazy instantiation resolver in
+    /// `infer::types`). Captured once, lazily, when the first library reference is
+    /// deferred; the `Arc`-shared caches/ambient surface stay live through it, so a
+    /// peel memoizes into the same program-wide interner. Cleared of diagnostics —
+    /// a lazy peel emits none.
+    lazy_resolution_snapshot: Option<Arc<CheckerContext>>,
     file_kinds: Arc<HashMap<String, FileKind>>,
 }
 
@@ -238,12 +245,31 @@ impl CheckerContext {
             namespace_member_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
+            lazy_resolution_snapshot: None,
             file_kinds: Arc::new(file_kinds),
         }
     }
 
     pub(crate) fn note_resolution_cycle(&mut self, target_index: usize) {
         self.lowest_cycle_target_index = self.lowest_cycle_target_index.min(target_index);
+    }
+
+    /// Returns the shared snapshot used to resolve a deferred library reference
+    /// body, capturing it on first use. The snapshot keeps the `Arc`-shared caches
+    /// and ambient surface (so a peel interns into the same program-wide store) but
+    /// drops the per-file diagnostic state and its own snapshot back-pointer.
+    pub(crate) fn lazy_resolution_snapshot(&mut self) -> Arc<CheckerContext> {
+        if let Some(snapshot) = &self.lazy_resolution_snapshot {
+            return snapshot.clone();
+        }
+        let mut snapshot = self.clone();
+        snapshot.diagnostics = Vec::new();
+        snapshot.diagnostic_keys = HashSet::new();
+        snapshot.diagnostic_keys_len = 0;
+        snapshot.lazy_resolution_snapshot = None;
+        let snapshot = Arc::new(snapshot);
+        self.lazy_resolution_snapshot = Some(snapshot.clone());
+        snapshot
     }
 
     /// Whether unresolved type names should be silently treated as `unknown`

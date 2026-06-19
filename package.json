@@ -4,6 +4,8 @@
 	"version": "0.0.0",
 	"type": "module",
 	"scripts": {
+		"test:rust": "cargo nextest run --workspace",
+		"test:rust:ci": "cargo nextest run --workspace --profile ci",
 		"lib:generate": "tsx scripts/lib/generate-default-libs.ts",
 		"lib:test": "tsx --test scripts/lib/generate-default-libs.test.ts",
 		"oracle:tsc": "tsc --noEmit --pretty false",
@@ -16,8 +18,10 @@
 		"real:project": "tsx scripts/real-projects/measure-project.ts",
 		"real:test": "tsx --test scripts/real-projects/measure-project.test.ts",
 		"real:auth-kit": "tsx scripts/real-projects/measure-project.ts --name auth-kit --authKitFallback",
+		"real:ky": "tsx scripts/real-projects/measure-project.ts --project .local-projects/ky --name ky --allowMissing",
 		"real:trpc": "tsx scripts/real-projects/measure-project.ts --project .local-projects/trpc --name trpc --allowMissing",
 		"real:unnamed": "tsx scripts/real-projects/measure-project.ts --project ../../nextjs/unnamed --name unnamed --allowMissing",
+		"real:ofetch": "tsx scripts/real-projects/measure-project.ts --project .local-projects/ofetch --name ofetch --allowMissing",
 		"real:zod": "tsx scripts/real-projects/measure-project.ts --project .local-projects/zod --name zod --allowMissing"
 	},
 	"devDependencies": {

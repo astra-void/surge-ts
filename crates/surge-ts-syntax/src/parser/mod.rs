@@ -63,7 +63,7 @@ fn parse_module_declaration(
 ) -> Option<Vec<ParsedStatement>> {
     match module_declaration {
         ModuleDeclaration::ImportDeclaration(import) => parse_import_declaration(import)
-            .map(|import| vec![ParsedStatement::ImportDeclaration(import)]),
+            .map(|import| vec![ParsedStatement::ImportDeclaration(Box::new(import))]),
         ModuleDeclaration::ExportNamedDeclaration(export) => parse_export_named_declaration(export),
         ModuleDeclaration::ExportDefaultDeclaration(export) => {
             parse_export_default_declaration(export)
@@ -72,9 +72,9 @@ fn parse_module_declaration(
         ModuleDeclaration::TSExportAssignment(export) => parse_export_assignment(export),
         ModuleDeclaration::TSNamespaceExportDeclaration(export) => {
             Some(vec![ParsedStatement::ExportDeclaration(
-                ParsedExportDeclaration::Unsupported {
+                Box::new(ParsedExportDeclaration::Unsupported {
                     span: Some(text_span_from_oxc_span(export.span)),
-                },
+                }),
             )])
         }
     }
@@ -86,18 +86,18 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
             Some(parse_variable_declaration(declaration))
         }
         Declaration::FunctionDeclaration(function) => parse_function_declaration(function)
-            .map(|function| vec![ParsedStatement::FunctionDeclaration(function)]),
+            .map(|function| vec![ParsedStatement::FunctionDeclaration(Box::new(function))]),
         Declaration::TSTypeAliasDeclaration(type_alias) => parse_type_alias_declaration(type_alias)
-            .map(|type_alias| vec![ParsedStatement::TypeAliasDeclaration(type_alias)]),
+            .map(|type_alias| vec![ParsedStatement::TypeAliasDeclaration(Box::new(type_alias))]),
         Declaration::TSInterfaceDeclaration(interface) => parse_interface_declaration(interface)
-            .map(|interface| vec![ParsedStatement::InterfaceDeclaration(interface)]),
+            .map(|interface| vec![ParsedStatement::InterfaceDeclaration(Box::new(interface))]),
         Declaration::ClassDeclaration(class) => parse_class_declaration(class)
-            .map(|class| vec![ParsedStatement::ClassDeclaration(class)]),
+            .map(|class| vec![ParsedStatement::ClassDeclaration(Box::new(class))]),
         Declaration::TSModuleDeclaration(module) => Some(parse_ts_module_declaration(module)),
         Declaration::TSGlobalDeclaration(global) => Some(parse_ts_global_declaration(global)),
         Declaration::TSImportEqualsDeclaration(import_equals) => {
             parse_import_equals_declaration(import_equals)
-                .map(|import| vec![ParsedStatement::ImportDeclaration(import)])
+                .map(|import| vec![ParsedStatement::ImportDeclaration(Box::new(import))])
         }
         _ => Some(vec![ParsedStatement::UnsupportedDeclaration {
             span: Some(text_span_from_oxc_span(oxc_span::GetSpan::span(
@@ -158,27 +158,27 @@ fn parse_expression_statement(
                 Expression::CallExpression(call_expression) => call_expression,
                 _ => unreachable!(),
             }) {
-                return Some(ParsedStatement::Call(call));
+                return Some(ParsedStatement::Call(Box::new(call)));
             }
 
             let (expression, _) = parse_expression(&expression_statement.expression);
-            Some(ParsedStatement::Expression(expression))
+            Some(ParsedStatement::Expression(Box::new(expression)))
         }
-        Expression::AssignmentExpression(assignment) => {
-            parse_assignment_expression(assignment).map(ParsedStatement::Assignment)
-        }
-        Expression::UnaryExpression(unary_expression) => {
-            parse_unary_expression(unary_expression).map(ParsedStatement::Expression)
-        }
+        Expression::AssignmentExpression(assignment) => parse_assignment_expression(assignment)
+            .map(|assignment| ParsedStatement::Assignment(Box::new(assignment))),
+        Expression::UnaryExpression(unary_expression) => parse_unary_expression(unary_expression)
+            .map(|expression| ParsedStatement::Expression(Box::new(expression))),
         Expression::ConditionalExpression(conditional_expression) => {
-            parse_conditional_expression(conditional_expression).map(ParsedStatement::Expression)
+            parse_conditional_expression(conditional_expression)
+                .map(|expression| ParsedStatement::Expression(Box::new(expression)))
         }
         Expression::StaticMemberExpression(member_expression) => {
-            parse_static_member_expression(member_expression).map(ParsedStatement::Expression)
+            parse_static_member_expression(member_expression)
+                .map(|expression| ParsedStatement::Expression(Box::new(expression)))
         }
         _ => {
             let (expression, _) = parse_expression(&expression_statement.expression);
-            Some(ParsedStatement::Expression(expression))
+            Some(ParsedStatement::Expression(Box::new(expression)))
         }
     }
 }
@@ -215,7 +215,7 @@ fn parse_binding_pattern_declarations(
     match binding {
         BindingPattern::BindingIdentifier(binding_identifier) => {
             vec![ParsedStatement::VariableDeclaration(
-                ParsedVariableDeclaration {
+                Box::new(ParsedVariableDeclaration {
                     is_declare,
                     kind,
                     name: binding_identifier.name.to_string(),
@@ -223,7 +223,7 @@ fn parse_binding_pattern_declarations(
                     declared_type,
                     initializer,
                     initializer_span,
-                },
+                }),
             )]
         }
         BindingPattern::AssignmentPattern(assignment_pattern) => {
@@ -405,12 +405,12 @@ fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedSt
     };
 
     vec![ParsedStatement::DeclareModuleDeclaration(
-        ParsedDeclareModuleDeclaration {
+        Box::new(ParsedDeclareModuleDeclaration {
             module_specifier,
             module_specifier_span: Some(text_span_from_oxc_span(module.id.span())),
             statements,
             span: Some(text_span_from_oxc_span(module.span)),
-        },
+        }),
     )]
 }
 
@@ -439,12 +439,12 @@ fn parse_ts_namespace_declaration(
     };
 
     vec![ParsedStatement::NamespaceDeclaration(
-        ParsedNamespaceDeclaration {
+        Box::new(ParsedNamespaceDeclaration {
             name,
             name_span,
             statements,
             span: Some(text_span_from_oxc_span(module.span)),
-        },
+        }),
     )]
 }
 
@@ -458,11 +458,11 @@ fn parse_ts_global_declaration(global: &TSGlobalDeclaration<'_>) -> Vec<ParsedSt
         .collect();
 
     vec![ParsedStatement::DeclareModuleDeclaration(
-        ParsedDeclareModuleDeclaration {
+        Box::new(ParsedDeclareModuleDeclaration {
             module_specifier: "global".to_string(),
             module_specifier_span: Some(text_span_from_oxc_span(global.global_span)),
             statements,
             span: Some(text_span_from_oxc_span(global.span)),
-        },
+        }),
     )]
 }

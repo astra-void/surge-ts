@@ -12,7 +12,35 @@ pub enum ObjectAssignabilityFailure {
     },
 }
 
+thread_local! {
+    /// Recursion depth of the current `is_assignable_to` evaluation. Lazy nominal
+    /// `Type::Reference`s can form cyclic structural graphs (interface A whose member
+    /// resolves to B whose member resolves back to A); structural comparison would
+    /// otherwise recurse forever following them. The bound breaks such a cycle by
+    /// treating the over-deep comparison as assignable — the coinductive choice tsc
+    /// makes with its relation-in-progress set.
+    static ASSIGNABILITY_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+const MAX_ASSIGNABILITY_DEPTH: u32 = 200;
+
 pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
+    struct DepthGuard;
+    impl Drop for DepthGuard {
+        fn drop(&mut self) {
+            ASSIGNABILITY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        }
+    }
+    let depth = ASSIGNABILITY_DEPTH.with(|depth| {
+        let next = depth.get() + 1;
+        depth.set(next);
+        next
+    });
+    let _guard = DepthGuard;
+    if depth > MAX_ASSIGNABILITY_DEPTH {
+        return true;
+    }
+
     if from == to
         || matches!(from, Type::Any)
         || matches!(from, Type::Never)
@@ -86,6 +114,32 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
             .iter()
             .any(|to_ty| is_assignable_to(from_ty, to_ty)),
         (Type::Object(_), Type::Object(_)) => object_assignability_failure(from, to).is_none(),
+        // An object type carrying a call signature (e.g. `BooleanConstructor`,
+        // or any `typeof fn` whose value also has properties) is assignable to a
+        // function type when its call signature is. tsc treats such objects as
+        // callable; without this an idiom like `arr.filter(Boolean)` is rejected.
+        (Type::Object(source), Type::Function(target)) => source
+            .call_signature()
+            .is_some_and(|call_signature| is_function_assignable_to(call_signature, target)),
+        // A primitive structurally satisfies an object type that requires no
+        // members — `{}`, all-optional shapes, and crucially the `T & {}` lib idiom
+        // (e.g. `HTMLInputTypeAttribute = "button" | … | (string & {})`, where the
+        // `string & {}` branch is what accepts an arbitrary `string`). tsc treats
+        // any non-nullish value as assignable to such a type.
+        (
+            Type::String
+            | Type::StringLiteral(_)
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_),
+            Type::Object(target),
+        ) => {
+            target.properties.values().all(|property| property.is_optional())
+                && target.string_index_type.is_none()
+                && target.call_signature().is_none()
+                && target.construct_signature().is_none()
+        }
         _ => false,
     }
 }
@@ -106,7 +160,14 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
         .iter()
         .zip(target.parameters().iter())
         .all(|(source_parameter, target_parameter)| {
+            // A source parameter typed `unknown`/`any` accepts whatever argument
+            // the target would supply, so it is contravariantly compatible with
+            // any target parameter. This is what makes a generic call signature
+            // whose unconstrained type parameter collapsed to `unknown` (e.g.
+            // `BooleanConstructor`'s `<T>(value?: T) => boolean`) usable as a
+            // typed callback such as an array predicate.
             source_parameter == target_parameter
+                || matches!(source_parameter, Type::Unknown | Type::Any)
                 || (is_assignable_to(source_parameter, target_parameter)
                     && is_assignable_to(target_parameter, source_parameter))
         });
