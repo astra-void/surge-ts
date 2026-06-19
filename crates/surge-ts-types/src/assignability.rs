@@ -100,6 +100,15 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return is_assignable_to(&reference.resolve(), to);
     }
     if let Type::Reference(reference) = to {
+        // Any function (or callable/constructable object) is assignable to the
+        // global `Function` interface. Its structural shape carries members a bare
+        // function type does not expose (`prototype`, `arguments`, `caller`), so
+        // the structural comparison below would wrongly reject it.
+        let display = reference.display.as_ref();
+        let base = display.split('<').next().unwrap_or(display);
+        if base == "Function" && is_function_like(from) {
+            return true;
+        }
         return is_assignable_to(from, &reference.resolve());
     }
 
@@ -185,6 +194,18 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
                 && target.string_index_type.is_none()
                 && target.call_signature().is_none()
                 && target.construct_signature().is_none()
+        }
+        _ => false,
+    }
+}
+
+/// Whether `ty` is a function or an object carrying a call/construct signature —
+/// i.e. something assignable to the global `Function` interface.
+fn is_function_like(ty: &Type) -> bool {
+    match ty {
+        Type::Function(_) => true,
+        Type::Object(object) => {
+            object.call_signature().is_some() || object.construct_signature().is_some()
         }
         _ => false,
     }
@@ -377,6 +398,35 @@ mod tests {
                 .with_construct_signature(FunctionType::new(vec![], Type::Void, false, 0)),
         );
         assert!(is_assignable_to(&constructor, &name_target()));
+    }
+
+    #[test]
+    fn function_assignable_to_function_interface() {
+        // Any function is assignable to the global `Function` interface, even
+        // though its structural shape (`prototype`/`arguments`/`caller`) is not
+        // exposed by a bare function type. Also covers a `string | Function`
+        // target (the DOM `setTimeout` handler).
+        struct Resolver(Type);
+        impl crate::ResolveReference for Resolver {
+            fn resolve(&self) -> Type {
+                self.0.clone()
+            }
+        }
+        let mut members = PropertyMap::new();
+        members.insert("prototype".to_string(), ObjectProperty::required(Type::Any));
+        members.insert("arguments".to_string(), ObjectProperty::required(Type::Any));
+        let function_interface = Type::Reference(crate::TypeReference::new(
+            "lib.es5.d.ts\u{0}Function",
+            "Function",
+            Vec::new(),
+            std::sync::Arc::new(Resolver(Type::Object(ObjectType::new(members, None)))),
+        ));
+        let function = function_type(vec![Type::Number], Type::Number, false, 1);
+        assert!(is_assignable_to(&function, &function_interface));
+        assert!(is_assignable_to(
+            &function,
+            &union_type(vec![Type::String, function_interface])
+        ));
     }
 
     #[test]
