@@ -248,6 +248,11 @@ pub struct ParsedInterfaceDeclaration {
     /// A bare call signature (`(value?: any): number`) on the interface, making
     /// values of this type callable without `new` (e.g. `NumberConstructor`).
     pub call_signature: Option<ParsedFunctionType>,
+    /// Construct signatures (`new <T>(executor): Promise<T>`) on the interface,
+    /// making values of this type usable with `new` (e.g. `PromiseConstructor`,
+    /// `SetConstructor`). One entry per overload; the resolver merges them into a
+    /// single permissive signature. Each carries its own `type_parameters`.
+    pub construct_signatures: Vec<ParsedFunctionType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
