@@ -6405,7 +6405,9 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "bracket-property-string-literal-dynamic-key-unsupported-or-pinned"
 path = "tests/smoke/bracket_property_string_literal_dynamic_key_unsupported_or_pinned.ts"
-expected_diagnostics = ["TS2339"]
+# tsc emits TS7053 here (unmodeled); surge must not emit the old false-positive
+# TS2339 that named the receiver as the missing property. See fixture header.
+expected_diagnostics = []
 
 [[case]]
 name = "bracket-property-string-literal-optional-chain-valid"

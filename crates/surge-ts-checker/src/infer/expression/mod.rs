@@ -92,6 +92,14 @@ pub(crate) fn infer_expression(
         ParsedExpression::NullLiteral => InferredExpression::Known(Type::Any),
         ParsedExpression::Identifier { name, span } => symbols
             .get(name)
+            .or_else(|| {
+                // Fall back to the module-scope value table for a binding declared
+                // later in the file: a function body may legally reference it
+                // because the body runs after the module is fully evaluated.
+                ctx.module_value_fallback
+                    .as_ref()
+                    .and_then(|fallback| fallback.get(name))
+            })
             .map(|symbol| {
                 InferredExpression::Known(clone_type_with_metrics(
                     &symbol.ty,

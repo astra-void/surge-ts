@@ -75,11 +75,14 @@ pub fn check_source_with_options(
 
     validate_local_type_declarations(&parsed.statements, &file_name, &mut ctx);
     validate_direct_utility_aliases(&parsed.statements, &mut ctx);
-    ctx.symbols = saved_symbols;
+    let validation_symbols = std::mem::replace(&mut ctx.symbols, saved_symbols);
+
+    ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
 
     for statement in parsed.statements {
         check_statement(statement, &mut ctx);
     }
+    ctx.module_value_fallback = None;
 
     ctx.finish()
 }

@@ -145,18 +145,40 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         (Type::Object(source), Type::Function(target)) => source
             .call_signature()
             .is_some_and(|call_signature| is_function_assignable_to(call_signature, target)),
+        // A function value carries `Function.prototype` members (`name`, `length`,
+        // `call`/`apply`/`bind`, …). It satisfies a plain object target whose
+        // required members are all drawn from that set — e.g. the cross-realm
+        // `cls: {name: string}` idiom that accepts `typeof SomeClass`. Targets
+        // that demand call/construct signatures or an index signature are left to
+        // the dedicated arms above (or rejected).
+        (Type::Function(_), Type::Object(target)) => {
+            target.call_signature().is_none()
+                && target.construct_signature().is_none()
+                && target.string_index_type.is_none()
+                && target.properties.iter().all(|(name, target_property)| {
+                    match from.get_property_access_type(name) {
+                        Some(source_ty) => is_assignable_to(&source_ty, &target_property.ty),
+                        None => target_property.is_optional(),
+                    }
+                })
+        }
         // A primitive structurally satisfies an object type that requires no
         // members — `{}`, all-optional shapes, and crucially the `T & {}` lib idiom
         // (e.g. `HTMLInputTypeAttribute = "button" | … | (string & {})`, where the
         // `string & {}` branch is what accepts an arbitrary `string`). tsc treats
-        // any non-nullish value as assignable to such a type.
+        // any non-nullish value as assignable to such a type. Arrays and tuples are
+        // objects too, so they likewise satisfy a no-required-member target — this
+        // is what makes `Object.fromEntries(entries: [...][])` accept its argument
+        // when the parameter degrades to `{}`.
         (
             Type::String
             | Type::StringLiteral(_)
             | Type::Number
             | Type::NumberLiteral(_)
             | Type::Boolean
-            | Type::BooleanLiteral(_),
+            | Type::BooleanLiteral(_)
+            | Type::Array(_)
+            | Type::Tuple(_),
             Type::Object(target),
         ) => {
             target.properties.values().all(|property| property.is_optional())
@@ -222,6 +244,38 @@ fn object_assignable(
     result
 }
 
+/// Function/constructor objects (those carrying a call or construct signature)
+/// also expose `Function.prototype` members. When such a source object lacks an
+/// explicit property, fall back to these so a `typeof SomeClass` value satisfies
+/// targets like `{name: string}`. Mirrors `function_property_access_type` in
+/// `ty.rs`, but keyed off the object's call signature for `call`/`apply`/`bind`.
+fn callable_object_function_member(source: &ObjectType, name: &str) -> Option<Type> {
+    let signature = source.call_signature().or_else(|| source.construct_signature())?;
+    match name {
+        "length" => Some(Type::Number),
+        "name" => Some(Type::String),
+        "toString" | "toLocaleString" => Some(Type::Function(FunctionType::new(
+            vec![],
+            Type::String,
+            false,
+            0,
+        ))),
+        "call" | "apply" => Some(Type::Function(FunctionType::new(
+            vec![],
+            signature.return_type().clone(),
+            true,
+            0,
+        ))),
+        "bind" => Some(Type::Function(FunctionType::new(
+            vec![],
+            Type::Function(signature.clone()),
+            true,
+            0,
+        ))),
+        _ => None,
+    }
+}
+
 pub fn object_assignability_failure(
     source: &Type,
     target: &Type,
@@ -236,7 +290,11 @@ pub fn object_assignability_failure(
             .map(|property| &property.ty)
             .or_else(|| source.string_index_type.as_deref());
 
-        let Some(source_property_ty) = source_property_ty else {
+        let source_property_ty = source_property_ty
+            .cloned()
+            .or_else(|| callable_object_function_member(source, property_name.as_str()));
+
+        let Some(source_property_ty) = source_property_ty.as_ref() else {
             if target_property.is_optional() {
                 continue;
             }
@@ -285,6 +343,67 @@ mod tests {
             is_variadic,
             required_parameter_count,
         ))
+    }
+
+    fn name_target() -> Type {
+        let mut properties = PropertyMap::new();
+        properties.insert("name".to_string(), ObjectProperty::required(Type::String));
+        Type::Object(ObjectType::new(properties, None))
+    }
+
+    #[test]
+    fn function_assignable_to_name_object() {
+        // A plain function value satisfies `{name: string}` via `Function.name`.
+        let function = function_type(vec![], Type::Void, false, 0);
+        assert!(is_assignable_to(&function, &name_target()));
+    }
+
+    #[test]
+    fn function_not_assignable_to_object_with_extra_required_member() {
+        let mut properties = PropertyMap::new();
+        properties.insert("name".to_string(), ObjectProperty::required(Type::String));
+        properties.insert("nope".to_string(), ObjectProperty::required(Type::Number));
+        let target = Type::Object(ObjectType::new(properties, None));
+        let function = function_type(vec![], Type::Void, false, 0);
+        assert!(!is_assignable_to(&function, &target));
+    }
+
+    #[test]
+    fn constructor_object_assignable_to_name_object() {
+        // `typeof SomeClass` (a construct-signature object) satisfies
+        // `{name: string}` via the synthesized `Function.name` member.
+        let constructor = Type::Object(
+            ObjectType::new(PropertyMap::new(), None)
+                .with_construct_signature(FunctionType::new(vec![], Type::Void, false, 0)),
+        );
+        assert!(is_assignable_to(&constructor, &name_target()));
+    }
+
+    #[test]
+    fn plain_object_without_name_not_assignable_to_name_object() {
+        // The Function-member fallback must not leak to ordinary objects.
+        let source = Type::Object(ObjectType::new(PropertyMap::new(), None));
+        assert!(!is_assignable_to(&source, &name_target()));
+    }
+
+    #[test]
+    fn array_assignable_to_empty_object() {
+        // `Object.fromEntries([...])`: an array satisfies a no-required-member
+        // object target (`{}`) just like any non-nullish value.
+        let empty = Type::Object(ObjectType::new(PropertyMap::new(), None));
+        assert!(is_assignable_to(&Type::Array(Box::new(Type::Number)), &empty));
+        assert!(is_assignable_to(
+            &Type::Tuple(vec![Type::String, Type::Any]),
+            &empty
+        ));
+    }
+
+    #[test]
+    fn array_not_assignable_to_object_with_required_member() {
+        assert!(!is_assignable_to(
+            &Type::Array(Box::new(Type::Number)),
+            &name_target()
+        ));
     }
 
     #[test]

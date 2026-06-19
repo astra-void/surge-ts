@@ -3691,6 +3691,162 @@ fn cli_array_find_contextual_callback_basic_resolves_find_and_reports_property_e
 }
 
 #[test]
+fn cli_symbol_in_call_signature_stays_callable() {
+    // A call signature that mentions `symbol` (param or return) must not poison
+    // the interface's callability. Regression for `Symbol('x')` reported as
+    // TS2349 "This expression is not callable".
+    let root = temp_dir("symbol-callable");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        interface MySymbolCtor {
+          (description?: string | number): symbol;
+          for(key: string): symbol;
+        }
+        declare const make: MySymbolCtor;
+        export const made = make('x');
+        export const bridged: symbol = make(1);
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(
+        !codes.contains(&"TS2349".to_string()),
+        "symbol-typed call signature should remain callable, got {codes:?}"
+    );
+}
+
+#[test]
+fn cli_definite_assignment_exempts_any_and_undefined_typed_let() {
+    // tsc skips definite-assignment analysis for a binding whose declared type
+    // permits `undefined` (`any`, or a union containing `undefined`). Regression
+    // for TS2454 on `let x: any` / `let x: T | undefined` assigned in try/loop.
+    let root = temp_dir("ts2454-any-undef");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        export function anyVar() {
+          let x: any;
+          for (const i of [1, 2]) { x = i; }
+          return x === undefined ? 0 : x + 1;
+        }
+        export function undefUnion() {
+          let u: number | undefined;
+          try { u = 1; } catch {}
+          return u ? u : 0;
+        }
+        export function stillReports() {
+          let s: string;
+          return s.length;
+        }
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    // The `any` and `T | undefined` bindings are exempt; the `string` binding is
+    // genuinely used before assignment and must still report exactly one TS2454.
+    let ts2454_count = json_diagnostic_codes(&parsed)
+        .iter()
+        .filter(|c| *c == "TS2454")
+        .count();
+    assert_eq!(
+        ts2454_count, 1,
+        "only the `string` binding should report TS2454"
+    );
+}
+
+#[test]
+fn cli_function_body_resolves_later_module_const() {
+    // A function body may reference a module-scope `const` declared after it; the
+    // body runs once the module is fully evaluated. Regression for TS2304 on
+    // forward references like ky's `deepMerge`.
+    let root = temp_dir("forward-const-ref");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        export const useEarly = () => later(1);
+        const later = (x: number) => x + 1;
+        export function stillReports() { return totallyMissing(1); }
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    // The forward reference to `later` resolves (no TS2304 for it); a genuinely
+    // undefined name still reports exactly one TS2304.
+    let ts2304_count = codes.iter().filter(|c| *c == "TS2304").count();
+    assert_eq!(
+        ts2304_count, 1,
+        "only the genuinely-missing name should report TS2304, got {codes:?}"
+    );
+}
+
+#[test]
+fn cli_computed_key_index_on_object_is_not_missing_property() {
+    // `obj[k]` where `k` is a non-literal computed key (`keyof T` or a type
+    // parameter `K extends keyof T`) resolves to an indexed-access type — it is
+    // not a missing-property error. Regression for TS2339 that mis-named the
+    // receiver identifier as the absent property (ky's `incoming[property]`).
+    let root = temp_dir("computed-key-index");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        type Hooks = { init?: number[]; before?: string[] };
+        declare const h: Hooks;
+        declare const k: keyof Hooks;
+        export const viaKeyof = h[k];
+        export function viaGeneric<K extends keyof Hooks>(o: Hooks, p: K) {
+          return o[p];
+        }
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(
+        !codes.contains(&"TS2339".to_string()),
+        "computed-key index access must not report TS2339, got {codes:?}"
+    );
+}
+
+#[test]
 fn cli_random_return_flow_authkit_shape_does_not_emit_ts2366() {
     let parsed = run_cli_json(&[
         "--project",

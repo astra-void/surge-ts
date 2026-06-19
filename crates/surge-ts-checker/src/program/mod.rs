@@ -912,6 +912,8 @@ fn check_program_file(
         );
         extend_diagnostics_dedup(&mut ctx.diagnostics, signature_ctx.diagnostics);
 
+        ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
+
         let statement_check_start = Instant::now();
         check_program_file_statements(
             &parsed_file.statements,
@@ -919,6 +921,7 @@ fn check_program_file(
             &final_function_signatures,
             ctx,
         );
+        ctx.module_value_fallback = None;
         record_program_timing(timings, |timings| {
             timings.per_file_statement_checking += statement_check_start.elapsed()
         });
@@ -973,7 +976,9 @@ fn check_program_file(
             timings.utility_alias_validation += utility_validation_start.elapsed()
         });
 
-        ctx.symbols = saved_symbols;
+        let validation_symbols = std::mem::replace(&mut ctx.symbols, saved_symbols);
+
+        ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
 
         let statement_check_start = Instant::now();
         check_program_file_statements(
@@ -982,6 +987,7 @@ fn check_program_file(
             &shared_state.function_signatures,
             ctx,
         );
+        ctx.module_value_fallback = None;
         record_program_timing(timings, |timings| {
             timings.per_file_statement_checking += statement_check_start.elapsed()
         });
