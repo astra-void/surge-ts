@@ -72,6 +72,7 @@ impl Type {
             Type::Tuple(_) => tuple_property_access_type(name),
             Type::String | Type::StringLiteral(_) => string_property_access_type(name),
             Type::Number | Type::NumberLiteral(_) => number_property_access_type(name),
+            Type::Function(function) => function_property_access_type(function, name),
             // Any property of `any` is `any`. A lazy reference can resolve to `any`
             // (e.g. `Promise<any>` collapses to its awaited `any`); without this arm
             // the access falls through to `None` and is misreported as a missing
@@ -285,6 +286,33 @@ fn number_property_access_type(name: &str) -> Option<Type> {
 fn tuple_property_access_type(name: &str) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
+        _ => None,
+    }
+}
+
+/// The members every function value carries via `Function`/`CallableFunction`
+/// (tsc reports none of these as missing). Under `strictBindCallApply` `call`
+/// and `apply` yield the function's own return type; modelled as variadic with
+/// no required parameters so an arbitrary `thisArg`/args list is accepted. `bind`
+/// yields a bound function, approximated by the original function type so a later
+/// call still resolves.
+fn function_property_access_type(function: &FunctionType, name: &str) -> Option<Type> {
+    match name {
+        "call" | "apply" => Some(function_type(
+            vec![],
+            function.return_type().clone(),
+            true,
+            0,
+        )),
+        "bind" => Some(function_type(
+            vec![],
+            Type::Function(function.clone()),
+            true,
+            0,
+        )),
+        "length" => Some(Type::Number),
+        "name" => Some(Type::String),
+        "toString" | "toLocaleString" => Some(function_type(vec![], Type::String, false, 0)),
         _ => None,
     }
 }
