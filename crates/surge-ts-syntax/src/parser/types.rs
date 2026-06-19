@@ -76,6 +76,12 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         } else {
             ParsedType::Boolean
         }),
+        // `infer X` in a conditional `extends` clause. Carrying the name (rather
+        // than dropping to `None`) keeps the enclosing conditional alive; the
+        // resolver treats the capture as a permissive hole.
+        TSType::TSInferType(infer_type) => {
+            Some(ParsedType::Infer(infer_type.type_parameter.name.name.to_string()))
+        }
         _ => None,
     }
 }

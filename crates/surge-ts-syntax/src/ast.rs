@@ -89,6 +89,10 @@ pub enum ParsedType {
     Mapped(ParsedMappedType),
     Conditional(ParsedConditionalType),
     TemplateLiteral(ParsedTemplateLiteralType),
+    /// An `infer X` capture inside a conditional type's `extends` clause. Modelled
+    /// so a conditional that uses it (e.g. React's `ComponentProps<T>`) survives
+    /// parsing instead of degrading the whole conditional to `Unknown`.
+    Infer(String),
 }
 
 /// A template literal type in type position, e.g. `` `/${Entity}/${Action}` ``.

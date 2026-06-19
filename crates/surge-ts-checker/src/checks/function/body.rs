@@ -39,6 +39,14 @@ pub(crate) fn should_check_missing_return(return_type: &Type) -> bool {
 }
 
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
+    thread_local! {
+        // References resolved while walking the current type, to break the cyclic
+        // structural graphs lazy nominal references form (interface A whose member
+        // resolves to B whose member resolves back to A). Re-entering a reference
+        // already on this path means the cycle introduces no *new* `unknown`.
+        static VISITING_REFERENCES: std::cell::RefCell<Vec<(std::sync::Arc<str>, std::sync::Arc<[Type]>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
     match ty {
         Type::Unknown => true,
         Type::Array(element) => type_contains_unknown(element),
@@ -58,7 +66,27 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
                     .is_some_and(type_contains_unknown)
         }
         Type::Union(union) => union.types().iter().any(type_contains_unknown),
-        Type::Reference(reference) => type_contains_unknown(&reference.resolve()),
+        Type::Reference(reference) => {
+            let on_path = VISITING_REFERENCES.with(|visiting| {
+                visiting
+                    .borrow()
+                    .iter()
+                    .any(|(id, arguments)| *id == reference.id && *arguments == reference.arguments)
+            });
+            if on_path {
+                return false;
+            }
+            VISITING_REFERENCES.with(|visiting| {
+                visiting
+                    .borrow_mut()
+                    .push((reference.id.clone(), reference.arguments.clone()));
+            });
+            let result = type_contains_unknown(&reference.resolve());
+            VISITING_REFERENCES.with(|visiting| {
+                visiting.borrow_mut().pop();
+            });
+            result
+        }
         _ => false,
     }
 }

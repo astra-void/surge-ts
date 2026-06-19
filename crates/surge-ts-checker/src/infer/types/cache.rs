@@ -152,6 +152,148 @@ impl ResolveReference for InternedInstantiation {
     }
 }
 
+/// Maximum nesting of in-flight lazy peels before a deeper one degrades to
+/// `unknown`. Real reference chains a consumer forces (an event-handler param, an
+/// inheritance chain) stay well under this; the bound only trips on a runaway
+/// library `extends` cluster.
+const MAX_LAZY_PEEL_DEPTH: usize = 24;
+
+/// How many times one generic declaration may appear in the in-flight peel stack
+/// before a deeper re-entry degrades to `unknown`. Bounds the mutually-recursive
+/// library clusters (`A<X>` → `A<f(X)>` → …) while still allowing modest, genuine
+/// self-nesting.
+const MAX_SAME_DECLARATION_PEELS: usize = 3;
+
+thread_local! {
+    /// Instantiations whose lazy body is currently being expanded on this thread.
+    /// A mutually-recursive library cluster (`HTMLElement` → `Element` → … , the
+    /// iterator/typed-array clusters) can peel back into an instantiation while
+    /// expanding it; this stack breaks that re-entry with `unknown` instead of
+    /// recursing forever. Keyed by declaration + resolved arguments.
+    static LAZY_PEEL_STACK: std::cell::RefCell<Vec<(DeclarationResolutionKey, Vec<Type>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Resolver for a deferred library [`Type::Reference`]. Unlike
+/// [`InternedInstantiation`] (which holds an already-expanded structural type),
+/// this expands the declaration body *on first peel* — one level deep, since the
+/// nested named types it references resolve to their own deferred references. This
+/// is what keeps resolving a type argument such as `HTMLElement` from eagerly
+/// pulling the whole DOM/iterator graph: the bulk shape is materialised only for
+/// the instantiations a consumer actually inspects.
+struct LazyInstantiation {
+    snapshot: Arc<CheckerContext>,
+    decl: crate::symbols::TypeDeclarationHandle,
+    decl_key: DeclarationResolutionKey,
+    type_arguments: Vec<surge_ts_syntax::ParsedType>,
+    resolved_arguments: Vec<Type>,
+    substitution: TypeParameterSubstitution,
+    memo: std::sync::OnceLock<Arc<Type>>,
+}
+
+impl ResolveReference for LazyInstantiation {
+    fn resolve(&self) -> Type {
+        if let Some(memoized) = self.memo.get() {
+            return (**memoized).clone();
+        }
+        // A peel of the same instantiation elsewhere may have already interned it.
+        if let Some(entry) =
+            lookup_instantiation(&self.snapshot, &self.decl_key, &self.resolved_arguments)
+        {
+            let _ = self.memo.set(entry.resolved.clone());
+            return (*entry.resolved).clone();
+        }
+
+        let guard_key = (self.decl_key.clone(), self.resolved_arguments.clone());
+        let blocked = LAZY_PEEL_STACK.with(|stack| {
+            let stack = stack.borrow();
+            if stack.len() >= MAX_LAZY_PEEL_DEPTH {
+                return true;
+            }
+            // Exact re-entry is a true cycle. The per-declaration count also stops a
+            // chain that re-enters the *same* generic declaration with ever-changing
+            // arguments (`A<X>` → `A<f(X)>` → …, as the mutually-recursive lib
+            // typed-array/iterator clusters do), which the exact-key check misses
+            // because every key differs. A few repeats are allowed for legitimate
+            // self-nesting before the back-edge degrades to `unknown`.
+            let same_decl = stack.iter().filter(|entry| entry.0 == self.decl_key).count();
+            same_decl >= MAX_SAME_DECLARATION_PEELS || stack.iter().any(|entry| *entry == guard_key)
+        });
+        if blocked {
+            return Type::Unknown;
+        }
+        LAZY_PEEL_STACK.with(|stack| stack.borrow_mut().push(guard_key.clone()));
+
+        // Box the working context so a nested peel keeps the per-frame stack small
+        // — the struct is large and a deep (but bounded) library `extends` chain
+        // would otherwise overflow the stack with on-stack clones.
+        let mut ctx = Box::new((*self.snapshot).clone());
+        let mut resolving = Vec::new();
+        let resolved = match self.decl.get() {
+            TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
+                alias,
+                self.type_arguments.clone(),
+                None,
+                &mut ctx,
+                &mut resolving,
+                &self.substitution,
+                Some(&self.resolved_arguments),
+            ),
+            TypeDeclarationInfo::Interface(interface) => resolve_interface(
+                interface,
+                self.type_arguments.clone(),
+                &mut ctx,
+                &mut resolving,
+                &self.substitution,
+                Some(&self.resolved_arguments),
+            ),
+        };
+
+        LAZY_PEEL_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if let Some(position) = stack.iter().rposition(|entry| *entry == guard_key) {
+                stack.remove(position);
+            }
+        });
+
+        let interned =
+            intern_instantiation(&self.snapshot, &self.decl_key, &self.resolved_arguments, resolved.ty);
+        let _ = self.memo.set(interned.clone());
+        (*interned).clone()
+    }
+}
+
+/// Builds a deferred library [`Type::Reference`] whose structural body is expanded
+/// lazily on peel (see [`LazyInstantiation`]). `resolved_arguments` carry the
+/// nominal identity and display; `decl`/`substitution` drive the one-level
+/// expansion when forced.
+pub(crate) fn make_lazy_type_reference(
+    ctx: &mut CheckerContext,
+    reference_id: &str,
+    display: &str,
+    decl: crate::symbols::TypeDeclarationHandle,
+    decl_key: DeclarationResolutionKey,
+    type_arguments: Vec<surge_ts_syntax::ParsedType>,
+    resolved_arguments: Vec<Type>,
+    substitution: TypeParameterSubstitution,
+) -> Type {
+    let snapshot = ctx.lazy_resolution_snapshot();
+    Type::Reference(TypeReference::new(
+        reference_id.to_string(),
+        display.to_string(),
+        resolved_arguments.clone(),
+        Arc::new(LazyInstantiation {
+            snapshot,
+            decl,
+            decl_key,
+            type_arguments,
+            resolved_arguments,
+            substitution,
+            memo: std::sync::OnceLock::new(),
+        }),
+    ))
+}
+
 /// Interns the structural expansion of `key` at `arguments`, returning the
 /// shared `Arc<Type>`. On a hit the previously-expanded shape is returned and
 /// `structural` is discarded, so each unique instantiation expands at most once.

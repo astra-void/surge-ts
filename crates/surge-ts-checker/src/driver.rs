@@ -533,6 +533,21 @@ fn collect_namespace_type_declarations(
     namespace: &ParsedNamespaceDeclaration,
     ctx: &mut CheckerContext,
 ) {
+    collect_namespace_type_declarations_prefixed(namespace, &namespace.name, ctx);
+}
+
+/// `prefix` is the fully-qualified dotted path to `namespace` (`React`, then
+/// `React.JSX`, …). Each member is registered under the full path so a qualified
+/// consumer reference like `React.JSX.IntrinsicElements` resolves; a nested member
+/// is ALSO registered under the bare immediate-namespace key (`JSX.IntrinsicElements`)
+/// so the JSX checker's literal lookup and the unqualified sibling references inside
+/// the library's own bodies keep resolving. First-wins (declaration merging).
+fn collect_namespace_type_declarations_prefixed(
+    namespace: &ParsedNamespaceDeclaration,
+    prefix: &str,
+    ctx: &mut CheckerContext,
+) {
+    let bare_prefix = namespace.name.as_str();
     for statement in &namespace.statements {
         let inner = match statement {
             ParsedStatement::ExportDeclaration(export) => {
@@ -547,38 +562,49 @@ fn collect_namespace_type_declarations(
 
         match inner {
             ParsedStatement::InterfaceDeclaration(interface) => {
-                let qualified = format!("{}.{}", namespace.name, interface.name);
-                let info = InterfaceInfo::new(
-                    qualified.clone(),
-                    ctx.file_name.clone(),
-                    interface.name_span,
-                    interface.type_parameters.clone(),
-                    interface.extends.clone(),
-                    interface.members.clone(),
-                    interface.string_index_type.clone(),
-                    interface.call_signature.clone(),
-                    None,
-                );
-                let _ = ctx
-                    .type_declarations
-                    .insert(qualified, TypeDeclarationInfo::Interface(info));
+                let mut register = |key: String| {
+                    let info = InterfaceInfo::new(
+                        key.clone(),
+                        ctx.file_name.clone(),
+                        interface.name_span,
+                        interface.type_parameters.clone(),
+                        interface.extends.clone(),
+                        interface.members.clone(),
+                        interface.string_index_type.clone(),
+                        interface.call_signature.clone(),
+                        None,
+                    );
+                    let _ = ctx
+                        .type_declarations
+                        .insert(key, TypeDeclarationInfo::Interface(info));
+                };
+                register(format!("{}.{}", prefix, interface.name));
+                if prefix != bare_prefix {
+                    register(format!("{}.{}", bare_prefix, interface.name));
+                }
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {
-                let qualified = format!("{}.{}", namespace.name, alias.name);
-                let info = TypeAliasInfo::new(
-                    qualified.clone(),
-                    ctx.file_name.clone(),
-                    alias.name_span,
-                    alias.type_parameters.clone(),
-                    alias.ty.clone(),
-                    None,
-                );
-                let _ = ctx
-                    .type_declarations
-                    .insert(qualified, TypeDeclarationInfo::Alias(info));
+                let mut register = |key: String| {
+                    let info = TypeAliasInfo::new(
+                        key.clone(),
+                        ctx.file_name.clone(),
+                        alias.name_span,
+                        alias.type_parameters.clone(),
+                        alias.ty.clone(),
+                        None,
+                    );
+                    let _ = ctx
+                        .type_declarations
+                        .insert(key, TypeDeclarationInfo::Alias(info));
+                };
+                register(format!("{}.{}", prefix, alias.name));
+                if prefix != bare_prefix {
+                    register(format!("{}.{}", bare_prefix, alias.name));
+                }
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                collect_namespace_type_declarations(inner_namespace, ctx);
+                let inner_prefix = format!("{}.{}", prefix, inner_namespace.name);
+                collect_namespace_type_declarations_prefixed(inner_namespace, &inner_prefix, ctx);
             }
             _ => {}
         }

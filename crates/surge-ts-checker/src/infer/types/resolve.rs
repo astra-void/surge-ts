@@ -176,6 +176,16 @@ pub(crate) fn resolve_parsed_type(
         ParsedType::TemplateLiteral(template) => {
             resolve_template_literal_type(template, ctx, resolving, substitution)
         }
+        // An `infer X` capture resolves to a permissive `any`: with no real
+        // inference, the enclosing `extends` pattern (e.g. `Ctor<infer P>`) stays a
+        // concrete shape so a non-matching check type correctly falls through to
+        // the conditional's false branch, rather than collapsing to `unknown`
+        // (which `is_assignable_to` would treat as matching). See
+        // `resolve_conditional_type`.
+        ParsedType::Infer(_) => ResolvedType {
+            ty: Type::Any,
+            had_error: false,
+        },
     }
 }
 
@@ -298,7 +308,13 @@ pub(crate) fn resolve_conditional_type(
 
     let resolved_extends =
         resolve_parsed_type(*conditional.extends_type, ctx, resolving, substitution);
-    if resolved_extends.had_error {
+    // Only bail when the extends pattern is structureless: a usable shape that
+    // merely tainted `had_error` from an unmodelled deep member (e.g. React's
+    // `JSXElementConstructor<P>`, whose body pulls `ReactNode`/`Component`) is
+    // still enough to decide the branch assignability test, so the conditional
+    // must proceed rather than collapse — that collapse is what blocked
+    // `ComponentProps<"input">` from selecting its `JSX.IntrinsicElements[T]` branch.
+    if resolved_extends.had_error && matches!(resolved_extends.ty, Type::Unknown) {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,
@@ -332,7 +348,17 @@ pub(crate) fn resolve_conditional_type(
                 substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
             member_substitution.insert(parameter_name.clone(), member.clone());
 
-            let branch = if is_assignable_to(&member, &resolved_extends.ty) {
+            // An extends pattern surge could not model (`unknown`) must not be
+            // treated as a matched constraint: `is_assignable_to(x, unknown)` is
+            // always true (unknown is the top type), which would pick the true
+            // branch for every member. tsc keeps the constraint meaningful, so an
+            // unmodelled extends falls to the false branch instead — this is what
+            // lets `ComponentProps<"input">` skip its `JSXElementConstructor<infer>`
+            // branch (whose body resolves to `unknown` here) and reach the
+            // `keyof JSX.IntrinsicElements` branch.
+            let branch = if !matches!(resolved_extends.ty, Type::Unknown)
+                && is_assignable_to(&member, &resolved_extends.ty)
+            {
                 (*conditional.true_type).clone()
             } else {
                 (*conditional.false_type).clone()
@@ -734,6 +760,34 @@ pub(crate) fn resolve_named_type(
             return cached;
         }
 
+        // Defer a library-scoped interface: its body (which transitively pulls the
+        // mutually-recursive DOM/iterator graph) is expanded only when the
+        // reference is peeled, so using the interface as a type argument no longer
+        // collapses the enclosing instantiation. User interfaces and all type
+        // aliases stay eager so their diagnostics and primitive/union expansions
+        // are unchanged.
+        if matches!(declaration, TypeDeclarationInfo::Interface(_))
+            && declaration_file_is_library_scoped(declaration, ctx)
+        {
+            let alias_id = format!("{}\u{0}{}", cache_key.file_name, cache_key.name);
+            let display = named_type.name.clone();
+            let resolved = ResolvedType {
+                ty: make_lazy_type_reference(
+                    ctx,
+                    &alias_id,
+                    &display,
+                    handle,
+                    cache_key.clone(),
+                    named_type.type_arguments,
+                    Vec::new(),
+                    substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
+                ),
+                had_error: false,
+            };
+            cache_named_type_resolution(ctx, &cache_key, &resolved);
+            return resolved;
+        }
+
         mark_named_type_resolution_in_progress(ctx, &cache_key);
         let resolved = match declaration {
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
@@ -861,6 +915,33 @@ pub(crate) fn resolve_named_type(
                 ctx,
             );
         }
+    }
+
+    // Defer a concrete library-scoped generic *interface* instantiation
+    // (`HTMLAttributes<HTMLElement>`): expand its body only on peel so a use site
+    // does not pull the whole DOM/iterator graph and collapse. Generic type
+    // aliases stay eager (their bodies reference interfaces, which are themselves
+    // deferred, so they stay bounded); non-concrete instantiations stay eager
+    // because their placeholder substitution must not be frozen into a shared ref.
+    if concrete_instantiation
+        && matches!(declaration, TypeDeclarationInfo::Interface(_))
+        && declaration_file_is_library_scoped(declaration, ctx)
+        && let (Some(display), Some(arguments)) =
+            (alias_display_name.as_ref(), reference_arguments.as_ref())
+    {
+        return ResolvedType {
+            ty: make_lazy_type_reference(
+                ctx,
+                &reference_id,
+                display,
+                handle,
+                decl_key.clone(),
+                named_type.type_arguments,
+                arguments.clone(),
+                substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
+            ),
+            had_error: false,
+        };
     }
 
     // Measure cycles triggered by this resolution alone. The declaration is pushed
