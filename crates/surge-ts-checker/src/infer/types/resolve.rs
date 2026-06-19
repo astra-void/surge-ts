@@ -1837,7 +1837,14 @@ fn resolve_indexed_access_type(
         }
         (_, invalid_index) => {
             if let Type::Unknown = invalid_index {
-                if ctx.options.diagnostic_profile != crate::context::DiagnosticProfile::Native {
+                // In a generic context (a type-parameter receiver/key or a
+                // substituted reference) an `unknown` index is a resolution
+                // limitation we cannot validate — e.g. `T[keyof T]` where `keyof T`
+                // could not be computed — not the literal `value[unknownKey]` that
+                // tsc flags. Degrade silently rather than emit a false TS2538.
+                if !generic_indexed_access
+                    && ctx.options.diagnostic_profile != crate::context::DiagnosticProfile::Native
+                {
                     let mut diagnostic =
                         Diagnostic::ts2538(&invalid_index.name(), ctx.file_name.clone());
                     if let Some(span) = indexed_access.span {
@@ -1850,7 +1857,7 @@ fn resolve_indexed_access_type(
                 }
                 return ResolvedType {
                     ty: Type::Unknown,
-                    had_error: true,
+                    had_error: !generic_indexed_access,
                 };
             }
             let mut diagnostic = Diagnostic::ts2538(&invalid_index.name(), ctx.file_name.clone());
