@@ -51,7 +51,18 @@ pub(crate) fn check_call_like(
 ) -> Option<Type> {
     record_call_resolution();
     let call_start = Instant::now();
-    let Some(symbol) = symbols.get(callee_name) else {
+    // A call may target a module-scope binding declared later in the file when it
+    // sits inside a function body (the body runs after the module is evaluated),
+    // so fall back to the module value table before reporting an unresolved name.
+    let fallback_symbol = if symbols.get(callee_name).is_none() {
+        ctx.module_value_fallback
+            .as_ref()
+            .and_then(|fallback| fallback.get(callee_name))
+            .cloned()
+    } else {
+        None
+    };
+    let Some(symbol) = symbols.get(callee_name).or(fallback_symbol.as_ref()) else {
         if emit_type_only_as_value_diagnostic(callee_name, callee_span, ctx) {
             return None;
         }

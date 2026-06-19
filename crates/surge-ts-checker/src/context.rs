@@ -216,6 +216,12 @@ pub(crate) struct CheckerContext {
     /// a lazy peel emits none.
     lazy_resolution_snapshot: Option<Arc<CheckerContext>>,
     file_kinds: Arc<HashMap<String, FileKind>>,
+    /// All module-scope value bindings of the file currently being checked,
+    /// inferred up front. Consulted only when a bare identifier misses the
+    /// positional scope, so a function body may reference a `const`/`let`/`class`
+    /// declared *after* it (legal — the body runs after the module finishes).
+    /// `Arc`-shared so cloning the context stays cheap.
+    pub(crate) module_value_fallback: Option<Arc<SymbolTable>>,
 }
 
 impl CheckerContext {
@@ -258,6 +264,7 @@ impl CheckerContext {
             lowest_cycle_target_index: usize::MAX,
             lazy_resolution_snapshot: None,
             file_kinds: Arc::new(file_kinds),
+            module_value_fallback: None,
         }
     }
 
