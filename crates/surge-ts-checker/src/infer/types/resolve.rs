@@ -98,11 +98,21 @@ pub(crate) fn resolve_parsed_type(
             resolve_named_type(named_type, ctx, resolving, substitution)
         }
         ParsedType::TypeOf(type_of) => {
+            // `typeof X` references a value. During type-declaration resolution the
+            // file's imported value bindings may not yet be in `ctx.symbols`, so on
+            // a miss consult the module's full value table (the same forward-ref
+            // fallback used when checking expressions); genuinely-missing names
+            // still report TS2304.
             let symbol = ctx
                 .symbols
                 .get(&type_of.name)
                 .cloned()
-                .or_else(|| ctx.ambient_global_symbols.get(&type_of.name).cloned());
+                .or_else(|| ctx.ambient_global_symbols.get(&type_of.name).cloned())
+                .or_else(|| {
+                    ctx.module_value_fallback
+                        .as_ref()
+                        .and_then(|table| table.get(&type_of.name).cloned())
+                });
 
             let Some(symbol) = symbol else {
                 let mut diagnostic = Diagnostic::ts2304(&type_of.name, ctx.file_name.clone());
