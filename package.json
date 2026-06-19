@@ -4,6 +4,8 @@
 	"version": "0.0.0",
 	"type": "module",
 	"scripts": {
+		"test:rust": "cargo nextest run --workspace",
+		"test:rust:ci": "cargo nextest run --workspace --profile ci",
 		"lib:generate": "tsx scripts/lib/generate-default-libs.ts",
 		"lib:test": "tsx --test scripts/lib/generate-default-libs.test.ts",
 		"oracle:tsc": "tsc --noEmit --pretty false",
