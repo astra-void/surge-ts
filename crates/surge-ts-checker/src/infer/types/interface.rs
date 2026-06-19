@@ -17,6 +17,7 @@ pub(crate) fn resolve_interface(
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
+    pre_resolved_arguments: Option<&[Type]>,
 ) -> ResolvedType {
     let declaration_key = declaration_resolution_key(&interface.file_name, &interface.name);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
@@ -46,6 +47,7 @@ pub(crate) fn resolve_interface(
         ctx,
         resolving,
         substitution,
+        pre_resolved_arguments,
     ) else {
         resolving.pop();
         return ResolvedType {
@@ -184,7 +186,10 @@ pub(crate) fn resolve_interface_declaration(
         let resolved_base = resolve_named_type(base.clone(), ctx, resolving, substitution);
         had_error |= resolved_base.had_error;
 
-        match resolved_base.ty {
+        // A generic base (`extends Dict<string>`) resolves to a nominal
+        // `Type::Reference`; peel it so its inherited members and index signature
+        // are merged structurally.
+        match resolved_base.ty.peeled() {
             Type::Object(object_type) => {
                 for (name, property) in object_type.properties.iter() {
                     properties.entry(name.clone()).or_insert(property.clone());

@@ -45,8 +45,8 @@ pub(crate) fn check_jsx_element(
         ctx,
     );
 
-    let props_object = match &props_type {
-        Some(Type::Object(object)) => Some(object.clone()),
+    let props_object = match props_type.as_ref().map(Type::peeled) {
+        Some(Type::Object(object)) => Some(object),
         _ => None,
     };
 
@@ -122,7 +122,9 @@ fn resolve_props_type(
 /// component (or an empty object for a zero-parameter component). Non-function
 /// values (including `any`) yield `None` so no prop check runs.
 fn component_props_type(component_type: &Type) -> Option<Type> {
-    match component_type {
+    // `const Foo: FC<Props> = …` types the component as a nominal reference; peel
+    // it to reach the underlying function and its props parameter.
+    match &component_type.peeled() {
         Type::Function(function_type) => Some(
             function_type
                 .parameters()
@@ -153,7 +155,7 @@ fn resolve_intrinsic_props_type(
         span: None,
         type_arguments: Vec::new(),
     });
-    let intrinsic_type = map_parsed_type(named, ctx);
+    let intrinsic_type = map_parsed_type(named, ctx).peeled();
     let Type::Object(object) = &intrinsic_type else {
         return None;
     };

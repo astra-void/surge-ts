@@ -67,7 +67,14 @@ pub(crate) fn check_call_like(
         return None;
     }
 
-    let result = match &symbol.ty {
+    // A callee typed by a named declaration (`declare var Number: NumberConstructor`)
+    // is a nominal reference; peel it so its call/construct signature is visible.
+    let callee_ty = symbol.ty.peeled();
+    if matches!(callee_ty, Type::Unknown) {
+        return None;
+    }
+
+    let result = match &callee_ty {
         Type::Function(function_type) => {
             with_type_copy_reason(TypeCopyReason::CallResolution, || {
                 let function_type = instantiate_function_type(

@@ -42,6 +42,17 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         }
     }
 
+    // Nominal references compare nominally first (same declaration + arguments is
+    // handled by the `from == to` fast path above); anything else falls back to
+    // comparing the structural expansion, so a reference stays interchangeable
+    // with its expanded shape without forcing eager expansion at construction.
+    if let Type::Reference(reference) = from {
+        return is_assignable_to(&reference.resolve(), to);
+    }
+    if let Type::Reference(reference) = to {
+        return is_assignable_to(from, &reference.resolve());
+    }
+
     match (from, to) {
         (Type::Undefined, Type::Void) => true,
         (Type::Function(source), Type::Function(target)) => {

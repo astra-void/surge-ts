@@ -60,6 +60,19 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
 
+    // A generic expected type (`Props`, `Box<T>`, …) is a nominal
+    // `Type::Reference`; peel it to its structural shape so the contextual-typing
+    // dispatch below (function/tuple/array/object/union) sees the real form
+    // instead of falling through to context-free evaluation.
+    let peeled_expected;
+    let expected_type = match expected_type {
+        Type::Reference(reference) => {
+            peeled_expected = reference.resolve().peeled();
+            &peeled_expected
+        }
+        other => other,
+    };
+
     if let (Type::Function(expected_function_type), ParsedExpression::ArrowFunction(arrow)) =
         (expected_type, expression)
     {

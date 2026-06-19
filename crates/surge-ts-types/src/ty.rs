@@ -1,4 +1,4 @@
-use crate::{FunctionType, ObjectType, UnionType};
+use crate::{FunctionType, ObjectType, TypeReference, UnionType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NumberLiteralType {
@@ -23,6 +23,10 @@ pub enum Type {
     Array(Box<Type>),
     Tuple(Vec<Type>),
     Union(UnionType),
+    /// A lazy, nominal reference to a named type instantiation (`Box<string>`,
+    /// `User`, …). The structural shape is resolved on demand and memoized,
+    /// rather than eagerly expanded at every use site. See [`TypeReference`].
+    Reference(TypeReference),
 }
 
 fn function_type(
@@ -45,7 +49,19 @@ impl Type {
             Type::String | Type::StringLiteral(_) => Some(Type::String),
             Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
             Type::Boolean | Type::BooleanLiteral(_) => Some(Type::Boolean),
+            Type::Reference(reference) => reference.resolve().base_primitive(),
             _ => None,
+        }
+    }
+
+    /// Returns the structural form of a [`Type::Reference`] (resolving lazily and
+    /// recursively), or a clone of `self` otherwise. Use at sites that
+    /// structurally inspect a type — e.g. matching `Type::Object` to read its
+    /// properties or index signature — so a nominal reference stays transparent.
+    pub fn peeled(&self) -> Type {
+        match self {
+            Type::Reference(reference) => reference.resolve().peeled(),
+            other => other.clone(),
         }
     }
 
@@ -56,6 +72,7 @@ impl Type {
             Type::Tuple(_) => tuple_property_access_type(name),
             Type::String | Type::StringLiteral(_) => string_property_access_type(name),
             Type::Number | Type::NumberLiteral(_) => number_property_access_type(name),
+            Type::Reference(reference) => reference.resolve().get_property_access_type(name),
             _ => None,
         }
     }
@@ -189,6 +206,7 @@ impl Type {
                     .collect::<Vec<_>>()
                     .join(" | ")
             }
+            Type::Reference(reference) => reference.display.to_string(),
         }
     }
 }

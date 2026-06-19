@@ -93,7 +93,10 @@ fn static_member_owner_for_missing_instance_property(
     object_type: &Type,
     symbols: &SymbolTable,
 ) -> Option<String> {
-    let Type::Object(instance) = object_type else {
+    // A class instance type is a nominal reference; peel it to read the class
+    // name (its object's `alias_name`) and detect the static-member mixup.
+    let object_type = object_type.peeled();
+    let Type::Object(instance) = &object_type else {
         return None;
     };
     let class_name = instance.alias_name.as_deref()?;
@@ -1070,6 +1073,7 @@ fn evaluate_index_access(
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Undefined
+        | Type::Reference(_)
         | Type::Union(_) => {
             let object_type_name = symbol.ty.name();
             ctx.push(diagnostic_with_syntax_span(

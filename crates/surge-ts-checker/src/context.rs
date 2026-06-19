@@ -114,6 +114,16 @@ pub(crate) struct GenericInstantiationCacheEntry {
     pub(crate) had_error: bool,
 }
 
+/// One memoized structural expansion of a named declaration at a fixed set of
+/// resolved type arguments, shared via `Arc` so a `Type::Reference` can resolve
+/// to it without re-expanding the declaration body. Backs the lazy/nominal type
+/// reference machinery (see `infer::types` instantiation interner).
+#[derive(Debug, Clone)]
+pub(crate) struct InstantiationCacheEntry {
+    pub(crate) arguments: Vec<Type>,
+    pub(crate) resolved: std::sync::Arc<Type>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
@@ -147,6 +157,13 @@ pub(crate) struct CheckerContext {
     /// `Arc` across all `CheckerContext` clones and jobs.
     pub(crate) program_resolved_generic_types:
         Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>>>,
+    /// Program-wide instantiation interner backing lazy/nominal `Type::Reference`
+    /// resolution. Maps a declaration + resolved type arguments to the shared
+    /// structural expansion, so a reference resolves (and the body expands) at
+    /// most once per unique instantiation rather than at every use site. Shared
+    /// via `Arc` across all `CheckerContext` clones and jobs.
+    pub(crate) program_instantiations:
+        Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<InstantiationCacheEntry>>>>,
     pub(crate) ambient_modules: Arc<std::collections::HashMap<String, ModuleExportTable>>,
     /// Module augmentations (`declare module "x"` in a file that is itself a
     /// module). Unlike ambient module declarations, these only merge into an
@@ -209,6 +226,7 @@ impl CheckerContext {
             type_declaration_scope: None,
             resolved_named_types: Arc::new(Mutex::new(HashMap::new())),
             program_resolved_generic_types: Arc::new(Mutex::new(HashMap::new())),
+            program_instantiations: Arc::new(Mutex::new(HashMap::new())),
             ambient_modules: Arc::new(std::collections::HashMap::new()),
             module_augmentations: Arc::new(std::collections::HashMap::new()),
             ambient_global_symbols: SymbolTable::new(),
@@ -480,6 +498,27 @@ impl CheckerContext {
     }
 
     pub(crate) fn truncate_diagnostics(&mut self, len: usize) {
+        self.diagnostics.truncate(len);
+    }
+
+    /// Like [`truncate_diagnostics`] but also releases the
+    /// `push_utility_diagnostic_once` keys recorded for the discarded diagnostics.
+    /// Used by a speculative probe (e.g. resolving a generic's arguments to form a
+    /// key) that discards its diagnostics: without releasing the once-guard, an
+    /// authoritative re-resolution of the same type would be suppressed as a
+    /// duplicate. Scoped narrowly so general truncation keeps its behavior.
+    pub(crate) fn truncate_diagnostics_releasing_utility_keys(&mut self, len: usize) {
+        if len < self.diagnostics.len() {
+            for diagnostic in &self.diagnostics[len..] {
+                let key = UtilityDiagnosticKey {
+                    code: diagnostic.code.to_string(),
+                    file_name: diagnostic.file_name.clone(),
+                    span: diagnostic.span.map(|span| (span.start, span.end)),
+                    message: diagnostic.message.clone(),
+                };
+                self.utility_diagnostic_keys.remove(&key);
+            }
+        }
         self.diagnostics.truncate(len);
     }
 
