@@ -93,6 +93,7 @@ pub(crate) struct InterfaceBody {
     pub(crate) members: Vec<ParsedInterfaceMember>,
     pub(crate) string_index_type: Option<ParsedType>,
     pub(crate) call_signature: Option<ParsedFunctionType>,
+    pub(crate) construct_signatures: Vec<ParsedFunctionType>,
 }
 
 impl Clone for InterfaceBody {
@@ -104,6 +105,7 @@ impl Clone for InterfaceBody {
             members: self.members.clone(),
             string_index_type: self.string_index_type.clone(),
             call_signature: self.call_signature.clone(),
+            construct_signatures: self.construct_signatures.clone(),
         }
     }
 }
@@ -131,6 +133,7 @@ impl InterfaceInfo {
         members: Vec<ParsedInterfaceMember>,
         string_index_type: Option<ParsedType>,
         call_signature: Option<ParsedFunctionType>,
+        construct_signatures: Vec<ParsedFunctionType>,
         resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ) -> Self {
         Self {
@@ -145,6 +148,7 @@ impl InterfaceInfo {
                 members,
                 string_index_type,
                 call_signature,
+                construct_signatures,
             }),
         }
     }
@@ -242,6 +246,11 @@ pub(crate) fn merge_interface_infos(
             .call_signature
             .clone()
             .or_else(|| incoming.body.call_signature.clone()),
+        {
+            let mut merged = existing.body.construct_signatures.clone();
+            merged.extend(incoming.body.construct_signatures.iter().cloned());
+            merged
+        },
         existing
             .resolution_scope
             .clone()
@@ -438,6 +447,8 @@ fn fold_interface_declaration(
     if body.call_signature.is_none() {
         body.call_signature = incoming.body.call_signature.clone();
     }
+    body.construct_signatures
+        .extend(incoming.body.construct_signatures.iter().cloned());
     if accumulator.resolution_scope.is_none() {
         accumulator.resolution_scope = incoming.resolution_scope.clone();
     }
@@ -680,6 +691,7 @@ mod tests {
             vec![],
             None,
             None,
+            Vec::new(),
             None,
         ));
 
@@ -722,6 +734,7 @@ mod tests {
             vec![],
             None,
             None,
+            Vec::new(),
             None,
         ));
         let _ = local.insert("User", local_interface.clone());

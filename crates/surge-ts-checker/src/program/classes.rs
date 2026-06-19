@@ -42,6 +42,7 @@ pub(crate) fn class_instance_interface_info(
         members,
         None,
         None,
+        Vec::new(),
         None,
     )
 }

@@ -242,24 +242,61 @@ pub(crate) fn check_new_like(
     // declared in physical default-lib files, so generated/default mode keeps
     // the existing builtin behaviour.
     if let ParsedExpression::Identifier { name, .. } = callee {
-        let physical_interface_file = match ctx.lookup_type_declaration(name) {
+        let physical_interface_arity = match ctx.lookup_type_declaration(name) {
             Some(crate::symbols::TypeDeclarationInfo::Interface(info)) => {
                 if crate::default_lib::is_physical_default_lib_file_name(&info.file_name) {
-                    Some(())
+                    Some(info.body.type_parameters.len())
                 } else {
                     None
                 }
             }
             _ => None,
         };
-        if physical_interface_file.is_some() {
-            for argument in arguments {
-                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+        if let Some(arity) = physical_interface_arity {
+            // Check the arguments against the constructor value's construct
+            // signature (e.g. `PromiseConstructor`'s `new <T>(executor): …`) so
+            // callback parameters — a `Promise` executor's `(resolve, reject)` —
+            // get contextual types instead of collapsing to implicit `any`. When
+            // no construct signature is reachable, evaluate the arguments bare.
+            let construct_signature = match evaluate_expression(callee, callee_span, symbols, ctx) {
+                InferredExpression::Known(ty) => match ty.peeled() {
+                    Type::Object(object) => object.construct_signature().cloned(),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(construct_signature) = construct_signature {
+                with_type_copy_reason(TypeCopyReason::CallResolution, || {
+                    check_function_type_call(
+                        &construct_signature,
+                        callee_span,
+                        call_span,
+                        type_arguments,
+                        arguments,
+                        symbols,
+                        ctx,
+                    )
+                });
+            } else {
+                for argument in arguments {
+                    let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+                }
             }
+            // Build the instance interface type (`Map<K, V>`) so lib methods carry
+            // meaningful types. With explicit type arguments use them; otherwise
+            // default each missing argument to `any` — surge does not yet infer a
+            // generic constructor's type arguments from its call arguments, and a
+            // bare `Set<>` would trip the generic-arity TS2314, while `Set<any>`
+            // stays assignable to whatever the use site expects.
+            let type_arguments = if type_arguments.is_empty() && arity > 0 {
+                vec![ParsedType::Any; arity]
+            } else {
+                type_arguments.to_vec()
+            };
             let named = ParsedType::Named(ParsedNamedType {
                 name: name.clone(),
                 span: None,
-                type_arguments: type_arguments.to_vec(),
+                type_arguments,
             });
             return Some(crate::infer::map_parsed_type(named, ctx));
         }
@@ -276,7 +313,9 @@ pub(crate) fn check_new_like(
 
     let callee_result = evaluate_expression(callee, callee_span, symbols, ctx);
     let callee_type = match callee_result {
-        InferredExpression::Known(ty) => ty,
+        // A constructor value is often a nominal reference (`declare const P:
+        // PromiseConstructor`); peel it so its construct signature is visible.
+        InferredExpression::Known(ty) => ty.peeled(),
         // The constructor target is unresolved (e.g. `new Missing(...)`). The
         // missing-name diagnostic is already reported; still evaluate the
         // arguments so their own errors surface, but do not cascade a result.

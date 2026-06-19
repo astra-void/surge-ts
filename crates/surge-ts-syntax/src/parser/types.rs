@@ -407,6 +407,32 @@ pub(crate) fn parse_call_signature(
     })
 }
 
+pub(crate) fn parse_construct_signature(
+    signature: &oxc_ast::ast::TSConstructSignatureDeclaration<'_>,
+) -> Option<ParsedFunctionType> {
+    let mut parameters = signature
+        .params
+        .items
+        .iter()
+        .map(parse_function_type_parameter)
+        .collect::<Option<Vec<_>>>()?;
+
+    if let Some(rest) = signature.params.rest.as_deref() {
+        parameters.push(parse_function_type_rest_parameter(rest)?);
+    }
+
+    let return_type = signature
+        .return_type
+        .as_ref()
+        .and_then(|annotation| parse_type_annotation(annotation.as_ref()))?;
+
+    Some(ParsedFunctionType {
+        parameters,
+        return_type: Box::new(return_type),
+        type_parameters: parse_type_parameters(signature.type_parameters.as_deref()),
+    })
+}
+
 /// Lowers a method signature (`foo(arg: A): R`) into a property whose type is a
 /// [`ParsedType::Function`], so method calls reuse the existing function-type property
 /// checking. Shared by interface and object-type-literal parsing.

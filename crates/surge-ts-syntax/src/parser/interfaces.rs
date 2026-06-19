@@ -5,8 +5,8 @@ use crate::{ParsedInterfaceDeclaration, ParsedInterfaceMember};
 use super::spans::text_span_from_oxc_span;
 use super::types::parse_type_parameters;
 use super::types::{
-    parse_call_signature, parse_index_signature_value_type, parse_type_method_signature,
-    parse_type_property_signature,
+    parse_call_signature, parse_construct_signature, parse_index_signature_value_type,
+    parse_type_method_signature, parse_type_property_signature,
 };
 
 pub(crate) fn parse_interface_declaration(
@@ -46,6 +46,21 @@ pub(crate) fn parse_interface_declaration(
             _ => None,
         });
 
+    // Construct signatures (`new <T>(...): Promise<T>`) make the interface usable
+    // with `new` (e.g. `PromiseConstructor`). Collect every overload; the resolver
+    // merges them into one permissive signature.
+    let construct_signatures = declaration
+        .body
+        .body
+        .iter()
+        .filter_map(|member| match member {
+            TSSignature::TSConstructSignatureDeclaration(signature) => {
+                parse_construct_signature(signature)
+            }
+            _ => None,
+        })
+        .collect();
+
     Some(ParsedInterfaceDeclaration {
         is_declare: declaration.declare,
         name: declaration.id.name.to_string(),
@@ -59,6 +74,7 @@ pub(crate) fn parse_interface_declaration(
         members,
         string_index_type,
         call_signature,
+        construct_signatures,
     })
 }
 
