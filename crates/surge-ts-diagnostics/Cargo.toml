@@ -3,6 +3,9 @@ name = "surge-ts-diagnostics"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+doctest = false
+
 [dependencies]
 
 [dev-dependencies]
