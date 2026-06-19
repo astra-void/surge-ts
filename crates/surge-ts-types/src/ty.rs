@@ -69,7 +69,10 @@ impl Type {
         match self {
             Type::Object(object) => object.get_property_access_type(name),
             Type::Array(element) => array_property_access_type(name, element.as_ref()),
-            Type::Tuple(_) => tuple_property_access_type(name),
+            // A tuple is an array, so it carries every `Array.prototype` method
+            // (`includes`, `map`, …) over the union of its element types — not just
+            // `length`. `["get","post"] as const` must answer `.includes`.
+            Type::Tuple(elements) => tuple_property_access_type(name, elements),
             Type::String | Type::StringLiteral(_) => string_property_access_type(name),
             Type::Number | Type::NumberLiteral(_) => number_property_access_type(name),
             Type::Function(function) => function_property_access_type(function, name),
@@ -283,11 +286,16 @@ fn number_property_access_type(name: &str) -> Option<Type> {
     }
 }
 
-fn tuple_property_access_type(name: &str) -> Option<Type> {
-    match name {
-        "length" => Some(Type::Number),
-        _ => None,
+fn tuple_property_access_type(name: &str, elements: &[Type]) -> Option<Type> {
+    if name == "length" {
+        return Some(Type::Number);
     }
+    let element = if elements.is_empty() {
+        Type::Never
+    } else {
+        Type::Union(UnionType::new(elements.to_vec()))
+    };
+    array_property_access_type(name, &element)
 }
 
 /// The members every function value carries via `Function`/`CallableFunction`
@@ -539,9 +547,19 @@ mod tests {
     #[test]
     fn tuple_unknown_property_is_unsupported() {
         assert_eq!(
-            Type::Tuple(vec![Type::String, Type::Number]).get_property_access_type("push"),
+            Type::Tuple(vec![Type::String, Type::Number])
+                .get_property_access_type("definitelyNotAnArrayMember"),
             None
         );
+    }
+
+    #[test]
+    fn tuple_exposes_array_methods_over_element_union() {
+        let tuple = Type::Tuple(vec![Type::String, Type::Number]);
+        // A tuple is an array, so array methods resolve over the element union.
+        assert!(tuple.get_property_access_type("includes").is_some());
+        assert!(tuple.get_property_access_type("map").is_some());
+        assert_eq!(tuple.get_property_access_type("length"), Some(Type::Number));
     }
 
     #[test]
