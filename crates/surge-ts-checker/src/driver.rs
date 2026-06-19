@@ -242,11 +242,15 @@ fn lower_global_augmentation_values(
     for stmt in block_statements {
         let var = match stmt {
             ParsedStatement::VariableDeclaration(var) => Some(var),
-            ParsedStatement::ExportDeclaration(
-                surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. },
-            ) => {
-                if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
-                    Some(var)
+            ParsedStatement::ExportDeclaration(export) => {
+                if let surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } =
+                    export.as_ref()
+                {
+                    if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
+                        Some(var)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -280,21 +284,20 @@ fn lower_global_augmentation_values(
     for (loc, fun_ty) in local_function_signatures {
         let name = match &block_statements[loc.statement_index] {
             ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
-            ParsedStatement::ExportDeclaration(
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
                 surge_ts_syntax::ParsedExportDeclaration::Default {
                     declaration: surge_ts_syntax::ParsedDefaultExportDeclaration::Function(f),
                     ..
-                },
-            ) => f.name.clone(),
-            ParsedStatement::ExportDeclaration(
-                surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. },
-            ) => {
-                if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
-                    f.name.clone()
-                } else {
-                    "unknown".to_string()
+                } => f.name.clone(),
+                surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } => {
+                    if let ParsedStatement::FunctionDeclaration(f) = declaration.as_ref() {
+                        f.name.clone()
+                    } else {
+                        "unknown".to_string()
+                    }
                 }
-            }
+                _ => "unknown".to_string(),
+            },
             _ => "unknown".to_string(),
         };
 
@@ -454,16 +457,17 @@ fn collect_local_type_declarations_from_statement(
                 ));
             }
         }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-            declaration,
-            ..
-        }) => collect_local_type_declarations_from_statement(
-            declaration.as_ref(),
-            file_name,
-            seen,
-            local_declarations,
-            ctx,
-        ),
+        ParsedStatement::ExportDeclaration(export) => {
+            if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
+                collect_local_type_declarations_from_statement(
+                    declaration.as_ref(),
+                    file_name,
+                    seen,
+                    local_declarations,
+                    ctx,
+                )
+            }
+        }
         _ => {}
     }
 }
@@ -501,16 +505,18 @@ fn collect_type_declarations_from_statement(statement: &ParsedStatement, ctx: &m
         ParsedStatement::ClassDeclaration(class) => {
             crate::program::collect_class(class, ctx);
         }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-            declaration,
-            ..
-        }) => collect_type_declarations_from_statement(declaration.as_ref(), ctx),
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Class(class),
-            ..
-        }) => {
-            crate::program::collect_class(class, ctx);
-        }
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                collect_type_declarations_from_statement(declaration.as_ref(), ctx)
+            }
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Class(class),
+                ..
+            } => {
+                crate::program::collect_class(class, ctx);
+            }
+            _ => {}
+        },
         ParsedStatement::NamespaceDeclaration(namespace) => {
             collect_namespace_type_declarations(namespace, ctx);
         }
@@ -529,10 +535,13 @@ fn collect_namespace_type_declarations(
 ) {
     for statement in &namespace.statements {
         let inner = match statement {
-            ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-                declaration,
-                ..
-            }) => declaration.as_ref(),
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
+                    declaration.as_ref()
+                } else {
+                    statement
+                }
+            }
             other => other,
         };
 
@@ -579,19 +588,19 @@ fn collect_namespace_type_declarations(
 fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
-            var::check_variable_declaration(variable, ctx);
+            var::check_variable_declaration(*variable, ctx);
         }
         ParsedStatement::Assignment(assignment) => {
-            assign::check_assignment(assignment, ctx);
+            assign::check_assignment(*assignment, ctx);
         }
         ParsedStatement::FunctionDeclaration(function) => {
-            check_function::check_function_declaration(function, ctx);
+            check_function::check_function_declaration(*function, ctx);
         }
         ParsedStatement::Call(call) => {
-            call::check_call(call, ctx);
+            call::check_call(*call, ctx);
         }
         ParsedStatement::Expression(expression) => {
-            expr::check_expression_statement(expression, ctx);
+            expr::check_expression_statement(*expression, ctx);
         }
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
@@ -787,51 +796,87 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                 ctx.push(diagnostic);
             }
         }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-            declaration,
-            ..
-        }) => check_statement(*declaration, ctx),
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
-            module_specifier: Some(specifier),
-            span,
-            module_specifier_span,
-            ..
-        }) => {
-            if crate::modules::is_external_specifier(&specifier) {
-                if !ctx.options.stub_external_modules {
-                    let mut diagnostic = Diagnostic::ts2307(&specifier, ctx.file_name.clone());
-                    if let Some(span) = module_specifier_span {
+        ParsedStatement::ExportDeclaration(export) => match *export {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                check_statement(*declaration, ctx)
+            }
+            ParsedExportDeclaration::Named {
+                module_specifier: Some(specifier),
+                span,
+                module_specifier_span,
+                ..
+            } => {
+                if crate::modules::is_external_specifier(&specifier) {
+                    if !ctx.options.stub_external_modules {
+                        let mut diagnostic = Diagnostic::ts2307(&specifier, ctx.file_name.clone());
+                        if let Some(span) = module_specifier_span {
+                            diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                        }
+                        ctx.push(diagnostic);
+                    }
+                } else {
+                    let mut diagnostic =
+                        Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
+
+                    if let Some(span) = span {
                         diagnostic = diagnostic.with_span(crate::context::convert_span(span));
                     }
+
                     ctx.push(diagnostic);
                 }
-            } else {
-                let mut diagnostic =
-                    Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
-
-                if let Some(span) = span {
-                    diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            }
+            ParsedExportDeclaration::Named { .. } => {}
+            ParsedExportDeclaration::Namespace { .. } => {}
+            ParsedExportDeclaration::Default { declaration, span } => match declaration {
+                ParsedDefaultExportDeclaration::Function(function) => {
+                    check_function::check_function_declaration(function, ctx);
                 }
+                ParsedDefaultExportDeclaration::Class(class) => {
+                    crate::program::check_class_declaration(&class, ctx);
+                }
+                ParsedDefaultExportDeclaration::Expression(expression) => {
+                    expr::check_expression_statement(expression, ctx);
+                }
+                ParsedDefaultExportDeclaration::Unsupported { .. } => {
+                    let mut diagnostic =
+                        Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
 
-                ctx.push(diagnostic);
+                    if let Some(span) = span {
+                        diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                    }
+
+                    ctx.push(diagnostic);
+                }
+            },
+            ParsedExportDeclaration::All {
+                module_specifier,
+                span,
+                module_specifier_span,
+                ..
+            } => {
+                if crate::modules::is_external_specifier(&module_specifier) {
+                    if !ctx.options.stub_external_modules {
+                        let mut diagnostic =
+                            Diagnostic::ts2307(&module_specifier, ctx.file_name.clone());
+                        if let Some(span) = module_specifier_span {
+                            diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                        }
+                        ctx.push(diagnostic);
+                    }
+                } else {
+                    let mut diagnostic =
+                        Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
+
+                    if let Some(span) = span {
+                        diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                    }
+
+                    ctx.push(diagnostic);
+                }
             }
-        }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { .. }) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Namespace { .. }) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration,
-            span,
-        }) => match declaration {
-            ParsedDefaultExportDeclaration::Function(function) => {
-                check_function::check_function_declaration(function, ctx);
-            }
-            ParsedDefaultExportDeclaration::Class(class) => {
-                crate::program::check_class_declaration(&class, ctx);
-            }
-            ParsedDefaultExportDeclaration::Expression(expression) => {
-                expr::check_expression_statement(expression, ctx);
-            }
-            ParsedDefaultExportDeclaration::Unsupported { .. } => {
+            ParsedExportDeclaration::Empty { .. } => {}
+            ParsedExportDeclaration::Equals { .. } => {}
+            ParsedExportDeclaration::Unsupported { span } => {
                 let mut diagnostic =
                     Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
 
@@ -842,34 +887,6 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                 ctx.push(diagnostic);
             }
         },
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
-            module_specifier,
-            span,
-            module_specifier_span,
-            ..
-        }) => {
-            if crate::modules::is_external_specifier(&module_specifier) {
-                if !ctx.options.stub_external_modules {
-                    let mut diagnostic =
-                        Diagnostic::ts2307(&module_specifier, ctx.file_name.clone());
-                    if let Some(span) = module_specifier_span {
-                        diagnostic = diagnostic.with_span(crate::context::convert_span(span));
-                    }
-                    ctx.push(diagnostic);
-                }
-            } else {
-                let mut diagnostic =
-                    Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
-
-                if let Some(span) = span {
-                    diagnostic = diagnostic.with_span(crate::context::convert_span(span));
-                }
-
-                ctx.push(diagnostic);
-            }
-        }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Equals { .. }) => {}
         ParsedStatement::DeclareModuleDeclaration(_) => {}
         // Namespace members are bound during type-declaration collection; the
         // namespace itself produces no value-level checks here.
@@ -882,15 +899,6 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                 diag = diag.with_span(crate::context::convert_span(s));
             }
             ctx.push(diag);
-        }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
-            let mut diagnostic = Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
-
-            if let Some(span) = span {
-                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
-            }
-
-            ctx.push(diagnostic);
         }
     }
 }
@@ -915,10 +923,11 @@ fn validate_direct_utility_aliases_from_statement(
         ParsedStatement::TypeAliasDeclaration(alias) => {
             validate_direct_utility_alias(alias, ctx);
         }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-            declaration,
-            ..
-        }) => validate_direct_utility_aliases_from_statement(declaration.as_ref(), ctx),
+        ParsedStatement::ExportDeclaration(export) => {
+            if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
+                validate_direct_utility_aliases_from_statement(declaration.as_ref(), ctx)
+            }
+        }
         _ => {}
     }
 }

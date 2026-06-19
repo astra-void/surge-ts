@@ -1512,12 +1512,16 @@ fn parse_property_call_no_args() {
     let parsed = parse_source("store.getState();", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::Expression(ParsedExpression::PropertyCall {
+    let ParsedStatement::Expression(expression) = &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+    let ParsedExpression::PropertyCall {
         object,
         property_name,
         arguments,
         ..
-    }) = &parsed.statements[0]
+    } = expression.as_ref()
     else {
         panic!("expected a property call expression");
     };
@@ -1545,12 +1549,18 @@ fn parse_call_expression_type_arguments_parsed() {
             assert_eq!(call.type_arguments.len(), 1);
             assert_eq!(call.arguments.len(), 1);
         }
-        ParsedStatement::Expression(ParsedExpression::Call {
-            callee_name,
-            type_arguments,
-            arguments,
-            ..
-        }) => {
+        ParsedStatement::Expression(expression)
+            if matches!(expression.as_ref(), ParsedExpression::Call { .. }) =>
+        {
+            let ParsedExpression::Call {
+                callee_name,
+                type_arguments,
+                arguments,
+                ..
+            } = expression.as_ref()
+            else {
+                unreachable!()
+            };
             assert_eq!(callee_name, "identity");
             assert_eq!(type_arguments.len(), 1);
             assert_eq!(arguments.len(), 1);
@@ -1763,8 +1773,11 @@ fn parse_property_call_expression_type_argument_parser_safe_or_pinned() {
     let parsed = parse_source("store.getState<string>();", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::Expression(ParsedExpression::PropertyCall { type_arguments, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::Expression(expression) = &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+    let ParsedExpression::PropertyCall { type_arguments, .. } = expression.as_ref()
     else {
         panic!("expected a property call expression");
     };
@@ -1777,8 +1790,11 @@ fn parse_property_call_one_arg() {
     let parsed = parse_source("store.setState(\"next\");", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::Expression(expression) = &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+    let ParsedExpression::PropertyCall { arguments, .. } = expression.as_ref()
     else {
         panic!("expected a property call expression");
     };
@@ -1791,8 +1807,11 @@ fn parse_property_call_multiple_args() {
     let parsed = parse_source("store.setState(\"next\", count, true);", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::Expression(expression) = &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+    let ParsedExpression::PropertyCall { arguments, .. } = expression.as_ref()
     else {
         panic!("expected a property call expression");
     };
@@ -1805,8 +1824,11 @@ fn parse_property_call_argument_is_property_call() {
     let parsed = parse_source("store.setState(store.getState());", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::Expression(expression) = &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+    let ParsedExpression::PropertyCall { arguments, .. } = expression.as_ref()
     else {
         panic!("expected a property call expression");
     };
@@ -1822,8 +1844,11 @@ fn parse_property_call_argument_is_call() {
     let parsed = parse_source("store.setState(getState());", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::Expression(expression) = &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+    let ParsedExpression::PropertyCall { arguments, .. } = expression.as_ref()
     else {
         panic!("expected a property call expression");
     };
@@ -1839,8 +1864,11 @@ fn parse_property_call_argument_is_conditional() {
     let parsed = parse_source("store.setState(true ? \"next\" : \"prev\");", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::Expression(ParsedExpression::PropertyCall { arguments, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::Expression(expression) = &parsed.statements[0]
+    else {
+        panic!("expected a property call expression");
+    };
+    let ParsedExpression::PropertyCall { arguments, .. } = expression.as_ref()
     else {
         panic!("expected a property call expression");
     };
@@ -3015,7 +3043,7 @@ fn parse_dynamic_import_expression_unsupported_no_panic() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         parsed.statements.first(),
-        Some(ParsedStatement::Expression(ParsedExpression::Unknown))
+        Some(ParsedStatement::Expression(expression)) if matches!(expression.as_ref(), ParsedExpression::Unknown)
     ));
 }
 
@@ -3024,9 +3052,11 @@ fn parse_export_interface_declaration() {
     let parsed = parse_source("export interface User { name: string; }", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3042,9 +3072,11 @@ fn parse_export_type_alias_declaration() {
     let parsed = parse_source("export type UserId = string;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3063,9 +3095,11 @@ fn parse_export_function_declaration() {
     );
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3081,9 +3115,11 @@ fn parse_export_variable_const_declaration() {
     let parsed = parse_source("export const name: string = \"Ada\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3099,9 +3135,11 @@ fn parse_export_const_declaration() {
     let parsed = parse_source("export const name: string = \"Ada\";", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3117,9 +3155,11 @@ fn parse_export_variable_let_declaration() {
     let parsed = parse_source("export let count: number = 1;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3135,9 +3175,11 @@ fn parse_export_let_declaration() {
     let parsed = parse_source("export let count: number = 1;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3153,9 +3195,11 @@ fn parse_export_variable_var_declaration() {
     let parsed = parse_source("export var value: boolean = true;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3171,9 +3215,11 @@ fn parse_export_var_declaration() {
     let parsed = parse_source("export var value: boolean = true;", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-        declaration, ..
-    }) = &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected an exported declaration");
+    };
+    let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
     else {
         panic!("expected an exported declaration");
     };
@@ -3189,11 +3235,15 @@ fn parse_export_named_one() {
     let parsed = parse_source("export { User };", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+    let ParsedExportDeclaration::Named {
         specifiers,
         module_specifier,
         ..
-    }) = &parsed.statements[0]
+    } = export.as_ref()
     else {
         panic!("expected a named export");
     };
@@ -3209,8 +3259,11 @@ fn parse_export_named_multiple() {
     let parsed = parse_source("export { User, Role };", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { specifiers, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+    let ParsedExportDeclaration::Named { specifiers, .. } = export.as_ref()
     else {
         panic!("expected a named export");
     };
@@ -3223,8 +3276,11 @@ fn parse_export_named_alias() {
     let parsed = parse_source("export { User as UserModel };", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { specifiers, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+    let ParsedExportDeclaration::Named { specifiers, .. } = export.as_ref()
     else {
         panic!("expected a named export");
     };
@@ -3239,11 +3295,15 @@ fn parse_export_type_named_one() {
     let parsed = parse_source("export type { User };", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+    let ParsedExportDeclaration::Named {
         is_type_only,
         specifiers,
         ..
-    }) = &parsed.statements[0]
+    } = export.as_ref()
     else {
         panic!("expected a named export");
     };
@@ -3257,11 +3317,15 @@ fn parse_export_type_named_alias() {
     let parsed = parse_source("export type { User as UserModel };", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+    let ParsedExportDeclaration::Named {
         is_type_only,
         specifiers,
         ..
-    }) = &parsed.statements[0]
+    } = export.as_ref()
     else {
         panic!("expected a named export");
     };
@@ -3276,11 +3340,15 @@ fn parse_export_type_named_multiple() {
     let parsed = parse_source("export type { User, Role };", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+    let ParsedExportDeclaration::Named {
         is_type_only,
         specifiers,
         ..
-    }) = &parsed.statements[0]
+    } = export.as_ref()
     else {
         panic!("expected a named export");
     };
@@ -3294,8 +3362,11 @@ fn parse_export_mixed_type_and_value_specifiers() {
     let parsed = parse_source("export { type User, value as renamedValue };", "example.ts");
     assert!(parsed.parser_errors.is_empty());
 
-    let ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { specifiers, .. }) =
-        &parsed.statements[0]
+    let ParsedStatement::ExportDeclaration(export) = &parsed.statements[0]
+    else {
+        panic!("expected a named export");
+    };
+    let ParsedExportDeclaration::Named { specifiers, .. } = export.as_ref()
     else {
         panic!("expected a named export");
     };
@@ -3323,7 +3394,7 @@ fn parse_export_empty() {
 
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. })
+        ParsedStatement::ExportDeclaration(export) if matches!(export.as_ref(), ParsedExportDeclaration::Empty { .. })
     ));
 }
 
@@ -3353,10 +3424,13 @@ fn parse_export_default_expression() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Expression(ParsedExpression::NumberLiteral(value)),
-            ..
-        }) if value == "1"
+        ParsedStatement::ExportDeclaration(export) if matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Expression(ParsedExpression::NumberLiteral(value)),
+                ..
+            } if value == "1"
+        )
     ));
 }
 
@@ -3369,10 +3443,13 @@ fn parse_export_default_function() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Function(_),
-            ..
-        })
+        ParsedStatement::ExportDeclaration(export) if matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Function(_),
+                ..
+            }
+        )
     ));
 }
 
@@ -3382,10 +3459,13 @@ fn parse_export_default_class_no_panic() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Class(_),
-            ..
-        })
+        ParsedStatement::ExportDeclaration(export) if matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Class(_),
+                ..
+            }
+        )
     ));
 }
 
@@ -3395,10 +3475,13 @@ fn parse_export_named_from() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
-            module_specifier: Some(module_specifier),
-            ..
-        }) if module_specifier == "./user"
+        ParsedStatement::ExportDeclaration(export) if matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Named {
+                module_specifier: Some(module_specifier),
+                ..
+            } if module_specifier == "./user"
+        )
     ));
 }
 
@@ -3408,11 +3491,14 @@ fn parse_export_type_named_from() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
-            is_type_only: true,
-            module_specifier: Some(module_specifier),
-            ..
-        }) if module_specifier == "./user"
+        ParsedStatement::ExportDeclaration(export) if matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Named {
+                is_type_only: true,
+                module_specifier: Some(module_specifier),
+                ..
+            } if module_specifier == "./user"
+        )
     ));
 }
 
@@ -3422,10 +3508,13 @@ fn parse_export_star_from() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
-            module_specifier,
-            ..
-        }) if module_specifier == "./user"
+        ParsedStatement::ExportDeclaration(export) if matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::All {
+                module_specifier,
+                ..
+            } if module_specifier == "./user"
+        )
     ));
 }
 
@@ -3435,11 +3524,14 @@ fn parse_export_star_as_from_unsupported_no_panic() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Namespace {
-            exported_name,
-            module_specifier,
-            ..
-        }) if exported_name == "Foo" && module_specifier == "./foo"
+        ParsedStatement::ExportDeclaration(export) if matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Namespace {
+                exported_name,
+                module_specifier,
+                ..
+            } if exported_name == "Foo" && module_specifier == "./foo"
+        )
     ));
 }
 
@@ -3469,10 +3561,13 @@ fn parse_declare_global_is_supported() {
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::DeclareModuleDeclaration(ParsedDeclareModuleDeclaration {
-            module_specifier,
-            ..
-        }) if module_specifier == "global"
+        ParsedStatement::DeclareModuleDeclaration(declaration) if matches!(
+            declaration.as_ref(),
+            ParsedDeclareModuleDeclaration {
+                module_specifier,
+                ..
+            } if module_specifier == "global"
+        )
     ));
 }
 

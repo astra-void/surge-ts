@@ -122,7 +122,7 @@ pub fn build_project_compatibility_report(
                     ambient_external_modules_set.insert(declare_module.module_specifier.clone());
                 }
                 surge_ts_syntax::ParsedStatement::ExportDeclaration(export) => {
-                    let module_specifier = match &export {
+                    let module_specifier = match export.as_ref() {
                         surge_ts_syntax::ParsedExportDeclaration::Named {
                             module_specifier,
                             ..

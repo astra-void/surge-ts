@@ -42,17 +42,17 @@ pub(crate) fn check_program_statement(
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
-            var::check_variable_declaration(variable, ctx);
+            var::check_variable_declaration(*variable, ctx);
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.variable_declaration_checking += start.elapsed()
             });
         }
         ParsedStatement::Assignment(assignment) => {
-            assign::check_assignment(assignment, ctx);
+            assign::check_assignment(*assignment, ctx);
         }
         ParsedStatement::FunctionDeclaration(function) => {
             check_program_function_declaration(
-                function,
+                *function,
                 file_index,
                 statement_index,
                 function_signatures,
@@ -60,10 +60,10 @@ pub(crate) fn check_program_statement(
             );
         }
         ParsedStatement::Call(call) => {
-            call::check_call(call, ctx);
+            call::check_call(*call, ctx);
         }
         ParsedStatement::Expression(expression) => {
-            expr::check_expression_statement(expression, ctx);
+            expr::check_expression_statement(*expression, ctx);
         }
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
@@ -71,38 +71,47 @@ pub(crate) fn check_program_statement(
             super::check_class_declaration(&class, ctx);
         }
         ParsedStatement::ImportDeclaration(_) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-            declaration,
-            ..
-        }) => check_program_statement(
-            *declaration,
-            file_index,
-            statement_index,
-            function_signatures,
-            ctx,
-        ),
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named { .. }) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Namespace { .. }) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration,
-            ..
-        }) => match declaration {
-            ParsedDefaultExportDeclaration::Function(function) => {
-                check_program_function_declaration(
-                    function,
-                    file_index,
-                    statement_index,
-                    function_signatures,
-                    ctx,
-                );
-            }
-            ParsedDefaultExportDeclaration::Expression(expression) => {
-                expr::check_expression_statement(expression, ctx);
-            }
-            ParsedDefaultExportDeclaration::Class(class) => {
-                super::check_class_declaration(&class, ctx);
-            }
-            ParsedDefaultExportDeclaration::Unsupported { span } => {
+        ParsedStatement::ExportDeclaration(export) => match *export {
+            ParsedExportDeclaration::Statement { declaration, .. } => check_program_statement(
+                *declaration,
+                file_index,
+                statement_index,
+                function_signatures,
+                ctx,
+            ),
+            ParsedExportDeclaration::Named { .. } => {}
+            ParsedExportDeclaration::Namespace { .. } => {}
+            ParsedExportDeclaration::Default { declaration, .. } => match declaration {
+                ParsedDefaultExportDeclaration::Function(function) => {
+                    check_program_function_declaration(
+                        function,
+                        file_index,
+                        statement_index,
+                        function_signatures,
+                        ctx,
+                    );
+                }
+                ParsedDefaultExportDeclaration::Expression(expression) => {
+                    expr::check_expression_statement(expression, ctx);
+                }
+                ParsedDefaultExportDeclaration::Class(class) => {
+                    super::check_class_declaration(&class, ctx);
+                }
+                ParsedDefaultExportDeclaration::Unsupported { span } => {
+                    let mut diagnostic =
+                        Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
+
+                    if let Some(span) = span {
+                        diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                    }
+
+                    ctx.push(diagnostic);
+                }
+            },
+            ParsedExportDeclaration::All { .. } => {}
+            ParsedExportDeclaration::Empty { .. } => {}
+            ParsedExportDeclaration::Equals { .. } => {}
+            ParsedExportDeclaration::Unsupported { span } => {
                 let mut diagnostic =
                     Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
 
@@ -113,24 +122,12 @@ pub(crate) fn check_program_statement(
                 ctx.push(diagnostic);
             }
         },
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All { .. }) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Empty { .. }) => {}
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Equals { .. }) => {}
         ParsedStatement::DeclareModuleDeclaration(_) => {}
         // Namespace members are bound during type-declaration collection; the
         // namespace itself produces no value-level checks here.
         ParsedStatement::NamespaceDeclaration(_) => {}
         ParsedStatement::UnsupportedDeclaration { span } => {
             emit_unsupported_declaration_diagnostic(ctx, span);
-        }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
-            let mut diagnostic = Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
-
-            if let Some(span) = span {
-                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
-            }
-
-            ctx.push(diagnostic);
         }
     }
 }
@@ -160,15 +157,18 @@ pub(crate) fn emit_unsupported_declaration_diagnostic_from_statement(
                 import.span.or(import.module_specifier_span),
             );
         }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Unsupported { span }) => {
-            emit_unsupported_declaration_diagnostic(ctx, *span);
-        }
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Default {
-            declaration: ParsedDefaultExportDeclaration::Unsupported { span },
-            span: declaration_span,
-        }) => {
-            emit_unsupported_declaration_diagnostic(ctx, (*span).or(*declaration_span));
-        }
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Unsupported { span } => {
+                emit_unsupported_declaration_diagnostic(ctx, *span);
+            }
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Unsupported { span },
+                span: declaration_span,
+            } => {
+                emit_unsupported_declaration_diagnostic(ctx, (*span).or(*declaration_span));
+            }
+            _ => {}
+        },
         ParsedStatement::DeclareModuleDeclaration(module) => {
             emit_unsupported_declaration_diagnostics(&module.statements, ctx);
         }
@@ -227,10 +227,12 @@ pub(crate) fn count_local_type_declarations_in_statement(statement: &ParsedState
     match statement {
         ParsedStatement::TypeAliasDeclaration(_) => 1,
         ParsedStatement::InterfaceDeclaration(_) => 1,
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Statement {
-            declaration,
-            ..
-        }) => count_local_type_declarations_in_statement(declaration.as_ref()),
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                count_local_type_declarations_in_statement(declaration.as_ref())
+            }
+            _ => 0,
+        },
         _ => 0,
     }
 }

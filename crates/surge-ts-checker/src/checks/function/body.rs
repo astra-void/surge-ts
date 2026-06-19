@@ -131,7 +131,7 @@ pub(crate) fn check_function_body_statement(
     match statement {
         ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
-            check_function_variable_declaration(variable, statement_index, scopes, flow_state, ctx);
+            check_function_variable_declaration(*variable, statement_index, scopes, flow_state, ctx);
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.variable_declaration_checking += start.elapsed()
             });
@@ -143,7 +143,7 @@ pub(crate) fn check_function_body_statement(
             let start = Instant::now();
             let visible_symbols = visible_symbols(scopes);
             check_function_return_statement(
-                return_statement,
+                *return_statement,
                 statement_index,
                 return_type,
                 flow_state,
@@ -156,7 +156,7 @@ pub(crate) fn check_function_body_statement(
         }
         ParsedFunctionBodyStatement::Throw(throw_statement) => {
             check_function_throw_statement(
-                throw_statement,
+                *throw_statement,
                 statement_index,
                 scopes,
                 flow_state,
@@ -166,14 +166,14 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::Continue | ParsedFunctionBodyStatement::Break => {}
         ParsedFunctionBodyStatement::Assignment(assignment) => {
             let start = Instant::now();
-            check_function_assignment(assignment, statement_index, scopes, flow_state, ctx);
+            check_function_assignment(*assignment, statement_index, scopes, flow_state, ctx);
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.assignability_checking += start.elapsed()
             });
         }
         ParsedFunctionBodyStatement::ThisPropertyAssignment(assignment) => {
             let start = Instant::now();
-            check_this_property_assignment(assignment, scopes, ctx);
+            check_this_property_assignment(*assignment, scopes, ctx);
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.assignability_checking += start.elapsed()
             });
@@ -181,7 +181,7 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::Expression(expression) => {
             let start = Instant::now();
             check_function_expression_statement(
-                expression,
+                *expression,
                 statement_index,
                 scopes,
                 flow_state,
@@ -194,7 +194,7 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::If(if_statement) => {
             let start = Instant::now();
             check_function_if_statement(
-                if_statement,
+                *if_statement,
                 statement_index,
                 return_type,
                 scopes,
@@ -208,7 +208,7 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::While(while_statement) => {
             let start = Instant::now();
             check_function_while_statement(
-                while_statement,
+                *while_statement,
                 statement_index,
                 return_type,
                 scopes,
@@ -222,7 +222,7 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
             let start = Instant::now();
             check_function_for_of_statement(
-                for_of_statement,
+                *for_of_statement,
                 statement_index,
                 return_type,
                 scopes,
@@ -236,7 +236,7 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::Switch(switch_statement) => {
             let start = Instant::now();
             check_function_switch_statement(
-                switch_statement,
+                *switch_statement,
                 statement_index,
                 return_type,
                 scopes,
@@ -250,7 +250,7 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::Try(try_statement) => {
             let start = Instant::now();
             check_function_try_statement(
-                try_statement,
+                *try_statement,
                 statement_index,
                 return_type,
                 scopes,

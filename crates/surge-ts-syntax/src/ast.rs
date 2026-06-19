@@ -20,20 +20,20 @@ pub struct ReferenceTypeDirective {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedStatement {
-    VariableDeclaration(ParsedVariableDeclaration),
-    Assignment(ParsedAssignment),
-    FunctionDeclaration(ParsedFunctionDeclaration),
-    Call(ParsedCall),
-    Expression(ParsedExpression),
-    TypeAliasDeclaration(ParsedTypeAliasDeclaration),
-    InterfaceDeclaration(ParsedInterfaceDeclaration),
-    ClassDeclaration(ParsedClassDeclaration),
-    ImportDeclaration(ParsedImportDeclaration),
-    ExportDeclaration(ParsedExportDeclaration),
-    DeclareModuleDeclaration(ParsedDeclareModuleDeclaration),
+    VariableDeclaration(Box<ParsedVariableDeclaration>),
+    Assignment(Box<ParsedAssignment>),
+    FunctionDeclaration(Box<ParsedFunctionDeclaration>),
+    Call(Box<ParsedCall>),
+    Expression(Box<ParsedExpression>),
+    TypeAliasDeclaration(Box<ParsedTypeAliasDeclaration>),
+    InterfaceDeclaration(Box<ParsedInterfaceDeclaration>),
+    ClassDeclaration(Box<ParsedClassDeclaration>),
+    ImportDeclaration(Box<ParsedImportDeclaration>),
+    ExportDeclaration(Box<ParsedExportDeclaration>),
+    DeclareModuleDeclaration(Box<ParsedDeclareModuleDeclaration>),
     /// An identifier-named namespace/module block such as `declare namespace JSX { ... }`.
     /// String-named `declare module "pkg"` blocks use [`ParsedDeclareModuleDeclaration`].
-    NamespaceDeclaration(ParsedNamespaceDeclaration),
+    NamespaceDeclaration(Box<ParsedNamespaceDeclaration>),
     UnsupportedDeclaration {
         span: Option<TextSpan>,
     },
@@ -768,20 +768,20 @@ pub struct ParsedFunctionDeclaration {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedFunctionBodyStatement {
-    VariableDeclaration(ParsedVariableDeclaration),
-    Return(ParsedReturnStatement),
-    Throw(ParsedThrowStatement),
-    Assignment(ParsedAssignment),
+    VariableDeclaration(Box<ParsedVariableDeclaration>),
+    Return(Box<ParsedReturnStatement>),
+    Throw(Box<ParsedThrowStatement>),
+    Assignment(Box<ParsedAssignment>),
     /// A `this.<property> = <value>` assignment inside a class method or
     /// constructor body. Checked against the instance property's declared type.
-    ThisPropertyAssignment(ParsedThisPropertyAssignment),
-    Expression(ParsedExpression),
+    ThisPropertyAssignment(Box<ParsedThisPropertyAssignment>),
+    Expression(Box<ParsedExpression>),
     Block(Vec<ParsedFunctionBodyStatement>),
-    If(ParsedIfStatement),
-    While(ParsedWhileStatement),
-    ForOf(ParsedForOfStatement),
-    Switch(ParsedSwitchStatement),
-    Try(ParsedTryStatement),
+    If(Box<ParsedIfStatement>),
+    While(Box<ParsedWhileStatement>),
+    ForOf(Box<ParsedForOfStatement>),
+    Switch(Box<ParsedSwitchStatement>),
+    Try(Box<ParsedTryStatement>),
     /// `continue;` — diverts straight-line flow back to the enclosing loop head.
     /// Carries no label/target; modelled only so flow analysis knows the branch
     /// does not fall through (enabling post-guard narrowing of `if (c) continue;`).

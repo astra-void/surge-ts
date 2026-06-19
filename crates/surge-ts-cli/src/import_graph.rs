@@ -81,14 +81,16 @@ pub fn expand_project_inputs(
 fn module_specifier_from_statement(statement: &ParsedStatement) -> Option<String> {
     match statement {
         ParsedStatement::ImportDeclaration(import) => Some(import.module_specifier.clone()),
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
-            module_specifier: Some(module_specifier),
-            ..
-        }) => Some(module_specifier.clone()),
-        ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
-            module_specifier,
-            ..
-        }) => Some(module_specifier.clone()),
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Named {
+                module_specifier: Some(module_specifier),
+                ..
+            } => Some(module_specifier.clone()),
+            ParsedExportDeclaration::All {
+                module_specifier, ..
+            } => Some(module_specifier.clone()),
+            _ => None,
+        },
         _ => None,
     }
 }

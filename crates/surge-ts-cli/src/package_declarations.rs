@@ -1185,14 +1185,16 @@ fn extract_packages_from_source(
     for statement in parsed.statements {
         let specifier = match statement {
             ParsedStatement::ImportDeclaration(import) => Some(import.module_specifier),
-            ParsedStatement::ExportDeclaration(ParsedExportDeclaration::Named {
-                module_specifier: Some(module_specifier),
-                ..
-            })
-            | ParsedStatement::ExportDeclaration(ParsedExportDeclaration::All {
-                module_specifier,
-                ..
-            }) => Some(module_specifier),
+            ParsedStatement::ExportDeclaration(export) => match *export {
+                ParsedExportDeclaration::Named {
+                    module_specifier: Some(module_specifier),
+                    ..
+                }
+                | ParsedExportDeclaration::All {
+                    module_specifier, ..
+                } => Some(module_specifier),
+                _ => None,
+            },
             _ => None,
         };
 
