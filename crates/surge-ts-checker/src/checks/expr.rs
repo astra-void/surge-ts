@@ -369,10 +369,12 @@ pub(crate) fn evaluate_expression(
         } => {
             let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
             // `a && b` only evaluates `b` when `a` is truthy, so narrow `b` by the
-            // `a` guard (`x.kind === "k" && x.k`, `"p" in x && x.p`).
+            // `a` guard: a structured guard (`x.kind === "k" && x.k`, `"p" in x &&
+            // x.p`) plus each identifier/property the `&&` chain proves non-nullish
+            // (`a.b && a.b > c`).
             let narrowed = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::And)
                 .then(|| {
-                    crate::checks::function::narrow_condition_symbol_table(left, symbols, true)
+                    crate::checks::function::narrow_truthy_operand_symbol_table(left, symbols)
                 })
                 .flatten();
             let right_result = evaluate_expression(

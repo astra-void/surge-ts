@@ -3906,6 +3906,41 @@ fn cli_any_typed_callee_is_callable() {
 }
 
 #[test]
+fn cli_and_chain_narrows_truthy_property() {
+    // `a.b && a.b > c` evaluates the right side only when `a.b` is truthy, so
+    // `a.b` narrows to non-nullish there — no TS2365 on `number | undefined`.
+    let root = temp_dir("and-truthy-narrow");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": true }, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        declare const c: { x?: number };
+        declare const p: { i: number };
+        export const r = c.x && p.i > c.x;
+        export function f() {
+          if (c.x && p.i > c.x) { return 1; }
+          return 0;
+        }
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(
+        !codes.contains(&"TS2365".to_string()),
+        "`a.b &&` must narrow `a.b` to non-nullish in the right operand, got {codes:?}"
+    );
+}
+
+#[test]
 fn cli_or_of_instanceof_guards_narrows_union() {
     // `if (x instanceof A || x instanceof B)` narrows `x` to `A | B` in the
     // then-branch (dropping other members). Regression for ky's

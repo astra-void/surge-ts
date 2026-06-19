@@ -962,6 +962,84 @@ pub(crate) fn narrow_condition_symbol_table(
         .or_else(|| narrow_property_presence_symbol_table(condition, symbols, branch_is_true))
 }
 
+/// Collects the identifiers/properties an `&&` chain proves truthy, so the right
+/// side of `a.b && a.b > c` (and the then-branch) sees them non-nullish.
+fn collect_and_chain_truthy_targets(
+    condition: &ParsedExpression,
+    targets: &mut Vec<TruthyGuardTarget>,
+) {
+    if let ParsedExpression::Logical {
+        left,
+        operator: ParsedLogicalOperator::And,
+        right,
+        ..
+    } = condition
+    {
+        collect_and_chain_truthy_targets(left, targets);
+        collect_and_chain_truthy_targets(right, targets);
+    } else if let Some(target) = truthy_guard_target(condition) {
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+}
+
+/// Narrows `symbols` by everything the truthy operand of an `&&` proves: a
+/// structured guard (`x.kind === "k" && …`) plus each identifier/property in the
+/// `&&` chain narrowed to non-nullish (`a.b && a.b > c`). Returns `None` when
+/// nothing narrows. Used to type the right operand of `&&`.
+pub(crate) fn narrow_truthy_operand_symbol_table(
+    operand: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<SymbolTable> {
+    let structured = narrow_condition_symbol_table(operand, symbols, true);
+
+    let mut targets = Vec::new();
+    collect_and_chain_truthy_targets(operand, &mut targets);
+    if targets.is_empty() {
+        return structured;
+    }
+
+    let base = structured.as_ref().unwrap_or(symbols);
+    let mut narrowed = base.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    let mut changed = structured.is_some();
+    for target in targets {
+        let base_name = match &target {
+            TruthyGuardTarget::Identifier(name) => name,
+            TruthyGuardTarget::Property { base, .. } => base,
+        };
+        let Some(symbol) = narrowed.get(base_name) else {
+            continue;
+        };
+        let new_ty = match &target {
+            TruthyGuardTarget::Identifier(_) => {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    surge_ts_types::remove_nullish(&symbol.ty)
+                })
+            }
+            TruthyGuardTarget::Property { property, .. } => {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    narrow_truthy_guarded_property(&symbol.ty, property)
+                })
+            }
+        };
+        if new_ty == symbol.ty {
+            continue;
+        }
+        changed = true;
+        narrowed.insert(
+            base_name.clone(),
+            SymbolInfo {
+                ty: new_ty,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+        );
+    }
+
+    changed.then_some(narrowed)
+}
+
 /// Like [`narrow_discriminant_symbol_table`] but applies the narrowing in place
 /// to a `ScopeStack`, for narrowing a discriminated union inside an `if` branch
 /// (or after an early-returning `if`).
