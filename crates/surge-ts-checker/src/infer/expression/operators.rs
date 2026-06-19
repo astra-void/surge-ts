@@ -26,6 +26,7 @@ pub(crate) fn infer_unary_expression(
                 InferredExpression::Unknown
             }
         }
+        ParsedUnaryOperator::Typeof => InferredExpression::Known(Type::String),
         ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus => match operand_type {
             InferredExpression::Known(Type::Any) => InferredExpression::Known(Type::Number),
             InferredExpression::Known(ty) if matches!(ty.base_primitive(), Some(Type::Number)) => {

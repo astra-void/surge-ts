@@ -731,6 +731,7 @@ pub enum ParsedUnaryOperator {
     Not,
     Plus,
     Minus,
+    Typeof,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

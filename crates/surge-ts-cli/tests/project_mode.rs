@@ -3847,6 +3847,78 @@ fn cli_computed_key_index_on_object_is_not_missing_property() {
 }
 
 #[test]
+fn cli_typeof_guard_narrows_union_in_all_branches() {
+    // `typeof x === "tag"` must narrow the union in the then-branch, the else
+    // branch, AND the fall-through after an early-returning `if`. Regression for
+    // ky's `if (typeof retry === 'number') return …; retry.methods`.
+    let root = temp_dir("typeof-narrowing");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        export function earlyReturn(x: number | string) {
+          if (typeof x === 'number') { return 0; }
+          return x.length;
+        }
+        export function withElse(x: number | { a: number }) {
+          if (typeof x === 'number') { return x; }
+          else { return x.a; }
+        }
+        export function discriminantElse(
+          v: { kind: 'a'; x: number } | { kind: 'b'; y: string },
+        ) {
+          if (v.kind === 'a') { return v.x; }
+          return v.y;
+        }
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    let codes = json_diagnostic_codes(&parsed);
+    assert!(
+        !codes.contains(&"TS2339".to_string()),
+        "typeof/discriminant guards must narrow in every branch, got {codes:?}"
+    );
+}
+
+#[test]
+fn cli_tuple_exposes_array_methods() {
+    // A tuple (e.g. `[...] as const`) is an array and carries array methods.
+    let root = temp_dir("tuple-array-methods");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
+    );
+    write_file(
+        &root,
+        "src/index.ts",
+        r#"
+        const methods = ['get', 'post', 'put'] as const;
+        export const hasGet = methods.includes('get');
+        export const upper = methods.map(m => m.toUpperCase());
+        "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(
+        !json_diagnostic_codes(&parsed).contains(&"TS2339".to_string()),
+        "tuple array methods must resolve"
+    );
+}
+
+#[test]
 fn cli_random_return_flow_authkit_shape_does_not_emit_ts2366() {
     let parsed = run_cli_json(&[
         "--project",
