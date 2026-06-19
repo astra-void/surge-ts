@@ -139,7 +139,11 @@ pub(crate) fn resolve_interface(
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
     }
-    let resolved = with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
+    let effective_scope = interface
+        .resolution_scope
+        .clone()
+        .or_else(|| ctx.module_scope_for_file(&interface.file_name));
+    let resolved = with_type_declaration_scope(&effective_scope, ctx, |ctx| {
         with_file_name(ctx, &interface.file_name, |ctx| {
             resolve_interface_declaration(
                 &interface.body.extends,

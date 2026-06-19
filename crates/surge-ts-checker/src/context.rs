@@ -172,6 +172,16 @@ pub(crate) struct CheckerContext {
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: Arc<TypeDeclarationTable>,
     pub(crate) module_file_index_by_identity: Arc<HashMap<Arc<str>, usize>>,
+    /// Each module's resolution scope keyed by its source `file_name`, mirroring
+    /// `shared_state.module_resolution_scopes` but addressable by name. A type
+    /// alias/interface imported across a module *import cycle* can lose its
+    /// pre-attached `resolution_scope` when the multi-pass binding fixpoint rebinds
+    /// it (the source module's scope is not yet available in that pass), leaving it
+    /// `None`. Resolving such a declaration's body must still happen in its
+    /// declaring module's scope, so resolution falls back to this map keyed by the
+    /// declaration's `file_name`. Populated once before the check phase; empty
+    /// during the binding passes (where no diagnostics surface).
+    pub(crate) module_scope_by_file: Arc<HashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     // Parallel to `type_parameter_scopes`: the declared constraint (if any) for
     // each in-scope type parameter, used to recognize `K extends keyof T` so a
@@ -239,6 +249,7 @@ impl CheckerContext {
             ambient_global_symbols: SymbolTable::new(),
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
             module_file_index_by_identity: Arc::new(HashMap::new()),
+            module_scope_by_file: Arc::new(HashMap::new()),
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
@@ -467,6 +478,23 @@ impl CheckerContext {
         module_file_index_by_identity: HashMap<Arc<str>, usize>,
     ) {
         self.module_file_index_by_identity = Arc::new(module_file_index_by_identity);
+    }
+
+    pub(crate) fn set_module_scope_by_file(
+        &mut self,
+        module_scope_by_file: HashMap<Arc<str>, Arc<TypeDeclarationScope>>,
+    ) {
+        self.module_scope_by_file = Arc::new(module_scope_by_file);
+    }
+
+    /// The resolution scope of the module that declared `file_name`, used as a
+    /// fallback when a declaration's pre-attached `resolution_scope` was dropped
+    /// across the cyclic-import binding fixpoint. See [`Self::module_scope_by_file`].
+    pub(crate) fn module_scope_for_file(
+        &self,
+        file_name: &str,
+    ) -> Option<Arc<TypeDeclarationScope>> {
+        self.module_scope_by_file.get(file_name).cloned()
     }
 
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
