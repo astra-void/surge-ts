@@ -9,7 +9,7 @@ use surge_ts_types::{ObjectProperty, PropertyMap, Type};
 
 use crate::arena::alloc_object_type;
 use crate::context::{CheckerContext, DeclarationResolutionKey, convert_span};
-use crate::default_lib::is_generated_default_lib_file_name;
+use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default_lib_file_name};
 use crate::symbols::TypeAliasInfo;
 
 /// Whether a type alias body introduces a structural boundary that makes a
@@ -78,7 +78,16 @@ pub(crate) fn resolve_type_alias(
         };
     };
 
-    if alias.file_name == "<built-in>" || is_generated_default_lib_file_name(&alias.file_name) {
+    let from_default_lib =
+        alias.file_name == "<built-in>" || is_generated_default_lib_file_name(&alias.file_name);
+    // The physical lib models `Pick`/`Omit` as homomorphic mapped types
+    // (`{[P in K]: T[P]}`) that should preserve each source property's optional
+    // modifier, but `resolve_mapped_type` forces them required. Resolve them as
+    // builtin utilities (which clone the source property, keeping optionality)
+    // even from the physical lib.
+    let physical_modifier_utility = is_physical_default_lib_file_name(&alias.file_name)
+        && matches!(alias.name.as_str(), "Pick" | "Omit");
+    if from_default_lib || physical_modifier_utility {
         if let Some(resolved) = resolve_builtin_utility_alias(
             &alias.name,
             &local_substitution,
@@ -376,5 +385,33 @@ pub(crate) fn string_literal_union_keys(ty: &Type) -> Option<Vec<String>> {
             Some(keys)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use surge_ts_types::ObjectType;
+
+    fn optional_object() -> Type {
+        let mut props = PropertyMap::new();
+        props.insert("a".to_string(), ObjectProperty::optional(Type::Number));
+        props.insert("b".to_string(), ObjectProperty::optional(Type::String));
+        Type::Object(ObjectType::new(props, None))
+    }
+
+    #[test]
+    fn omit_preserves_source_property_optionality() {
+        let mut sub = TypeParameterSubstitution::new();
+        sub.insert("T".to_string(), optional_object());
+        sub.insert("K".to_string(), Type::StringLiteral("b".to_string()));
+
+        let resolved = resolve_omit_utility_type(&sub);
+        let Type::Object(object) = resolved.ty else {
+            panic!("Omit must resolve to an object");
+        };
+        let a = object.properties.get("a").expect("`a` is kept");
+        assert!(a.is_optional(), "Omit must keep `a` optional, not force it required");
+        assert!(object.properties.get("b").is_none(), "`b` is omitted");
     }
 }
