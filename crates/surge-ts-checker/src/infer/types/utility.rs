@@ -86,7 +86,7 @@ pub(crate) fn resolve_type_alias(
     // builtin utilities (which clone the source property, keeping optionality)
     // even from the physical lib.
     let physical_modifier_utility = is_physical_default_lib_file_name(&alias.file_name)
-        && matches!(alias.name.as_str(), "Pick" | "Omit");
+        && matches!(alias.name.as_str(), "Pick" | "Omit" | "Required" | "Readonly");
     if from_default_lib || physical_modifier_utility {
         if let Some(resolved) = resolve_builtin_utility_alias(
             &alias.name,
@@ -145,6 +145,8 @@ pub(crate) fn resolve_builtin_utility_alias(
 ) -> Option<ResolvedType> {
     match alias_name {
         "Partial" => Some(resolve_partial_utility_type(substitution)),
+        "Required" => Some(resolve_required_utility_type(substitution)),
+        "Readonly" => Some(resolve_readonly_utility_type(substitution)),
         "Record" => Some(resolve_record_utility_type(substitution)),
         "Pick" => Some(resolve_pick_utility_type(substitution, name_span, ctx)),
         "Omit" => Some(resolve_omit_utility_type(substitution)),
@@ -178,6 +180,70 @@ pub(crate) fn resolve_partial_utility_type(
 
     ResolvedType {
         ty: Type::Object(alloc_object_type(properties, None)),
+        had_error: false,
+    }
+}
+
+/// `Required<T>`: every property of `T` becomes required (the inverse of
+/// `Partial`). The lib models it as `{ [P in keyof T]-?: T[P] }`, whose `-?`
+/// modifier `parse_mapped_type` cannot represent, so resolve it directly here.
+pub(crate) fn resolve_required_utility_type(
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let Some(source_type) = substitution.get("T").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Type::Object(object_type) = source_type.peeled() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    // `Required<T>` only strips the optional *modifier* (`-?`); it keeps each
+    // property's declared type intact, including an explicit `| undefined` member
+    // (`jitter?: boolean | … | undefined` stays assignable from `undefined`).
+    let mut properties = PropertyMap::new();
+    for (name, property) in object_type.properties.iter() {
+        properties.insert(name.clone(), ObjectProperty::required(property.ty.clone()));
+    }
+
+    ResolvedType {
+        ty: Type::Object(alloc_object_type(
+            properties,
+            object_type.string_index_type.as_deref().cloned(),
+        )),
+        had_error: false,
+    }
+}
+
+/// `Readonly<T>`: identity for our purposes — surge does not model the `readonly`
+/// modifier, so the type is structurally unchanged. The lib models it as
+/// `{ readonly [P in keyof T]: T[P] }`, which `parse_mapped_type` degrades; clone
+/// the source object's shape instead.
+pub(crate) fn resolve_readonly_utility_type(
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let Some(source_type) = substitution.get("T").cloned() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    let Type::Object(object_type) = source_type.peeled() else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    };
+
+    ResolvedType {
+        ty: Type::Object(object_type),
         had_error: false,
     }
 }
