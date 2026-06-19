@@ -1,4 +1,6 @@
-use crate::{FunctionType, Type};
+use std::sync::Arc;
+
+use crate::{FunctionType, ObjectType, Type};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectAssignabilityFailure {
@@ -20,6 +22,20 @@ thread_local! {
     /// treating the over-deep comparison as assignable — the coinductive choice tsc
     /// makes with its relation-in-progress set.
     static ASSIGNABILITY_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+
+    /// Object pairs whose assignability is being decided on the current stack,
+    /// keyed by their shared property-map `Arc` pointers (stable across the
+    /// memoized `resolve()` of a reference). Mutually-recursive library object
+    /// graphs (e.g. DOM `Request`/`RequestInit`, whose members cycle back) make
+    /// `object_assignability_failure` re-ask the *same* pair while it is still in
+    /// progress; without this the comparison re-descends the cycle from every
+    /// sibling property, which is exponential. Re-asking an in-progress pair
+    /// answers `true` coinductively — the same answer the depth bound gives, but
+    /// at the cycle edge instead of after 200 redundant levels. Cleared when the
+    /// outermost `is_assignable_to` returns so a freed `Arc` pointer can never be
+    /// reused for a stale entry.
+    static OBJECT_ASSIGNABILITY_IN_PROGRESS: std::cell::RefCell<std::collections::HashSet<(usize, usize)>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
 const MAX_ASSIGNABILITY_DEPTH: u32 = 200;
@@ -28,7 +44,13 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     struct DepthGuard;
     impl Drop for DepthGuard {
         fn drop(&mut self) {
-            ASSIGNABILITY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+            ASSIGNABILITY_DEPTH.with(|depth| {
+                let next = depth.get().saturating_sub(1);
+                depth.set(next);
+                if next == 0 {
+                    OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().clear());
+                }
+            });
         }
     }
     let depth = ASSIGNABILITY_DEPTH.with(|depth| {
@@ -113,7 +135,9 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
             .types()
             .iter()
             .any(|to_ty| is_assignable_to(from_ty, to_ty)),
-        (Type::Object(_), Type::Object(_)) => object_assignability_failure(from, to).is_none(),
+        (Type::Object(from_obj), Type::Object(to_obj)) => {
+            object_assignable(from_obj, to_obj, from, to)
+        }
         // An object type carrying a call signature (e.g. `BooleanConstructor`,
         // or any `typeof fn` whose value also has properties) is assignable to a
         // function type when its call signature is. tsc treats such objects as
@@ -173,6 +197,29 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
         });
 
     parameters_compatible && is_assignable_to(source.return_type(), target.return_type())
+}
+
+fn object_assignable(
+    from_obj: &ObjectType,
+    to_obj: &ObjectType,
+    from: &Type,
+    to: &Type,
+) -> bool {
+    let key = (
+        Arc::as_ptr(&from_obj.properties) as usize,
+        Arc::as_ptr(&to_obj.properties) as usize,
+    );
+    let newly_inserted =
+        OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().insert(key));
+    if !newly_inserted {
+        return true;
+    }
+
+    let result = object_assignability_failure(from, to).is_none();
+    OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| {
+        set.borrow_mut().remove(&key);
+    });
+    result
 }
 
 pub fn object_assignability_failure(

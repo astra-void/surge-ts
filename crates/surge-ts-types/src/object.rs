@@ -47,7 +47,13 @@ pub struct ObjectType {
 
 impl PartialEq for ObjectType {
     fn eq(&self, other: &Self) -> bool {
-        self.properties == other.properties && self.string_index_type == other.string_index_type
+        // Object types resolved from the same memoized reference share a property
+        // map `Arc`; comparing their pointers short-circuits the O(size) structural
+        // compare, which dominates checking projects with large library object
+        // graphs (DOM `Request`/`Response`, …) reached through nominal references.
+        let properties_equal = Arc::ptr_eq(&self.properties, &other.properties)
+            || self.properties == other.properties;
+        properties_equal && self.string_index_type == other.string_index_type
     }
 }
 
