@@ -132,6 +132,15 @@ pub(crate) fn check_call_like(
                 )
             })
         }
+        // An `any`-typed callee is callable and yields `any`; still evaluate the
+        // arguments so their own errors surface. (`new`-position handles this in
+        // `check_new_like`; this is the symmetric call-position arm.)
+        Type::Any => {
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            Some(Type::Any)
+        }
         _ => {
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2349(ctx.file_name.clone()),
