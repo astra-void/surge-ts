@@ -718,6 +718,9 @@ pub enum ParsedBinaryOperator {
     /// The `in` operator (`"prop" in obj`). Evaluates to `boolean`; used as a
     /// property-presence type guard for narrowing.
     In,
+    /// The `instanceof` operator (`x instanceof Ctor`). Evaluates to `boolean`;
+    /// used as a type guard for narrowing a union by class membership.
+    Instanceof,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -832,7 +832,7 @@ fn parse_binary_expression(binary_expression: &BinaryExpression<'_>) -> Option<P
         BinaryOperator::BitwiseXOR => ParsedBinaryOperator::BitwiseXOR,
         BinaryOperator::BitwiseAnd => ParsedBinaryOperator::BitwiseAnd,
         BinaryOperator::In => ParsedBinaryOperator::In,
-        _ => return None,
+        BinaryOperator::Instanceof => ParsedBinaryOperator::Instanceof,
     };
 
     let (left, left_span) = parse_expression(&binary_expression.left);

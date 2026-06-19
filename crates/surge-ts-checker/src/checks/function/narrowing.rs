@@ -533,9 +533,102 @@ fn narrow_typeof_symbol_table(
     Some(narrowed_symbols)
 }
 
+/// Whether a union member is an instance of the class/interface named `ctor_name`
+/// (a nominal name match). `Some(false)` for a member that definitely is not (a
+/// primitive, or a differently-named object); `None` when undecidable (`any`/
+/// `unknown`), so the member is kept in both branches.
+fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
+    match member {
+        Type::Any | Type::Unknown => None,
+        Type::String
+        | Type::StringLiteral(_)
+        | Type::Number
+        | Type::NumberLiteral(_)
+        | Type::Boolean
+        | Type::BooleanLiteral(_)
+        | Type::Undefined
+        | Type::Void
+        | Type::Never => Some(false),
+        // Match nominally on the member's own name (`Blob`, `URLSearchParams`):
+        // a `Type::Reference` reports its referenced name without resolving, so
+        // do not peel (peeling would expand to the structural shape).
+        other => Some(other.name() == ctor_name),
+    }
+}
+
+/// Narrows a union by an `x instanceof Ctor` guard. `keep_matching` keeps the
+/// members that are instances of `Ctor` (the `=== true` branch); otherwise
+/// removes them. Members whose membership is undecidable are kept either way.
+fn narrow_union_by_instanceof(ty: &Type, ctor_name: &str, keep_matching: bool) -> Option<Type> {
+    let Type::Union(union) = ty else {
+        return None;
+    };
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| match instanceof_matches(member, ctor_name) {
+            Some(is_instance) => is_instance == keep_matching,
+            None => true,
+        })
+        .cloned()
+        .collect();
+
+    if kept.is_empty() || kept.len() == union.types().len() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
+/// Parses an `x instanceof Ctor` guard, returning the operand expression and the
+/// constructor identifier name. (`instanceof` has no equality polarity — the
+/// then-branch always keeps the matching members.)
+fn parse_instanceof_condition(
+    condition: &ParsedExpression,
+) -> Option<(&ParsedExpression, &str)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator: ParsedBinaryOperator::Instanceof,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let ParsedExpression::Identifier { name: ctor_name, .. } = right.as_ref() else {
+        return None;
+    };
+    Some((left.as_ref(), ctor_name.as_str()))
+}
+
+/// Builds a symbol table narrowed by an `x instanceof Ctor` guard for the branch.
+fn narrow_instanceof_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let (operand, ctor_name) = parse_instanceof_condition(condition)?;
+    let ParsedExpression::Identifier { name, .. } = operand else {
+        return None;
+    };
+    let symbol = symbols.get(name)?;
+    let narrowed = narrow_union_by_instanceof(&symbol.ty, ctor_name, branch_is_true)?;
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    narrowed_symbols.insert(
+        name.clone(),
+        SymbolInfo {
+            ty: narrowed,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        },
+    );
+    Some(narrowed_symbols)
+}
+
 /// Narrows for a branch by any recognized type guard: a discriminated-union
-/// equality test (`x.kind === "a"`), a `typeof x === "tag"` test, or an `in`
-/// property-presence test (`"prop" in x`). Returns `None` if none apply.
+/// equality test (`x.kind === "a"`), a `typeof x === "tag"` test, an
+/// `x instanceof Ctor` test, or an `in` property-presence test (`"prop" in x`).
+/// Returns `None` if none apply.
 pub(crate) fn narrow_condition_symbol_table(
     condition: &ParsedExpression,
     symbols: &SymbolTable,
@@ -543,6 +636,7 @@ pub(crate) fn narrow_condition_symbol_table(
 ) -> Option<SymbolTable> {
     narrow_discriminant_symbol_table(condition, symbols, branch_is_true)
         .or_else(|| narrow_typeof_symbol_table(condition, symbols, branch_is_true))
+        .or_else(|| narrow_instanceof_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_property_presence_symbol_table(condition, symbols, branch_is_true))
 }
 
@@ -555,6 +649,9 @@ pub(crate) fn narrow_discriminant_in_scope(
     branch_is_true: bool,
 ) {
     if narrow_typeof_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
+    if narrow_instanceof_in_scope(condition, scopes, branch_is_true) {
         return;
     }
 
@@ -668,6 +765,35 @@ fn narrow_typeof_in_scope(
     let name = name.clone();
     // Shadow in the current frame, not the owning frame — see the note in
     // `narrow_discriminant_in_scope`.
+    let _ = scopes.insert_current(name, narrowed_symbol);
+    true
+}
+
+/// Applies `x instanceof Ctor` narrowing in place to a `ScopeStack`. Returns
+/// whether the condition was an instanceof guard over a bare identifier.
+fn narrow_instanceof_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let Some((operand, ctor_name)) = parse_instanceof_condition(condition) else {
+        return false;
+    };
+    let ParsedExpression::Identifier { name, .. } = operand else {
+        return false;
+    };
+    let Some(symbol) = scopes.resolve(name) else {
+        return true;
+    };
+    let Some(narrowed) = narrow_union_by_instanceof(&symbol.ty, ctor_name, branch_is_true) else {
+        return true;
+    };
+    let narrowed_symbol = SymbolInfo {
+        ty: narrowed,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let name = name.clone();
     let _ = scopes.insert_current(name, narrowed_symbol);
     true
 }
