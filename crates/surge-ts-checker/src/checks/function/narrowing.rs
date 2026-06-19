@@ -693,6 +693,249 @@ fn narrow_array_isarray_symbol_table(
     Some(narrowed_symbols)
 }
 
+/// Concrete `ArrayBufferView` types: the typed arrays and `DataView`. The
+/// `ArrayBuffer.isView(x)` predicate is `x is ArrayBufferView`, and a union may
+/// carry either the `ArrayBufferView` interface itself or a concrete view.
+const ARRAY_BUFFER_VIEW_NAMES: &[&str] = &[
+    "ArrayBufferView",
+    "DataView",
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+];
+
+/// Whether a union member is an `ArrayBufferView` (matched nominally on the base
+/// name, ignoring any generic arguments, e.g. `ArrayBufferView<ArrayBuffer>`).
+fn is_array_buffer_view_type(member: &Type) -> bool {
+    let name = member.name();
+    let base = name.split('<').next().unwrap_or(name.as_str());
+    ARRAY_BUFFER_VIEW_NAMES.contains(&base)
+}
+
+/// Parses an `ArrayBuffer.isView(x)` guard, returning the argument expression.
+fn parse_arraybuffer_isview_condition(condition: &ParsedExpression) -> Option<&ParsedExpression> {
+    let ParsedExpression::PropertyCall {
+        object,
+        property_name,
+        arguments,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+        return None;
+    };
+    if name != "ArrayBuffer" || property_name != "isView" || arguments.len() != 1 {
+        return None;
+    }
+    Some(&arguments[0].expression)
+}
+
+/// Narrows a union by `ArrayBuffer.isView(x)`. `keep_views` keeps the
+/// `ArrayBufferView` members (the `=== true` branch); otherwise removes them.
+/// `any`/`unknown` members are kept either way.
+fn narrow_union_by_arraybufferview(ty: &Type, keep_views: bool) -> Option<Type> {
+    let Type::Union(union) = ty else {
+        return None;
+    };
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| match member {
+            Type::Any | Type::Unknown => true,
+            _ => is_array_buffer_view_type(member) == keep_views,
+        })
+        .cloned()
+        .collect();
+
+    if kept.is_empty() || kept.len() == union.types().len() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
+/// The identifier a single type guard tests, if the guard is one we model over a
+/// bare identifier (`x instanceof C`, `typeof x === "s"`, `Array.isArray(x)`,
+/// `ArrayBuffer.isView(x)`).
+fn guard_operand_identifier(condition: &ParsedExpression) -> Option<&str> {
+    let operand = if let Some((operand, _)) = parse_instanceof_condition(condition) {
+        operand
+    } else if let Some((operand, _, _)) = parse_typeof_condition(condition) {
+        operand
+    } else if let Some(operand) = parse_array_isarray_condition(condition) {
+        operand
+    } else if let Some(operand) = parse_arraybuffer_isview_condition(condition) {
+        operand
+    } else {
+        return None;
+    };
+    match operand {
+        ParsedExpression::Identifier { name, .. } => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Narrows `ty` for variable `var_name` under `condition`, returning the narrowed
+/// type or `None` when the condition does not constrain `var_name` (or leaves it
+/// unchanged). Composes `||` (true branch: union of disjuncts — every disjunct
+/// must constrain `var_name`), `&&` (true branch: sequential), and `!`.
+fn narrow_type_for_identifier(
+    condition: &ParsedExpression,
+    var_name: &str,
+    ty: &Type,
+    branch_is_true: bool,
+) -> Option<Type> {
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => narrow_type_for_identifier(operand, var_name, ty, !branch_is_true),
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or,
+            right,
+            ..
+        } if branch_is_true => {
+            // `A || B` true branch: the value satisfies A or B, so its type is the
+            // union of each disjunct's narrowing. A disjunct that does not
+            // constrain `var_name` leaves it unconstrained, so the whole guard
+            // cannot narrow — bail.
+            let left_narrowed = narrow_type_for_identifier(left, var_name, ty, true)?;
+            let right_narrowed = narrow_type_for_identifier(right, var_name, ty, true)?;
+            Some(union_type(vec![left_narrowed, right_narrowed]))
+        }
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And,
+            right,
+            ..
+        } if branch_is_true => {
+            // `A && B` true branch: apply each guard in sequence.
+            let after_left =
+                narrow_type_for_identifier(left, var_name, ty, true).unwrap_or_else(|| ty.clone());
+            Some(
+                narrow_type_for_identifier(right, var_name, &after_left, true)
+                    .unwrap_or(after_left),
+            )
+        }
+        _ => narrow_single_guard_for_identifier(condition, var_name, ty, branch_is_true),
+    }
+}
+
+/// Narrows `ty` for `var_name` under a single (non-composite) guard condition.
+fn narrow_single_guard_for_identifier(
+    condition: &ParsedExpression,
+    var_name: &str,
+    ty: &Type,
+    branch_is_true: bool,
+) -> Option<Type> {
+    if let Some((ParsedExpression::Identifier { name, .. }, ctor_name)) =
+        parse_instanceof_condition(condition).map(|(operand, ctor)| (operand, ctor))
+        && name == var_name
+    {
+        return narrow_union_by_instanceof(ty, ctor_name, branch_is_true);
+    }
+    if let Some((ParsedExpression::Identifier { name, .. }, tag, eq)) = parse_typeof_condition(condition)
+        && name == var_name
+    {
+        return narrow_union_by_typeof(ty, tag, branch_is_true == eq);
+    }
+    if let Some(ParsedExpression::Identifier { name, .. }) =
+        parse_array_isarray_condition(condition)
+        && name == var_name
+    {
+        return narrow_union_by_arrayness(ty, branch_is_true);
+    }
+    if let Some(ParsedExpression::Identifier { name, .. }) =
+        parse_arraybuffer_isview_condition(condition)
+        && name == var_name
+    {
+        return narrow_union_by_arraybufferview(ty, branch_is_true);
+    }
+    None
+}
+
+/// Applies `||`/`&&`-composed guard narrowing in place to a `ScopeStack`. Returns
+/// whether `condition` was such a logical composition (so the caller can stop).
+fn narrow_logical_guard_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    if !matches!(
+        condition,
+        ParsedExpression::Logical {
+            operator: ParsedLogicalOperator::Or | ParsedLogicalOperator::And,
+            ..
+        }
+    ) {
+        return false;
+    }
+
+    let mut operand_names = Vec::new();
+    collect_guard_operand_identifiers(condition, &mut operand_names);
+
+    for name in operand_names {
+        let Some(symbol) = scopes.resolve(&name) else {
+            continue;
+        };
+        let Some(narrowed) =
+            narrow_type_for_identifier(condition, &name, &symbol.ty, branch_is_true)
+        else {
+            continue;
+        };
+        if narrowed == symbol.ty {
+            continue;
+        }
+        let narrowed_symbol = SymbolInfo {
+            ty: narrowed,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        let _ = scopes.insert_current(name, narrowed_symbol);
+    }
+    true
+}
+
+/// Collects the distinct identifiers tested by single guards within a
+/// (possibly `||`/`&&`/`!`-composed) condition.
+fn collect_guard_operand_identifiers(condition: &ParsedExpression, names: &mut Vec<String>) {
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => collect_guard_operand_identifiers(operand, names),
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or | ParsedLogicalOperator::And,
+            right,
+            ..
+        } => {
+            collect_guard_operand_identifiers(left, names);
+            collect_guard_operand_identifiers(right, names);
+        }
+        _ => {
+            if let Some(name) = guard_operand_identifier(condition)
+                && !names.iter().any(|existing| existing == name)
+            {
+                names.push(name.to_string());
+            }
+        }
+    }
+}
+
 /// Narrows for a branch by any recognized type guard: a discriminated-union
 /// equality test (`x.kind === "a"`), a `typeof x === "tag"` test, an
 /// `x instanceof Ctor` test, an `Array.isArray(x)` test, or an `in`
@@ -738,6 +981,9 @@ pub(crate) fn narrow_discriminant_in_scope(
         return;
     }
 
+    if narrow_logical_guard_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
     if narrow_typeof_in_scope(condition, scopes, branch_is_true) {
         return;
     }
@@ -745,6 +991,9 @@ pub(crate) fn narrow_discriminant_in_scope(
         return;
     }
     if narrow_array_isarray_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
+    if narrow_arraybuffer_isview_in_scope(condition, scopes, branch_is_true) {
         return;
     }
 
@@ -920,6 +1169,35 @@ fn narrow_array_isarray_in_scope(
     true
 }
 
+/// Applies `ArrayBuffer.isView(x)` narrowing in place to a `ScopeStack`. Returns
+/// whether the condition was such a guard over a bare identifier.
+fn narrow_arraybuffer_isview_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let Some(operand) = parse_arraybuffer_isview_condition(condition) else {
+        return false;
+    };
+    let ParsedExpression::Identifier { name, .. } = operand else {
+        return false;
+    };
+    let Some(symbol) = scopes.resolve(name) else {
+        return true;
+    };
+    let Some(narrowed) = narrow_union_by_arraybufferview(&symbol.ty, branch_is_true) else {
+        return true;
+    };
+    let narrowed_symbol = SymbolInfo {
+        ty: narrowed,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let name = name.clone();
+    let _ = scopes.insert_current(name, narrowed_symbol);
+    true
+}
+
 pub(crate) fn evaluate_condition_expression_with_truthy_guards(
     expression: &ParsedExpression,
     fallback_span: Option<surge_ts_syntax::TextSpan>,
@@ -1052,5 +1330,48 @@ mod tests {
         assert!(narrow_union_by_typeof(&union3(), "boolean", true).is_none());
         // A non-union type is never narrowed.
         assert!(narrow_union_by_arrayness(&Type::String, true).is_none());
+    }
+
+    struct FixedResolver(Type);
+    impl surge_ts_types::ResolveReference for FixedResolver {
+        fn resolve(&self) -> Type {
+            self.0.clone()
+        }
+    }
+
+    fn view_reference(display: &str) -> Type {
+        Type::Reference(surge_ts_types::TypeReference::new(
+            format!("lib.dom.d.ts\u{0}{}", display.split('<').next().unwrap()),
+            display,
+            Vec::new(),
+            std::sync::Arc::new(FixedResolver(Type::Unknown)),
+        ))
+    }
+
+    #[test]
+    fn arraybufferview_keeps_view_members_in_true_branch() {
+        // `ArrayBuffer.isView(x)` keeps the `ArrayBufferView<ArrayBuffer>` member
+        // and drops the `ArrayBuffer` / primitive members.
+        let union = union_type(vec![
+            view_reference("ArrayBufferView<ArrayBuffer>"),
+            view_reference("ArrayBuffer"),
+            Type::String,
+        ]);
+        let narrowed = narrow_union_by_arraybufferview(&union, true).unwrap();
+        assert_eq!(narrowed, view_reference("ArrayBufferView<ArrayBuffer>"));
+    }
+
+    #[test]
+    fn arraybufferview_removes_view_members_in_false_branch() {
+        let union = union_type(vec![
+            view_reference("Int8Array"),
+            view_reference("ArrayBuffer"),
+            Type::String,
+        ]);
+        let narrowed = narrow_union_by_arraybufferview(&union, false).unwrap();
+        assert_eq!(
+            narrowed,
+            union_type(vec![view_reference("ArrayBuffer"), Type::String])
+        );
     }
 }
