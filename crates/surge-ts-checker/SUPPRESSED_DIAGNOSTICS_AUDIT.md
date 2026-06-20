@@ -1,11 +1,38 @@
 # Suppressed-Diagnostics Audit (follow-up)
 
-**Status: OPEN.** Tracks the compatibility-report suppression/stub counters that
-sit behind a "matches tsc" parity claim. Source-level parity can be 0/0 while
-these counters are non-zero, because surge-ts hides three categories of output
-before the user-facing comparison (plus a fourth, stderr-only config-option
-category — see below). A product-grade parity claim must confirm none of them
-masks a real source-level miss.
+**Status: substantially RESOLVED (2026-06-20).** Tracks the compatibility-report
+suppression/stub counters that sit behind a "matches tsc" parity claim.
+Source-level parity can be 0/0 while these counters are non-zero, because
+surge-ts hides three categories of output before the user-facing comparison
+(plus a fourth, stderr-only config-option category — see below).
+
+What changed in this pass:
+- **Recursive-type cycle fallback (action item #1) — FIXED.** A legal *non-generic*
+  recursive type now resolves its self-edge to a lazy nominal `Type::Reference`
+  to the same declaration instead of `unknown`, so a member/assignability check
+  through the back-edge sees the real recursive shape rather than silently
+  passing. All five ky source `surge::type-*-cycle` notes are gone; ky's
+  native-profile run now surfaces **zero** source-level diagnostics. See below.
+- **External-stub segmentation (action item #3) — DONE.** `externalModuleStubs`
+  now reports `{ total, resolved, unresolved }`; `unresolved` is counted in the
+  checker at the points an external specifier fails every resolution path.
+- **Counter gating (action item #4) — DONE.** The ky regression gate now asserts
+  zero source-level native-profile diagnostics and `externalModuleStubs.unresolved
+  == 0`, so a regression that adds a suppressed source-level diagnostic fails the
+  gate instead of hiding.
+
+- **Lib-graph limits (action item #2) — three fixed, one deferred.** Fixed: the 14
+  spurious `TS2393` "duplicate function implementation" notes on ambient `declare
+  function` overloads (overload-aware duplicate detection; also −76 false `TS2393`
+  on zod); the 2 `TS2536` on constrained indexed access
+  (`addEventListener<K extends keyof WindowEventMap>` — the ambient
+  signature-collection path now establishes the type-parameter scope); and the 2
+  `TS2304` 'globalThis' (`typeof globalThis` → clean `unknown` + a `T & unknown ⇒
+  T` intersection simplification, so `window`/`self` resolve to `Window` and their
+  members are checked). All three pass every gate (ky 0/0, sweep 76/76, zod 0-new,
+  no new trpc FP). Deferred: `intrinsic`/`BuiltinIteratorReturn` — its surface fix
+  (`intrinsic ⇒ any`) exposes surge's incomplete iterator/indexed-access modelling
+  and **breaks ky 0/0**. Root-caused below.
 
 ## What the counters mean
 
@@ -32,35 +59,66 @@ suppression):
 surge --project <tsconfig> --diagnosticProfile native --diagnosticStyle tsc
 ```
 
-## ky — first-pass audit (2026-06-20)
+## ky — audit (2026-06-20, post cycle-fix)
 
 Counters on `.local-projects/ky` (tsc reports 0; surge tsc-profile reports 0):
 
-| counter | value |
-| --- | ---: |
-| `suppressedRustOnlyDiagnosticsTotal` | 15 |
-| `suppressedDeclarationDiagnosticsTotal` | 23 |
-| `externalModuleStubs.total` | 1 |
+| counter | before fix | after fix |
+| --- | ---: | ---: |
+| `suppressedRustOnlyDiagnosticsTotal` | 15 | 4 |
+| `suppressedDeclarationDiagnosticsTotal` | 23 | 22 |
+| `externalModuleStubs` | `{total:1}` | `{total:1, resolved:1, unresolved:0}` |
 
-`--diagnosticProfile native` surfaces 25 otherwise-suppressed diagnostics:
+`--diagnosticProfile native` (suppression off) now surfaces **2** diagnostics,
+**all in physical lib `.d.ts`** and **zero in ky source** (down from 25 in the
+first pass → 19 after the cycle fix → 6 after the overload fix → 4 after the
+constrained indexed-access fix → 2 after the globalThis fix):
 
-- **20 in physical lib `.d.ts`** (`lib.dom.d.ts` ×18, `lib.es2015.iterable`,
-  `lib.es2015.collection`). These are surge parser/checker limits on upstream lib
-  syntax, suppressed because `PhysicalDefaultLib` is trusted. Benign for the
-  *source* claim, but they mean surge mis-handles ~20 constructs in the lib graph,
-  which can quietly degrade the resolved types user code sees.
-- **5 in ky SOURCE** — all `surge::type-alias-cycle` /
-  `surge::type-declaration-cycle`:
-  - `source/types/ky.ts:5` `KyInstance`
-  - `source/types/options.ts:399` `Options` and `source/types/hooks.ts:366` `Options`
-  - `source/types/options.ts:91` / `source/types/hooks.ts:28` `Hooks` / `InitHook`
+- 1 `TS2304` (`BuiltinIteratorReturn`), 1 `surge::type-declaration-cycle`
+  (`Set<T>`) — in `lib.es2015.iterable.d.ts` / `lib.es2015.collection.d.ts`. The
+  14 `TS2393` (overload fix), 2 `TS2536` (constrained indexed-access fix), and 2
+  `TS2304` 'globalThis' (globalThis fix) are gone; see "Lib-graph limits" below.
 
-  These are **legal self-referential / mutually-recursive types** that tsc accepts
-  without complaint. surge's cycle detector emits a (suppressed) `surge::` note
-  and falls back to a degraded resolution for the cyclic type. This is the item
-  that actually needs attention: the 0/0 source claim holds only because these are
-  `surge::` codes, not TS codes — but the underlying types are not fully modelled
-  (several ky fixes had to work around `KyInstance`/`Options` resolution).
+The **5 ky SOURCE** cycle notes that the first pass flagged as "the item that
+actually needs attention" (`KyInstance`, `Options` ×2, `Hooks`, `InitHook`) are
+**gone**: they are legal non-generic recursive types, and surge now resolves each
+self-edge to a lazy nominal reference to its own declaration rather than emitting
+a suppressed `surge::type-*-cycle` note and degrading to `unknown`. The lib
+`Set<T>` self-cycle remains (it is generic — see the fix's scope note), which is
+the one new entry in the otherwise-shrunk `suppressedRustOnly` count.
+
+### The fix (recursive-type cycle fallback)
+
+`resolve_type_alias` / `resolve_interface` take the declaration's
+`TypeDeclarationHandle`; on a detected resolution cycle the legal back-edge of a
+**non-generic** structural alias / any **non-generic** interface returns
+`make_recursive_cycle_reference(...)` — a lazy nominal `Type::Reference` that peels
+one level to the real shape on demand (bounded by `LAZY_PEEL_STACK`). A
+member/assignability probe through the self-edge is therefore checked against the
+real recursive type. Locked by smoke cases
+`type-alias-recursive-member-access-through-self-edge` (TS2339+TS2322 through a
+recursive object field) and the rewritten `*-cycle-*-no-cascade` cases, which now
+assert tsc's real codes (TS2741 / TS2322 / TS2355 / `[]`) instead of the old
+suppressed note.
+
+**Scope — generic recursion stays `unknown` (deliberate).** A *generic*
+recursive declaration is left as `unknown` with the (suppressed) note, because its
+lazy peel is bounded mid-instantiation: forcing the deeply self-instantiating
+generic clusters (trpc's `ProcedureBuilder<…8 params…>`, whose every method returns
+`Builder<…refined…>`) would expose an incomplete shape and over-report
+member/assignability checks. Verified: an unguarded version added ~33 false
+positives on trpc examples (`Property 'mutation' does not exist on type
+'ProcedureBuilder'`, etc.); gating on `type_parameters.is_empty()` drops the trpc
+and zod deltas to exactly **0 new / 0 removed** while keeping every non-generic
+fix. Keeping `unknown` there preserves the previous sound-but-under-reporting
+behaviour for generics.
+
+**Known residual (pre-existing, not introduced here):** `type A = B` where `B` is
+an interface that cycles back to `A` still emits a spurious `surge::type-alias-cycle`
+note (tsc reports `TS2741` on the assignment). The legality check
+`alias_body_supports_recursion` only inspects the alias's immediate parsed body, so
+it cannot see that the bare reference `B` is a structural interface. Locked
+unchanged by smoke case `interface-cycle-type-alias-through-interface-no-cascade`.
 
 `externalModuleStubs.total = 1` is the single non-relative import in ky source,
 `import type {Expect, Equal} from '@type-challenges/utils'` (a compile-time type
@@ -108,23 +166,124 @@ none of them.
 
 ## Action items
 
-1. **Recursive-type cycle fallback (highest value).** Investigate the 5
-   `surge::type-*-cycle` notes on legal recursive ky types (`KyInstance`,
-   `Options`, `Hooks`, `InitHook`). Confirm whether the cyclic fallback degrades
-   the resolved type, and whether any downstream user-facing check silently
-   under-reports because of it. tsc models these without a cycle error.
-2. **Lib-graph limits.** Enumerate the ~20 suppressed lib `.d.ts` diagnostics by
-   code; decide which are genuinely unsupported lib syntax (acceptable to suppress)
-   versus surge bugs that could corrupt a resolved global/DOM type.
-3. **Stub-vs-resolve clarity.** `externalModuleStubs` counts references, not
-   failures. Either rename/segment it into "referenced" vs "stubbed (unresolved)"
-   so a real unresolved import is distinguishable, or add a separate
-   unresolved-external counter. For a parity claim, an *unresolved* external
-   module is the risky case; a resolved one is not.
-4. **Gate the counters.** Once audited, consider asserting expected suppression
-   counts (or `== 0` for ky source-file `surge::` diagnostics) in the `real:ky`
-   regression gate so a regression that adds a new suppressed source-level
-   diagnostic is caught, not hidden.
+1. ~~**Recursive-type cycle fallback (highest value).**~~ **DONE (2026-06-20).**
+   The 5 ky source `surge::type-*-cycle` notes are gone; their legal non-generic
+   recursive types now resolve through a lazy nominal self-reference instead of
+   degrading to `unknown`. Generic recursion is deliberately left as `unknown` (it
+   would over-report — see "The fix" above). Locked by the rewritten `*-cycle-*`
+   smoke cases + the ky native-profile gate.
+2. **Lib-graph limits (three fixed; one deferred + a tracked residual).**
+   The first-pass ky native run surfaced 20 lib `.d.ts` diagnostics; after the
+   cycle fix (#1) 14 remained, after the overload fix 6, after the constrained
+   indexed-access fix 4, and after the globalThis fix **2** remain (the
+   `BuiltinIteratorReturn` TS2304 and the `Set<T>` generic-recursion cycle).
+   - **`TS2393` ×14 "Duplicate function implementation" (`lib.dom.d.ts`) —
+     FIXED (2026-06-21).** These were ambient `declare function` *overloads* at
+     global scope (`postMessage`, `scroll`, `addEventListener`/`removeEventListener`,
+     …, each declared 2+ times). tsc merges same-name `declare function`s as an
+     overload set; surge flagged the second as a duplicate *implementation*. Fix:
+     TS2393 now fires only when a body-bearing implementation follows another
+     body-bearing implementation (tracked per scope via
+     `SymbolTable::{mark,has}_function_implementation`); bodyless declarations
+     merge as overloads. A companion fix skips body checks (e.g. TS2355) on
+     bodyless `function` signatures. Verified: all 14 lib FPs gone, ky still 0/0,
+     sweep 76/76, **zod −76 false TS2393**, trpc −1 (no new). Locked by the
+     rewritten `ambient_global_duplicate_function_policy_pinned` and the
+     `function-overload-signatures-not-duplicate` smoke case. (Residual: surge
+     still does not build a true overload *set* for call resolution — it keeps the
+     first signature — a separate limitation tracked apart from the duplicate
+     policy.)
+   - **`TS2536` ×2 "Type 'K' cannot be used to index …" (`lib.dom.d.ts`) —
+     FIXED (2026-06-21).** `addEventListener<K extends keyof WindowEventMap>(…,
+     listener: (this: Window, ev: WindowEventMap[K]) => any)`. Root cause: the
+     ambient/global signature-collection path
+     (`collect_function_declaration_signature`) mapped the signature *without*
+     establishing the function's type-parameter scope, so the constraint `K extends
+     keyof WindowEventMap` was invisible and `WindowEventMap[K]` reported a false
+     TS2536. (Single-file checking always had the scope, which is why it only
+     reproduced in project/ambient mode.) Fix: wrap the mapping in
+     `with_type_parameter_scope`, **scoped to generic `declare` functions** — for a
+     `declare` function the collected signature is authoritative (no body check
+     follows), whereas a non-`declare` function is re-checked under its own scope
+     by `check_function_declaration`, and resolving its (cross-module) signature
+     concretely *here* changed how generic instantiations were collected and
+     surfaced assignability false positives (e.g. zod `api.ts`). With the
+     `is_declare` gate: 2 lib TS2536 gone, ky still 0/0, sweep 76/76, **zod 0
+     delta**, trpc net −9 false positives. Locked by
+     `ambient_generic_function_constrained_indexed_access_no_ts2536`. (Residual: 2
+     new trpc TS2339 in `react-query`/`openapi` — see below — from *separate*
+     deeper gaps the more-precise `declare` signatures expose; trpc is net-better
+     and not a gated 0/0 project.)
+   - **`TS2304` 'globalThis' ×2 (`declare var self/window: Window & typeof
+     globalThis`) — FIXED (2026-06-21), as a two-part change.** globalThis's value
+     symbol is installed (`sync_global_this_symbol`) only after every ambient global
+     is collected, so an ambient var naming `typeof globalThis` resolves it first
+     and missed.
+     1. **`typeof globalThis` resolution**: on the miss, return a clean `unknown`
+        with `had_error: false` instead of a (suppressed) TS2304 with `had_error:
+        true` — globalThis is always a valid built-in, so the diagnostic is a false
+        positive and the `had_error` would poison the enclosing intersection.
+     2. **Intersection `T & unknown ⇒ T`**: `merge_intersection_members`, after
+        dropping the `unknown` operand, now returns a lone surviving member
+        unchanged instead of peeling + re-merging it. Re-merging forced the lazy
+        `Window` reference's bounded structural expansion and discarded its nominal
+        identity, which both degraded `window`/`self` *and* corrupted the **shared**
+        `Window` apparent type — a plain `declare const win: Window; win.appVersion`
+        then resolved to `Window` (caught by the `declare-global-window-physical-lib-basic`
+        sweep preset). Returning the member unchanged keeps `Window & typeof
+        globalThis ⇒ Window`.
+     With both, `window`/`self` resolve to `Window`, member access is checked
+     (`w.bar` is `string`, locked by
+     `ambient_global_typeof_global_this_intersection_resolves_to_left`), and the 2
+     lib globalThis TS2304 are gone. Verified gate-clean: sweep 76/76, ky 0/0, zod
+     0-new, **no genuinely-new trpc FP** (the only trpc movement is original-baseline
+     churn). Residual: `window.<unknown-prop>` reports TS4111 rather than tsc's
+     TS2339 — a *separate* spurious string-index-signature on surge's physical-lib
+     `Window`, latent (no gated project trips it) and tracked apart.
+   - **`TS2304` 'BuiltinIteratorReturn' ×1 — deferred (iterator-type modelling).**
+     `type BuiltinIteratorReturn = intrinsic`; surge drops the alias because the
+     oxc→`ParsedType` lowering had no `intrinsic` case, so references to it report
+     TS2304. Making the alias resolve — whether `intrinsic ⇒ any` *or* `intrinsic ⇒
+     unknown`, both behave identically here — is **not** the real work: it merely
+     lets `SetIterator`/`IteratorObject<T, BuiltinIteratorReturn, …>` expand, and
+     because every array property's `[Symbol.iterator]` pulls that chain, the
+     recursive `Hooks` type (its `…Hook[]` members) resolves more fully and
+     **breaks ky 0/0** by surfacing two *downstream* gaps, neither about iterators
+     directly:
+     1. `merge.ts` `function newHookValue<K extends keyof Hooks>(): Required<Hooks>[K]`
+        → false TS2536. The constrained indexed access is in a *non-`declare`*
+        function (so the #7 declare-scoped fix does not cover it), and resolving
+        `Required<Hooks>` pushes a generic type-parameter scope that shadows the
+        function's `K`, so `type_parameter_has_constraint("K")` looks in the wrong
+        frame. (Only triggered once the iterator chain resolves — invisible
+        otherwise, so it cannot be fixed/tested in isolation.)
+     2. `Ky.ts` `(options.hooks?.init ?? []).length` → TS2339 `.length` on
+        `unknown` — optional-chain typing through the recursive `Hooks` returns
+        `unknown`.
+     So closing this needs real **iterator-type modelling** (so resolving the alias
+     does not perturb consumers) *plus* the two downstream fixes — a coordinated
+     feature, each part untestable until the others land. The dropped-alias /
+     suppressed-TS2304 status quo is the pragmatic optimum. **Reverted; tracked as a
+     dedicated follow-up.**
+   - **`surge::type-declaration-cycle` on `Set<T>`** — the generic-recursion case
+     deliberately left as `unknown` by the #1 fix (see its scope note).
+   - **Newly-exposed (by the TS2536 fix), separate deeper gaps — open:** 2 trpc
+     `TS2339` the more-precise `declare`-generic signatures surface —
+     `context.client` on a `TRPCContextState<…>` instantiation (generic member
+     resolution) and `fs.realpathSync.native` (function-with-namespace-property
+     merge on a `@types/node` overload). Both are distinct from indexed access; tsc
+     reports neither. Not gated; documented for follow-up.
+3. ~~**Stub-vs-resolve clarity.**~~ **DONE (2026-06-20).** `externalModuleStubs` now
+   reports `{ total, resolved, unresolved }`. `unresolved` is counted in the
+   checker (`record_unresolved_external_module`) at every point an external
+   specifier fails resolution (imports + re-exports), so a silently-stubbed
+   unresolved import is now distinguishable from a benign resolved reference.
+   Locked by `compat_report_external_module_stubs_json`.
+4. ~~**Gate the counters.**~~ **DONE (2026-06-20).** The ky regression gate
+   (`scripts/real-projects/ky-regression.test.ts`) now asserts (a) the native
+   profile surfaces **zero** ky *source* diagnostics — catching any new suppressed
+   source-level diagnostic, including a recursive-cycle regression — and (b)
+   `externalModuleStubs.unresolved == 0`.
 5. ~~**Catch up the tsconfig option registry to TS 6.0.**~~ **DONE (2026-06-20).**
    `node20` is recognized for `module`/`moduleResolution` and the 8 newer options
    are registered. Loading ky emits zero config diagnostics; locked by
