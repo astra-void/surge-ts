@@ -425,6 +425,14 @@ message = "Property '{0}' comes from an index signature, so it must be accessed 
 arity = 1
 
 [[diagnostic]]
+code = "TS6133"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is declared but its value is never read."
+arity = 1
+
+[[diagnostic]]
 code = "TS4114"
 category = "Error"
 source = "typescript"

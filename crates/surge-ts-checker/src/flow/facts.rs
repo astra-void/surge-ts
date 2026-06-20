@@ -39,6 +39,7 @@ pub(crate) fn collect_function_flow_facts_from_statement(
     );
 
     match statement {
+        ParsedFunctionBodyStatement::Function(_) => {}
         ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
             if matches!(
                 variable.kind,
@@ -158,6 +159,7 @@ pub(crate) fn summarize_function_statement_flow(
     statement: &ParsedFunctionBodyStatement,
 ) -> ReturnFlowSummary {
     match statement {
+        ParsedFunctionBodyStatement::Function(_) => ReturnFlowSummary::default(),
         ParsedFunctionBodyStatement::Return(return_statement) => ReturnFlowSummary {
             contains_value_return: return_statement.expression.is_some(),
             contains_return_with_value: return_statement.expression.is_some(),

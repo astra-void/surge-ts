@@ -150,6 +150,8 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
         },
     );
 

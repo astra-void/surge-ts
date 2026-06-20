@@ -266,6 +266,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     None,
                     Some(instance_type.clone()),
                     true,
+                    None,
                     ctx,
                 );
             }
@@ -293,6 +294,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     method.name_span,
                     Some(this_type),
                     false,
+                    method.has_body.then(|| method.body_reads.as_slice()),
                     ctx,
                 );
             }

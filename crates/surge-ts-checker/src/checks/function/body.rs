@@ -172,6 +172,11 @@ pub(crate) fn check_function_body_statement(
 ) {
     record_flow_statement_count();
     match statement {
+        // A nested function declaration is inert for the enclosing body's
+        // checking (its body is not separately type-checked, matching the prior
+        // drop-at-parse behavior); it is retained only so use-tracking can see
+        // identifier reads inside it.
+        ParsedFunctionBodyStatement::Function(_) => {}
         ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
             check_function_variable_declaration(*variable, statement_index, scopes, flow_state, ctx);

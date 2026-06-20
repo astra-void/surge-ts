@@ -323,6 +323,8 @@ pub struct ParsedClassProperty {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedClassMethod {
+    /// See [`ParsedFunctionDeclaration::body_reads`].
+    pub body_reads: Vec<String>,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub is_static: bool,
@@ -332,10 +334,14 @@ pub struct ParsedClassMethod {
     pub parameters: Vec<ParsedFunctionParameter>,
     pub return_type: Option<ParsedType>,
     pub body: Vec<ParsedFunctionBodyStatement>,
+    /// See [`ParsedFunctionDeclaration::has_body`].
+    pub has_body: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedClassConstructor {
+    /// See [`ParsedFunctionDeclaration::body_reads`].
+    pub body_reads: Vec<String>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,
@@ -791,6 +797,10 @@ pub struct ParsedAssignment {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedFunctionDeclaration {
+    /// All value-position identifier names read anywhere in the body (including
+    /// nested functions, spreads, for-in, and object methods), collected from the
+    /// full oxc AST during parsing. Backs unused-binding diagnostics (TS6133).
+    pub body_reads: Vec<String>,
     pub is_declare: bool,
     pub name: String,
     pub name_span: Option<TextSpan>,
@@ -799,6 +809,9 @@ pub struct ParsedFunctionDeclaration {
     pub return_type: Option<ParsedType>,
     pub return_type_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
+    /// False for an overload signature (no body block); its parameters are not
+    /// subject to TS6133.
+    pub has_body: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -812,6 +825,10 @@ pub enum ParsedFunctionBodyStatement {
     ThisPropertyAssignment(Box<ParsedThisPropertyAssignment>),
     Expression(Box<ParsedExpression>),
     Block(Vec<ParsedFunctionBodyStatement>),
+    /// A nested `function` declaration. Retained so identifier reads inside its
+    /// body (e.g. a captured outer parameter) stay visible to use-tracking; the
+    /// enclosing function's control-flow analysis treats it as inert.
+    Function(Box<ParsedFunctionDeclaration>),
     If(Box<ParsedIfStatement>),
     While(Box<ParsedWhileStatement>),
     ForOf(Box<ParsedForOfStatement>),
@@ -916,6 +933,8 @@ pub struct ParsedFunctionParameter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedArrowFunction {
+    /// See [`ParsedFunctionDeclaration::body_reads`].
+    pub body_reads: Vec<String>,
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub return_type: Option<ParsedType>,

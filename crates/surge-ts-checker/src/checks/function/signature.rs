@@ -16,8 +16,8 @@ use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 use crate::arena::alloc_function_type;
 use crate::checks::expr::evaluate_expression;
 use crate::checks::var::widen_implicit_variable_initializer_type;
-use crate::context::CheckerContext;
 use crate::context::convert_span;
+use crate::context::{CheckerContext, FileKind};
 use crate::flow::{FunctionFlowState, analyze_function_body_flow, collect_function_flow_facts};
 use crate::infer::{
     InferredExpression, TypeParameterSubstitution, map_parsed_type_with_substitution,
@@ -489,6 +489,36 @@ pub(crate) fn register_function_signature(
     duplicate
 }
 
+/// Whether `noUnusedParameters` reporting applies in the current file. Skips
+/// declaration files (ambient / `.d.ts`), where tsc never reports.
+pub(crate) fn should_track_unused_parameters(ctx: &CheckerContext) -> bool {
+    ctx.options.no_unused_parameters && ctx.current_file_kind == FileKind::RootSource
+}
+
+/// Reports TS6133 for each identifier parameter whose name never appears in the
+/// body's collected reads (and is not `_`-prefixed). Object/array patterns and
+/// the `this` pseudo-parameter are skipped.
+pub(crate) fn emit_unused_parameters(
+    parameters: &[ParsedFunctionParameter],
+    reads: &[String],
+    ctx: &mut CheckerContext,
+) {
+    for parameter in parameters {
+        let ParsedBindingName::Identifier { name, span } = &parameter.binding_name else {
+            continue;
+        };
+        if name == "this" || name.starts_with('_') || reads.iter().any(|read| read == name) {
+            continue;
+        }
+        let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
+        let diagnostic = match span {
+            Some(span) => diagnostic.with_span(convert_span(*span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check_function_body_with_signature(
     name: String,
@@ -499,6 +529,7 @@ pub(crate) fn check_function_body_with_signature(
     function_signature: Option<FunctionSignatureInfo>,
     has_explicit_return_type: bool,
     missing_return_span: Option<TextSpan>,
+    body_reads: Option<&[String]>,
     ctx: &mut CheckerContext,
 ) {
     check_function_body_with_signature_and_this(
@@ -512,6 +543,7 @@ pub(crate) fn check_function_body_with_signature(
         missing_return_span,
         None,
         false,
+        body_reads,
         ctx,
     );
 }
@@ -531,6 +563,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     missing_return_span: Option<TextSpan>,
     this_type: Option<Type>,
     is_constructor: bool,
+    body_reads: Option<&[String]>,
     ctx: &mut CheckerContext,
 ) {
     let body_flow = analyze_function_body_flow(&body);
@@ -562,6 +595,14 @@ pub(crate) fn check_function_body_with_signature_and_this(
     let mut flow_state = FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
     );
+
+    if !is_constructor && should_track_unused_parameters(ctx) {
+        // `None` is an overload signature (no body); tsc never flags its
+        // parameters.
+        if let Some(reads) = body_reads {
+            emit_unused_parameters(&parameters, reads, ctx);
+        }
+    }
 
     for (parameter, parameter_type) in parameters
         .into_iter()

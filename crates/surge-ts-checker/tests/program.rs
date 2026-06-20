@@ -117,6 +117,8 @@ fn program_api_no_lib_hides_generated_default_libs() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: true,
             skip_lib_check: false,
             types: Vec::new(),
@@ -523,6 +525,8 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -540,6 +544,8 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -844,6 +850,68 @@ fn no_property_access_from_index_signature_silent_when_flag_off() {
     );
 }
 
+fn no_unused_parameters_options(no_unused_parameters: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_unused_parameters,
+        ..Default::default()
+    }
+}
+
+fn ts6133_codes(source: &str, on: bool) -> Vec<String> {
+    let diagnostics = check_source_with_options(source, "a.ts", no_unused_parameters_options(on));
+    codes(&diagnostics)
+        .into_iter()
+        .filter(|code| code == "TS6133")
+        .collect()
+}
+
+#[test]
+fn no_unused_parameters_reports_ts6133() {
+    let source = "export function f(a: number, b: number): number { return b; }";
+    assert_eq!(ts6133_codes(source, true), vec!["TS6133"]);
+}
+
+#[test]
+fn no_unused_parameters_exempts_underscore_prefix() {
+    let source = "export function f(_a: number, b: number): number { return b; }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_counts_read_in_nested_function() {
+    // The parameter is read only inside a nested function declaration — the oxc
+    // read-walk must see it, so no TS6133.
+    let source =
+        "export function f(p: number): void { function inner(): number { return p; } inner(); }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_counts_read_in_template_literal() {
+    let source = "export function f(token: string): string { return `Bearer ${token}`; }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_counts_read_in_spread() {
+    let source = "export function f(p: number[]): number[] { return [...p]; }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_skips_overload_signatures() {
+    // The bodyless overload signature's parameters must not be flagged; only the
+    // implementation is checked (and here `a` is used).
+    let source = "export function f(a: string): string;\nexport function f(a: number): string;\nexport function f(a: string | number): string { return String(a); }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_silent_when_flag_off() {
+    let source = "export function f(a: number, b: number): number { return b; }";
+    assert!(ts6133_codes(source, false).is_empty());
+}
+
 #[test]
 fn program_api_preserves_input_file_names() {
     let diagnostics = program(&[
@@ -882,6 +950,8 @@ fn program_order_parser_before_type_prepass() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1470,6 +1540,8 @@ fn program_module_export_function_parameter_no_implicit_any() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1496,6 +1568,8 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1519,6 +1593,8 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),

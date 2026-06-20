@@ -825,6 +825,7 @@ fn parse_arrow_function_expression(
         return_type,
         is_async: arrow_expression.r#async,
         body,
+        body_reads: super::reads::collect_function_body_reads(&arrow_expression.body),
         span: Some(text_span_from_oxc_span(arrow_expression.span)),
     })
 }
@@ -1026,6 +1027,11 @@ fn parse_object_method_shorthand(
         return_type,
         is_async: function.r#async,
         body: ParsedArrowFunctionBody::Block(body),
+        body_reads: function
+            .body
+            .as_ref()
+            .map(|body| super::reads::collect_function_body_reads(body))
+            .unwrap_or_default(),
         span: Some(text_span_from_oxc_span(function.span)),
     };
 

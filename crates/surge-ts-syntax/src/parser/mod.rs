@@ -18,6 +18,7 @@ mod function_types;
 mod functions;
 mod imports;
 mod interfaces;
+mod reads;
 mod reference_directives;
 mod spans;
 mod types;

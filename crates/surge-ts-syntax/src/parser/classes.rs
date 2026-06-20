@@ -119,12 +119,19 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 .as_ref()
                 .map(|body| parse_statement_list_as_function_body(&body.statements))
                 .unwrap_or_default();
+            let body_reads = method
+                .value
+                .body
+                .as_ref()
+                .map(|body| super::reads::collect_function_body_reads(body))
+                .unwrap_or_default();
 
             match method.kind {
                 MethodDefinitionKind::Constructor => {
                     Some(ParsedClassMember::Constructor(ParsedClassConstructor {
                         parameters,
                         body,
+                        body_reads,
                         span: Some(text_span_from_oxc_span(method.span)),
                     }))
                 }
@@ -153,6 +160,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         parameters,
                         return_type,
                         body,
+                        has_body: method.value.body.is_some(),
+                        body_reads,
                     }))
                 }
                 MethodDefinitionKind::Get | MethodDefinitionKind::Set => {

@@ -56,6 +56,8 @@ pub struct CheckerOptions {
     pub no_fallthrough_cases_in_switch: bool,
     pub no_implicit_override: bool,
     pub no_property_access_from_index_signature: bool,
+    pub no_unused_locals: bool,
+    pub no_unused_parameters: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
     /// Effective type-package names included in the program. When the project's
@@ -85,6 +87,8 @@ impl Default for CheckerOptions {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
             types: Vec::new(),

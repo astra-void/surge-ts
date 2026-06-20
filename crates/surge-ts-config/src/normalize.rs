@@ -56,6 +56,15 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.no_property_access_from_index_signature);
             }
+            "noUnusedLocals" => {
+                normalized.no_unused_locals = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.no_unused_locals);
+            }
+            "noUnusedParameters" => {
+                normalized.no_unused_parameters =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_unused_parameters);
+            }
             "target" => {
                 normalized.target = parse_target_option(value, config_dir, diagnostics);
             }

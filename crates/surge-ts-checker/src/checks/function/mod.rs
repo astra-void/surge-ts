@@ -85,6 +85,8 @@ pub(crate) fn check_function_declaration(
         return_type,
         return_type_span,
         body,
+        has_body,
+        body_reads,
         ..
     } = function;
 
@@ -141,6 +143,7 @@ pub(crate) fn check_function_declaration(
             Some(signature_info),
             return_type.is_some(),
             return_type_span.or(name_span),
+            has_body.then(|| body_reads.as_slice()),
             ctx,
         );
     });
@@ -164,6 +167,8 @@ pub(crate) fn check_function_declaration_body(
         return_type,
         return_type_span,
         body,
+        has_body,
+        body_reads,
         ..
     } = function;
 
@@ -182,6 +187,7 @@ pub(crate) fn check_function_declaration_body(
         Some(signature_info),
         return_type.is_some(),
         return_type_span.or(name_span),
+        has_body.then(|| body_reads.as_slice()),
         ctx,
     );
     record_program_timing(ctx.timings.as_ref(), |timings| {
@@ -209,6 +215,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
         return_type,
         is_async,
         body,
+        body_reads,
         span: arrow_span,
     } = arrow;
     let _ = is_async;
@@ -263,6 +270,10 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
         for (index, parameter) in parameters.iter().enumerate() {
             let parameter_type = parameter_types.get(index).unwrap_or(&Type::Any);
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);
+        }
+
+        if should_track_unused_parameters(ctx) {
+            emit_unused_parameters(&parameters, &body_reads, ctx);
         }
 
         let visible_symbols = visible_symbols(&scopes);

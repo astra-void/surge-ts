@@ -535,6 +535,16 @@ pub const TS4111: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS6133: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6133",
+    number: Some(6133),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is declared but its value is never read.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS4114: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS4114",
     number: Some(4114),
@@ -819,6 +829,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7006,
     TS7019,
     TS4111,
+    TS6133,
     TS4114,
     TS7029,
     TS7030,
@@ -1371,6 +1382,15 @@ impl Diagnostic {
     pub fn ts4111(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS4111,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6133(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6133,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
