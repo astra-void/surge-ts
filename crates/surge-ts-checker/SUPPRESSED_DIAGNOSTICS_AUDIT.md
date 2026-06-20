@@ -264,15 +264,23 @@ none of them.
         `unknown` no-cascade) — verified to clear ky `merge.ts`. Held back only
         because it is inert without the iterator chain and shifts trpc churn.
      2. `Ky.ts` `(options.hooks?.init ?? []).length` → TS2339 `.length` on
-        `unknown`. **Root cause:** `options.hooks` itself resolves to `unknown` —
-        the recursive `Options`/`Hooks`/`InitHook` lazy peel reaches its depth bound
-        once the iterator chain deepens the `…Hook[]` members, so the property
-        access degrades; `?? []` then propagates `unknown` to `.length`.
+        `unknown`. **Root cause (narrowed):** `options.hooks` itself resolves to
+        `unknown`. It is **not** the lazy-peel depth bound — raising
+        `MAX_LAZY_PEEL_DEPTH`/`MAX_SAME_DECLARATION_PEELS` does not clear it — and it
+        does **not** reproduce on a minimal recursive `Opts/Hooks/Init` triple; it is
+        specific to ky's large `Options` cluster. The remaining suspect is the
+        named-type cache's *cross-frame cycle* path
+        (`get_cached_named_type_resolution`: a declaration seen `Resolving` but
+        absent from the local `resolving` stack returns `unknown`/`had_error`), which
+        `intrinsic`'s altered resolution order trips for `Options.hooks`. Fixing it
+        would mean returning a deferred reference there (as #1 does for the in-frame
+        edge) rather than `unknown` — broader and riskier than #1.
      So closing this needs real **iterator-type modelling** (so resolving the alias
-     does not deepen consumers' peels) *plus* the gap-1 indexed-access suppression
-     *plus* recursive-peel-depth tuning — a coordinated feature, each part inert or
-     untestable until the others land. The dropped-alias / suppressed-TS2304 status
-     quo is the pragmatic optimum. **Reverted; tracked as a dedicated follow-up with
+     does not perturb the recursive cluster's resolution order) *plus* the gap-1
+     indexed-access suppression *plus* a cross-frame-cycle deferred reference — a
+     coordinated feature, each part inert or untestable until the others land. The
+     dropped-alias / suppressed-TS2304 status quo is the pragmatic optimum.
+     **Reverted; tracked as a dedicated follow-up with
      both root causes pinned above.**
    - **`surge::type-declaration-cycle` on `Set<T>`** — the generic-recursion case
      deliberately left as `unknown` by the #1 fix (see its scope note).
