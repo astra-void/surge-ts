@@ -491,6 +491,15 @@ pub enum ParsedExpression {
         elements: Vec<ParsedArrayElement>,
         span: Option<TextSpan>,
     },
+    /// A template literal (`` `a${x}b` ``). Only the interpolated `expressions`
+    /// are retained — the literal quasi text is dropped — so the checker can
+    /// still count identifier reads inside the template (e.g. for TS6133). The
+    /// result type is intentionally left unmodeled (see the checker), preserving
+    /// prior behavior where templates were opaque.
+    TemplateLiteral {
+        expressions: Vec<ParsedExpression>,
+        span: Option<TextSpan>,
+    },
     Unary {
         operator: ParsedUnaryOperator,
         operator_span: Option<TextSpan>,

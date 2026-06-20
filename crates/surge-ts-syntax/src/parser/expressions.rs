@@ -145,6 +145,26 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ThisExpression(this_expression) => ParsedExpression::This {
             span: Some(text_span_from_oxc_span(this_expression.span)),
         },
+        Expression::TemplateLiteral(template) => ParsedExpression::TemplateLiteral {
+            expressions: template
+                .expressions
+                .iter()
+                .map(|expression| parse_expression(expression).0)
+                .collect(),
+            span: Some(text_span_from_oxc_span(template.span)),
+        },
+        Expression::TaggedTemplateExpression(tagged) => ParsedExpression::TemplateLiteral {
+            expressions: std::iter::once(parse_expression(&tagged.tag).0)
+                .chain(
+                    tagged
+                        .quasi
+                        .expressions
+                        .iter()
+                        .map(|expression| parse_expression(expression).0),
+                )
+                .collect(),
+            span: Some(text_span_from_oxc_span(tagged.span)),
+        },
         _ => ParsedExpression::Unknown,
     };
 

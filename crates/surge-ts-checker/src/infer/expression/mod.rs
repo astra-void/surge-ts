@@ -346,6 +346,15 @@ pub(crate) fn infer_expression(
         ParsedExpression::JsxElement { .. } | ParsedExpression::JsxFragment { .. } => {
             InferredExpression::Known(jsx_element_type())
         }
+        ParsedExpression::TemplateLiteral { expressions, .. } => {
+            // Walk the interpolations so their identifier reads are observed (e.g.
+            // for TS6133 use-tracking). The template's own type is left unmodeled,
+            // matching the prior behavior where templates were opaque.
+            for expression in expressions {
+                let _ = infer_expression(expression, symbols, ctx);
+            }
+            InferredExpression::Unknown
+        }
         ParsedExpression::Unknown => InferredExpression::Unknown,
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {

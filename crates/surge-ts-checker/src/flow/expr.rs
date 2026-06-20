@@ -449,6 +449,23 @@ pub(crate) fn check_expression_flow_impl(
             FlowCheck::Clear
         }
         ParsedExpression::ArrowFunction(_) => FlowCheck::Clear,
+        ParsedExpression::TemplateLiteral { expressions, .. } => {
+            for expression in expressions {
+                if check_expression_flow_impl(
+                    expression,
+                    fallback_span,
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
+                .is_blocked()
+                {
+                    return FlowCheck::Blocked;
+                }
+            }
+
+            FlowCheck::Clear
+        }
         ParsedExpression::This { .. }
         | ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)
