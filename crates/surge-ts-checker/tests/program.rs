@@ -113,6 +113,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
+            no_implicit_returns: false,
             no_lib: true,
             skip_lib_check: false,
             types: Vec::new(),
@@ -515,6 +516,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -528,6 +530,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -539,6 +542,124 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
         file_names(&program_diagnostics),
         file_names(&single_file_diagnostics)
     );
+}
+
+fn no_implicit_returns_options(no_implicit_returns: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_implicit_returns,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_implicit_returns_reports_ts7030_on_partial_value_return() {
+    let source = "export function a(x: number) { if (x > 0) return 1; }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS7030"]);
+}
+
+#[test]
+fn no_implicit_returns_reports_ts7030_on_arrow_block_body() {
+    let source = "export const f = (x: number) => { if (x > 0) return 1; };";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS7030"]);
+}
+
+#[test]
+fn no_implicit_returns_silent_when_flag_off() {
+    let source = "export function a(x: number) { if (x > 0) return 1; }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_returns_options(false));
+    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+}
+
+#[test]
+fn no_implicit_returns_silent_when_all_paths_return() {
+    let source = "export function b(x: number) { if (x > 0) return 1; return 2; }";
+    let diagnostics = check_source_with_options(source, "b.ts", no_implicit_returns_options(true));
+    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+}
+
+#[test]
+fn no_implicit_returns_silent_when_all_paths_exit_without_value() {
+    // Every path exits explicitly (`return 1` / bare `return;`), so there is no
+    // implicit fall-through — tsc emits nothing here even under noImplicitReturns.
+    let source = "export function c(x: number) { if (x > 0) return 1; return; }";
+    let diagnostics = check_source_with_options(source, "c.ts", no_implicit_returns_options(true));
+    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+}
+
+#[test]
+fn no_implicit_returns_silent_on_infinite_loop() {
+    // `while (true)` with no `break` never falls through, so the end is
+    // unreachable and tsc emits no TS7030. (surge's separate always-truthy note
+    // for `while (true)` is out of scope here, so assert only TS7030's absence.)
+    let source = "export function g(x: number) { while (true) { if (x > 0) return 1; } }";
+    let diagnostics = check_source_with_options(source, "g.ts", no_implicit_returns_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS7030"),
+        "unexpected TS7030: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_returns_silent_on_throw_only_body() {
+    // A function that only throws (no `return <value>`) infers a `void` return
+    // type; tsc skips TS7030. A `throw` must not count as a value return.
+    let source = "export function p(x: number) { if (x > 0) { throw x; } }";
+    let diagnostics = check_source_with_options(source, "p.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_implicit_returns_silent_on_exhaustive_switch_with_default() {
+    // Every clause returns and a `default` makes the switch exhaustive, so no
+    // path falls through — tsc emits no TS7030.
+    let source = "export function s(x: number) { switch (x) { case 1: return 'a'; default: return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "s.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_implicit_returns_reports_switch_without_default() {
+    // No `default`: the discriminant may match no clause and fall through, so
+    // tsc reports TS7030.
+    let source = "export function s(x: number) { switch (x) { case 1: return 'a'; case 2: return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "s.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS7030"]);
+}
+
+#[test]
+fn no_implicit_returns_does_not_fire_on_constructor() {
+    // tsc never applies noImplicitReturns to constructors (they implicitly
+    // return `this`). A constructor with a conditional `return` value must not
+    // produce TS7030.
+    let source =
+        "export class C { constructor(x: number) { if (x > 0) { return; } this.y = x; } y = 0; }";
+    let diagnostics = check_source_with_options(source, "c.ts", no_implicit_returns_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS7030"),
+        "unexpected TS7030: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_returns_silent_on_try_return_catch_throw() {
+    // Every path exits: the `try` returns, the `catch` throws. The construct
+    // never falls through, so tsc emits no TS7030 (regression: surge's Try flow
+    // summary used to hardcode `guarantees_exit = false`).
+    let source = "export function h(x: number) { try { return x; } catch (e) { throw e; } }";
+    let diagnostics = check_source_with_options(source, "h.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_implicit_returns_does_not_affect_annotated_missing_return() {
+    // Annotated return type still routes through TS2366, independent of the flag.
+    let source = "export function e(x: number): number { if (x > 0) return 1; }";
+    let diagnostics = check_source_with_options(source, "e.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS2366"]);
 }
 
 #[test]
@@ -575,6 +696,7 @@ fn program_order_parser_before_type_prepass() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1159,6 +1281,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1181,6 +1304,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1200,6 +1324,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),

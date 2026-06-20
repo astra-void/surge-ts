@@ -10,7 +10,7 @@ use super::expr::evaluate_expression;
 use crate::arena::alloc_function_type;
 use crate::context::CheckerContext;
 use crate::context::convert_span;
-use crate::flow::{FunctionFlowState, collect_function_flow_facts};
+use crate::flow::{FunctionFlowState, analyze_function_body_flow, collect_function_flow_facts};
 use crate::infer::InferredExpression;
 use crate::program::record_program_timing;
 use crate::symbols::{ScopeStack, SymbolTable};
@@ -297,6 +297,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                 let mut flow_state = FunctionFlowState::new(
                     flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
                 );
+                let body_flow = analyze_function_body_flow(&statements);
                 let return_type_for_body = match &return_type {
                     Type::Any | Type::Unknown | Type::Void => None,
                     ty => Some(ty),
@@ -308,6 +309,17 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                     &mut flow_state,
                     ctx,
                 );
+
+                let contextually_void = expected_type
+                    .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void));
+                if !has_explicit_return_type
+                    && !contextually_void
+                    && ctx.options.no_implicit_returns
+                    && body_flow.contains_return_with_value
+                    && !body_flow.guarantees_exit
+                {
+                    emit_implicit_return_diagnostic(arrow_span, ctx);
+                }
             }
         }
 

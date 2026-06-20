@@ -20,6 +20,8 @@ pub struct LoadedTsConfig {
 pub struct NormalizedCompilerOptions {
     pub strict: bool,
     pub no_implicit_any: bool,
+    /// `compilerOptions.noImplicitReturns`. Independent of `strict`; defaults off.
+    pub no_implicit_returns: bool,
     pub target: ScriptTarget,
     pub module: ModuleKind,
     pub module_resolution: ModuleResolutionKind,
@@ -54,6 +56,7 @@ impl Default for NormalizedCompilerOptions {
         Self {
             strict: true,
             no_implicit_any: true,
+            no_implicit_returns: false,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
             module_resolution: ModuleResolutionKind::Bundler,

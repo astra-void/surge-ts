@@ -110,6 +110,21 @@ pub(crate) fn emit_missing_return_diagnostic(
     }
 }
 
+/// TS7030 under `noImplicitReturns`: an un-annotated function where some path
+/// returns a value but the end point is still reachable. The annotated analogue
+/// is [`emit_missing_return_diagnostic`]'s TS2366 branch.
+pub(crate) fn emit_implicit_return_diagnostic(
+    missing_return_span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let diagnostic = Diagnostic::ts7030(ctx.file_name.clone());
+    let diagnostic = match missing_return_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    };
+    ctx.push(diagnostic);
+}
+
 pub(crate) fn check_function_body(
     body: Vec<ParsedFunctionBodyStatement>,
     return_type: Option<&Type>,

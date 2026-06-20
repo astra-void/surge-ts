@@ -36,6 +36,11 @@ pub(crate) fn normalize_compiler_options(
                     normalized.no_implicit_any = no_implicit_any;
                 }
             }
+            "noImplicitReturns" => {
+                normalized.no_implicit_returns =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_implicit_returns);
+            }
             "target" => {
                 normalized.target = parse_target_option(value, config_dir, diagnostics);
             }

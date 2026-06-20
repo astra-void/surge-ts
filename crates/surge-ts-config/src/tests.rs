@@ -551,6 +551,33 @@ fn ts6_node20_and_newer_options_are_recognized() {
 }
 
 #[test]
+fn no_implicit_returns_parses_into_normalized_options() {
+    let root = temp_dir("no-implicit-returns");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "noImplicitReturns": true } }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(
+        loaded.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        loaded.diagnostics
+    );
+    assert!(loaded.compiler_options.no_implicit_returns);
+}
+
+#[test]
+fn no_implicit_returns_defaults_off() {
+    let root = temp_dir("no-implicit-returns-default");
+    write_file(&root, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(!loaded.compiler_options.no_implicit_returns);
+}
+
+#[test]
 fn module_none_is_legacy_and_falls_back_to_preserve() {
     let root = temp_dir("module-none");
     write_file(

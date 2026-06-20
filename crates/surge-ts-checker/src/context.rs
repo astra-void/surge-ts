@@ -52,6 +52,7 @@ pub struct CompatibilityStats {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
+    pub no_implicit_returns: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
     /// Effective type-package names included in the program. When the project's
@@ -77,6 +78,7 @@ impl Default for CheckerOptions {
     fn default() -> Self {
         Self {
             no_implicit_any: false,
+            no_implicit_returns: false,
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
             types: Vec::new(),
