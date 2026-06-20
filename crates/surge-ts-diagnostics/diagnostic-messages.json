@@ -416,6 +416,14 @@
     "support": "catalog-only"
   },
   {
+    "code": "TS4114",
+    "category": "Error",
+    "message": "This member must have an 'override' modifier because it overrides a member in the base class '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS7029",
     "category": "Error",
     "message": "Fallthrough case in switch.",

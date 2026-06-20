@@ -46,6 +46,11 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.no_fallthrough_cases_in_switch);
             }
+            "noImplicitOverride" => {
+                normalized.no_implicit_override =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_implicit_override);
+            }
             "target" => {
                 normalized.target = parse_target_option(value, config_dir, diagnostics);
             }

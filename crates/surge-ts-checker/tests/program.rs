@@ -115,6 +115,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
             no_implicit_any: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
             no_lib: true,
             skip_lib_check: false,
             types: Vec::new(),
@@ -519,6 +520,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_implicit_any: true,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -534,6 +536,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_implicit_any: true,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -708,6 +711,72 @@ fn no_fallthrough_silent_when_flag_off() {
     );
 }
 
+fn no_implicit_override_options(no_implicit_override: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_implicit_override,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_implicit_override_reports_ts4114_on_missing_override() {
+    let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { greet(): string { return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS4114"]);
+}
+
+#[test]
+fn no_implicit_override_silent_with_override_modifier() {
+    let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { override greet(): string { return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4114"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_override_silent_on_new_member() {
+    let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { extra(): number { return 1; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4114"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_override_silent_on_abstract_member_implementation() {
+    // Implementing an abstract base member does not require `override`.
+    let source = "abstract class Base { abstract run(): number; } class Impl extends Base { run(): number { return 1; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4114"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_override_reports_transitively() {
+    let source = "class A { f(): number { return 1; } } class B extends A {} class C extends B { f(): number { return 2; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS4114"]);
+}
+
+#[test]
+fn no_implicit_override_silent_when_flag_off() {
+    let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { greet(): string { return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(false));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4114"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
 #[test]
 fn program_api_preserves_input_file_names() {
     let diagnostics = program(&[
@@ -744,6 +813,7 @@ fn program_order_parser_before_type_prepass() {
             no_implicit_any: true,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1330,6 +1400,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             no_implicit_any: true,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1354,6 +1425,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             no_implicit_any: true,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1375,6 +1447,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             no_implicit_any: true,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),

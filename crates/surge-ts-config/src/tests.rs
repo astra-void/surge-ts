@@ -578,6 +578,24 @@ fn no_implicit_returns_defaults_off() {
 }
 
 #[test]
+fn no_implicit_override_parses_and_defaults_off() {
+    let on = temp_dir("no-implicit-override-on");
+    write_file(
+        &on,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "noImplicitOverride": true } }"#,
+    );
+    let loaded_on = load(on.join("tsconfig.json"));
+    assert!(loaded_on.diagnostics.is_empty());
+    assert!(loaded_on.compiler_options.no_implicit_override);
+
+    let off = temp_dir("no-implicit-override-off");
+    write_file(&off, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+    let loaded_off = load(off.join("tsconfig.json"));
+    assert!(!loaded_off.compiler_options.no_implicit_override);
+}
+
+#[test]
 fn no_fallthrough_cases_in_switch_parses_and_defaults_off() {
     let on = temp_dir("no-fallthrough-on");
     write_file(

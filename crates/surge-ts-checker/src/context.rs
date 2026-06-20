@@ -54,6 +54,7 @@ pub struct CheckerOptions {
     pub no_implicit_any: bool,
     pub no_implicit_returns: bool,
     pub no_fallthrough_cases_in_switch: bool,
+    pub no_implicit_override: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
     /// Effective type-package names included in the program. When the project's
@@ -81,6 +82,7 @@ impl Default for CheckerOptions {
             no_implicit_any: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
             types: Vec::new(),

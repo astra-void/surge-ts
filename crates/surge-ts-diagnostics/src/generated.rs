@@ -525,6 +525,16 @@ pub const TS7019: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::CatalogOnly,
 };
 
+pub const TS4114: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4114",
+    number: Some(4114),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member must have an 'override' modifier because it overrides a member in the base class '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS7029: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS7029",
     number: Some(7029),
@@ -798,6 +808,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7005,
     TS7006,
     TS7019,
+    TS4114,
     TS7029,
     TS7030,
     TS7031,
@@ -1340,6 +1351,15 @@ impl Diagnostic {
     pub fn ts7019(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS7019,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4114(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4114,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

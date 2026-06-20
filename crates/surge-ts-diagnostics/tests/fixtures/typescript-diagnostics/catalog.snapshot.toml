@@ -417,6 +417,14 @@ message = "Rest parameter '{0}' implicitly has an 'any[]' type."
 arity = 1
 
 [[diagnostic]]
+code = "TS4114"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member must have an 'override' modifier because it overrides a member in the base class '{0}'."
+arity = 1
+
+[[diagnostic]]
 code = "TS7029"
 category = "Error"
 source = "typescript"
