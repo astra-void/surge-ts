@@ -61,6 +61,7 @@ pub struct ProjectCompatibilityReport {
     pub by_file: Vec<CompatReportCountEntry>,
     pub parser_errors: Vec<CompatReportParserErrorEntry>,
     pub external_module_stubs_total: usize,
+    pub external_modules_unresolved_total: usize,
     pub declaration_files_loaded: usize,
     pub ambient_external_modules: Vec<String>,
     pub diagnostic_coverage: DiagnosticCoverageStats,
@@ -195,6 +196,7 @@ pub fn build_project_compatibility_report(
         by_file: sort_counts(by_file),
         parser_errors: sort_parser_errors(parser_errors),
         external_module_stubs_total,
+        external_modules_unresolved_total: stats.external_modules_unresolved_total,
         declaration_files_loaded,
         ambient_external_modules: {
             let mut list: Vec<_> = ambient_external_modules_set.into_iter().collect();
@@ -368,9 +370,14 @@ pub fn render_project_compatibility_report_text(report: &ProjectCompatibilityRep
     }
 
     lines.push(String::new());
+    let unresolved_externals = report
+        .external_modules_unresolved_total
+        .min(report.external_module_stubs_total);
     lines.push(format!(
-        "External module stubs: {}",
-        report.external_module_stubs_total
+        "External module stubs: {} (resolved: {}, unresolved: {})",
+        report.external_module_stubs_total,
+        report.external_module_stubs_total - unresolved_externals,
+        unresolved_externals
     ));
 
     if report.declaration_files_loaded > 0 {
@@ -565,9 +572,17 @@ pub fn render_project_compatibility_report_json(report: &ProjectCompatibilityRep
     );
 
     let mut stubs_json = Map::new();
+    let unresolved = report
+        .external_modules_unresolved_total
+        .min(report.external_module_stubs_total);
     stubs_json.insert(
         "total".to_string(),
         Value::from(report.external_module_stubs_total as u64),
+    );
+    stubs_json.insert("unresolved".to_string(), Value::from(unresolved as u64));
+    stubs_json.insert(
+        "resolved".to_string(),
+        Value::from((report.external_module_stubs_total - unresolved) as u64),
     );
     root.insert("externalModuleStubs".to_string(), Value::Object(stubs_json));
 

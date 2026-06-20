@@ -228,6 +228,7 @@ pub(crate) fn resolve_module_export_table(
                     )
                     .is_none()
                     {
+                        record_unresolved_external_module(ctx, module_specifier);
                         if !(ctx.options.stub_external_modules
                             && is_external_specifier(module_specifier))
                         {
@@ -410,6 +411,7 @@ pub(crate) fn resolve_module_export_table(
                     )
                     .is_none()
                     {
+                        record_unresolved_external_module(ctx, module_specifier);
                         if !(ctx.options.stub_external_modules
                             && is_external_specifier(module_specifier))
                         {
@@ -459,6 +461,7 @@ pub(crate) fn resolve_module_export_table(
             resolving,
             &parsed_file.file_name,
         ) else {
+            record_unresolved_external_module(ctx, module_specifier);
             if !(ctx.options.stub_external_modules && is_external_specifier(module_specifier)) {
                 emit_unresolved_export_module_diagnostic(
                     ctx,

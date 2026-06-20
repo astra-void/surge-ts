@@ -47,6 +47,12 @@ pub struct CompatibilityStats {
     pub suppressed_diagnostics_total: usize,
     pub suppressed_declaration_diagnostics_total: usize,
     pub suppressed_rust_only_diagnostics_total: usize,
+    /// Count of non-relative (package) import/export specifiers that failed every
+    /// resolution path — the subset of `externalModuleStubs` references that were
+    /// actually unresolved (and either stubbed or reported TS2307), rather than
+    /// resolved via a dependency declaration. This is the parity-relevant figure:
+    /// a resolved external reference is benign, an unresolved one is the risk.
+    pub external_modules_unresolved_total: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

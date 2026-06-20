@@ -2921,7 +2921,11 @@ fn compat_report_external_module_stubs_json() {
 
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let stubs = report.get("externalModuleStubs").unwrap();
+    // Both `react` and `zustand` are non-relative references (total) and neither
+    // resolves in this fixture, so both are unresolved and none resolved.
     assert_eq!(stubs.get("total").unwrap().as_u64().unwrap(), 2);
+    assert_eq!(stubs.get("unresolved").unwrap().as_u64().unwrap(), 2);
+    assert_eq!(stubs.get("resolved").unwrap().as_u64().unwrap(), 0);
 }
 
 #[test]
