@@ -6,6 +6,11 @@ pub struct ParsedSource {
     pub is_module: bool,
     /// Leading `/// <reference types="..." />` directives, in source order.
     pub reference_type_directives: Vec<ReferenceTypeDirective>,
+    /// Every value- and type-position identifier name referenced anywhere in the
+    /// module (including export specifiers, collected from the full oxc AST).
+    /// Backs unused-import / unused-local diagnostics (TS6133): a top-level
+    /// binding whose name never appears here and is not exported is unused.
+    pub module_reads: Vec<String>,
 }
 
 /// A leading `/// <reference types="..." />` directive. Only the `types` form is

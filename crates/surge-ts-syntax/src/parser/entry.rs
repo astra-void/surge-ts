@@ -35,11 +35,20 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
             )
         });
 
+    // Declaration files never participate in noUnusedLocals, so skip the
+    // module-wide read walk for them (avoids the cost on every dependency `.d.ts`).
+    let module_reads = if file_name.ends_with(".d.ts") {
+        Vec::new()
+    } else {
+        super::reads::collect_program_reads(&parsed.program)
+    };
+
     ParsedSource {
         file_name: file_name.to_string(),
         statements,
         parser_errors,
         is_module,
         reference_type_directives,
+        module_reads,
     }
 }

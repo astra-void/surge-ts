@@ -850,6 +850,57 @@ fn no_property_access_from_index_signature_silent_when_flag_off() {
     );
 }
 
+fn ts6133_program_codes(source: &str, no_unused_locals: bool) -> Vec<String> {
+    let options = CheckerOptions {
+        no_unused_locals,
+        ..Default::default()
+    };
+    let diagnostics = program_with_options(&[("a.ts", source)], options);
+    codes(&diagnostics)
+        .into_iter()
+        .filter(|code| code == "TS6133")
+        .collect()
+}
+
+#[test]
+fn no_unused_locals_reports_unused_const() {
+    let source = "export {};\nconst unused = 1;\n";
+    assert_eq!(ts6133_program_codes(source, true), vec!["TS6133"]);
+}
+
+#[test]
+fn no_unused_locals_reports_unused_function() {
+    let source = "export {};\nfunction unused(): number { return 1; }\n";
+    assert_eq!(ts6133_program_codes(source, true), vec!["TS6133"]);
+}
+
+#[test]
+fn no_unused_locals_exempts_unused_class() {
+    // tsc does not report unused top-level classes under noUnusedLocals.
+    let source = "export {};\nclass Unused {}\n";
+    assert!(ts6133_program_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_locals_exempts_used_and_exported() {
+    let source =
+        "const used = 1;\nexport const reexported = 2;\nexport const x = used;\n";
+    assert!(ts6133_program_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_locals_ignores_scripts() {
+    // No import/export: a script, whose top-level bindings are globals, not locals.
+    let source = "const topLevel = 1;\n";
+    assert!(ts6133_program_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_locals_silent_when_flag_off() {
+    let source = "export {};\nconst unused = 1;\n";
+    assert!(ts6133_program_codes(source, false).is_empty());
+}
+
 fn no_unused_parameters_options(no_unused_parameters: bool) -> CheckerOptions {
     CheckerOptions {
         no_unused_parameters,

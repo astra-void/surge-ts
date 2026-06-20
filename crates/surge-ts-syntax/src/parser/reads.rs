@@ -4,7 +4,7 @@
 //! methods, and nested functions — the over-approximation that backs FP-free
 //! unused-binding diagnostics (TS6133).
 
-use oxc_ast::ast::{FunctionBody, IdentifierReference};
+use oxc_ast::ast::{FunctionBody, IdentifierReference, Program};
 use oxc_ast_visit::Visit;
 
 #[derive(Default)]
@@ -27,5 +27,11 @@ fn finish(mut collector: ReadCollector) -> Vec<String> {
 pub(crate) fn collect_function_body_reads(body: &FunctionBody<'_>) -> Vec<String> {
     let mut collector = ReadCollector::default();
     collector.visit_function_body(body);
+    finish(collector)
+}
+
+pub(crate) fn collect_program_reads(program: &Program<'_>) -> Vec<String> {
+    let mut collector = ReadCollector::default();
+    collector.visit_program(program);
     finish(collector)
 }
