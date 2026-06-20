@@ -519,6 +519,73 @@ pub(crate) fn emit_unused_parameters(
     }
 }
 
+/// Reports TS6133 for each function-local `const`/`let`/`var` whose name never
+/// appears in the body's reads. Gated on `noUnusedLocals` in a root source file.
+/// Uses the function-wide read set, so a binding read in any nested scope counts
+/// (an over-approximation — never a false positive).
+pub(crate) fn emit_unused_locals(
+    statements: &[ParsedFunctionBodyStatement],
+    reads: &[String],
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_unused_locals || ctx.current_file_kind != FileKind::RootSource {
+        return;
+    }
+    let mut locals: Vec<(&str, Option<TextSpan>)> = Vec::new();
+    collect_local_var_declarations(statements, &mut locals);
+    for (name, span) in locals {
+        if reads.iter().any(|read| read == name) {
+            continue;
+        }
+        let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
+        let diagnostic = match span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+    }
+}
+
+/// Collects `const`/`let`/`var` declarations directly owned by this function
+/// body, recursing through control-flow statements but not into nested functions
+/// (whose locals belong to their own scope).
+fn collect_local_var_declarations<'a>(
+    statements: &'a [ParsedFunctionBodyStatement],
+    out: &mut Vec<(&'a str, Option<TextSpan>)>,
+) {
+    for statement in statements {
+        match statement {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) if !variable.is_declare => {
+                out.push((variable.name.as_str(), variable.name_span));
+            }
+            ParsedFunctionBodyStatement::Block(body) => collect_local_var_declarations(body, out),
+            ParsedFunctionBodyStatement::If(statement) => {
+                collect_local_var_declarations(&statement.then_body, out);
+                collect_local_var_declarations(&statement.else_body, out);
+            }
+            ParsedFunctionBodyStatement::While(statement) => {
+                collect_local_var_declarations(&statement.body, out)
+            }
+            ParsedFunctionBodyStatement::ForOf(statement) => {
+                collect_local_var_declarations(&statement.body, out)
+            }
+            ParsedFunctionBodyStatement::Switch(statement) => {
+                for case in &statement.cases {
+                    collect_local_var_declarations(&case.consequent, out);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(statement) => {
+                collect_local_var_declarations(&statement.block, out);
+                if let Some(handler) = &statement.handler {
+                    collect_local_var_declarations(&handler.body, out);
+                }
+                collect_local_var_declarations(&statement.finalizer, out);
+            }
+            _ => {}
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check_function_body_with_signature(
     name: String,
@@ -596,12 +663,13 @@ pub(crate) fn check_function_body_with_signature_and_this(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
     );
 
-    if !is_constructor && should_track_unused_parameters(ctx) {
-        // `None` is an overload signature (no body); tsc never flags its
-        // parameters.
-        if let Some(reads) = body_reads {
+    // `None` is an overload signature (no body); tsc never flags its parameters
+    // or locals.
+    if let Some(reads) = body_reads {
+        if !is_constructor && should_track_unused_parameters(ctx) {
             emit_unused_parameters(&parameters, reads, ctx);
         }
+        emit_unused_locals(&body, reads, ctx);
     }
 
     for (parameter, parameter_type) in parameters

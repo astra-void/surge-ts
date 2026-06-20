@@ -304,6 +304,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                 }
             }
             ParsedArrowFunctionBody::Block(statements) => {
+                emit_unused_locals(&statements, &body_reads, ctx);
                 let flow_facts = collect_function_flow_facts(&statements);
                 let mut flow_state = FunctionFlowState::new(
                     flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,

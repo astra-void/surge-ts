@@ -901,6 +901,18 @@ fn no_unused_locals_silent_when_flag_off() {
     assert!(ts6133_program_codes(source, false).is_empty());
 }
 
+#[test]
+fn no_unused_locals_reports_function_local() {
+    let source = "export function f(): number { const unused = 1; const used = 2; return used; }";
+    assert_eq!(ts6133_program_codes(source, true), vec!["TS6133"]);
+}
+
+#[test]
+fn no_unused_locals_counts_local_read_in_nested_block_and_closure() {
+    let source = "export function f(): number { const a = 1; const b = 2; if (a > 0) { return a; } return [b].map(x => x)[0]; }";
+    assert!(ts6133_program_codes(source, true).is_empty());
+}
+
 fn no_unused_parameters_options(no_unused_parameters: bool) -> CheckerOptions {
     CheckerOptions {
         no_unused_parameters,
