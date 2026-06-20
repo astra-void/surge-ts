@@ -116,6 +116,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            no_property_access_from_index_signature: false,
             no_lib: true,
             skip_lib_check: false,
             types: Vec::new(),
@@ -521,6 +522,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            no_property_access_from_index_signature: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -537,6 +539,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            no_property_access_from_index_signature: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -777,6 +780,70 @@ fn no_implicit_override_silent_when_flag_off() {
     );
 }
 
+fn no_property_access_index_options(no_property_access_from_index_signature: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_property_access_from_index_signature,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_property_access_from_index_signature_reports_ts4111_on_dot_access() {
+    let source = "interface D { [k: string]: number; } declare const d: D; const a = d.foo;";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS4111"]);
+}
+
+#[test]
+fn no_property_access_from_index_signature_allows_declared_property() {
+    let source =
+        "interface D { [k: string]: number; declared: number; } declare const d: D; const a = d.declared;";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_property_access_from_index_signature_allows_bracket_access() {
+    let source = "interface D { [k: string]: number; } declare const d: D; const a = d[\"foo\"];";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_property_access_from_index_signature_silent_without_index_signature() {
+    let source = "interface P { x: number; } declare const p: P; const a = p.x;";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_property_access_from_index_signature_silent_when_flag_off() {
+    let source = "interface D { [k: string]: number; } declare const d: D; const a = d.foo;";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(false));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
 #[test]
 fn program_api_preserves_input_file_names() {
     let diagnostics = program(&[
@@ -814,6 +881,7 @@ fn program_order_parser_before_type_prepass() {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            no_property_access_from_index_signature: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1401,6 +1469,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            no_property_access_from_index_signature: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1426,6 +1495,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            no_property_access_from_index_signature: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1448,6 +1518,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            no_property_access_from_index_signature: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),

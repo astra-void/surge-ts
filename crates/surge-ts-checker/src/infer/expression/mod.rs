@@ -153,6 +153,7 @@ pub(crate) fn infer_expression(
             object_span,
             property_name,
             property_span,
+            ..
         } => infer_property_access(
             object,
             object_span,
@@ -178,6 +179,7 @@ pub(crate) fn infer_expression(
             object_span,
             property_name,
             property_span,
+            ..
         } => infer_optional_property_access(
             object,
             object_span,

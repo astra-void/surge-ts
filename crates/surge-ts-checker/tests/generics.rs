@@ -1109,6 +1109,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            no_property_access_from_index_signature: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),

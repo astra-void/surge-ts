@@ -596,6 +596,24 @@ fn no_implicit_override_parses_and_defaults_off() {
 }
 
 #[test]
+fn no_property_access_from_index_signature_parses_and_defaults_off() {
+    let on = temp_dir("no-prop-access-index-on");
+    write_file(
+        &on,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "noPropertyAccessFromIndexSignature": true } }"#,
+    );
+    let loaded_on = load(on.join("tsconfig.json"));
+    assert!(loaded_on.diagnostics.is_empty());
+    assert!(loaded_on.compiler_options.no_property_access_from_index_signature);
+
+    let off = temp_dir("no-prop-access-index-off");
+    write_file(&off, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+    let loaded_off = load(off.join("tsconfig.json"));
+    assert!(!loaded_off.compiler_options.no_property_access_from_index_signature);
+}
+
+#[test]
 fn no_fallthrough_cases_in_switch_parses_and_defaults_off() {
     let on = temp_dir("no-fallthrough-on");
     write_file(

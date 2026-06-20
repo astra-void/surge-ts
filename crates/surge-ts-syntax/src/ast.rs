@@ -526,6 +526,10 @@ pub enum ParsedExpression {
         object_span: Option<TextSpan>,
         property_name: String,
         property_span: Option<TextSpan>,
+        /// True when the source wrote `obj["key"]` (lowered here to a property
+        /// access for lookup reuse) rather than `obj.key`. Only dotted accesses
+        /// are subject to TS4111 (`noPropertyAccessFromIndexSignature`).
+        is_bracketed: bool,
     },
     IndexAccess {
         object_name: String,
@@ -581,6 +585,8 @@ pub enum ParsedExpression {
         object_span: Option<TextSpan>,
         property_name: String,
         property_span: Option<TextSpan>,
+        /// See [`ParsedExpression::PropertyAccess::is_bracketed`].
+        is_bracketed: bool,
     },
     OptionalPropertyCall {
         object: Box<ParsedExpression>,

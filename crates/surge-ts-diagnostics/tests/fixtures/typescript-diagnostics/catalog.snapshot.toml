@@ -417,6 +417,14 @@ message = "Rest parameter '{0}' implicitly has an 'any[]' type."
 arity = 1
 
 [[diagnostic]]
+code = "TS4111"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' comes from an index signature, so it must be accessed with ['{0}']."
+arity = 1
+
+[[diagnostic]]
 code = "TS4114"
 category = "Error"
 source = "typescript"

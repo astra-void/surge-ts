@@ -51,6 +51,11 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.no_implicit_override);
             }
+            "noPropertyAccessFromIndexSignature" => {
+                normalized.no_property_access_from_index_signature =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_property_access_from_index_signature);
+            }
             "target" => {
                 normalized.target = parse_target_option(value, config_dir, diagnostics);
             }

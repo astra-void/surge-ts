@@ -448,6 +448,15 @@ span_tests = [
 status = "catalog-only"
 reason = "Cataloged for future coverage"
 
+[TS4111]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "zod/trpc real-project parity (noPropertyAccessFromIndexSignature)",
+]
+
 [TS4114]
 status = "emitted"
 fixtures = [

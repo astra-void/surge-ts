@@ -525,6 +525,16 @@ pub const TS7019: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::CatalogOnly,
 };
 
+pub const TS4111: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4111",
+    number: Some(4111),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property '{0}' comes from an index signature, so it must be accessed with ['{0}'].",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS4114: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS4114",
     number: Some(4114),
@@ -808,6 +818,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7005,
     TS7006,
     TS7019,
+    TS4111,
     TS4114,
     TS7029,
     TS7030,
@@ -1351,6 +1362,15 @@ impl Diagnostic {
     pub fn ts7019(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS7019,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4111(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4111,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
