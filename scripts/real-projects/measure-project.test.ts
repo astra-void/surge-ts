@@ -192,7 +192,7 @@ test('parseArgs reads all supported flags', () => {
 test('parseArgs applies defaults', () => {
   const parsed = parseArgs(['--project', '/abs/project']);
   assert.equal(parsed.maxDiagnostics, 500);
-  assert.deepEqual(parsed.rustJobs, [1, 4]);
+  assert.deepEqual(parsed.rustJobs, [1, 'auto']);
   assert.equal(parsed.outDir, null);
   assert.equal(parsed.name, null);
   assert.equal(parsed.authKitFallback, false);
