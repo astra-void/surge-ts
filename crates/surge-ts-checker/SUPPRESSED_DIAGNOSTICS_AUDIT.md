@@ -170,10 +170,28 @@ none of them.
      export-specifier references count as uses (so type-only imports are safe).
      FP-free against ky 0/0, zod, and trpc. Minor remaining FN: constructor-local
      bindings and a few edge constructs.
-   - **Other flags:** `erasableSyntaxOnly` / `noUncheckedSideEffectImports` are
-     low-value; `useDefineForClassFields` is emit-semantics. `strictNullChecks` /
-     `exactOptionalPropertyTypes` are out of scope (surge is hard-wired
-     strict-null; see the verdict above).
+   - **Remaining flags — investigated, no action needed (2026-06-20).** None of
+     the still-`KnownNoop` strictness flags warrant enforcement:
+     - **`noUncheckedSideEffectImports`** — already matched. surge emits TS2882
+       for an unresolvable side-effect import unconditionally, which is exactly
+       TS 6.0 `tsc`'s behavior (verified: `tsc` reports TS2882 with the flag both
+       on and off; surge reports the same two). The flag changes nothing here.
+     - **`erasableSyntaxOnly`** — not worth implementing. Its trigger constructs
+       (enums, parameter properties) are not even parsed by surge (enums lower to
+       `UnsupportedDeclaration`; constructor parameter modifiers are not
+       captured), so only `namespace`/`import =` would be detectable, and those
+       need an erasable-vs-runtime distinction. Partial coverage of a rare flag.
+     - **`useDefineForClassFields`** — emit/runtime-semantics; under noEmit it
+       produces essentially no standalone diagnostics.
+     - **`strictNullChecks` / `exactOptionalPropertyTypes`** — out of scope. surge
+       has no `Type::Null` and treats `undefined` as non-assignable, i.e. it is
+       hard-wired strict-null: the common `strictNullChecks: true` already matches,
+       `false` cannot be modelled without nullable-widening machinery, and full
+       EOPT needs per-property exact-optional tracking (deep type-system work).
+
+   With this, the checking-relevant strictness family is enforced where it is
+   both tractable and valuable (TS7030, TS7029, TS4114, TS4111, TS6133); the rest
+   are a deliberate, documented non-enforcement rather than a silent gap.
 
 This is a follow-up to the 2026-06-20 ky 0/0 parity landing (see
 `REAL_PROJECT_COMPAT.md` → "ky" → "Suppression / stub transparency").
