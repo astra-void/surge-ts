@@ -142,13 +142,20 @@ none of them.
      inferred return type).
    - **`noFallthroughCasesInSwitch` (TS7029)** — DONE. Emitted for a non-empty
      switch clause whose end is reachable.
+   - **`noImplicitOverride` (TS4114)** — DONE. Parser now captures the `override`
+     (and `abstract`) modifier; emitted for an instance member overriding a
+     source-declared base-class member without `override`. Conservative:
+     `.d.ts`/builtin bases and abstract base members are skipped to avoid false
+     positives.
+   - **`noPropertyAccessFromIndexSignature` (TS4111)** — DONE. A new `is_bracketed`
+     AST flag preserves the dot-vs-bracket distinction; emitted for `obj.foo` that
+     resolves through a string index signature. FP-free; under-reports on library
+     types whose index signature surge does not fully resolve (`process.env`, node
+     headers).
    - **Remaining:** `noUnusedLocals`/`noUnusedParameters` (TS6133) needs a new
      use-tracking pass (no existing reference counting) with several FP-exemption
      rules (exports, ambient, `_`-prefixed params, destructuring) — a larger
-     subsystem, not a flow-summary reuse. `noImplicitOverride` (TS4114) needs the
-     parser to capture the `override` keyword + base-member resolution.
-     `noPropertyAccessFromIndexSignature` (TS4111) needs index-signature
-     provenance on property access. `erasableSyntaxOnly` /
+     subsystem, not a flow-summary reuse. `erasableSyntaxOnly` /
      `noUncheckedSideEffectImports` are low-value; `useDefineForClassFields` is
      emit-semantics. `strictNullChecks` / `exactOptionalPropertyTypes` are out of
      scope (surge is hard-wired strict-null; see the verdict above).
