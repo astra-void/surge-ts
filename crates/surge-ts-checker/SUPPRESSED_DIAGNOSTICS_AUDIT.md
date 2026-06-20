@@ -127,14 +127,31 @@ none of them.
    diagnostic is caught, not hidden.
 5. ~~**Catch up the tsconfig option registry to TS 6.0.**~~ **DONE (2026-06-20).**
    `node20` is recognized for `module`/`moduleResolution` and the 8 newer options
-   are registered (`KnownNoop`). Loading ky emits zero config diagnostics; locked
-   by `tests::ts6_node20_and_newer_options_are_recognized`. The checking-relevant
-   flags (`erasableSyntaxOnly`, `noImplicitOverride`,
-   `noPropertyAccessFromIndexSignature`, `noUncheckedSideEffectImports`,
-   `useDefineForClassFields`) are recognized but not enforced — the same standing
-   KnownNoop limitation as the rest of the strictness family. A future item could
-   enforce the type-checking-relevant ones, but that is a checker feature, not a
-   config gap.
+   are registered. Loading ky emits zero config diagnostics; locked by
+   `tests::ts6_node20_and_newer_options_are_recognized`.
+6. **Enforce checking-relevant strictness flags (in progress, 2026-06-20).** The
+   strict family was all `KnownNoop` (parsed, dropped, never enforced). Now being
+   enforced flag-by-flag, each gated on the project's own tsconfig so the oracle's
+   tsc run matches and each verified against ky (0/0) + the preset sweep + the
+   zod/trpc real projects:
+   - **`noImplicitReturns` (TS7030)** — DONE. Emitted for an unannotated
+     function/arrow that returns a value on some path with a reachable end.
+     Required fixing the return-flow summary (try/switch `guarantees_exit`,
+     `while (true)`, throw-vs-return, constructor exclusion). Known limitation:
+     `return <void-typed-expr>` over-reports vs tsc (flow-only; tsc consults the
+     inferred return type).
+   - **`noFallthroughCasesInSwitch` (TS7029)** — DONE. Emitted for a non-empty
+     switch clause whose end is reachable.
+   - **Remaining:** `noUnusedLocals`/`noUnusedParameters` (TS6133) needs a new
+     use-tracking pass (no existing reference counting) with several FP-exemption
+     rules (exports, ambient, `_`-prefixed params, destructuring) — a larger
+     subsystem, not a flow-summary reuse. `noImplicitOverride` (TS4114) needs the
+     parser to capture the `override` keyword + base-member resolution.
+     `noPropertyAccessFromIndexSignature` (TS4111) needs index-signature
+     provenance on property access. `erasableSyntaxOnly` /
+     `noUncheckedSideEffectImports` are low-value; `useDefineForClassFields` is
+     emit-semantics. `strictNullChecks` / `exactOptionalPropertyTypes` are out of
+     scope (surge is hard-wired strict-null; see the verdict above).
 
 This is a follow-up to the 2026-06-20 ky 0/0 parity landing (see
 `REAL_PROJECT_COMPAT.md` → "ky" → "Suppression / stub transparency").
