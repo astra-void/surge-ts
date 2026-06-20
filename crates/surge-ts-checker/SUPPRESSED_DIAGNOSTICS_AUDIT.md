@@ -251,20 +251,29 @@ none of them.
      **breaks ky 0/0** by surfacing two *downstream* gaps, neither about iterators
      directly:
      1. `merge.ts` `function newHookValue<K extends keyof Hooks>(): Required<Hooks>[K]`
-        → false TS2536. The constrained indexed access is in a *non-`declare`*
-        function (so the #7 declare-scoped fix does not cover it), and resolving
-        `Required<Hooks>` pushes a generic type-parameter scope that shadows the
-        function's `K`, so `type_parameter_has_constraint("K")` looks in the wrong
-        frame. (Only triggered once the iterator chain resolves — invisible
-        otherwise, so it cannot be fixed/tested in isolation.)
+        → false TS2536. **Root cause (debugged):** at the indexed access `K` is a
+        placeholder in the threaded `substitution` (`idxph = Some("K")`) but its
+        `keyof Hooks` constraint is absent from `ctx.type_parameter_constraint_scopes`
+        (`keyof_target("K") = None`), because this non-`declare` signature is
+        resolved in the ambient/global pre-pass without the function's
+        type-parameter scope (the #7 fix is declare-scoped). Without the iterator
+        chain `Required<Hooks>` resolves with `had_error` and the access
+        short-circuits before the TS2536 check, masking it. **A targeted fix
+        works:** suppress TS2536 for a placeholder index over a *concrete* (non-
+        placeholder) receiver whose constraint can't be verified (degrade to
+        `unknown` no-cascade) — verified to clear ky `merge.ts`. Held back only
+        because it is inert without the iterator chain and shifts trpc churn.
      2. `Ky.ts` `(options.hooks?.init ?? []).length` → TS2339 `.length` on
-        `unknown` — optional-chain typing through the recursive `Hooks` returns
-        `unknown`.
+        `unknown`. **Root cause:** `options.hooks` itself resolves to `unknown` —
+        the recursive `Options`/`Hooks`/`InitHook` lazy peel reaches its depth bound
+        once the iterator chain deepens the `…Hook[]` members, so the property
+        access degrades; `?? []` then propagates `unknown` to `.length`.
      So closing this needs real **iterator-type modelling** (so resolving the alias
-     does not perturb consumers) *plus* the two downstream fixes — a coordinated
-     feature, each part untestable until the others land. The dropped-alias /
-     suppressed-TS2304 status quo is the pragmatic optimum. **Reverted; tracked as a
-     dedicated follow-up.**
+     does not deepen consumers' peels) *plus* the gap-1 indexed-access suppression
+     *plus* recursive-peel-depth tuning — a coordinated feature, each part inert or
+     untestable until the others land. The dropped-alias / suppressed-TS2304 status
+     quo is the pragmatic optimum. **Reverted; tracked as a dedicated follow-up with
+     both root causes pinned above.**
    - **`surge::type-declaration-cycle` on `Set<T>`** — the generic-recursion case
      deliberately left as `unknown` by the #1 fix (see its scope note).
    - **Newly-exposed (by the TS2536 fix), separate deeper gaps — open:** 2 trpc
