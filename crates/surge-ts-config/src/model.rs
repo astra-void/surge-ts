@@ -104,6 +104,7 @@ pub enum ModuleKind {
     ESNext,
     Node16,
     Node18,
+    Node20,
     NodeNext,
     Preserve,
 }
@@ -117,6 +118,7 @@ impl Default for ModuleKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleResolutionKind {
     Node16,
+    Node20,
     NodeNext,
     Bundler,
 }

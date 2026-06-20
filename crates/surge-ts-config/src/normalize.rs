@@ -213,6 +213,7 @@ fn parse_module_option(
         "esnext" => ModuleKind::ESNext,
         "node16" => ModuleKind::Node16,
         "node18" => ModuleKind::Node18,
+        "node20" => ModuleKind::Node20,
         "nodenext" => ModuleKind::NodeNext,
         "preserve" => ModuleKind::Preserve,
         "amd" | "umd" | "system" | "systemjs" | "none" => {
@@ -250,6 +251,7 @@ fn parse_module_resolution_option(
 
     match raw.to_ascii_lowercase().as_str() {
         "node16" => ModuleResolutionKind::Node16,
+        "node20" => ModuleResolutionKind::Node20,
         "nodenext" => ModuleResolutionKind::NodeNext,
         "bundler" => ModuleResolutionKind::Bundler,
         "classic" | "node" | "node10" => {

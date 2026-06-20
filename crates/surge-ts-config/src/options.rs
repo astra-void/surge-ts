@@ -258,6 +258,46 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::KnownNoop,
     },
     TsConfigOptionDefinition {
+        name: "noImplicitOverride",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "noPropertyAccessFromIndexSignature",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "noUncheckedSideEffectImports",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "useDefineForClassFields",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "erasableSyntaxOnly",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "newLine",
+        value_kind: TsConfigOptionValueKind::String,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "stripInternal",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "noEmitOnError",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
         name: "noLib",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::Supported,

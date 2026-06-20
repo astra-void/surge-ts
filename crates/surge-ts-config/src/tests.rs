@@ -516,6 +516,41 @@ fn module_resolution_nodenext_is_valid() {
 }
 
 #[test]
+fn ts6_node20_and_newer_options_are_recognized() {
+    let root = temp_dir("ts6-node20-options");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+              "compilerOptions": {
+                "module": "node20",
+                "moduleResolution": "node20",
+                "newLine": "lf",
+                "stripInternal": true,
+                "erasableSyntaxOnly": true,
+                "noImplicitOverride": true,
+                "noPropertyAccessFromIndexSignature": true,
+                "noUncheckedSideEffectImports": true,
+                "noEmitOnError": true,
+                "useDefineForClassFields": true
+              }
+            }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(
+        loaded.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        loaded.diagnostics
+    );
+    assert_eq!(loaded.compiler_options.module, ModuleKind::Node20);
+    assert_eq!(
+        loaded.compiler_options.module_resolution,
+        ModuleResolutionKind::Node20
+    );
+}
+
+#[test]
 fn module_none_is_legacy_and_falls_back_to_preserve() {
     let root = temp_dir("module-none");
     write_file(

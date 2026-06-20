@@ -1540,6 +1540,7 @@ fn module_kind_to_string(module: surge_ts_config::ModuleKind) -> &'static str {
         surge_ts_config::ModuleKind::ESNext => "esnext",
         surge_ts_config::ModuleKind::Node16 => "node16",
         surge_ts_config::ModuleKind::Node18 => "node18",
+        surge_ts_config::ModuleKind::Node20 => "node20",
         surge_ts_config::ModuleKind::NodeNext => "nodenext",
         surge_ts_config::ModuleKind::Preserve => "preserve",
     }
@@ -1550,6 +1551,7 @@ fn module_resolution_kind_to_string(
 ) -> &'static str {
     match module_resolution {
         surge_ts_config::ModuleResolutionKind::Node16 => "node16",
+        surge_ts_config::ModuleResolutionKind::Node20 => "node20",
         surge_ts_config::ModuleResolutionKind::NodeNext => "nodenext",
         surge_ts_config::ModuleResolutionKind::Bundler => "bundler",
     }
