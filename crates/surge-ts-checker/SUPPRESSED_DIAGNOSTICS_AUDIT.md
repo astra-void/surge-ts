@@ -3,8 +3,9 @@
 **Status: OPEN.** Tracks the compatibility-report suppression/stub counters that
 sit behind a "matches tsc" parity claim. Source-level parity can be 0/0 while
 these counters are non-zero, because surge-ts hides three categories of output
-before the user-facing comparison. A product-grade parity claim must confirm
-none of them masks a real source-level miss.
+before the user-facing comparison (plus a fourth, stderr-only config-option
+category — see below). A product-grade parity claim must confirm none of them
+masks a real source-level miss.
 
 ## What the counters mean
 
@@ -67,6 +68,40 @@ assertion in `core/constants.ts`). The package is installed (`dependency
 declaration files: 1`, `dependency declaration diagnostics: 0`), so it resolves;
 the counter is just flagging the external reference.
 
+## Config-option diagnostics (stderr-only, not counted)
+
+A fourth category sits entirely outside the three counters above: tsconfig
+option diagnostics from `surge-ts-config`. ky's base config
+(`@sindresorhus/tsconfig`) targets TS 6.0, and surge's option registry
+(`crates/surge-ts-config/src/options.rs`) lags it, so loading ky emits:
+
+- **1 `InvalidCompilerOptionValue`** — `module: "node20"`. surge's
+  `parse_module_option` does not recognize `node20` and **falls back to
+  `ModuleKind::Preserve`** (`moduleResolution: "node16"` *is* recognized).
+- **8 `UnknownCompilerOption`** — none of `newLine`, `stripInternal`,
+  `erasableSyntaxOnly`, `noImplicitOverride`,
+  `noPropertyAccessFromIndexSignature`, `noUncheckedSideEffectImports`,
+  `noEmitOnError`, `useDefineForClassFields` are in the registry; each is parsed,
+  warned, and dropped.
+
+These are written to **stderr** (`crates/surge-ts-cli/src/main.rs` ~L540,
+`eprintln!`), not to the diagnostic JSON. They are **not** TS codes, **not** in
+`suppressedRustOnly`/`suppressedDeclaration`, and do **not** enter the oracle
+comparison — so the ky 0/0 parity is unaffected by them. The transparency
+concern is what the dropped flags *would* have checked:
+
+- **Emit / noEmit-irrelevant (safe to ignore):** `newLine`, `stripInternal`,
+  `noEmitOnError`, and `declaration` semantics. These never produce type
+  diagnostics under a noEmit checker.
+- **Checking-relevant (silently un-enforced):** `erasableSyntaxOnly` (TS5.8 —
+  errors on non-erasable syntax), `noImplicitOverride` (TS4114),
+  `noPropertyAccessFromIndexSignature` (TS4111), `noUncheckedSideEffectImports`,
+  and `useDefineForClassFields` (class-field init semantics). surge does not
+  honor these, so on a project whose source *did* trip one, surge would
+  **under-report** relative to tsc. ky's 0/0 holds only because ky source
+  happens not to trip any of them — surge is matching tsc's *result*, not
+  enforcing tsc's *configured strictness*.
+
 ## Action items
 
 1. **Recursive-type cycle fallback (highest value).** Investigate the 5
@@ -86,6 +121,14 @@ the counter is just flagging the external reference.
    counts (or `== 0` for ky source-file `surge::` diagnostics) in the `real:ky`
    regression gate so a regression that adds a new suppressed source-level
    diagnostic is caught, not hidden.
+5. **Catch up the tsconfig option registry to TS 6.0.** Add `module: "node20"`
+   to `parse_module_option` (currently defaults to `Preserve`) and register the
+   8 unknown options. For the checking-relevant ones (`erasableSyntaxOnly`,
+   `noImplicitOverride`, `noPropertyAccessFromIndexSignature`,
+   `noUncheckedSideEffectImports`, `useDefineForClassFields`), decide per-flag
+   whether to enforce or to mark `KnownNoop` — silently dropping a strictness
+   flag means surge can under-report where tsc would error. Until then, the ky
+   0/0 claim matches tsc's *result* but not its *configured strictness*.
 
 This is a follow-up to the 2026-06-20 ky 0/0 parity landing (see
 `REAL_PROJECT_COMPAT.md` → "ky" → "Suppression / stub transparency").
