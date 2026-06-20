@@ -448,9 +448,23 @@ span_tests = [
 status = "catalog-only"
 reason = "Cataloged for future coverage"
 
+[TS7029]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "zod/trpc real-project parity (noFallthroughCasesInSwitch)",
+]
+
 [TS7030]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "ky/zod/trpc real-project parity (noImplicitReturns)",
+]
 
 [TS7031]
 status = "emitted"

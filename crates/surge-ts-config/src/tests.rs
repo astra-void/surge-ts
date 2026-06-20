@@ -578,6 +578,24 @@ fn no_implicit_returns_defaults_off() {
 }
 
 #[test]
+fn no_fallthrough_cases_in_switch_parses_and_defaults_off() {
+    let on = temp_dir("no-fallthrough-on");
+    write_file(
+        &on,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "noFallthroughCasesInSwitch": true } }"#,
+    );
+    let loaded_on = load(on.join("tsconfig.json"));
+    assert!(loaded_on.diagnostics.is_empty());
+    assert!(loaded_on.compiler_options.no_fallthrough_cases_in_switch);
+
+    let off = temp_dir("no-fallthrough-off");
+    write_file(&off, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+    let loaded_off = load(off.join("tsconfig.json"));
+    assert!(!loaded_off.compiler_options.no_fallthrough_cases_in_switch);
+}
+
+#[test]
 fn module_none_is_legacy_and_falls_back_to_preserve() {
     let root = temp_dir("module-none");
     write_file(

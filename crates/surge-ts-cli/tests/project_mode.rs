@@ -147,6 +147,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
         },
     );
 

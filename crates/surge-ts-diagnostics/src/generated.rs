@@ -525,6 +525,16 @@ pub const TS7019: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::CatalogOnly,
 };
 
+pub const TS7029: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS7029",
+    number: Some(7029),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Fallthrough case in switch.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS7030: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS7030",
     number: Some(7030),
@@ -532,7 +542,7 @@ pub const TS7030: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Not all code paths return a value.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS7031: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -788,6 +798,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7005,
     TS7006,
     TS7019,
+    TS7029,
     TS7030,
     TS7031,
     TS7034,
@@ -1332,6 +1343,11 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts7029(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS7029, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

@@ -1107,6 +1107,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),

@@ -389,6 +389,7 @@ fn run_single_file_mode(
         CheckerOptions {
             no_implicit_any,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib,
             skip_lib_check: false,
             stub_external_modules,
@@ -789,6 +790,7 @@ fn run_project_mode(
     let checker_options = CheckerOptions {
         no_implicit_any: loaded.compiler_options.no_implicit_any,
         no_implicit_returns: loaded.compiler_options.no_implicit_returns,
+        no_fallthrough_cases_in_switch: loaded.compiler_options.no_fallthrough_cases_in_switch,
         no_lib: loaded.compiler_options.no_lib,
         skip_lib_check: loaded.compiler_options.skip_lib_check,
         stub_external_modules,

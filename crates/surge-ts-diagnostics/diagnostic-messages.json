@@ -416,12 +416,20 @@
     "support": "catalog-only"
   },
   {
+    "code": "TS7029",
+    "category": "Error",
+    "message": "Fallthrough case in switch.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS7030",
     "category": "Error",
     "message": "Not all code paths return a value.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7031",

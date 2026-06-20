@@ -417,10 +417,18 @@ message = "Rest parameter '{0}' implicitly has an 'any[]' type."
 arity = 1
 
 [[diagnostic]]
+code = "TS7029"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Fallthrough case in switch."
+arity = 0
+
+[[diagnostic]]
 code = "TS7030"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Not all code paths return a value."
 arity = 0
 

@@ -114,6 +114,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
             stub_external_modules: false,
             no_implicit_any: false,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib: true,
             skip_lib_check: false,
             types: Vec::new(),
@@ -517,6 +518,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -531,6 +533,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -662,6 +665,49 @@ fn no_implicit_returns_does_not_affect_annotated_missing_return() {
     assert_eq!(codes(&diagnostics), vec!["TS2366"]);
 }
 
+fn no_fallthrough_options(no_fallthrough_cases_in_switch: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_fallthrough_cases_in_switch,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_fallthrough_reports_ts7029_on_reachable_clause_end() {
+    let source =
+        "export function a(x: number) { switch (x) { case 1: x; case 2: return; default: return; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS7029"]);
+}
+
+#[test]
+fn no_fallthrough_allows_empty_stacked_labels() {
+    let source =
+        "export function a(x: number) { switch (x) { case 1: case 2: return; default: return; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_fallthrough_allows_terminated_clauses() {
+    let source =
+        "export function a(x: number) { switch (x) { case 1: return; case 2: throw x; default: break; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_fallthrough_silent_when_flag_off() {
+    let source =
+        "export function a(x: number) { switch (x) { case 1: x; case 2: return; default: return; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(false));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS7029"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
 #[test]
 fn program_api_preserves_input_file_names() {
     let diagnostics = program(&[
@@ -697,6 +743,7 @@ fn program_order_parser_before_type_prepass() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1282,6 +1329,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1305,6 +1353,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1325,6 +1374,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),

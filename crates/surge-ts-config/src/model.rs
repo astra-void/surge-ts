@@ -22,6 +22,8 @@ pub struct NormalizedCompilerOptions {
     pub no_implicit_any: bool,
     /// `compilerOptions.noImplicitReturns`. Independent of `strict`; defaults off.
     pub no_implicit_returns: bool,
+    /// `compilerOptions.noFallthroughCasesInSwitch`. Independent of `strict`; defaults off.
+    pub no_fallthrough_cases_in_switch: bool,
     pub target: ScriptTarget,
     pub module: ModuleKind,
     pub module_resolution: ModuleResolutionKind,
@@ -57,6 +59,7 @@ impl Default for NormalizedCompilerOptions {
             strict: true,
             no_implicit_any: true,
             no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
             module_resolution: ModuleResolutionKind::Bundler,
