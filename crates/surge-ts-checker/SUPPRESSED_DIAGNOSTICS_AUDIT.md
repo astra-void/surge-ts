@@ -152,13 +152,25 @@ none of them.
      resolves through a string index signature. FP-free; under-reports on library
      types whose index signature surge does not fully resolve (`process.env`, node
      headers).
-   - **Remaining:** `noUnusedLocals`/`noUnusedParameters` (TS6133) needs a new
-     use-tracking pass (no existing reference counting) with several FP-exemption
-     rules (exports, ambient, `_`-prefixed params, destructuring) — a larger
-     subsystem, not a flow-summary reuse. `erasableSyntaxOnly` /
-     `noUncheckedSideEffectImports` are low-value; `useDefineForClassFields` is
-     emit-semantics. `strictNullChecks` / `exactOptionalPropertyTypes` are out of
-     scope (surge is hard-wired strict-null; see the verdict above).
+   - **`noUnusedParameters` (TS6133)** — DONE. Required a new use-tracking
+     foundation: a parser pass (`reads.rs`, via `oxc_ast_visit`) collects every
+     value-position `IdentifierReference` from the full oxc body and stores it as
+     `body_reads` on each parsed function/arrow/method, so reads inside spreads,
+     `for-in`, object methods, template literals, and nested functions are all
+     visible. Template literals are now parsed and nested function declarations
+     retained (inert) for the same reason. Overload signatures (`has_body =
+     false`) and `_`-prefixed/`this`/pattern parameters are exempt. FP-free
+     against ky 0/0, zod, and trpc.
+   - **`noUnusedLocals` (TS6133) — remaining.** The read infrastructure
+     (`body_reads`) now exists and is reusable; the remaining work is collecting
+     local declarations and exempting exported bindings, plus module-level locals
+     and unused imports (which need a module-wide read set + export/import
+     tracking). Until then, unused *locals* tsc reports are under-counted (FN,
+     never FP).
+   - **Other flags:** `erasableSyntaxOnly` / `noUncheckedSideEffectImports` are
+     low-value; `useDefineForClassFields` is emit-semantics. `strictNullChecks` /
+     `exactOptionalPropertyTypes` are out of scope (surge is hard-wired
+     strict-null; see the verdict above).
 
 This is a follow-up to the 2026-06-20 ky 0/0 parity landing (see
 `REAL_PROJECT_COMPAT.md` → "ky" → "Suppression / stub transparency").
