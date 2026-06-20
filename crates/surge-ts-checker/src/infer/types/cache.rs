@@ -232,6 +232,7 @@ impl ResolveReference for LazyInstantiation {
         let resolved = match self.decl.get() {
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
                 alias,
+                self.decl.clone(),
                 self.type_arguments.clone(),
                 None,
                 &mut ctx,
@@ -241,6 +242,7 @@ impl ResolveReference for LazyInstantiation {
             ),
             TypeDeclarationInfo::Interface(interface) => resolve_interface(
                 interface,
+                self.decl.clone(),
                 self.type_arguments.clone(),
                 &mut ctx,
                 &mut resolving,
@@ -292,6 +294,37 @@ pub(crate) fn make_lazy_type_reference(
             memo: std::sync::OnceLock::new(),
         }),
     ))
+}
+
+/// Builds the lazy nominal [`Type::Reference`] a recursive declaration's
+/// self-edge resolves to when a resolution cycle is detected (see
+/// `resolve_type_alias` / `resolve_interface`). It carries the declaration's
+/// nominal identity and defers re-expansion to [`LazyInstantiation`], so forcing
+/// the back-edge peels one level to the real recursive shape (bounded by the lazy
+/// peel stack) instead of collapsing to `unknown`.
+pub(crate) fn make_recursive_cycle_reference(
+    ctx: &mut CheckerContext,
+    name: &str,
+    handle: crate::symbols::TypeDeclarationHandle,
+    decl_key: DeclarationResolutionKey,
+    type_arguments: Vec<surge_ts_syntax::ParsedType>,
+    pre_resolved_arguments: Option<&[Type]>,
+    substitution: &TypeParameterSubstitution,
+) -> Type {
+    let reference_id = format!("{}\u{0}{}", decl_key.file_name, decl_key.name);
+    let resolved_arguments = pre_resolved_arguments
+        .map(<[Type]>::to_vec)
+        .unwrap_or_default();
+    make_lazy_type_reference(
+        ctx,
+        &reference_id,
+        name,
+        handle,
+        decl_key,
+        type_arguments,
+        resolved_arguments,
+        substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
+    )
 }
 
 /// Interns the structural expansion of `key` at `arguments`, returning the

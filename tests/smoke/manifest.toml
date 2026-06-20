@@ -3933,7 +3933,22 @@ expected_diagnostics = ["surge::type-alias-cycle"]
 [[case]]
 name = "type-alias-cycle-in-object-property-no-cascade"
 path = "tests/smoke/type_alias_cycle_in_object_property_no_cascade.ts"
-expected_diagnostics = ["surge::type-alias-cycle"]
+expected_diagnostics = ["TS2741"]
+
+[[case]]
+name = "type-alias-recursive-member-access-through-self-edge"
+path = "tests/smoke/type_alias_recursive_member_access_through_self_edge.ts"
+expected_diagnostics = ["TS2339", "TS2322"]
+
+[[case]]
+name = "function-overload-signatures-not-duplicate"
+path = "tests/smoke/function_overload_signatures_not_duplicate.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "intersection-with-unknown-simplifies-to-member"
+path = "tests/smoke/intersection_with_unknown_simplifies_to_member.ts"
+expected_diagnostics = ["TS2339", "TS2322"]
 
 [[case]]
 name = "type-alias-cycle-in-union-no-cascade"
@@ -4248,17 +4263,17 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "interface-cycle-self-no-stack-overflow"
 path = "tests/smoke/interface_cycle_self_no_stack_overflow.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = []
 
 [[case]]
 name = "interface-cycle-indirect-no-stack-overflow"
 path = "tests/smoke/interface_cycle_indirect_no_stack_overflow.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = []
 
 [[case]]
 name = "interface-cycle-no-assignment-cascade"
 path = "tests/smoke/interface_cycle_no_assignment_cascade.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "interface-duplicate-alias-then-interface-no-cascade"
@@ -4328,27 +4343,27 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "interface-cycle-self-property-no-cascade"
 path = "tests/smoke/interface_cycle_self_property_no_cascade.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = ["TS2741"]
 
 [[case]]
 name = "interface-cycle-self-optional-property-no-cascade"
 path = "tests/smoke/interface_cycle_self_optional_property_no_cascade.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = []
 
 [[case]]
 name = "interface-cycle-self-union-property-no-cascade"
 path = "tests/smoke/interface_cycle_self_union_property_no_cascade.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = []
 
 [[case]]
 name = "interface-cycle-indirect-property-no-cascade"
 path = "tests/smoke/interface_cycle_indirect_property_no_cascade.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = ["TS2741"]
 
 [[case]]
 name = "interface-cycle-through-type-alias-no-cascade"
 path = "tests/smoke/interface_cycle_through_type_alias_no_cascade.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = ["TS2741"]
 
 [[case]]
 name = "interface-cycle-type-alias-through-interface-no-cascade"
@@ -4358,12 +4373,12 @@ expected_diagnostics = ["surge::type-alias-cycle"]
 [[case]]
 name = "interface-cycle-function-parameter-no-cascade"
 path = "tests/smoke/interface_cycle_function_parameter_no_cascade.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = ["TS2741"]
 
 [[case]]
 name = "interface-cycle-function-return-no-missing-return-cascade"
 path = "tests/smoke/interface_cycle_function_return_no_missing_return_cascade.ts"
-expected_diagnostics = ["surge::type-declaration-cycle"]
+expected_diagnostics = ["TS2355"]
 
 [[case]]
 name = "interface-optional-write-uses-declared-type"

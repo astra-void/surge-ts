@@ -1,5 +1,5 @@
-interface Node {
-  next?: Node;
+interface Lnk {
+  next?: Lnk;
 }
 
-let node: Node = {};
+let node: Lnk = {};

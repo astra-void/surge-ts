@@ -1,5 +1,5 @@
-interface Node {
-  next: Node | undefined;
+interface Lnk {
+  next: Lnk | undefined;
 }
 
-let node: Node = { next: undefined };
+let node: Lnk = { next: undefined };

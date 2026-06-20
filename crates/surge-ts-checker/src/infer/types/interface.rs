@@ -9,10 +9,11 @@ use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type};
 use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::{CheckerContext, DeclarationResolutionKey};
 use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default_lib_file_name};
-use crate::symbols::InterfaceInfo;
+use crate::symbols::{InterfaceInfo, TypeDeclarationHandle};
 
 pub(crate) fn resolve_interface(
     interface: &InterfaceInfo,
+    handle: TypeDeclarationHandle,
     type_arguments: Vec<ParsedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
@@ -21,16 +22,32 @@ pub(crate) fn resolve_interface(
 ) -> ResolvedType {
     let declaration_key = declaration_resolution_key(&interface.file_name, &interface.name);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
-        // A recursive interface (`interface Node { next: Node }`, and the mutually
-        // recursive DOM/typed-array/iterator clusters React's event types pull in)
-        // is valid in tsc — only the self-referential edge is left unexpanded. The
-        // internal cycle marker is still emitted (cycle detection / cascade
-        // guarding), but the back-edge resolves to a clean `unknown` with
-        // `had_error: false` so the cycle does not poison the enclosing type: a
-        // generic instantiation whose argument transitively recurses must still
-        // resolve its other members rather than collapse to `unknown` in
-        // `bind_type_arguments`.
+        // A recursive interface (`interface Node { next: Node }`) is always valid in
+        // tsc. For a *non-generic* interface resolve the self-edge to a lazy nominal
+        // reference to the same declaration so a member/assignability check through it
+        // peels back to the real shape instead of silently passing on `unknown`; the
+        // lazy peel stack bounds re-expansion.
+        //
+        // A *generic* interface is left as `unknown` with a (suppressed) note: its
+        // lazy peel is bounded mid-instantiation, so forcing the deeply
+        // self-instantiating generic builder/library clusters would expose an
+        // incomplete shape and over-report. Keeping `unknown` preserves the previous
+        // sound-but-under-reporting behaviour for those.
         ctx.note_resolution_cycle(index);
+        if interface.body.type_parameters.is_empty() {
+            return ResolvedType {
+                ty: make_recursive_cycle_reference(
+                    ctx,
+                    &interface.name,
+                    handle,
+                    declaration_key,
+                    type_arguments,
+                    pre_resolved_arguments,
+                    substitution,
+                ),
+                had_error: false,
+            };
+        }
         emit_type_declaration_cycle(&interface.name, interface.name_span, ctx);
         return ResolvedType {
             ty: Type::Unknown,

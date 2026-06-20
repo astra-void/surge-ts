@@ -30,13 +30,36 @@ pub(crate) fn collect_function_declaration_signature(
     let temp_symbols = std::mem::take(symbols);
     ctx.set_symbols(temp_symbols);
 
-    let function_type = map_function_signature(
-        &function.parameters,
-        function.return_type.as_ref(),
-        &function.type_parameters,
-        None,
-        ctx,
-    );
+    // Establish the function's own type-parameter scope (with constraints) while
+    // mapping the signature, so a constrained parameter such as `K extends keyof T`
+    // is visible when its body resolves a `T[K]` indexed access (otherwise a false
+    // TS2536, e.g. the lib `addEventListener<K extends keyof WindowEventMap>(…:
+    // WindowEventMap[K])`).
+    //
+    // Scoped to *generic* `declare` functions only. For a `declare` function this
+    // collected signature is the authoritative resolution (no body is checked
+    // afterwards), so it must resolve its constrained indexed accesses here. A
+    // non-`declare` function is re-checked authoritatively by
+    // `check_function_declaration` under its own scope; resolving its (often
+    // cross-module) signature concretely *here* instead changed how generic
+    // instantiations were collected and surfaced assignability false positives, so
+    // its pre-pass signature is left as-is. The empty-scope case is also skipped: a
+    // pushed empty scope makes `type_parameter_scopes` non-empty and flips the
+    // `concrete_instantiation` short-circuit.
+    let map_signature = |ctx: &mut CheckerContext| {
+        map_function_signature(
+            &function.parameters,
+            function.return_type.as_ref(),
+            &function.type_parameters,
+            None,
+            ctx,
+        )
+    };
+    let function_type = if function.is_declare && !function.type_parameters.is_empty() {
+        with_type_parameter_scope(&function.type_parameters, ctx, map_signature)
+    } else {
+        map_signature(ctx)
+    };
 
     *symbols = std::mem::take(&mut ctx.symbols);
 
@@ -50,6 +73,7 @@ pub(crate) fn collect_function_declaration_signature(
         )),
         symbols,
         false,
+        function.has_body,
     );
 
     if duplicate {
@@ -109,6 +133,7 @@ pub(crate) fn check_function_declaration(
                 Some(signature_info.clone()),
                 symbols,
                 true,
+                has_body,
             )
         };
 
@@ -130,7 +155,12 @@ pub(crate) fn check_function_declaration(
             ctx.symbols.record_declaration_span(&name, span);
         }
 
-        if is_declare {
+        // A bodyless `function` declaration is an ambient declaration or an
+        // overload signature: there is no body to check, and the implementation
+        // (or none, for ambient) carries the real body. Running body checks here
+        // would falsely flag the signature (e.g. TS2355 for a non-void return type
+        // with no `return`), which tsc never does for an overload signature.
+        if is_declare || !has_body {
             return;
         }
 

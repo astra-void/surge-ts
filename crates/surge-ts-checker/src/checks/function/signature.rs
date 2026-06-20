@@ -465,17 +465,28 @@ pub(crate) fn register_function_signature(
     function_signature: Option<FunctionSignatureInfo>,
     symbols: &mut SymbolTable,
     replace_existing: bool,
+    is_implementation: bool,
 ) -> bool {
-    let duplicate = matches!(
+    let symbol_exists = matches!(
         symbols.get(&name),
         Some(existing) if matches!(existing.kind, SymbolKind::Function)
     );
 
-    if duplicate && !replace_existing {
-        return true;
+    // TS2393 ("Duplicate function implementation") fires only when *this*
+    // declaration has a body and another implementation was already registered.
+    // Bodyless declarations (overload signatures, ambient `declare function`s)
+    // merge as overloads, so two of them — or an overload preceding an
+    // implementation — is not a duplicate.
+    let duplicate_implementation = is_implementation && symbols.has_function_implementation(&name);
+    if is_implementation {
+        symbols.mark_function_implementation(&name);
     }
 
-    if !duplicate || replace_existing {
+    if symbol_exists && !replace_existing {
+        return duplicate_implementation;
+    }
+
+    if !symbol_exists || replace_existing {
         symbols.insert(
             name,
             SymbolInfo {
@@ -486,7 +497,7 @@ pub(crate) fn register_function_signature(
         );
     }
 
-    duplicate
+    duplicate_implementation
 }
 
 /// Whether `noUnusedParameters` reporting applies in the current file. Skips

@@ -3787,7 +3787,72 @@ fn ambient_global_duplicate_function_policy_pinned() {
         ("types/b.d.ts", "declare function getName(): number;"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
+    // tsc merges the two ambient `declare function getName` declarations as an
+    // overload set (NOT a duplicate implementation): it reports no TS2393 and
+    // instead a TS2322 at the call site once the `number` overload is selected.
+    // surge no longer emits the false TS2393 here. It does not yet build a true
+    // overload set (it keeps the first signature, so `getName()` stays `string`
+    // and the TS2322 is under-reported) — a separate overload-merging limitation,
+    // tracked distinctly from the duplicate-implementation policy this pins.
+    assert!(
+        !codes(&diagnostics).contains(&"TS2393".to_string()),
+        "ambient function overloads must not be flagged as duplicate implementations: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn ambient_generic_function_constrained_indexed_access_no_ts2536() {
+    // An ambient `declare function` whose signature indexes a concrete type by a
+    // constrained type parameter (`K extends keyof EventMap` → `EventMap[K]`, as
+    // the lib `addEventListener` does) must not emit a false TS2536. The ambient
+    // collection path resolves this signature authoritatively (no body follows),
+    // so it must do so under the function's own type-parameter scope. Single-file
+    // checking always had that scope; this pins the project/ambient path.
+    let diagnostics = program(&[
+        ("src/index.ts", "export const x = 1;"),
+        (
+            "types/dom.d.ts",
+            "interface BaseMap { click: number; }\n\
+             interface EventMap extends BaseMap { focus: string; }\n\
+             declare function on<K extends keyof EventMap>(type: K, listener: (this: object, ev: EventMap[K]) => any): void;\n\
+             declare function on(type: string, listener: () => void): void;",
+        ),
+    ]);
+
+    assert!(
+        diagnostics.is_empty(),
+        "constrained indexed access in an ambient generic signature must not cascade: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn ambient_global_typeof_global_this_intersection_resolves_to_left() {
+    // `declare const w: Win & typeof globalThis` (the lib shape of `window`/`self`)
+    // resolves `typeof globalThis` before the global object symbol is installed.
+    // Treating that miss as a clean `unknown` plus the `T & unknown ⇒ T`
+    // simplification keeps `w` typed as `Win`, so member access is checked against
+    // it — `w.bar` is `string`. The earlier behaviour emitted a (suppressed) TS2304
+    // and poisoned `w` to `unknown`, silently dropping the member check; an eager
+    // re-merge instead corrupted the shared `Win` apparent type.
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "export const ok: string = w.bar;\nexport const bad: number = w.bar;",
+        ),
+        (
+            "types/globals.d.ts",
+            "interface Win { bar: string; }\ndeclare const w: Win & typeof globalThis;",
+        ),
+    ]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2322"],
+        "w.bar must resolve to Win.bar (string): only the number assignment errors: {:?}",
+        codes(&diagnostics)
+    );
 }
 
 #[test]

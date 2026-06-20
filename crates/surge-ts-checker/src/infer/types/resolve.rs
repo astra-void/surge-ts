@@ -115,6 +115,19 @@ pub(crate) fn resolve_parsed_type(
                 });
 
             let Some(symbol) = symbol else {
+                // `globalThis` is always a valid built-in, but its value symbol is
+                // installed only after every ambient global is collected, so an
+                // ambient declaration naming it (`declare var window: Window & typeof
+                // globalThis`) resolves it first. Treat the miss as a clean `unknown`
+                // (a false TS2304 / `had_error` would otherwise poison the enclosing
+                // intersection); the `T & unknown ⇒ T` simplification then keeps
+                // `window`/`self` as `Window`.
+                if type_of.name == "globalThis" {
+                    return ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: false,
+                    };
+                }
                 let mut diagnostic = Diagnostic::ts2304(&type_of.name, ctx.file_name.clone());
                 if let Some(span) = type_of.name_span {
                     diagnostic = diagnostic.with_span(convert_span(span));
@@ -663,6 +676,15 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         .filter(|ty| !matches!(ty, Type::Unknown))
         .collect();
 
+    // `T & unknown ⇒ T`: with the `unknown` operands dropped, a lone survivor is
+    // returned unchanged. Peeling and re-merging it (below) would force a lazy
+    // library reference's bounded structural expansion and discard its nominal
+    // identity — e.g. `Window & typeof globalThis` would otherwise corrupt the
+    // shared `Window` apparent type.
+    if members.len() == 1 {
+        return members.into_iter().next().unwrap();
+    }
+
     let display_name = (!members.is_empty()).then(|| {
         members
             .iter()
@@ -802,6 +824,7 @@ pub(crate) fn resolve_named_type(
         let resolved = match declaration {
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
                 alias,
+                handle.clone(),
                 named_type.type_arguments,
                 named_type.span,
                 ctx,
@@ -811,6 +834,7 @@ pub(crate) fn resolve_named_type(
             ),
             TypeDeclarationInfo::Interface(interface) => resolve_interface(
                 interface,
+                handle.clone(),
                 named_type.type_arguments,
                 ctx,
                 resolving,
@@ -970,6 +994,7 @@ pub(crate) fn resolve_named_type(
     let resolved = match declaration {
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
             alias,
+            handle.clone(),
             named_type.type_arguments,
             named_type.span,
             ctx,
@@ -979,6 +1004,7 @@ pub(crate) fn resolve_named_type(
         ),
         TypeDeclarationInfo::Interface(interface) => resolve_interface(
             interface,
+            handle.clone(),
             named_type.type_arguments,
             ctx,
             resolving,
