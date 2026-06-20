@@ -101,6 +101,32 @@ suppression (`Required<Hooks>[K]`, gap 1) and `unknown ?? right` handling.
    point regardless of entry order (memoize the whole strongly-connected component
    together). Most correct, largest.
 
+### Phase 2/3 attempts (this session) — all ineffective or regressive
+
+Three targeted patches of the existing architecture were tried with the full
+verification suite as the safety net; none works:
+
+- **cross-frame edge → deferred reference** (`get_cached_named_type_resolution`
+  returns a lazy ref instead of `unknown`): did not clear gap 2 (the failing edge
+  is not the cross-frame path — consistent with Phase 1).
+- **raise the lazy-peel bounds** (24→64, 3→8): no effect.
+- **defer any `had_error` user-type resolution to a lazy reference** (don't cache
+  the degraded structure): **regressed badly** — `Options` then peeled to only its
+  inherited `RequestInit` shape, *losing* ky's own fields (`baseUrl`, `hooks`,
+  `retry`, `onDownloadProgress`, …), so ky gained ~10 new errors. The deferred
+  reference re-peels to a degraded `Options`, i.e. the instability is in how the
+  cluster *merges extends + own members under recursion*, not just whether a single
+  result is cached.
+
+**Conclusion:** the existing recursive-resolution machinery cannot be bent into a
+fix by a targeted patch — every lever either misses or regresses. Closing #8 needs
+approach 3 done properly: compute the whole SCC's fixed point (collect the cluster,
+resolve members against the cluster's own deferred references, merge `extends` +
+own members once, memoize the component as a unit) rather than resolving each
+declaration independently with order-dependent `had_error` propagation. That is a
+ground-up redesign of the recursive cluster resolver — a major architectural
+change, scoped as its own project, not a session patch.
+
 ## Phased plan (each phase gated: ky 0/0 + sweep 76/76 + zod/trpc no new FP)
 
 1. **Characterise the failing edge — DONE (Phase 1).** Result above: it is *not*
