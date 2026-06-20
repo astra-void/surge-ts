@@ -16,8 +16,8 @@ use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 use crate::arena::alloc_function_type;
 use crate::checks::expr::evaluate_expression;
 use crate::checks::var::widen_implicit_variable_initializer_type;
-use crate::context::CheckerContext;
 use crate::context::convert_span;
+use crate::context::{CheckerContext, FileKind};
 use crate::flow::{FunctionFlowState, analyze_function_body_flow, collect_function_flow_facts};
 use crate::infer::{
     InferredExpression, TypeParameterSubstitution, map_parsed_type_with_substitution,
@@ -465,17 +465,28 @@ pub(crate) fn register_function_signature(
     function_signature: Option<FunctionSignatureInfo>,
     symbols: &mut SymbolTable,
     replace_existing: bool,
+    is_implementation: bool,
 ) -> bool {
-    let duplicate = matches!(
+    let symbol_exists = matches!(
         symbols.get(&name),
         Some(existing) if matches!(existing.kind, SymbolKind::Function)
     );
 
-    if duplicate && !replace_existing {
-        return true;
+    // TS2393 ("Duplicate function implementation") fires only when *this*
+    // declaration has a body and another implementation was already registered.
+    // Bodyless declarations (overload signatures, ambient `declare function`s)
+    // merge as overloads, so two of them — or an overload preceding an
+    // implementation — is not a duplicate.
+    let duplicate_implementation = is_implementation && symbols.has_function_implementation(&name);
+    if is_implementation {
+        symbols.mark_function_implementation(&name);
     }
 
-    if !duplicate || replace_existing {
+    if symbol_exists && !replace_existing {
+        return duplicate_implementation;
+    }
+
+    if !symbol_exists || replace_existing {
         symbols.insert(
             name,
             SymbolInfo {
@@ -486,7 +497,104 @@ pub(crate) fn register_function_signature(
         );
     }
 
-    duplicate
+    duplicate_implementation
+}
+
+/// Whether `noUnusedParameters` reporting applies in the current file. Skips
+/// declaration files (ambient / `.d.ts`), where tsc never reports.
+pub(crate) fn should_track_unused_parameters(ctx: &CheckerContext) -> bool {
+    ctx.options.no_unused_parameters && ctx.current_file_kind == FileKind::RootSource
+}
+
+/// Reports TS6133 for each identifier parameter whose name never appears in the
+/// body's collected reads (and is not `_`-prefixed). Object/array patterns and
+/// the `this` pseudo-parameter are skipped.
+pub(crate) fn emit_unused_parameters(
+    parameters: &[ParsedFunctionParameter],
+    reads: &[String],
+    ctx: &mut CheckerContext,
+) {
+    for parameter in parameters {
+        let ParsedBindingName::Identifier { name, span } = &parameter.binding_name else {
+            continue;
+        };
+        if name == "this" || name.starts_with('_') || reads.iter().any(|read| read == name) {
+            continue;
+        }
+        let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
+        let diagnostic = match span {
+            Some(span) => diagnostic.with_span(convert_span(*span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+    }
+}
+
+/// Reports TS6133 for each function-local `const`/`let`/`var` whose name never
+/// appears in the body's reads. Gated on `noUnusedLocals` in a root source file.
+/// Uses the function-wide read set, so a binding read in any nested scope counts
+/// (an over-approximation — never a false positive).
+pub(crate) fn emit_unused_locals(
+    statements: &[ParsedFunctionBodyStatement],
+    reads: &[String],
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_unused_locals || ctx.current_file_kind != FileKind::RootSource {
+        return;
+    }
+    let mut locals: Vec<(&str, Option<TextSpan>)> = Vec::new();
+    collect_local_var_declarations(statements, &mut locals);
+    for (name, span) in locals {
+        if reads.iter().any(|read| read == name) {
+            continue;
+        }
+        let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
+        let diagnostic = match span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+    }
+}
+
+/// Collects `const`/`let`/`var` declarations directly owned by this function
+/// body, recursing through control-flow statements but not into nested functions
+/// (whose locals belong to their own scope).
+fn collect_local_var_declarations<'a>(
+    statements: &'a [ParsedFunctionBodyStatement],
+    out: &mut Vec<(&'a str, Option<TextSpan>)>,
+) {
+    for statement in statements {
+        match statement {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) if !variable.is_declare => {
+                out.push((variable.name.as_str(), variable.name_span));
+            }
+            ParsedFunctionBodyStatement::Block(body) => collect_local_var_declarations(body, out),
+            ParsedFunctionBodyStatement::If(statement) => {
+                collect_local_var_declarations(&statement.then_body, out);
+                collect_local_var_declarations(&statement.else_body, out);
+            }
+            ParsedFunctionBodyStatement::While(statement) => {
+                collect_local_var_declarations(&statement.body, out)
+            }
+            ParsedFunctionBodyStatement::ForOf(statement) => {
+                collect_local_var_declarations(&statement.body, out)
+            }
+            ParsedFunctionBodyStatement::Switch(statement) => {
+                for case in &statement.cases {
+                    collect_local_var_declarations(&case.consequent, out);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(statement) => {
+                collect_local_var_declarations(&statement.block, out);
+                if let Some(handler) = &statement.handler {
+                    collect_local_var_declarations(&handler.body, out);
+                }
+                collect_local_var_declarations(&statement.finalizer, out);
+            }
+            _ => {}
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -499,6 +607,7 @@ pub(crate) fn check_function_body_with_signature(
     function_signature: Option<FunctionSignatureInfo>,
     has_explicit_return_type: bool,
     missing_return_span: Option<TextSpan>,
+    body_reads: Option<&[String]>,
     ctx: &mut CheckerContext,
 ) {
     check_function_body_with_signature_and_this(
@@ -511,6 +620,8 @@ pub(crate) fn check_function_body_with_signature(
         has_explicit_return_type,
         missing_return_span,
         None,
+        false,
+        body_reads,
         ctx,
     );
 }
@@ -529,6 +640,8 @@ pub(crate) fn check_function_body_with_signature_and_this(
     has_explicit_return_type: bool,
     missing_return_span: Option<TextSpan>,
     this_type: Option<Type>,
+    is_constructor: bool,
+    body_reads: Option<&[String]>,
     ctx: &mut CheckerContext,
 ) {
     let body_flow = analyze_function_body_flow(&body);
@@ -561,6 +674,15 @@ pub(crate) fn check_function_body_with_signature_and_this(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
     );
 
+    // `None` is an overload signature (no body); tsc never flags its parameters
+    // or locals.
+    if let Some(reads) = body_reads {
+        if !is_constructor && should_track_unused_parameters(ctx) {
+            emit_unused_parameters(&parameters, reads, ctx);
+        }
+        emit_unused_locals(&body, reads, ctx);
+    }
+
     for (parameter, parameter_type) in parameters
         .into_iter()
         .zip(function_type.parameters().iter())
@@ -580,6 +702,13 @@ pub(crate) fn check_function_body_with_signature_and_this(
 
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
         emit_missing_return_diagnostic(body_flow, missing_return_span, ctx);
+    } else if !has_explicit_return_type
+        && !is_constructor
+        && ctx.options.no_implicit_returns
+        && body_flow.contains_return_with_value
+        && !body_flow.guarantees_exit
+    {
+        emit_implicit_return_diagnostic(missing_return_span, ctx);
     }
 }
 

@@ -1,7 +1,7 @@
-interface Node {
-  next: Node;
+interface Lnk {
+  next: Lnk;
 }
 
-function take(node: Node) {}
+function take(node: Lnk) {}
 
 take({ next: {} });

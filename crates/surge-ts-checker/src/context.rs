@@ -47,11 +47,23 @@ pub struct CompatibilityStats {
     pub suppressed_diagnostics_total: usize,
     pub suppressed_declaration_diagnostics_total: usize,
     pub suppressed_rust_only_diagnostics_total: usize,
+    /// Count of non-relative (package) import/export specifiers that failed every
+    /// resolution path — the subset of `externalModuleStubs` references that were
+    /// actually unresolved (and either stubbed or reported TS2307), rather than
+    /// resolved via a dependency declaration. This is the parity-relevant figure:
+    /// a resolved external reference is benign, an unresolved one is the risk.
+    pub external_modules_unresolved_total: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
+    pub no_implicit_returns: bool,
+    pub no_fallthrough_cases_in_switch: bool,
+    pub no_implicit_override: bool,
+    pub no_property_access_from_index_signature: bool,
+    pub no_unused_locals: bool,
+    pub no_unused_parameters: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
     /// Effective type-package names included in the program. When the project's
@@ -77,6 +89,12 @@ impl Default for CheckerOptions {
     fn default() -> Self {
         Self {
             no_implicit_any: false,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
             types: Vec::new(),

@@ -136,6 +136,7 @@ mod tests {
                     parser_errors: parsed.parser_errors,
                     is_module: parsed.is_module,
                     file_kind: FileKind::RootSource,
+                    module_reads: parsed.module_reads,
                 }
             })
             .collect()

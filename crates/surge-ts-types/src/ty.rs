@@ -65,6 +65,22 @@ impl Type {
         }
     }
 
+    /// Whether `name` resolves only through a string index signature rather than
+    /// a declared property — the condition for TS4111 under
+    /// `noPropertyAccessFromIndexSignature`. References are peeled; other type
+    /// shapes (no index signature) answer `false`.
+    pub fn property_only_from_string_index(&self, name: &str) -> bool {
+        match self {
+            Type::Object(object) => {
+                object.get_property(name).is_none() && object.allows_string_index_access()
+            }
+            Type::Reference(reference) => {
+                reference.resolve().property_only_from_string_index(name)
+            }
+            _ => false,
+        }
+    }
+
     pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
         match self {
             Type::Object(object) => object.get_property_access_type(name),

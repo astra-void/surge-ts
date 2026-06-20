@@ -146,6 +146,12 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             types: Vec::new(),
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
         },
     );
 
@@ -2915,7 +2921,11 @@ fn compat_report_external_module_stubs_json() {
 
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let stubs = report.get("externalModuleStubs").unwrap();
+    // Both `react` and `zustand` are non-relative references (total) and neither
+    // resolves in this fixture, so both are unresolved and none resolved.
     assert_eq!(stubs.get("total").unwrap().as_u64().unwrap(), 2);
+    assert_eq!(stubs.get("unresolved").unwrap().as_u64().unwrap(), 2);
+    assert_eq!(stubs.get("resolved").unwrap().as_u64().unwrap(), 0);
 }
 
 #[test]

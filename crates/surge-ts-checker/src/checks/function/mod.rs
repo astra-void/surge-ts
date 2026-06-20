@@ -10,7 +10,7 @@ use super::expr::evaluate_expression;
 use crate::arena::alloc_function_type;
 use crate::context::CheckerContext;
 use crate::context::convert_span;
-use crate::flow::{FunctionFlowState, collect_function_flow_facts};
+use crate::flow::{FunctionFlowState, analyze_function_body_flow, collect_function_flow_facts};
 use crate::infer::InferredExpression;
 use crate::program::record_program_timing;
 use crate::symbols::{ScopeStack, SymbolTable};
@@ -30,13 +30,36 @@ pub(crate) fn collect_function_declaration_signature(
     let temp_symbols = std::mem::take(symbols);
     ctx.set_symbols(temp_symbols);
 
-    let function_type = map_function_signature(
-        &function.parameters,
-        function.return_type.as_ref(),
-        &function.type_parameters,
-        None,
-        ctx,
-    );
+    // Establish the function's own type-parameter scope (with constraints) while
+    // mapping the signature, so a constrained parameter such as `K extends keyof T`
+    // is visible when its body resolves a `T[K]` indexed access (otherwise a false
+    // TS2536, e.g. the lib `addEventListener<K extends keyof WindowEventMap>(…:
+    // WindowEventMap[K])`).
+    //
+    // Scoped to *generic* `declare` functions only. For a `declare` function this
+    // collected signature is the authoritative resolution (no body is checked
+    // afterwards), so it must resolve its constrained indexed accesses here. A
+    // non-`declare` function is re-checked authoritatively by
+    // `check_function_declaration` under its own scope; resolving its (often
+    // cross-module) signature concretely *here* instead changed how generic
+    // instantiations were collected and surfaced assignability false positives, so
+    // its pre-pass signature is left as-is. The empty-scope case is also skipped: a
+    // pushed empty scope makes `type_parameter_scopes` non-empty and flips the
+    // `concrete_instantiation` short-circuit.
+    let map_signature = |ctx: &mut CheckerContext| {
+        map_function_signature(
+            &function.parameters,
+            function.return_type.as_ref(),
+            &function.type_parameters,
+            None,
+            ctx,
+        )
+    };
+    let function_type = if function.is_declare && !function.type_parameters.is_empty() {
+        with_type_parameter_scope(&function.type_parameters, ctx, map_signature)
+    } else {
+        map_signature(ctx)
+    };
 
     *symbols = std::mem::take(&mut ctx.symbols);
 
@@ -50,6 +73,7 @@ pub(crate) fn collect_function_declaration_signature(
         )),
         symbols,
         false,
+        function.has_body,
     );
 
     if duplicate {
@@ -85,6 +109,8 @@ pub(crate) fn check_function_declaration(
         return_type,
         return_type_span,
         body,
+        has_body,
+        body_reads,
         ..
     } = function;
 
@@ -107,6 +133,7 @@ pub(crate) fn check_function_declaration(
                 Some(signature_info.clone()),
                 symbols,
                 true,
+                has_body,
             )
         };
 
@@ -128,7 +155,12 @@ pub(crate) fn check_function_declaration(
             ctx.symbols.record_declaration_span(&name, span);
         }
 
-        if is_declare {
+        // A bodyless `function` declaration is an ambient declaration or an
+        // overload signature: there is no body to check, and the implementation
+        // (or none, for ambient) carries the real body. Running body checks here
+        // would falsely flag the signature (e.g. TS2355 for a non-void return type
+        // with no `return`), which tsc never does for an overload signature.
+        if is_declare || !has_body {
             return;
         }
 
@@ -141,6 +173,7 @@ pub(crate) fn check_function_declaration(
             Some(signature_info),
             return_type.is_some(),
             return_type_span.or(name_span),
+            has_body.then(|| body_reads.as_slice()),
             ctx,
         );
     });
@@ -164,6 +197,8 @@ pub(crate) fn check_function_declaration_body(
         return_type,
         return_type_span,
         body,
+        has_body,
+        body_reads,
         ..
     } = function;
 
@@ -182,6 +217,7 @@ pub(crate) fn check_function_declaration_body(
         Some(signature_info),
         return_type.is_some(),
         return_type_span.or(name_span),
+        has_body.then(|| body_reads.as_slice()),
         ctx,
     );
     record_program_timing(ctx.timings.as_ref(), |timings| {
@@ -209,6 +245,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
         return_type,
         is_async,
         body,
+        body_reads,
         span: arrow_span,
     } = arrow;
     let _ = is_async;
@@ -265,6 +302,10 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);
         }
 
+        if should_track_unused_parameters(ctx) {
+            emit_unused_parameters(&parameters, &body_reads, ctx);
+        }
+
         let visible_symbols = visible_symbols(&scopes);
         match body {
             ParsedArrowFunctionBody::Expression(expression) => {
@@ -293,10 +334,12 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                 }
             }
             ParsedArrowFunctionBody::Block(statements) => {
+                emit_unused_locals(&statements, &body_reads, ctx);
                 let flow_facts = collect_function_flow_facts(&statements);
                 let mut flow_state = FunctionFlowState::new(
                     flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
                 );
+                let body_flow = analyze_function_body_flow(&statements);
                 let return_type_for_body = match &return_type {
                     Type::Any | Type::Unknown | Type::Void => None,
                     ty => Some(ty),
@@ -308,6 +351,17 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                     &mut flow_state,
                     ctx,
                 );
+
+                let contextually_void = expected_type
+                    .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void));
+                if !has_explicit_return_type
+                    && !contextually_void
+                    && ctx.options.no_implicit_returns
+                    && body_flow.contains_return_with_value
+                    && !body_flow.guarantees_exit
+                {
+                    emit_implicit_return_diagnostic(arrow_span, ctx);
+                }
             }
         }
 

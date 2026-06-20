@@ -51,12 +51,12 @@ pub(crate) fn emit_generic_arity(
     ctx.push_utility_diagnostic_once(diagnostic);
 }
 
-pub(crate) fn emit_type_alias_cycle(
+pub(crate) fn emit_type_declaration_cycle(
     name: &str,
     name_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    let mut diagnostic = Diagnostic::surge_type_alias_cycle(name, ctx.file_name.clone());
+    let mut diagnostic = Diagnostic::surge_type_declaration_cycle(name, ctx.file_name.clone());
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -65,12 +65,12 @@ pub(crate) fn emit_type_alias_cycle(
     ctx.push_utility_diagnostic_once(diagnostic);
 }
 
-pub(crate) fn emit_type_declaration_cycle(
+pub(crate) fn emit_type_alias_cycle(
     name: &str,
     name_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    let mut diagnostic = Diagnostic::surge_type_declaration_cycle(name, ctx.file_name.clone());
+    let mut diagnostic = Diagnostic::surge_type_alias_cycle(name, ctx.file_name.clone());
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));

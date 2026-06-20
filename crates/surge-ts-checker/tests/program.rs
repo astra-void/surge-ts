@@ -113,6 +113,12 @@ fn program_api_no_lib_hides_generated_default_libs() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: true,
             skip_lib_check: false,
             types: Vec::new(),
@@ -515,6 +521,12 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -528,6 +540,12 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -539,6 +557,422 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
         file_names(&program_diagnostics),
         file_names(&single_file_diagnostics)
     );
+}
+
+fn no_implicit_returns_options(no_implicit_returns: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_implicit_returns,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_implicit_returns_reports_ts7030_on_partial_value_return() {
+    let source = "export function a(x: number) { if (x > 0) return 1; }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS7030"]);
+}
+
+#[test]
+fn no_implicit_returns_reports_ts7030_on_arrow_block_body() {
+    let source = "export const f = (x: number) => { if (x > 0) return 1; };";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS7030"]);
+}
+
+#[test]
+fn no_implicit_returns_silent_when_flag_off() {
+    let source = "export function a(x: number) { if (x > 0) return 1; }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_returns_options(false));
+    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+}
+
+#[test]
+fn no_implicit_returns_silent_when_all_paths_return() {
+    let source = "export function b(x: number) { if (x > 0) return 1; return 2; }";
+    let diagnostics = check_source_with_options(source, "b.ts", no_implicit_returns_options(true));
+    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+}
+
+#[test]
+fn no_implicit_returns_silent_when_all_paths_exit_without_value() {
+    // Every path exits explicitly (`return 1` / bare `return;`), so there is no
+    // implicit fall-through — tsc emits nothing here even under noImplicitReturns.
+    let source = "export function c(x: number) { if (x > 0) return 1; return; }";
+    let diagnostics = check_source_with_options(source, "c.ts", no_implicit_returns_options(true));
+    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+}
+
+#[test]
+fn no_implicit_returns_silent_on_infinite_loop() {
+    // `while (true)` with no `break` never falls through, so the end is
+    // unreachable and tsc emits no TS7030. (surge's separate always-truthy note
+    // for `while (true)` is out of scope here, so assert only TS7030's absence.)
+    let source = "export function g(x: number) { while (true) { if (x > 0) return 1; } }";
+    let diagnostics = check_source_with_options(source, "g.ts", no_implicit_returns_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS7030"),
+        "unexpected TS7030: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_returns_silent_on_throw_only_body() {
+    // A function that only throws (no `return <value>`) infers a `void` return
+    // type; tsc skips TS7030. A `throw` must not count as a value return.
+    let source = "export function p(x: number) { if (x > 0) { throw x; } }";
+    let diagnostics = check_source_with_options(source, "p.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_implicit_returns_silent_on_exhaustive_switch_with_default() {
+    // Every clause returns and a `default` makes the switch exhaustive, so no
+    // path falls through — tsc emits no TS7030.
+    let source = "export function s(x: number) { switch (x) { case 1: return 'a'; default: return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "s.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_implicit_returns_reports_switch_without_default() {
+    // No `default`: the discriminant may match no clause and fall through, so
+    // tsc reports TS7030.
+    let source = "export function s(x: number) { switch (x) { case 1: return 'a'; case 2: return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "s.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS7030"]);
+}
+
+#[test]
+fn no_implicit_returns_does_not_fire_on_constructor() {
+    // tsc never applies noImplicitReturns to constructors (they implicitly
+    // return `this`). A constructor with a conditional `return` value must not
+    // produce TS7030.
+    let source =
+        "export class C { constructor(x: number) { if (x > 0) { return; } this.y = x; } y = 0; }";
+    let diagnostics = check_source_with_options(source, "c.ts", no_implicit_returns_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS7030"),
+        "unexpected TS7030: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_returns_silent_on_try_return_catch_throw() {
+    // Every path exits: the `try` returns, the `catch` throws. The construct
+    // never falls through, so tsc emits no TS7030 (regression: surge's Try flow
+    // summary used to hardcode `guarantees_exit = false`).
+    let source = "export function h(x: number) { try { return x; } catch (e) { throw e; } }";
+    let diagnostics = check_source_with_options(source, "h.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_implicit_returns_does_not_affect_annotated_missing_return() {
+    // Annotated return type still routes through TS2366, independent of the flag.
+    let source = "export function e(x: number): number { if (x > 0) return 1; }";
+    let diagnostics = check_source_with_options(source, "e.ts", no_implicit_returns_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS2366"]);
+}
+
+fn no_fallthrough_options(no_fallthrough_cases_in_switch: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_fallthrough_cases_in_switch,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_fallthrough_reports_ts7029_on_reachable_clause_end() {
+    let source =
+        "export function a(x: number) { switch (x) { case 1: x; case 2: return; default: return; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS7029"]);
+}
+
+#[test]
+fn no_fallthrough_allows_empty_stacked_labels() {
+    let source =
+        "export function a(x: number) { switch (x) { case 1: case 2: return; default: return; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_fallthrough_allows_terminated_clauses() {
+    let source =
+        "export function a(x: number) { switch (x) { case 1: return; case 2: throw x; default: break; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(true));
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn no_fallthrough_silent_when_flag_off() {
+    let source =
+        "export function a(x: number) { switch (x) { case 1: x; case 2: return; default: return; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(false));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS7029"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+fn no_implicit_override_options(no_implicit_override: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_implicit_override,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_implicit_override_reports_ts4114_on_missing_override() {
+    let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { greet(): string { return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS4114"]);
+}
+
+#[test]
+fn no_implicit_override_silent_with_override_modifier() {
+    let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { override greet(): string { return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4114"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_override_silent_on_new_member() {
+    let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { extra(): number { return 1; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4114"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_override_silent_on_abstract_member_implementation() {
+    // Implementing an abstract base member does not require `override`.
+    let source = "abstract class Base { abstract run(): number; } class Impl extends Base { run(): number { return 1; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4114"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_implicit_override_reports_transitively() {
+    let source = "class A { f(): number { return 1; } } class B extends A {} class C extends B { f(): number { return 2; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS4114"]);
+}
+
+#[test]
+fn no_implicit_override_silent_when_flag_off() {
+    let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { greet(): string { return 'b'; } }";
+    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(false));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4114"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+fn no_property_access_index_options(no_property_access_from_index_signature: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_property_access_from_index_signature,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_property_access_from_index_signature_reports_ts4111_on_dot_access() {
+    let source = "interface D { [k: string]: number; } declare const d: D; const a = d.foo;";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert_eq!(codes(&diagnostics), vec!["TS4111"]);
+}
+
+#[test]
+fn no_property_access_from_index_signature_allows_declared_property() {
+    let source =
+        "interface D { [k: string]: number; declared: number; } declare const d: D; const a = d.declared;";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_property_access_from_index_signature_allows_bracket_access() {
+    let source = "interface D { [k: string]: number; } declare const d: D; const a = d[\"foo\"];";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_property_access_from_index_signature_silent_without_index_signature() {
+    let source = "interface P { x: number; } declare const p: P; const a = p.x;";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_property_access_from_index_signature_silent_when_flag_off() {
+    let source = "interface D { [k: string]: number; } declare const d: D; const a = d.foo;";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(false));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+fn ts6133_program_codes(source: &str, no_unused_locals: bool) -> Vec<String> {
+    let options = CheckerOptions {
+        no_unused_locals,
+        ..Default::default()
+    };
+    let diagnostics = program_with_options(&[("a.ts", source)], options);
+    codes(&diagnostics)
+        .into_iter()
+        .filter(|code| code == "TS6133")
+        .collect()
+}
+
+#[test]
+fn no_unused_locals_reports_unused_const() {
+    let source = "export {};\nconst unused = 1;\n";
+    assert_eq!(ts6133_program_codes(source, true), vec!["TS6133"]);
+}
+
+#[test]
+fn no_unused_locals_reports_unused_function() {
+    let source = "export {};\nfunction unused(): number { return 1; }\n";
+    assert_eq!(ts6133_program_codes(source, true), vec!["TS6133"]);
+}
+
+#[test]
+fn no_unused_locals_exempts_unused_class() {
+    // tsc does not report unused top-level classes under noUnusedLocals.
+    let source = "export {};\nclass Unused {}\n";
+    assert!(ts6133_program_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_locals_exempts_used_and_exported() {
+    let source =
+        "const used = 1;\nexport const reexported = 2;\nexport const x = used;\n";
+    assert!(ts6133_program_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_locals_ignores_scripts() {
+    // No import/export: a script, whose top-level bindings are globals, not locals.
+    let source = "const topLevel = 1;\n";
+    assert!(ts6133_program_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_locals_silent_when_flag_off() {
+    let source = "export {};\nconst unused = 1;\n";
+    assert!(ts6133_program_codes(source, false).is_empty());
+}
+
+#[test]
+fn no_unused_locals_reports_function_local() {
+    let source = "export function f(): number { const unused = 1; const used = 2; return used; }";
+    assert_eq!(ts6133_program_codes(source, true), vec!["TS6133"]);
+}
+
+#[test]
+fn no_unused_locals_counts_local_read_in_nested_block_and_closure() {
+    let source = "export function f(): number { const a = 1; const b = 2; if (a > 0) { return a; } return [b].map(x => x)[0]; }";
+    assert!(ts6133_program_codes(source, true).is_empty());
+}
+
+fn no_unused_parameters_options(no_unused_parameters: bool) -> CheckerOptions {
+    CheckerOptions {
+        no_unused_parameters,
+        ..Default::default()
+    }
+}
+
+fn ts6133_codes(source: &str, on: bool) -> Vec<String> {
+    let diagnostics = check_source_with_options(source, "a.ts", no_unused_parameters_options(on));
+    codes(&diagnostics)
+        .into_iter()
+        .filter(|code| code == "TS6133")
+        .collect()
+}
+
+#[test]
+fn no_unused_parameters_reports_ts6133() {
+    let source = "export function f(a: number, b: number): number { return b; }";
+    assert_eq!(ts6133_codes(source, true), vec!["TS6133"]);
+}
+
+#[test]
+fn no_unused_parameters_exempts_underscore_prefix() {
+    let source = "export function f(_a: number, b: number): number { return b; }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_counts_read_in_nested_function() {
+    // The parameter is read only inside a nested function declaration — the oxc
+    // read-walk must see it, so no TS6133.
+    let source =
+        "export function f(p: number): void { function inner(): number { return p; } inner(); }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_counts_read_in_template_literal() {
+    let source = "export function f(token: string): string { return `Bearer ${token}`; }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_counts_read_in_spread() {
+    let source = "export function f(p: number[]): number[] { return [...p]; }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_skips_overload_signatures() {
+    // The bodyless overload signature's parameters must not be flagged; only the
+    // implementation is checked (and here `a` is used).
+    let source = "export function f(a: string): string;\nexport function f(a: number): string;\nexport function f(a: string | number): string { return String(a); }";
+    assert!(ts6133_codes(source, true).is_empty());
+}
+
+#[test]
+fn no_unused_parameters_silent_when_flag_off() {
+    let source = "export function f(a: number, b: number): number { return b; }";
+    assert!(ts6133_codes(source, false).is_empty());
 }
 
 #[test]
@@ -575,6 +1009,12 @@ fn program_order_parser_before_type_prepass() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1159,6 +1599,12 @@ fn program_module_export_function_parameter_no_implicit_any() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1181,6 +1627,12 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -1200,6 +1652,12 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             resolved_modules: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
             types: Vec::new(),
@@ -3329,7 +3787,72 @@ fn ambient_global_duplicate_function_policy_pinned() {
         ("types/b.d.ts", "declare function getName(): number;"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
+    // tsc merges the two ambient `declare function getName` declarations as an
+    // overload set (NOT a duplicate implementation): it reports no TS2393 and
+    // instead a TS2322 at the call site once the `number` overload is selected.
+    // surge no longer emits the false TS2393 here. It does not yet build a true
+    // overload set (it keeps the first signature, so `getName()` stays `string`
+    // and the TS2322 is under-reported) — a separate overload-merging limitation,
+    // tracked distinctly from the duplicate-implementation policy this pins.
+    assert!(
+        !codes(&diagnostics).contains(&"TS2393".to_string()),
+        "ambient function overloads must not be flagged as duplicate implementations: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn ambient_generic_function_constrained_indexed_access_no_ts2536() {
+    // An ambient `declare function` whose signature indexes a concrete type by a
+    // constrained type parameter (`K extends keyof EventMap` → `EventMap[K]`, as
+    // the lib `addEventListener` does) must not emit a false TS2536. The ambient
+    // collection path resolves this signature authoritatively (no body follows),
+    // so it must do so under the function's own type-parameter scope. Single-file
+    // checking always had that scope; this pins the project/ambient path.
+    let diagnostics = program(&[
+        ("src/index.ts", "export const x = 1;"),
+        (
+            "types/dom.d.ts",
+            "interface BaseMap { click: number; }\n\
+             interface EventMap extends BaseMap { focus: string; }\n\
+             declare function on<K extends keyof EventMap>(type: K, listener: (this: object, ev: EventMap[K]) => any): void;\n\
+             declare function on(type: string, listener: () => void): void;",
+        ),
+    ]);
+
+    assert!(
+        diagnostics.is_empty(),
+        "constrained indexed access in an ambient generic signature must not cascade: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn ambient_global_typeof_global_this_intersection_resolves_to_left() {
+    // `declare const w: Win & typeof globalThis` (the lib shape of `window`/`self`)
+    // resolves `typeof globalThis` before the global object symbol is installed.
+    // Treating that miss as a clean `unknown` plus the `T & unknown ⇒ T`
+    // simplification keeps `w` typed as `Win`, so member access is checked against
+    // it — `w.bar` is `string`. The earlier behaviour emitted a (suppressed) TS2304
+    // and poisoned `w` to `unknown`, silently dropping the member check; an eager
+    // re-merge instead corrupted the shared `Win` apparent type.
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "export const ok: string = w.bar;\nexport const bad: number = w.bar;",
+        ),
+        (
+            "types/globals.d.ts",
+            "interface Win { bar: string; }\ndeclare const w: Win & typeof globalThis;",
+        ),
+    ]);
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2322"],
+        "w.bar must resolve to Win.bar (string): only the number assignment errors: {:?}",
+        codes(&diagnostics)
+    );
 }
 
 #[test]

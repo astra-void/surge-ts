@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan};
@@ -52,6 +52,12 @@ pub(crate) struct SymbolTable {
     // the same copy-on-write discipline as `symbols`; empty in nearly every
     // table, so the extra `Arc` clone is effectively free.
     declaration_spans: Arc<HashMap<Arc<str>, TextSpan>>,
+    // Names that already have a body-bearing function *implementation* registered
+    // in this scope. A second implementation is the only thing that yields
+    // TS2393 ("Duplicate function implementation"); bodyless declarations
+    // (overload signatures, ambient `declare function`s) merge as overloads and
+    // must not trip it. Shares the copy-on-write discipline of `symbols`.
+    function_implementations: Arc<HashSet<Arc<str>>>,
     // Optional read-only fallback consulted by lookups (`get`, `get_handle`,
     // `contains_let_or_const`) when a name is absent from `symbols`. A function
     // body's root scope sets this to the module/ambient environment instead of
@@ -72,6 +78,7 @@ impl Clone for SymbolTable {
         Self {
             symbols: Arc::clone(&self.symbols),
             declaration_spans: Arc::clone(&self.declaration_spans),
+            function_implementations: Arc::clone(&self.function_implementations),
             parent: self.parent.clone(),
         }
     }
@@ -88,6 +95,7 @@ impl SymbolTable {
         Self {
             symbols: Arc::new(HashMap::new()),
             declaration_spans: Arc::new(HashMap::new()),
+            function_implementations: Arc::new(HashSet::new()),
             parent: Some(parent),
         }
     }
@@ -220,6 +228,21 @@ impl SymbolTable {
             return None;
         }
         Arc::make_mut(&mut self.declaration_spans).remove(name)
+    }
+
+    /// Whether a body-bearing function implementation for `name` was already
+    /// registered in this scope (see [`Self::mark_function_implementation`]).
+    pub(crate) fn has_function_implementation(&self, name: &str) -> bool {
+        self.function_implementations.contains(name)
+    }
+
+    /// Marks that a body-bearing function implementation for `name` exists in
+    /// this scope, so a *second* implementation can be reported as TS2393.
+    pub(crate) fn mark_function_implementation(&mut self, name: &str) {
+        if self.function_implementations.contains(name) {
+            return;
+        }
+        Arc::make_mut(&mut self.function_implementations).insert(name.into());
     }
 }
 

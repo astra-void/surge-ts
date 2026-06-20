@@ -20,6 +20,18 @@ pub struct LoadedTsConfig {
 pub struct NormalizedCompilerOptions {
     pub strict: bool,
     pub no_implicit_any: bool,
+    /// `compilerOptions.noImplicitReturns`. Independent of `strict`; defaults off.
+    pub no_implicit_returns: bool,
+    /// `compilerOptions.noFallthroughCasesInSwitch`. Independent of `strict`; defaults off.
+    pub no_fallthrough_cases_in_switch: bool,
+    /// `compilerOptions.noImplicitOverride`. Independent of `strict`; defaults off.
+    pub no_implicit_override: bool,
+    /// `compilerOptions.noPropertyAccessFromIndexSignature`. Independent of `strict`; defaults off.
+    pub no_property_access_from_index_signature: bool,
+    /// `compilerOptions.noUnusedLocals`. Independent of `strict`; defaults off.
+    pub no_unused_locals: bool,
+    /// `compilerOptions.noUnusedParameters`. Independent of `strict`; defaults off.
+    pub no_unused_parameters: bool,
     pub target: ScriptTarget,
     pub module: ModuleKind,
     pub module_resolution: ModuleResolutionKind,
@@ -54,6 +66,12 @@ impl Default for NormalizedCompilerOptions {
         Self {
             strict: true,
             no_implicit_any: true,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
             module_resolution: ModuleResolutionKind::Bundler,
@@ -104,6 +122,7 @@ pub enum ModuleKind {
     ESNext,
     Node16,
     Node18,
+    Node20,
     NodeNext,
     Preserve,
 }
@@ -117,6 +136,7 @@ impl Default for ModuleKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleResolutionKind {
     Node16,
+    Node20,
     NodeNext,
     Bundler,
 }

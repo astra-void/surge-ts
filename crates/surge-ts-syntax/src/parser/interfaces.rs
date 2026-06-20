@@ -111,6 +111,7 @@ fn parse_interface_member(member: &TSSignature<'_>) -> Option<ParsedInterfaceMem
         name: property.name,
         name_span: property.name_span,
         optional: property.optional,
+        is_abstract: false,
         ty: property.ty,
     })
 }

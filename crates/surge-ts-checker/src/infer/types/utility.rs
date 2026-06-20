@@ -10,7 +10,7 @@ use surge_ts_types::{ObjectProperty, PropertyMap, Type};
 use crate::arena::alloc_object_type;
 use crate::context::{CheckerContext, DeclarationResolutionKey, convert_span};
 use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default_lib_file_name};
-use crate::symbols::TypeAliasInfo;
+use crate::symbols::{TypeAliasInfo, TypeDeclarationHandle};
 
 /// Whether a type alias body introduces a structural boundary that makes a
 /// self-reference legal (tsc's rule for recursive type aliases). Object, array,
@@ -34,6 +34,7 @@ fn alias_body_supports_recursion(ty: &ParsedType) -> bool {
 
 pub(crate) fn resolve_type_alias(
     alias: &TypeAliasInfo,
+    handle: TypeDeclarationHandle,
     type_arguments: Vec<ParsedType>,
     reference_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
@@ -44,16 +45,38 @@ pub(crate) fn resolve_type_alias(
     let declaration_key = declaration_resolution_key(&alias.file_name, &alias.name);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
         ctx.note_resolution_cycle(index);
-        emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
         // tsc only rejects a type alias that references itself *without* an
         // intervening structural type (`type A = A`, `type A = B; type B = A`).
-        // Recursion through an object/array/tuple/function (`type Rec<T> = { rest:
-        // Rec<T> }`, and the mutually recursive lib/DOM clusters React's event
-        // types pull in) is valid — the self-edge is just left unexpanded. Keep the
-        // internal cycle marker either way, but only poison the enclosing type
-        // (`had_error: true`) for a genuine structureless cycle; a structural one
-        // resolves to a clean `unknown` so it does not collapse a generic
-        // instantiation in `bind_type_arguments`.
+        // Recursion through an object/array/tuple/function (`type Rec = { rest: Rec
+        // }`) is valid and tsc reports nothing. For a *non-generic* structural alias
+        // resolve the legal back-edge to a lazy nominal reference to the same
+        // declaration: forcing it (a member access, an assignability probe) peels one
+        // level back to the real recursive shape rather than `unknown`, so a
+        // property/assignability check through the self-edge is not silently dropped.
+        // The lazy peel stack bounds the re-expansion.
+        //
+        // A *generic* recursive declaration is left as `unknown`: its lazy peel is
+        // bounded mid-instantiation, so forcing the deeply self-instantiating generic
+        // clusters (a fluent builder whose every method returns `Builder<…refined…>`)
+        // would expose an incomplete shape and over-report member/assignability
+        // checks. Keeping `unknown` there preserves the previous (sound, if
+        // under-reporting) behaviour. The (suppressed) note marks the degraded
+        // resolution; a genuine structureless cycle keeps it as a real error.
+        if alias_body_supports_recursion(&alias.body.ty) && alias.body.type_parameters.is_empty() {
+            return ResolvedType {
+                ty: make_recursive_cycle_reference(
+                    ctx,
+                    &alias.name,
+                    handle,
+                    declaration_key,
+                    type_arguments,
+                    pre_resolved_arguments,
+                    substitution,
+                ),
+                had_error: false,
+            };
+        }
+        emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
         return ResolvedType {
             ty: Type::Unknown,
             had_error: !alias_body_supports_recursion(&alias.body.ty),

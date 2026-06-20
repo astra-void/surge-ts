@@ -525,6 +525,46 @@ pub const TS7019: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::CatalogOnly,
 };
 
+pub const TS4111: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4111",
+    number: Some(4111),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property '{0}' comes from an index signature, so it must be accessed with ['{0}'].",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS6133: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6133",
+    number: Some(6133),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is declared but its value is never read.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4114: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4114",
+    number: Some(4114),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member must have an 'override' modifier because it overrides a member in the base class '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS7029: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS7029",
+    number: Some(7029),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Fallthrough case in switch.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS7030: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS7030",
     number: Some(7030),
@@ -532,7 +572,7 @@ pub const TS7030: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Not all code paths return a value.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS7031: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -788,6 +828,10 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7005,
     TS7006,
     TS7019,
+    TS4111,
+    TS6133,
+    TS4114,
+    TS7029,
     TS7030,
     TS7031,
     TS7034,
@@ -1332,6 +1376,38 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4111(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4111,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6133(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6133,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4114(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4114,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts7029(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS7029, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

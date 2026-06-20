@@ -85,6 +85,30 @@ pub(crate) fn missing_property_diagnostic(
     Diagnostic::ts2339(property_name, &object_type_name, file_name)
 }
 
+/// TS4111 under `noPropertyAccessFromIndexSignature`: a dotted `obj.foo` whose
+/// `foo` resolves through a string index signature rather than a declared
+/// property must instead be written `obj["foo"]`. No-op unless the flag is set.
+fn maybe_emit_index_signature_access(
+    object: &ParsedExpression,
+    property_name: &str,
+    property_span: Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_property_access_from_index_signature {
+        return;
+    }
+    if let InferredExpression::Known(object_type) = infer_expression(object, symbols, ctx) {
+        if object_type.property_only_from_string_index(property_name) {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts4111(property_name, ctx.file_name.clone()),
+                choose_span(property_span, fallback_span),
+            ));
+        }
+    }
+}
+
 /// Returns the class name when `object_type` is a class instance (an object
 /// tagged with the class name) and the class's static side declares
 /// `property_name`, so the access should be reported as a static-member mixup.
@@ -460,8 +484,9 @@ pub(crate) fn evaluate_expression(
         ParsedExpression::OptionalPropertyAccess {
             object,
             object_span,
-            property_name: _,
-            property_span: _,
+            property_name,
+            property_span,
+            is_bracketed,
         } => {
             let _ = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
             let inferred_expression = infer_expression(expression, symbols, ctx);
@@ -481,6 +506,16 @@ pub(crate) fn evaluate_expression(
                     diagnostic,
                     choose_span(*span, fallback_span),
                 ));
+            }
+            if !is_bracketed && matches!(inferred_expression, InferredExpression::Known(_)) {
+                maybe_emit_index_signature_access(
+                    object,
+                    property_name,
+                    *property_span,
+                    fallback_span,
+                    symbols,
+                    ctx,
+                );
             }
             inferred_expression
         }
@@ -716,6 +751,34 @@ pub(crate) fn evaluate_expression(
             }
 
             infer_expression(expression, symbols, ctx)
+        }
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            property_span,
+            is_bracketed,
+            ..
+        } => {
+            let inferred_expression = infer_expression(expression, symbols, ctx);
+            report_inferred_expression(
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                    inferred_expression.clone()
+                }),
+                fallback_span,
+                symbols,
+                ctx,
+            );
+            if !is_bracketed && matches!(inferred_expression, InferredExpression::Known(_)) {
+                maybe_emit_index_signature_access(
+                    object,
+                    property_name,
+                    *property_span,
+                    fallback_span,
+                    symbols,
+                    ctx,
+                );
+            }
+            inferred_expression
         }
         _ => {
             let inferred_expression = infer_expression(expression, symbols, ctx);

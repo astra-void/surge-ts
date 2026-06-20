@@ -230,22 +230,22 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
     TsConfigOptionDefinition {
         name: "noImplicitReturns",
         value_kind: TsConfigOptionValueKind::Boolean,
-        support: TsConfigOptionSupport::KnownNoop,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "noFallthroughCasesInSwitch",
         value_kind: TsConfigOptionValueKind::Boolean,
-        support: TsConfigOptionSupport::KnownNoop,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "noUnusedLocals",
         value_kind: TsConfigOptionValueKind::Boolean,
-        support: TsConfigOptionSupport::KnownNoop,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "noUnusedParameters",
         value_kind: TsConfigOptionValueKind::Boolean,
-        support: TsConfigOptionSupport::KnownNoop,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "allowUnreachableCode",
@@ -254,6 +254,46 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
     },
     TsConfigOptionDefinition {
         name: "allowUnusedLabels",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "noImplicitOverride",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
+        name: "noPropertyAccessFromIndexSignature",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
+        name: "noUncheckedSideEffectImports",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "useDefineForClassFields",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "erasableSyntaxOnly",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "newLine",
+        value_kind: TsConfigOptionValueKind::String,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "stripInternal",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "noEmitOnError",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::KnownNoop,
     },

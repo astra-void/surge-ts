@@ -6,6 +6,11 @@ pub struct ParsedSource {
     pub is_module: bool,
     /// Leading `/// <reference types="..." />` directives, in source order.
     pub reference_type_directives: Vec<ReferenceTypeDirective>,
+    /// Every value- and type-position identifier name referenced anywhere in the
+    /// module (including export specifiers, collected from the full oxc AST).
+    /// Backs unused-import / unused-local diagnostics (TS6133): a top-level
+    /// binding whose name never appears here and is not exported is unused.
+    pub module_reads: Vec<String>,
 }
 
 /// A leading `/// <reference types="..." />` directive. Only the `types` form is
@@ -260,6 +265,7 @@ pub struct ParsedInterfaceMember {
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub optional: bool,
+    pub is_abstract: bool,
     pub ty: ParsedType,
 }
 
@@ -298,6 +304,8 @@ pub struct ParsedClassAccessor {
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub is_static: bool,
+    pub is_override: bool,
+    pub is_abstract: bool,
     pub getter_return_type: Option<ParsedType>,
     pub setter_param_type: Option<ParsedType>,
     pub has_getter: bool,
@@ -309,6 +317,8 @@ pub struct ParsedClassProperty {
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub is_static: bool,
+    pub is_override: bool,
+    pub is_abstract: bool,
     pub optional: bool,
     pub readonly: bool,
     pub declared_type: Option<ParsedType>,
@@ -318,17 +328,25 @@ pub struct ParsedClassProperty {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedClassMethod {
+    /// See [`ParsedFunctionDeclaration::body_reads`].
+    pub body_reads: Vec<String>,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub is_static: bool,
+    pub is_override: bool,
+    pub is_abstract: bool,
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub return_type: Option<ParsedType>,
     pub body: Vec<ParsedFunctionBodyStatement>,
+    /// See [`ParsedFunctionDeclaration::has_body`].
+    pub has_body: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedClassConstructor {
+    /// See [`ParsedFunctionDeclaration::body_reads`].
+    pub body_reads: Vec<String>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,
@@ -484,6 +502,15 @@ pub enum ParsedExpression {
         elements: Vec<ParsedArrayElement>,
         span: Option<TextSpan>,
     },
+    /// A template literal (`` `a${x}b` ``). Only the interpolated `expressions`
+    /// are retained — the literal quasi text is dropped — so the checker can
+    /// still count identifier reads inside the template (e.g. for TS6133). The
+    /// result type is intentionally left unmodeled (see the checker), preserving
+    /// prior behavior where templates were opaque.
+    TemplateLiteral {
+        expressions: Vec<ParsedExpression>,
+        span: Option<TextSpan>,
+    },
     Unary {
         operator: ParsedUnaryOperator,
         operator_span: Option<TextSpan>,
@@ -519,6 +546,10 @@ pub enum ParsedExpression {
         object_span: Option<TextSpan>,
         property_name: String,
         property_span: Option<TextSpan>,
+        /// True when the source wrote `obj["key"]` (lowered here to a property
+        /// access for lookup reuse) rather than `obj.key`. Only dotted accesses
+        /// are subject to TS4111 (`noPropertyAccessFromIndexSignature`).
+        is_bracketed: bool,
     },
     IndexAccess {
         object_name: String,
@@ -574,6 +605,8 @@ pub enum ParsedExpression {
         object_span: Option<TextSpan>,
         property_name: String,
         property_span: Option<TextSpan>,
+        /// See [`ParsedExpression::PropertyAccess::is_bracketed`].
+        is_bracketed: bool,
     },
     OptionalPropertyCall {
         object: Box<ParsedExpression>,
@@ -769,6 +802,10 @@ pub struct ParsedAssignment {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedFunctionDeclaration {
+    /// All value-position identifier names read anywhere in the body (including
+    /// nested functions, spreads, for-in, and object methods), collected from the
+    /// full oxc AST during parsing. Backs unused-binding diagnostics (TS6133).
+    pub body_reads: Vec<String>,
     pub is_declare: bool,
     pub name: String,
     pub name_span: Option<TextSpan>,
@@ -777,6 +814,9 @@ pub struct ParsedFunctionDeclaration {
     pub return_type: Option<ParsedType>,
     pub return_type_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
+    /// False for an overload signature (no body block); its parameters are not
+    /// subject to TS6133.
+    pub has_body: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -790,6 +830,10 @@ pub enum ParsedFunctionBodyStatement {
     ThisPropertyAssignment(Box<ParsedThisPropertyAssignment>),
     Expression(Box<ParsedExpression>),
     Block(Vec<ParsedFunctionBodyStatement>),
+    /// A nested `function` declaration. Retained so identifier reads inside its
+    /// body (e.g. a captured outer parameter) stay visible to use-tracking; the
+    /// enclosing function's control-flow analysis treats it as inert.
+    Function(Box<ParsedFunctionDeclaration>),
     If(Box<ParsedIfStatement>),
     While(Box<ParsedWhileStatement>),
     ForOf(Box<ParsedForOfStatement>),
@@ -894,6 +938,8 @@ pub struct ParsedFunctionParameter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedArrowFunction {
+    /// See [`ParsedFunctionDeclaration::body_reads`].
+    pub body_reads: Vec<String>,
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub return_type: Option<ParsedType>,

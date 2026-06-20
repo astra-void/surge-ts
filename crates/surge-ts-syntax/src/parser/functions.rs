@@ -57,6 +57,12 @@ pub(crate) fn parse_function_declaration(
         return_type,
         return_type_span,
         body,
+        has_body: function.body.is_some(),
+        body_reads: function
+            .body
+            .as_ref()
+            .map(|body| super::reads::collect_function_body_reads(body))
+            .unwrap_or_default(),
     })
 }
 
@@ -111,6 +117,10 @@ fn parse_function_body_statement(
                 Declaration::VariableDeclaration(declaration) => {
                     Some(parse_variable_declaration_as_function_body(declaration))
                 }
+                Declaration::FunctionDeclaration(function) => parse_function_declaration(function)
+                    .map(|function| {
+                        vec![ParsedFunctionBodyStatement::Function(Box::new(function))]
+                    }),
                 _ => None,
             }
         }

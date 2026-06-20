@@ -417,10 +417,42 @@ message = "Rest parameter '{0}' implicitly has an 'any[]' type."
 arity = 1
 
 [[diagnostic]]
+code = "TS4111"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' comes from an index signature, so it must be accessed with ['{0}']."
+arity = 1
+
+[[diagnostic]]
+code = "TS6133"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is declared but its value is never read."
+arity = 1
+
+[[diagnostic]]
+code = "TS4114"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member must have an 'override' modifier because it overrides a member in the base class '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS7029"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Fallthrough case in switch."
+arity = 0
+
+[[diagnostic]]
 code = "TS7030"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Not all code paths return a value."
 arity = 0
 

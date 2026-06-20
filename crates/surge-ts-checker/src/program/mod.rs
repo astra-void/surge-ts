@@ -28,6 +28,7 @@ mod binding;
 mod classes;
 mod globals;
 mod statements;
+mod unused_locals;
 
 pub(crate) use ambient::*;
 pub(crate) use binding::*;
@@ -59,6 +60,9 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) parser_errors: Vec<String>,
     pub(crate) is_module: bool,
     pub(crate) file_kind: FileKind,
+    /// Module-wide identifier reads (see [`surge_ts_syntax::ParsedSource`]),
+    /// retained only when `noUnusedLocals` is enabled; empty otherwise.
+    pub(crate) module_reads: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -529,6 +533,7 @@ fn parse_program_file(
         parser_errors: parsed.parser_errors,
         is_module: parsed.is_module,
         file_kind: classify_file_kind(&file_name),
+        module_reads: parsed.module_reads,
     }
 }
 
@@ -922,6 +927,14 @@ fn check_program_file(
             ctx,
         );
         ctx.module_value_fallback = None;
+
+        if ctx.options.no_unused_locals && ctx.current_file_kind == FileKind::RootSource {
+            unused_locals::emit_unused_module_bindings(
+                &parsed_file.statements,
+                &parsed_file.module_reads,
+                ctx,
+            );
+        }
         record_program_timing(timings, |timings| {
             timings.per_file_statement_checking += statement_check_start.elapsed()
         });

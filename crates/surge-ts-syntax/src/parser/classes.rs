@@ -1,4 +1,7 @@
-use oxc_ast::ast::{Class, ClassElement, Expression, MethodDefinitionKind, PropertyKey};
+use oxc_ast::ast::{
+    Class, ClassElement, Expression, MethodDefinitionKind, MethodDefinitionType,
+    PropertyDefinitionType, PropertyKey,
+};
 
 use crate::{
     ParsedClassAccessor, ParsedClassConstructor, ParsedClassDeclaration, ParsedClassMember,
@@ -116,12 +119,19 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 .as_ref()
                 .map(|body| parse_statement_list_as_function_body(&body.statements))
                 .unwrap_or_default();
+            let body_reads = method
+                .value
+                .body
+                .as_ref()
+                .map(|body| super::reads::collect_function_body_reads(body))
+                .unwrap_or_default();
 
             match method.kind {
                 MethodDefinitionKind::Constructor => {
                     Some(ParsedClassMember::Constructor(ParsedClassConstructor {
                         parameters,
                         body,
+                        body_reads,
                         span: Some(text_span_from_oxc_span(method.span)),
                     }))
                 }
@@ -139,12 +149,19 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         name: key.name.to_string(),
                         name_span: Some(text_span_from_oxc_span(key.span)),
                         is_static: method.r#static,
+                        is_override: method.r#override,
+                        is_abstract: matches!(
+                            method.r#type,
+                            MethodDefinitionType::TSAbstractMethodDefinition
+                        ),
                         type_parameters: parse_type_parameters(
                             method.value.type_parameters.as_deref(),
                         ),
                         parameters,
                         return_type,
                         body,
+                        has_body: method.value.body.is_some(),
+                        body_reads,
                     }))
                 }
                 MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
@@ -178,6 +195,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         name: key.name.to_string(),
                         name_span: Some(text_span_from_oxc_span(key.span)),
                         is_static: method.r#static,
+                        is_override: method.r#override,
+                        is_abstract: matches!(
+                            method.r#type,
+                            MethodDefinitionType::TSAbstractMethodDefinition
+                        ),
                         getter_return_type,
                         setter_param_type,
                         has_getter: is_getter,
@@ -211,6 +233,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 name: key.name.to_string(),
                 name_span: Some(text_span_from_oxc_span(key.span)),
                 is_static: property.r#static,
+                is_override: property.r#override,
+                is_abstract: matches!(
+                    property.r#type,
+                    PropertyDefinitionType::TSAbstractPropertyDefinition
+                ),
                 optional: property.optional,
                 readonly: property.readonly,
                 declared_type,

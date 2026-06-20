@@ -36,6 +36,35 @@ pub(crate) fn normalize_compiler_options(
                     normalized.no_implicit_any = no_implicit_any;
                 }
             }
+            "noImplicitReturns" => {
+                normalized.no_implicit_returns =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_implicit_returns);
+            }
+            "noFallthroughCasesInSwitch" => {
+                normalized.no_fallthrough_cases_in_switch =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_fallthrough_cases_in_switch);
+            }
+            "noImplicitOverride" => {
+                normalized.no_implicit_override =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_implicit_override);
+            }
+            "noPropertyAccessFromIndexSignature" => {
+                normalized.no_property_access_from_index_signature =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_property_access_from_index_signature);
+            }
+            "noUnusedLocals" => {
+                normalized.no_unused_locals = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.no_unused_locals);
+            }
+            "noUnusedParameters" => {
+                normalized.no_unused_parameters =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_unused_parameters);
+            }
             "target" => {
                 normalized.target = parse_target_option(value, config_dir, diagnostics);
             }
@@ -213,6 +242,7 @@ fn parse_module_option(
         "esnext" => ModuleKind::ESNext,
         "node16" => ModuleKind::Node16,
         "node18" => ModuleKind::Node18,
+        "node20" => ModuleKind::Node20,
         "nodenext" => ModuleKind::NodeNext,
         "preserve" => ModuleKind::Preserve,
         "amd" | "umd" | "system" | "systemjs" | "none" => {
@@ -250,6 +280,7 @@ fn parse_module_resolution_option(
 
     match raw.to_ascii_lowercase().as_str() {
         "node16" => ModuleResolutionKind::Node16,
+        "node20" => ModuleResolutionKind::Node20,
         "nodenext" => ModuleResolutionKind::NodeNext,
         "bundler" => ModuleResolutionKind::Bundler,
         "classic" | "node" | "node10" => {

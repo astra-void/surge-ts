@@ -110,6 +110,21 @@ pub(crate) fn emit_missing_return_diagnostic(
     }
 }
 
+/// TS7030 under `noImplicitReturns`: an un-annotated function where some path
+/// returns a value but the end point is still reachable. The annotated analogue
+/// is [`emit_missing_return_diagnostic`]'s TS2366 branch.
+pub(crate) fn emit_implicit_return_diagnostic(
+    missing_return_span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let diagnostic = Diagnostic::ts7030(ctx.file_name.clone());
+    let diagnostic = match missing_return_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    };
+    ctx.push(diagnostic);
+}
+
 pub(crate) fn check_function_body(
     body: Vec<ParsedFunctionBodyStatement>,
     return_type: Option<&Type>,
@@ -157,6 +172,11 @@ pub(crate) fn check_function_body_statement(
 ) {
     record_flow_statement_count();
     match statement {
+        // A nested function declaration is inert for the enclosing body's
+        // checking (its body is not separately type-checked, matching the prior
+        // drop-at-parse behavior); it is retained only so use-tracking can see
+        // identifier reads inside it.
+        ParsedFunctionBodyStatement::Function(_) => {}
         ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
             check_function_variable_declaration(*variable, statement_index, scopes, flow_state, ctx);
@@ -597,6 +617,30 @@ pub(crate) fn for_of_element_type(iterable_type: &Type) -> Type {
     }
 }
 
+/// TS7029 under `noFallthroughCasesInSwitch`: a non-empty clause whose end is
+/// reachable falls through into the next clause. The last clause cannot fall
+/// through, and empty clauses (stacked `case` labels) are allowed to.
+fn emit_switch_fallthrough_diagnostics(
+    switch_statement: &ParsedSwitchStatement,
+    ctx: &mut CheckerContext,
+) {
+    let case_count = switch_statement.cases.len();
+    for (index, case) in switch_statement.cases.iter().enumerate() {
+        let is_last = index + 1 == case_count;
+        if is_last || case.consequent.is_empty() {
+            continue;
+        }
+        if !analyze_function_body_flow(&case.consequent).guarantees_exit {
+            let diagnostic = Diagnostic::ts7029(ctx.file_name.clone());
+            let diagnostic = match case.span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            };
+            ctx.push(diagnostic);
+        }
+    }
+}
+
 pub(crate) fn check_function_switch_statement(
     switch_statement: ParsedSwitchStatement,
     statement_index: usize,
@@ -605,6 +649,10 @@ pub(crate) fn check_function_switch_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
+    if ctx.options.no_fallthrough_cases_in_switch {
+        emit_switch_fallthrough_diagnostics(&switch_statement, ctx);
+    }
+
     let flow_active = flow_state.tracked_local_count() > 0;
     let condition_blocked = if flow_active {
         check_expression_flow(

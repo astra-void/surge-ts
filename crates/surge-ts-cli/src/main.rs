@@ -388,6 +388,12 @@ fn run_single_file_mode(
         &file_name,
         CheckerOptions {
             no_implicit_any,
+            no_implicit_returns: false,
+            no_fallthrough_cases_in_switch: false,
+            no_implicit_override: false,
+            no_property_access_from_index_signature: false,
+            no_unused_locals: false,
+            no_unused_parameters: false,
             no_lib,
             skip_lib_check: false,
             stub_external_modules,
@@ -787,6 +793,12 @@ fn run_project_mode(
 
     let checker_options = CheckerOptions {
         no_implicit_any: loaded.compiler_options.no_implicit_any,
+        no_implicit_returns: loaded.compiler_options.no_implicit_returns,
+        no_fallthrough_cases_in_switch: loaded.compiler_options.no_fallthrough_cases_in_switch,
+        no_implicit_override: loaded.compiler_options.no_implicit_override,
+        no_property_access_from_index_signature: loaded.compiler_options.no_property_access_from_index_signature,
+        no_unused_locals: loaded.compiler_options.no_unused_locals,
+        no_unused_parameters: loaded.compiler_options.no_unused_parameters,
         no_lib: loaded.compiler_options.no_lib,
         skip_lib_check: loaded.compiler_options.skip_lib_check,
         stub_external_modules,
@@ -1540,6 +1552,7 @@ fn module_kind_to_string(module: surge_ts_config::ModuleKind) -> &'static str {
         surge_ts_config::ModuleKind::ESNext => "esnext",
         surge_ts_config::ModuleKind::Node16 => "node16",
         surge_ts_config::ModuleKind::Node18 => "node18",
+        surge_ts_config::ModuleKind::Node20 => "node20",
         surge_ts_config::ModuleKind::NodeNext => "nodenext",
         surge_ts_config::ModuleKind::Preserve => "preserve",
     }
@@ -1550,6 +1563,7 @@ fn module_resolution_kind_to_string(
 ) -> &'static str {
     match module_resolution {
         surge_ts_config::ModuleResolutionKind::Node16 => "node16",
+        surge_ts_config::ModuleResolutionKind::Node20 => "node20",
         surge_ts_config::ModuleResolutionKind::NodeNext => "nodenext",
         surge_ts_config::ModuleResolutionKind::Bundler => "bundler",
     }

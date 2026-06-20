@@ -105,6 +105,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 parser_errors: parsed.parser_errors,
                 is_module: parsed.is_module,
                 file_kind: FileKind::GeneratedDeclaration,
+                module_reads: parsed.module_reads,
             }
         })
         .collect();

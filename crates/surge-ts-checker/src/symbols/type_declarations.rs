@@ -464,6 +464,7 @@ fn fold_interface_declaration(
 /// resolution own a stable `&TypeDeclarationInfo` while the `CheckerContext` the
 /// lookup came from is borrowed mutably, without deep-cloning the (often large)
 /// interface/alias payload.
+#[derive(Clone)]
 pub(crate) struct TypeDeclarationHandle {
     _arena: CheckerArena,
     ptr: *const TypeDeclarationInfo,

@@ -153,6 +153,7 @@ pub(crate) fn infer_expression(
             object_span,
             property_name,
             property_span,
+            ..
         } => infer_property_access(
             object,
             object_span,
@@ -178,6 +179,7 @@ pub(crate) fn infer_expression(
             object_span,
             property_name,
             property_span,
+            ..
         } => infer_optional_property_access(
             object,
             object_span,
@@ -343,6 +345,15 @@ pub(crate) fn infer_expression(
         } => infer_optional_index_access(object, object_span, index, index_span, symbols, ctx),
         ParsedExpression::JsxElement { .. } | ParsedExpression::JsxFragment { .. } => {
             InferredExpression::Known(jsx_element_type())
+        }
+        ParsedExpression::TemplateLiteral { expressions, .. } => {
+            // Walk the interpolations so their identifier reads are observed (e.g.
+            // for TS6133 use-tracking). The template's own type is left unmodeled,
+            // matching the prior behavior where templates were opaque.
+            for expression in expressions {
+                let _ = infer_expression(expression, symbols, ctx);
+            }
+            InferredExpression::Unknown
         }
         ParsedExpression::Unknown => InferredExpression::Unknown,
     };

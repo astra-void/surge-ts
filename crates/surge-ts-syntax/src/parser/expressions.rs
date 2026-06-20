@@ -145,6 +145,26 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ThisExpression(this_expression) => ParsedExpression::This {
             span: Some(text_span_from_oxc_span(this_expression.span)),
         },
+        Expression::TemplateLiteral(template) => ParsedExpression::TemplateLiteral {
+            expressions: template
+                .expressions
+                .iter()
+                .map(|expression| parse_expression(expression).0)
+                .collect(),
+            span: Some(text_span_from_oxc_span(template.span)),
+        },
+        Expression::TaggedTemplateExpression(tagged) => ParsedExpression::TemplateLiteral {
+            expressions: std::iter::once(parse_expression(&tagged.tag).0)
+                .chain(
+                    tagged
+                        .quasi
+                        .expressions
+                        .iter()
+                        .map(|expression| parse_expression(expression).0),
+                )
+                .collect(),
+            span: Some(text_span_from_oxc_span(tagged.span)),
+        },
         _ => ParsedExpression::Unknown,
     };
 
@@ -805,6 +825,7 @@ fn parse_arrow_function_expression(
         return_type,
         is_async: arrow_expression.r#async,
         body,
+        body_reads: super::reads::collect_function_body_reads(&arrow_expression.body),
         span: Some(text_span_from_oxc_span(arrow_expression.span)),
     })
 }
@@ -1006,6 +1027,11 @@ fn parse_object_method_shorthand(
         return_type,
         is_async: function.r#async,
         body: ParsedArrowFunctionBody::Block(body),
+        body_reads: function
+            .body
+            .as_ref()
+            .map(|body| super::reads::collect_function_body_reads(body))
+            .unwrap_or_default(),
         span: Some(text_span_from_oxc_span(function.span)),
     };
 
@@ -1061,6 +1087,7 @@ pub(crate) fn parse_static_member_expression(
             object_span: Some(text_span_from_oxc_span(object_span)),
             property_name: member_expression.property.name.to_string(),
             property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+            is_bracketed: false,
         });
     }
 
@@ -1070,6 +1097,7 @@ pub(crate) fn parse_static_member_expression(
         object_span: Some(text_span_from_oxc_span(object_span)),
         property_name: member_expression.property.name.to_string(),
         property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
+        is_bracketed: false,
     })
 }
 
@@ -1146,6 +1174,7 @@ fn parse_computed_member_expression(
                     object_span: Some(text_span_from_oxc_span(object_span)),
                     property_name,
                     property_span,
+                    is_bracketed: true,
                 });
             }
 
@@ -1154,6 +1183,7 @@ fn parse_computed_member_expression(
                 object_span: Some(text_span_from_oxc_span(object_span)),
                 property_name,
                 property_span,
+                is_bracketed: true,
             });
         }
     }

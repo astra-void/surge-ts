@@ -18,6 +18,7 @@ mod function_types;
 mod functions;
 mod imports;
 mod interfaces;
+mod reads;
 mod reference_directives;
 mod spans;
 mod types;
@@ -307,6 +308,7 @@ fn parse_object_binding_property_declarations(
         object_span: source_initializer_span,
         property_name: identifier.name.to_string(),
         property_span: Some(text_span_from_oxc_span(identifier.span)),
+        is_bracketed: false,
     };
 
     parse_binding_pattern_declarations(
