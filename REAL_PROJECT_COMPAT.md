@@ -433,6 +433,69 @@ zero, while `string_path_lookup_count=30503` and
 lookup is the next measurable bottleneck. Exact diagnostics stayed at 0, raw
 oracle match stayed yes, and compatReport diagnosticsTotal stayed 0.
 
+## ky (Fetch-API real-project parity)
+
+`ky` is [sindresorhus/ky](https://github.com/sindresorhus/ky) 2.0.2: ~29 small
+Fetch-API / DOM-typed source files, `tsconfig` extending `@sindresorhus/tsconfig`
+(lib `DOM`+`DOM.Iterable`+`ES2023`, `exactOptionalPropertyTypes`, target
+`esnext`). **`tsc` reports 0 diagnostics on it**, so it is a strict
+false-positive corpus: every surge-ts diagnostic is a known-wrong over-report.
+Unlike `unnamed` (a measured baseline), ky is now used as a **parity claim and a
+regression gate**.
+
+- Command: `pnpm run real:ky`
+  (`measure-project.ts --project .local-projects/ky --name ky --allowMissing`),
+  plus `pnpm run oracle:compare -- --project .local-projects/ky/tsconfig.json
+  --failOnMismatch`.
+- Local project present: gated. `.local-projects/` is gitignored — ky is **not
+  vendored**. The source is never copied into this repo; `--allowMissing` keeps
+  the script honest when absent.
+- Artifacts: `.bench/real-projects/ky/` (`measurement.md`, `compat-report.json`).
+
+### Current measurement (2026-06-20): 0/0
+
+- TypeScript total diagnostics: **0**. surge-ts total diagnostics: **0**.
+- code-count match: **yes**; file/code match: **yes**; only-TypeScript: 0;
+  only-surge-ts: 0. surge-ts matches tsc exactly.
+- Regression gate: `pnpm run real:ky:test` (also run by `pnpm run real:test`)
+  runs the surge↔tsc comparison and fails on any drift from 0/0. It **skips**
+  when ky or the `typescript` package is absent (mirroring the physical-lib rust
+  tests). The specific patterns that were fixed are additionally pinned as
+  cargo fixtures: `tests/compat-projects/physical-lib-new-promise-executor-basic`
+  and `tests/compat-projects/physical-lib-required-omit-pick-basic`, plus the
+  `cli_*` regressions in `crates/surge-ts-cli/tests/project_mode.rs`.
+
+### Suppression / stub transparency (not yet audited)
+
+Source-level parity is 0/0, but the compatReport shows three non-zero suppression
+counters on ky that gate the parity claim and need a transparent audit (tracked
+in `crates/surge-ts-checker/SUPPRESSED_DIAGNOSTICS_AUDIT.md`):
+
+- `suppressedRustOnlyDiagnosticsTotal = 15` — `surge::*` diagnostics
+  (parser/internal limits, never TS codes) suppressed before user output.
+- `suppressedDeclarationDiagnosticsTotal = 23` — diagnostics inside declaration
+  (`.d.ts`) files suppressed (trusted upstream lib/dependency declarations).
+- `externalModuleStubs.total = 1` — one imported module resolved to a stub
+  rather than a real declaration.
+
+These do not affect the source-file comparison, but a product-grade "matches
+tsc on ky" claim must confirm none of them hides a real source-level miss.
+
+### History (false-positive burn-down)
+
+ky was adopted mid-2026 as a false-positive corpus. The over-report count fell
+across a sequence of targeted checker fixes (each verified oracle-clean):
+**~42 (post-runaway) → 39 → 36 → 22 → 16 → 13 → 6 → 3 → 2 → 0**. The
+`36`-remaining and intermediate states are kept here as historical records of
+that burn-down; they were real measured over-report counts at the time, not the
+current parity. The final clusters cleared on 2026-06-20 were: a `typeof
+<importedValue>` module-value fallback, an `any`-typed callee being callable,
+OR-of-guards + `ArrayBuffer.isView` narrowing, contextual `new Promise<void>`
+generic-constructor inference (+ function→`Function` assignability), and the
+`Required`/`Readonly` utility resolution (+ generic-context TS2538 suppression
+and `&&`-chain truthy-property narrowing). The detailed root-cause taxonomy
+lives in the working notes, not this doc.
+
 ## v0.84 Real-Project Audit
 
 The old `trpc` baseline is retired as the active real-project target.
