@@ -161,12 +161,15 @@ none of them.
      retained (inert) for the same reason. Overload signatures (`has_body =
      false`) and `_`-prefixed/`this`/pattern parameters are exempt. FP-free
      against ky 0/0, zod, and trpc.
-   - **`noUnusedLocals` (TS6133) — remaining.** The read infrastructure
-     (`body_reads`) now exists and is reusable; the remaining work is collecting
-     local declarations and exempting exported bindings, plus module-level locals
-     and unused imports (which need a module-wide read set + export/import
-     tracking). Until then, unused *locals* tsc reports are under-counted (FN,
-     never FP).
+   - **`noUnusedLocals` (TS6133)** — DONE. Module-level unused imports and
+     value declarations (`const`/`let`/`var`, functions) are flagged via a
+     module-wide read set (`ParsedSource::module_reads`, from the full oxc AST,
+     skipped for `.d.ts`); function-local `const`/`let`/`var` are flagged via the
+     per-function `body_reads`. Matches tsc: only modules are checked, top-level
+     *classes* are exempt, exported/`declare` bindings are exempt, and type- and
+     export-specifier references count as uses (so type-only imports are safe).
+     FP-free against ky 0/0, zod, and trpc. Minor remaining FN: constructor-local
+     bindings and a few edge constructs.
    - **Other flags:** `erasableSyntaxOnly` / `noUncheckedSideEffectImports` are
      low-value; `useDefineForClassFields` is emit-semantics. `strictNullChecks` /
      `exactOptionalPropertyTypes` are out of scope (surge is hard-wired
