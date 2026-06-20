@@ -264,21 +264,30 @@ none of them.
         `unknown` no-cascade) — verified to clear ky `merge.ts`. Held back only
         because it is inert without the iterator chain and shifts trpc churn.
      2. `Ky.ts` `(options.hooks?.init ?? []).length` → TS2339 `.length` on
-        `unknown`. **Root cause (narrowed):** `options.hooks` itself resolves to
-        `unknown`. It is **not** the lazy-peel depth bound — raising
-        `MAX_LAZY_PEEL_DEPTH`/`MAX_SAME_DECLARATION_PEELS` does not clear it — and it
-        does **not** reproduce on a minimal recursive `Opts/Hooks/Init` triple; it is
-        specific to ky's large `Options` cluster. The remaining suspect is the
-        named-type cache's *cross-frame cycle* path
-        (`get_cached_named_type_resolution`: a declaration seen `Resolving` but
-        absent from the local `resolving` stack returns `unknown`/`had_error`), which
-        `intrinsic`'s altered resolution order trips for `Options.hooks`. Fixing it
-        would mean returning a deferred reference there (as #1 does for the in-frame
-        edge) rather than `unknown` — broader and riskier than #1.
-     So closing this needs real **iterator-type modelling** (so resolving the alias
-     does not perturb the recursive cluster's resolution order) *plus* the gap-1
-     indexed-access suppression *plus* a cross-frame-cycle deferred reference — a
-     coordinated feature, each part inert or untestable until the others land. The
+        `unknown`. **Traced through three layers** (debugged with `intrinsic`
+        applied):
+        - `??` (`checks/expr.rs`, `infer/expression/mod.rs`): `unknown ?? right`
+          returns `unknown` (matching tsc's `{}`-narrowing only loosely), so a
+          `unknown` left propagates to `.length`.
+        - the `unknown` left is `options.hooks?.init`:
+          `infer_optional_property_access` returns `Unknown` whenever
+          `infer_expression(object)` is `Unknown`.
+        - that object, `options.hooks`, itself infers to `unknown`.
+        **Root cause is NOT what earlier suspects predicted:** it is *not* the
+        lazy-peel depth bound (raising `MAX_LAZY_PEEL_DEPTH`/
+        `MAX_SAME_DECLARATION_PEELS` does not clear it), *not* minimally reproducible
+        (a small `Opts/Hooks/Init` triple stays clean), and the cross-frame-cycle
+        deferred-reference change (returning a lazy ref from
+        `get_cached_named_type_resolution` instead of `unknown`) **did not clear it
+        either**. Probes contradict — `options.hooks` reads as `any` through `a!.x`
+        but `unknown` through `?.`/`??` — i.e. ky's large `Options`/`Hooks` cluster
+        resolves *non-deterministically* (order- and cache-dependent) once
+        `intrinsic` deepens the type graph. It is a recursive-resolution **stability**
+        bug, not a single mis-handled site.
+     So closing this needs real **iterator-type modelling** that keeps the recursive
+     cluster's resolution deterministic and complete — not a point fix. The gap-1
+     indexed-access suppression and the `unknown ?? right` handling are real but
+     secondary; the dominant blocker is the unstable `options.hooks` resolution. The
      dropped-alias / suppressed-TS2304 status quo is the pragmatic optimum.
      **Reverted; tracked as a dedicated follow-up with
      both root causes pinned above.**
