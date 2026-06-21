@@ -43,6 +43,53 @@ fn function_type(
     ))
 }
 
+/// A reference resolver that yields a fixed pre-built structural type.
+#[derive(Debug)]
+struct FixedResolved(Type);
+
+impl crate::ResolveReference for FixedResolved {
+    fn resolve(&self) -> Type {
+        self.0.clone()
+    }
+}
+
+/// Builds an `ArrayIterator<T>` reference for the result of `Array.prototype`'s
+/// `values()`/`keys()`/`entries()`. It carries the yielded element as its single
+/// type argument (so `for…of` derives the element via the iterator-reference
+/// path) and resolves structurally to a minimal iterator object exposing
+/// `next(): { value, done }`, so direct iterator-protocol use does not report a
+/// missing member. `Array`-valued modelling was rejected: it would falsely reject
+/// `arr.values().next()`.
+fn array_iterator_type(yields: Type) -> Type {
+    use crate::{ObjectProperty, PropertyMap};
+    let display = format!("ArrayIterator<{}>", yields.name());
+
+    let mut result_props = PropertyMap::new();
+    // The protocol's terminal result carries `value: undefined`, so the merged
+    // `next()` result type is `T | undefined` — matching tsc and keeping the
+    // possibly-absent value sound.
+    result_props.insert(
+        "value".to_string(),
+        ObjectProperty::required(crate::union_type(vec![yields.clone(), Type::Undefined])),
+    );
+    result_props.insert("done".to_string(), ObjectProperty::required(Type::Boolean));
+    let result = Type::Object(ObjectType::new(result_props, None));
+
+    let mut props = PropertyMap::new();
+    props.insert(
+        "next".to_string(),
+        ObjectProperty::required(function_type(vec![], result, false, 0)),
+    );
+    let body = Type::Object(ObjectType::new(props, None));
+
+    Type::Reference(TypeReference::new(
+        "\u{0}ArrayIterator",
+        display,
+        vec![yields],
+        std::sync::Arc::new(FixedResolved(body)),
+    ))
+}
+
 impl Type {
     pub fn base_primitive(&self) -> Option<Type> {
         match self {
@@ -482,6 +529,27 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             Some(function_type(vec![element.clone()], Type::Number, true, 1))
         }
         "includes" => Some(function_type(vec![element.clone()], Type::Boolean, true, 1)),
+        // Iterator-producing methods. The result carries the yielded element so
+        // `for…of arr.values()` / `.entries()` / `.keys()` derive the loop
+        // variable type instead of degrading to `unknown`.
+        "values" => Some(function_type(
+            vec![],
+            array_iterator_type(element.clone()),
+            false,
+            0,
+        )),
+        "keys" => Some(function_type(
+            vec![],
+            array_iterator_type(Type::Number),
+            false,
+            0,
+        )),
+        "entries" => Some(function_type(
+            vec![],
+            array_iterator_type(Type::Tuple(vec![Type::Number, element.clone()])),
+            false,
+            0,
+        )),
         _ => None,
     }
 }
@@ -734,5 +802,57 @@ mod tests {
             .name(),
             "[[string, number], boolean]"
         );
+    }
+
+    fn iterator_element(method_result: &Type) -> Type {
+        let Type::Function(function) = method_result else {
+            panic!("expected a function-typed array method, got {method_result:?}");
+        };
+        let Type::Reference(reference) = function.return_type() else {
+            panic!("expected an iterator reference return type");
+        };
+        assert_eq!(reference.id.as_ref(), "\u{0}ArrayIterator");
+        reference.arguments[0].clone()
+    }
+
+    #[test]
+    fn array_values_iterator_yields_element() {
+        let result = array_property_access_type("values", &Type::Number).unwrap();
+        assert_eq!(iterator_element(&result), Type::Number);
+    }
+
+    #[test]
+    fn array_keys_iterator_yields_number() {
+        let result = array_property_access_type("keys", &Type::String).unwrap();
+        assert_eq!(iterator_element(&result), Type::Number);
+    }
+
+    #[test]
+    fn array_entries_iterator_yields_index_value_tuple() {
+        let result = array_property_access_type("entries", &Type::String).unwrap();
+        assert_eq!(
+            iterator_element(&result),
+            Type::Tuple(vec![Type::Number, Type::String])
+        );
+    }
+
+    #[test]
+    fn array_iterator_next_value_is_element_or_undefined() {
+        let result = array_property_access_type("values", &Type::Number).unwrap();
+        let Type::Function(function) = &result else {
+            panic!("expected function");
+        };
+        let next = function
+            .return_type()
+            .get_property_access_type("next")
+            .expect("iterator exposes next()");
+        let Type::Function(next_fn) = next else {
+            panic!("next is callable");
+        };
+        let value = next_fn
+            .return_type()
+            .get_property_access_type("value")
+            .expect("iterator result has value");
+        assert_eq!(value, crate::union_type(vec![Type::Number, Type::Undefined]));
     }
 }
