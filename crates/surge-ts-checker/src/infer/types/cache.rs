@@ -258,6 +258,18 @@ impl ResolveReference for LazyInstantiation {
             }
         });
 
+        // A degraded peel (a member that hit an incomplete scope or a bounded
+        // re-entry and collapsed to `unknown`) must not be interned: the program
+        // instantiation cache is first-wins and program-wide, so a degraded shape
+        // computed under a transient incomplete scope (e.g. the binding/signature
+        // pass, before `module_scope_by_file` is populated) would permanently
+        // shadow the correct expansion every later peel produces. Return the
+        // degraded shape transiently instead, leaving the cache for a clean peel to
+        // populate, and do not memoize it on this reference.
+        if resolved.had_error {
+            return resolved.ty;
+        }
+
         let interned =
             intern_instantiation(&self.snapshot, &self.decl_key, &self.resolved_arguments, resolved.ty);
         let _ = self.memo.set(interned.clone());
