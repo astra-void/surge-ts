@@ -1,10 +1,62 @@
 # Iterator-Type Modelling & Recursive-Resolution Stability (design)
 
-**Status: DESIGN / track open.** Dedicated follow-up for the last open
-suppressed-diagnostics item (#8): the suppressed `TS2304 'BuiltinIteratorReturn'`
-lib note and, behind it, surge's iterator/`Set`/`Map` typing. This document
-captures the debugged root cause and a phased plan; no code in this track is
-landed yet (every partial attempt is reverted — see "Attempts" below).
+**Status: RESOLVED (#8 closed).** `intrinsic` now lowers to `unknown`, so
+`type BuiltinIteratorReturn = intrinsic` (and the other `intrinsic`-bodied lib
+aliases) resolve instead of dropping to `TS2304`, and ky stays 0/0. The blocker
+this document spent a session chasing — gap 2, the `initHooks.length` over-report
+— was **misdiagnosed as SCC fixed-point instability**. See "Actual root cause &
+fix" below; the older analysis is kept for the record but its conclusion (a
+ground-up SCC-resolver redesign) was wrong and was not needed.
+
+## Actual root cause & fix (what closed #8)
+
+The whole-SCC-fixed-point theory was a red herring. With `intrinsic ⇒ unknown`
+applied, instrumenting every `resolve_named_type` for the ky `Options`/`Hooks`/
+`NormalizedOptions` cluster showed the real seed: a **type-declaration handle
+lookup failure**, not `had_error` propagation through a cycle.
+
+1. **Incomplete active scope on named-type lookup.** `Hooks`/`Options`/
+   `NormalizedOptions` are module-scoped (not in the program-wide table). When a
+   declaration body was re-resolved with only its pre-attached
+   `resolution_scope` (a *local-only* layer, no imports) or with no scope at all
+   (a lazy reference re-expanded outside its originating frame), the imported
+   member type was not found and degraded to `unknown + had_error`. The active
+   scope happened to be incomplete; the authoritative per-file scope (local +
+   resolved imports) lived in `module_scope_by_file` but was never consulted on a
+   miss. **Fix:** `lookup_type_declaration_handle_exact` now falls back to
+   `module_scope_by_file[ctx.file_name]` when the active scope misses. (Lookups
+   only ever turn a miss into a hit, so this cannot mis-resolve an existing
+   success.) This was the dominant fix and also drops TS2304 broadly on zod/trpc.
+
+2. **Degraded lazy peels poisoning the program-wide interner.**
+   `LazyInstantiation::resolve` interned *every* peel result — including a
+   degraded (`had_error`) one produced under a transient incomplete scope (the
+   binding/signature pass runs before `module_scope_by_file` is populated). The
+   interner is first-wins and program-wide, so a degraded `Options`/`Hooks`
+   computed once during binding permanently shadowed every later clean peel —
+   exactly the order-dependent cache poisoning this doc attributed to the SCC.
+   **Fix:** `LazyInstantiation::resolve` no longer interns or memoizes a
+   `had_error` peel; it returns the degraded shape transiently, leaving the
+   interner for a clean peel to populate.
+
+3. **Gap 1 (`Required<Hooks>[K]`, TS2536).** Once (1)+(2) made `Required<Hooks>`
+   resolve *cleanly* (previously it bailed early as `had_error`), the constrained
+   indexed access surfaced a false TS2536: `map_function_signature` resolved the
+   return type without pushing the signature's type-parameter **constraint**
+   scope, so `K extends keyof Hooks` was invisible and the index could not be
+   recognised as valid. **Fix:** `map_function_signature` pushes the
+   type-parameter scope (with constraints) around parameter/return resolution.
+   This also removes TS2536s broadly (zod −31, trpc −7).
+
+**Verification:** ky 0/0 (native source diagnostics 0; `BuiltinIteratorReturn`
+TS2304 gone), oracle sweep 76/76, oracle harness 21/21, `cargo nextest`
+1367/1367. Real projects net-improve: zod 900→871, trpc 2116→2085, unnamed
+unchanged (58→58). The small TS2345/TS2322 increases on zod/trpc are surge's
+known incomplete assignability surfacing on types that now resolve instead of
+degrading to `unknown` — a consequence of more-correct resolution, not a new
+mis-resolution.
+
+The original (now-superseded) analysis follows.
 
 ## Goal
 
