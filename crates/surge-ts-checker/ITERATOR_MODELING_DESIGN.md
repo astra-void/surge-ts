@@ -8,6 +8,32 @@ this document spent a session chasing — gap 2, the `initHooks.length` over-rep
 fix" below; the older analysis is kept for the record but its conclusion (a
 ground-up SCC-resolver redesign) was wrong and was not needed.
 
+## Iterator member typing (former Phase 5) — landed
+
+With the alias resolving, the follow-on value work is done for the common
+`for…of` cases (no full `Symbol.iterator` protocol inference needed):
+
+- `for_of_element_type` (`checks/function/body.rs`) now unwraps a nominal
+  collection/iterator `Type::Reference` from its resolved type arguments:
+  `Set<T>`/`ReadonlySet`/`WeakSet` → `T`, `Map<K, V>`/`ReadonlyMap`/`WeakMap` →
+  the `[K, V]` entry tuple, and the iterator wrappers (`IterableIterator`,
+  `ArrayIterator`, `MapIterator`, `SetIterator`, `IteratorObject`, `Generator`,
+  …) → their element argument. No graph expansion: the element comes straight
+  from `reference.arguments`.
+- `Array.prototype` gained `values()`/`keys()`/`entries()`
+  (`surge-ts-types::ty`), each returning an `ArrayIterator<…>` reference (element,
+  `number`, and `[number, element]` respectively) whose resolver exposes
+  `next(): { value: T | undefined; done: boolean }`, so both `for…of` and direct
+  iterator-protocol use type correctly. (`Array`-valued modelling was rejected —
+  it would falsely reject `arr.values().next()`.)
+- Verified by `physical-lib-iterator-for-of-basic` (oracle preset, exact parity)
+  and `surge-ts-types` unit tests. Real projects: trpc −10 (11 `.entries/.values/
+  .keys` TS2339 FPs removed), zod/unnamed unchanged.
+- **Known limitation (pre-existing, not iterator-specific):** a `for…of` at
+  module top level is not body-checked the way a function-body `for…of` is — it
+  under-reports for arrays too — so the element typing above only takes effect
+  inside function/method bodies.
+
 ## Actual root cause & fix (what closed #8)
 
 The whole-SCC-fixed-point theory was a red herring. With `intrinsic ⇒ unknown`
