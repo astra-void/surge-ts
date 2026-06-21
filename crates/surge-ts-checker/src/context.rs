@@ -494,6 +494,25 @@ impl CheckerContext {
             }
         }
 
+        // The active `type_declaration_scope` can be incomplete — a declaration's
+        // pre-attached `resolution_scope` may carry only its local layer (no
+        // imports), and a lazy reference re-expanded outside its originating frame
+        // may carry no scope at all. The authoritative per-file scope (local
+        // declarations + resolved imports) lives in `module_scope_by_file`, keyed
+        // by the file currently being resolved (`with_file_name` tracks it through
+        // declaration bodies). Consulting it on a miss makes a type referenced from
+        // file X resolvable whenever X can legitimately see it, independent of which
+        // partial scope happened to be installed. This is what stabilizes mutually
+        // imported clusters (ky's `Options`/`Hooks`/`NormalizedOptions` across the
+        // circular `options.ts`/`hooks.ts` imports), whose resolution order would
+        // otherwise leave a member degraded to `unknown`.
+        if let Some(scope) = self.module_scope_by_file.get(self.file_name.as_str()) {
+            if let Some(handle) = scope.get_handle(name) {
+                crate::program::record_type_declaration_lookup(2);
+                return Some(handle);
+            }
+        }
+
         crate::program::record_type_declaration_lookup(3);
         self.ambient_global_type_declarations.get_handle(name)
     }

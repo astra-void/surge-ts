@@ -290,6 +290,17 @@ pub(crate) fn map_function_signature(
 ) -> FunctionType {
     report_duplicate_type_parameters(type_parameters, ctx);
 
+    // Register the signature's type parameters (with their constraints) for the
+    // duration of parameter/return-type resolution. The placeholder substitution
+    // alone marks `K` as generic, but the *constraint* (`K extends keyof Hooks`)
+    // lives only in this scope; without it a constrained indexed access in the
+    // return type (`Required<Hooks>[K]`) cannot be recognised as a valid generic
+    // index and degrades to a false `TS2536`.
+    let pushed_type_parameter_scope = !type_parameters.is_empty();
+    if pushed_type_parameter_scope {
+        ctx.push_type_parameter_scope(type_parameters, None);
+    }
+
     let type_parameter_substitution = build_type_parameter_substitution(type_parameters);
     let mut parameter_types = Vec::with_capacity(parameters.len());
     let mut parameter_symbols = None;
@@ -375,6 +386,10 @@ pub(crate) fn map_function_signature(
             })
         })
         .unwrap_or(Type::Unknown);
+
+    if pushed_type_parameter_scope {
+        ctx.pop_type_parameter_scope();
+    }
 
     alloc_function_type(
         parameter_types,
