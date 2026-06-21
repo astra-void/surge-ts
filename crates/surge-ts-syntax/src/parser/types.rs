@@ -41,6 +41,11 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSVoidKeyword(_) => Some(ParsedType::Void),
         TSType::TSAnyKeyword(_) => Some(ParsedType::Any),
         TSType::TSUnknownKeyword(_) => Some(ParsedType::Unknown),
+        // `intrinsic`-bodied lib aliases (`Uppercase`, `BuiltinIteratorReturn`,
+        // `NoInfer`, …) are compiler built-ins with no user-modellable body.
+        // Lower to `Unknown` so the alias resolves instead of dropping to TS2304;
+        // the alias's nominal/generic surface is preserved by its declaration.
+        TSType::TSIntrinsicKeyword(_) => Some(ParsedType::Unknown),
         TSType::TSNeverKeyword(_) => Some(ParsedType::Never),
         TSType::TSLiteralType(literal_type) => Some(parse_literal_type(literal_type)),
         TSType::TSTypeLiteral(type_literal) => Some(parse_type_literal(type_literal)),
