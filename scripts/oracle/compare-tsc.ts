@@ -286,6 +286,7 @@ export const fixturePresets: Record<string, string> = {
   'module-augmentation-unresolved-no-cascade': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-unresolved-no-cascade/tsconfig.json'),
   'interface-method-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-method-merge-basic/tsconfig.json'),
   'class-interface-merge-policy-pinned': path.join(workspaceRoot, 'tests/compat-projects/class-interface-merge-policy-pinned/tsconfig.json'),
+  'physical-lib-iterator-for-of-basic': path.join(workspaceRoot, 'tests/compat-projects/physical-lib-iterator-for-of-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
