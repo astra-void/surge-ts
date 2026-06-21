@@ -613,7 +613,51 @@ pub(crate) fn for_of_element_type(iterable_type: &Type) -> Type {
                 union_type(element_types)
             }
         }
+        // A nominal collection/iterator reference (`Set<T>`, `Map<K, V>`,
+        // `MapIterator<V>`, …) yields its element type from the resolved type
+        // arguments, without forcing the whole lib iterator graph to expand.
+        Type::Reference(reference) => {
+            if let Some(element) = iterable_reference_element_type(reference) {
+                element
+            } else {
+                // A non-collection reference may still be a structural iterable
+                // (an array alias, a tuple alias). Peel once and re-derive; the
+                // peeled shape is never another reference for these, so this does
+                // not loop.
+                match reference.resolve() {
+                    Type::Reference(_) => Type::Unknown,
+                    peeled => for_of_element_type(&peeled),
+                }
+            }
+        }
         _ => Type::Unknown,
+    }
+}
+
+/// The element type a `for…of` binds when iterating a known lib collection or
+/// iterator reference, derived from its resolved type arguments. `Map`-like
+/// references yield the `[K, V]` entry tuple; `Set`-like and the iterator
+/// wrappers yield their single element argument. Returns `None` for any other
+/// reference so the caller can fall back to structural peeling.
+fn iterable_reference_element_type(reference: &surge_ts_types::TypeReference) -> Option<Type> {
+    let name = reference.id.rsplit('\u{0}').next().unwrap_or(&reference.id);
+    let arg = |index: usize| reference.arguments.get(index).cloned();
+    match name {
+        "Map" | "ReadonlyMap" | "WeakMap" => match (arg(0), arg(1)) {
+            (Some(key), Some(value)) => Some(Type::Tuple(vec![key, value])),
+            _ => Some(Type::Unknown),
+        },
+        "Set" | "ReadonlySet" | "WeakSet" => Some(arg(0).unwrap_or(Type::Unknown)),
+        "IterableIterator"
+        | "Iterator"
+        | "IteratorObject"
+        | "ArrayIterator"
+        | "MapIterator"
+        | "SetIterator"
+        | "Generator"
+        | "AsyncGenerator"
+        | "IterableIteratorObject" => Some(arg(0).unwrap_or(Type::Unknown)),
+        _ => None,
     }
 }
 
