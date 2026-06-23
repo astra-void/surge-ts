@@ -407,15 +407,18 @@ impl CheckerContext {
     }
 
     pub(crate) fn lookup_type_declaration(&self, name: &str) -> Option<&TypeDeclarationInfo> {
-        if let Some(declaration) = self.lookup_type_declaration_exact(name) {
-            return Some(declaration);
-        }
+        // A namespace member's own siblings shadow any outer/global declaration of
+        // the same name: inside `namespace React` a bare `MouseEvent` is
+        // `React.MouseEvent` (a generic interface), not the non-generic DOM global.
+        // Resolving the qualified candidates first is what keeps generic React event
+        // types (`MouseEventHandler<T> = EventHandler<MouseEvent<T>>`) from degrading
+        // to the arity-0 global and losing their function shape.
         for candidate in self.namespace_qualified_candidates(name) {
             if let Some(declaration) = self.lookup_type_declaration_exact(&candidate) {
                 return Some(declaration);
             }
         }
-        None
+        self.lookup_type_declaration_exact(name)
     }
 
     fn lookup_type_declaration_exact(&self, name: &str) -> Option<&TypeDeclarationInfo> {
@@ -467,15 +470,14 @@ impl CheckerContext {
         &self,
         name: &str,
     ) -> Option<crate::symbols::TypeDeclarationHandle> {
-        if let Some(handle) = self.lookup_type_declaration_handle_exact(name) {
-            return Some(handle);
-        }
+        // Namespace siblings shadow outer/global declarations of the same name — see
+        // [`lookup_type_declaration`] for why this ordering matters.
         for candidate in self.namespace_qualified_candidates(name) {
             if let Some(handle) = self.lookup_type_declaration_handle_exact(&candidate) {
                 return Some(handle);
             }
         }
-        None
+        self.lookup_type_declaration_handle_exact(name)
     }
 
     fn lookup_type_declaration_handle_exact(

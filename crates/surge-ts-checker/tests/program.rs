@@ -3210,6 +3210,36 @@ fn program_external_namespace_property_access_no_cascade() {
 }
 
 #[test]
+fn namespace_generic_member_shadows_nongeneric_ambient_global() {
+    // A namespace member's generic interface (`Ev<T>`) must shadow a same-named
+    // non-generic ambient global (`interface Ev`) when referenced from a sibling
+    // member. Otherwise a handler-alias chain (`Handler<T> = Fn<Ev<T>>`) resolves
+    // `Ev` to the arity-0 global, applying `<T>` degrades it to a non-function, and
+    // a callback contextually typed by `Handler` falsely reports TS7006 — the root
+    // cause of the React `onClick={(e) => …}` / `render={({ field }) => …}` over-reports.
+    let mut options = CheckerOptions::default();
+    options.no_implicit_any = true;
+    let diagnostics = program_with_options(
+        &[(
+            "src/index.ts",
+            "declare interface Ev { a: number; }\n\
+             declare namespace NS {\n\
+               interface Base<T> { x: T }\n\
+               interface Ev<T> extends Base<T> { y: number }\n\
+               type Fn<E extends Base<any>> = (e: E) => void;\n\
+               type Handler<T> = Fn<Ev<T>>;\n\
+             }\n\
+             declare function on(cb: NS.Handler<number>): void;\n\
+             on((e) => e.x);",
+        )],
+        options,
+    );
+
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+}
+
+
+#[test]
 fn program_stub_external_modules_keeps_relative_missing_module_ts2307() {
     let files = vec![SourceFileInput {
         file_name: "test.ts".to_string(),
