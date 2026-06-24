@@ -8,6 +8,17 @@ pub enum DiagnosticCategory {
     Message,
 }
 
+impl DiagnosticCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            DiagnosticCategory::Error => "error",
+            DiagnosticCategory::Warning => "warning",
+            DiagnosticCategory::Suggestion => "suggestion",
+            DiagnosticCategory::Message => "message",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSupport {
     CatalogOnly,

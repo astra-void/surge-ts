@@ -29,7 +29,8 @@ pub(crate) fn render_with_span(
     );
 
     format!(
-        "error[{}]: {}\n --> {}:{}:{}\n  |\n{line:>width$} | {source_line}\n{sep:>width$} | {caret_line}",
+        "{}[{}]: {}\n --> {}:{}:{}\n  |\n{line:>width$} | {source_line}\n{sep:>width$} | {caret_line}",
+        diagnostic.severity.label(),
         diagnostic.code,
         diagnostic.message,
         diagnostic.file_name,

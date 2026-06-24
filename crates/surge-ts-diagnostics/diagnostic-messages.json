@@ -104,6 +104,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS18046",
+    "category": "Error",
+    "message": "'{0}' is of type 'unknown'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2339",
     "category": "Error",
     "message": "Property '{0}' does not exist on type '{1}'.",

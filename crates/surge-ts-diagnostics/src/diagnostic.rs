@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::render::render_with_span;
-use crate::{DiagnosticCode, DiagnosticDescriptor};
+use crate::{DiagnosticCategory, DiagnosticCode, DiagnosticDescriptor};
 
 #[derive(Debug, Clone)]
 pub enum DiagnosticArg {
@@ -48,6 +48,7 @@ pub struct Diagnostic {
     pub message: String,
     pub file_name: String,
     pub span: Option<TextSpan>,
+    pub severity: DiagnosticCategory,
 }
 
 impl Diagnostic {
@@ -61,6 +62,7 @@ impl Diagnostic {
             message: message.into(),
             file_name: file_name.into(),
             span: None,
+            severity: DiagnosticCategory::Error,
         }
     }
 
@@ -77,10 +79,16 @@ impl Diagnostic {
             format_message(descriptor.message_template, &args),
             file_name,
         )
+        .with_severity(descriptor.category)
     }
 
     pub fn with_span(mut self, span: TextSpan) -> Self {
         self.span = Some(span);
+        self
+    }
+
+    pub fn with_severity(mut self, severity: DiagnosticCategory) -> Self {
+        self.severity = severity;
         self
     }
 
@@ -94,7 +102,13 @@ impl Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "error[{}]: {}", self.code, self.message)?;
+        writeln!(
+            f,
+            "{}[{}]: {}",
+            self.severity.label(),
+            self.code,
+            self.message
+        )?;
         write!(f, " --> {}", self.file_name)
     }
 }
