@@ -77,6 +77,13 @@ pub enum ParsedType {
     Void,
     Any,
     Unknown,
+    /// The genuine `unknown` keyword, kept distinct from [`ParsedType::Unknown`]
+    /// (which doubles as surge's conservative degrade target for `object`,
+    /// `symbol`, `bigint`, `intrinsic`, and unparseable annotations). Only this
+    /// variant lowers to [`Type::GenuineUnknown`], so the checker can emit
+    /// `TS18046` on a genuinely-`unknown`-typed receiver without flagging a
+    /// merely-degraded one.
+    UnknownKeyword,
     Never,
     StringLiteral(String),
     NumberLiteral(String),

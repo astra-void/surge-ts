@@ -27,40 +27,40 @@ pub(crate) fn parse_export_named_declaration(
 
     if let Some(wrapped_declaration) = declaration.declaration.as_ref() {
         if declaration.source.is_some() {
-            return Some(vec![ParsedStatement::ExportDeclaration(
-                Box::new(ParsedExportDeclaration::Unsupported { span }),
-            )]);
+            return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                ParsedExportDeclaration::Unsupported { span },
+            ))]);
         }
 
         return parse_exported_declaration(wrapped_declaration, declaration.export_kind).or_else(
             || {
-                Some(vec![ParsedStatement::ExportDeclaration(
-                    Box::new(ParsedExportDeclaration::Unsupported { span }),
-                )])
+                Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                    ParsedExportDeclaration::Unsupported { span },
+                ))])
             },
         );
     }
 
     if declaration.specifiers.is_empty() {
-        return Some(vec![ParsedStatement::ExportDeclaration(
-            Box::new(ParsedExportDeclaration::Empty { span }),
-        )]);
+        return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+            ParsedExportDeclaration::Empty { span },
+        ))]);
     }
 
     let mut specifiers = Vec::new();
 
     for specifier in &declaration.specifiers {
         let Some(parsed_specifier) = parse_export_specifier(specifier) else {
-            return Some(vec![ParsedStatement::ExportDeclaration(
-                Box::new(ParsedExportDeclaration::Unsupported { span }),
-            )]);
+            return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                ParsedExportDeclaration::Unsupported { span },
+            ))]);
         };
 
         specifiers.push(parsed_specifier);
     }
 
-    Some(vec![ParsedStatement::ExportDeclaration(
-        Box::new(ParsedExportDeclaration::Named {
+    Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+        ParsedExportDeclaration::Named {
             is_type_only: matches!(declaration.export_kind, ImportOrExportKind::Type),
             specifiers,
             module_specifier: declaration
@@ -72,8 +72,8 @@ pub(crate) fn parse_export_named_declaration(
                 .as_ref()
                 .map(|source| text_span_from_oxc_span(source.span)),
             span,
-        }),
-    )])
+        },
+    ))])
 }
 
 pub(crate) fn parse_export_default_declaration(
@@ -84,14 +84,14 @@ pub(crate) fn parse_export_default_declaration(
     let parsed_declaration = match &declaration.declaration {
         ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
             let Some(function) = parse_function_declaration(function) else {
-                return Some(vec![ParsedStatement::ExportDeclaration(
-                    Box::new(ParsedExportDeclaration::Default {
+                return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                    ParsedExportDeclaration::Default {
                         declaration: ParsedDefaultExportDeclaration::Unsupported {
                             span: Some(text_span_from_oxc_span(declaration.span)),
                         },
                         span,
-                    }),
-                )]);
+                    },
+                ))]);
             };
 
             ParsedDefaultExportDeclaration::Function(function)
@@ -133,24 +133,24 @@ pub(crate) fn parse_export_default_declaration(
         }
         ExportDefaultDeclarationKind::ArrayExpression(array_expression) => {
             let Some(parsed_expression) = parse_array_expression(array_expression) else {
-                return Some(vec![ParsedStatement::ExportDeclaration(
-                    Box::new(ParsedExportDeclaration::Default {
+                return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                    ParsedExportDeclaration::Default {
                         declaration: ParsedDefaultExportDeclaration::Unsupported { span },
                         span,
-                    }),
-                )]);
+                    },
+                ))]);
             };
 
             ParsedDefaultExportDeclaration::Expression(parsed_expression)
         }
         ExportDefaultDeclarationKind::UnaryExpression(unary_expression) => {
             let Some(parsed_expression) = parse_unary_expression(unary_expression) else {
-                return Some(vec![ParsedStatement::ExportDeclaration(
-                    Box::new(ParsedExportDeclaration::Default {
+                return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                    ParsedExportDeclaration::Default {
                         declaration: ParsedDefaultExportDeclaration::Unsupported { span },
                         span,
-                    }),
-                )]);
+                    },
+                ))]);
             };
 
             ParsedDefaultExportDeclaration::Expression(parsed_expression)
@@ -158,24 +158,24 @@ pub(crate) fn parse_export_default_declaration(
         ExportDefaultDeclarationKind::ConditionalExpression(conditional_expression) => {
             let Some(parsed_expression) = parse_conditional_expression(conditional_expression)
             else {
-                return Some(vec![ParsedStatement::ExportDeclaration(
-                    Box::new(ParsedExportDeclaration::Default {
+                return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                    ParsedExportDeclaration::Default {
                         declaration: ParsedDefaultExportDeclaration::Unsupported { span },
                         span,
-                    }),
-                )]);
+                    },
+                ))]);
             };
 
             ParsedDefaultExportDeclaration::Expression(parsed_expression)
         }
         ExportDefaultDeclarationKind::StaticMemberExpression(member_expression) => {
             let Some(parsed_expression) = parse_static_member_expression(member_expression) else {
-                return Some(vec![ParsedStatement::ExportDeclaration(
-                    Box::new(ParsedExportDeclaration::Default {
+                return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                    ParsedExportDeclaration::Default {
                         declaration: ParsedDefaultExportDeclaration::Unsupported { span },
                         span,
-                    }),
-                )]);
+                    },
+                ))]);
             };
 
             ParsedDefaultExportDeclaration::Expression(parsed_expression)
@@ -185,21 +185,21 @@ pub(crate) fn parse_export_default_declaration(
             ParsedDefaultExportDeclaration::Expression(parsed_expression)
         }
         _ => {
-            return Some(vec![ParsedStatement::ExportDeclaration(
-                Box::new(ParsedExportDeclaration::Default {
+            return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                ParsedExportDeclaration::Default {
                     declaration: ParsedDefaultExportDeclaration::Unsupported { span },
                     span,
-                }),
-            )]);
+                },
+            ))]);
         }
     };
 
-    Some(vec![ParsedStatement::ExportDeclaration(
-        Box::new(ParsedExportDeclaration::Default {
+    Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+        ParsedExportDeclaration::Default {
             declaration: parsed_declaration,
             span,
-        }),
-    )])
+        },
+    ))])
 }
 
 pub(crate) fn parse_export_assignment(
@@ -211,18 +211,18 @@ pub(crate) fn parse_export_assignment(
     // (`export = require(...)`, object literals, member access, etc.) stays
     // unsupported.
     let Expression::Identifier(identifier) = &declaration.expression else {
-        return Some(vec![ParsedStatement::ExportDeclaration(
-            Box::new(ParsedExportDeclaration::Unsupported { span }),
-        )]);
+        return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+            ParsedExportDeclaration::Unsupported { span },
+        ))]);
     };
 
-    Some(vec![ParsedStatement::ExportDeclaration(
-        Box::new(ParsedExportDeclaration::Equals {
+    Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+        ParsedExportDeclaration::Equals {
             exported_name: identifier.name.to_string(),
             exported_name_span: Some(text_span_from_oxc_span(identifier.span)),
             span,
-        }),
-    )])
+        },
+    ))])
 }
 
 pub(crate) fn parse_export_all_declaration(
@@ -233,30 +233,30 @@ pub(crate) fn parse_export_all_declaration(
     let module_specifier_span = Some(text_span_from_oxc_span(declaration.source.span));
 
     if matches!(declaration.export_kind, ImportOrExportKind::Type) {
-        return Some(vec![ParsedStatement::ExportDeclaration(
-            Box::new(ParsedExportDeclaration::Unsupported { span }),
-        )]);
+        return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+            ParsedExportDeclaration::Unsupported { span },
+        ))]);
     }
 
     if let Some(exported) = declaration.exported.as_ref() {
-        return Some(vec![ParsedStatement::ExportDeclaration(
-            Box::new(ParsedExportDeclaration::Namespace {
+        return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+            ParsedExportDeclaration::Namespace {
                 exported_name: module_export_name_to_string(exported),
                 exported_name_span: Some(text_span_from_oxc_span(exported.span())),
                 module_specifier,
                 module_specifier_span,
                 span,
-            }),
-        )]);
+            },
+        ))]);
     }
 
-    Some(vec![ParsedStatement::ExportDeclaration(
-        Box::new(ParsedExportDeclaration::All {
+    Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+        ParsedExportDeclaration::All {
             module_specifier,
             module_specifier_span,
             span,
-        }),
-    )])
+        },
+    ))])
 }
 
 fn parse_exported_declaration(

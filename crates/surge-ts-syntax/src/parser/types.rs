@@ -40,7 +40,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSBigIntKeyword(_) => Some(ParsedType::Unknown),
         TSType::TSVoidKeyword(_) => Some(ParsedType::Void),
         TSType::TSAnyKeyword(_) => Some(ParsedType::Any),
-        TSType::TSUnknownKeyword(_) => Some(ParsedType::Unknown),
+        TSType::TSUnknownKeyword(_) => Some(ParsedType::UnknownKeyword),
         // `intrinsic`-bodied lib aliases (`Uppercase`, `BuiltinIteratorReturn`,
         // `NoInfer`, …) are compiler built-ins with no user-modellable body.
         // Lower to `Unknown` so the alias resolves instead of dropping to TS2304;
@@ -89,9 +89,9 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         // `infer X` in a conditional `extends` clause. Carrying the name (rather
         // than dropping to `None`) keeps the enclosing conditional alive; the
         // resolver treats the capture as a permissive hole.
-        TSType::TSInferType(infer_type) => {
-            Some(ParsedType::Infer(infer_type.type_parameter.name.name.to_string()))
-        }
+        TSType::TSInferType(infer_type) => Some(ParsedType::Infer(
+            infer_type.type_parameter.name.name.to_string(),
+        )),
         _ => None,
     }
 }
