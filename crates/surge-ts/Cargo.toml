@@ -1,0 +1,22 @@
+[package]
+name = "surge-ts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Embeddable Rust TypeScript noEmit compatibility checker: in-memory and tsconfig project checking."
+keywords = ["typescript", "type-checker", "tsc"]
+categories = ["development-tools"]
+readme = "README.md"
+
+[dependencies]
+# `preserve_order` keeps package.json object key order, which determines
+# conditional-`exports`/`imports` priority during package resolution.
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
+surge-ts-checker = { version = "0.1.0", path = "../surge-ts-checker" }
+surge-ts-config = { version = "0.1.0", path = "../surge-ts-config" }
+surge-ts-diagnostics = { version = "0.1.0", path = "../surge-ts-diagnostics" }
+surge-ts-syntax = { version = "0.1.0", path = "../surge-ts-syntax" }
