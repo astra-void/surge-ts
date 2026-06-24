@@ -14,7 +14,9 @@ use crate::modules::{
     ModuleExportTable, ModuleImportBindings, build_module_export_table,
     resolve_module_export_tables, resolve_module_imports,
 };
-use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
+use crate::symbols::{
+    SymbolTable, TypeDeclarationInfo, TypeDeclarationScope, TypeDeclarationTable,
+};
 
 pub(crate) fn collect_preliminary_module_type_bindings(
     parsed_files: &[ParsedProgramFile],
@@ -47,7 +49,14 @@ pub(crate) fn collect_preliminary_module_type_bindings(
         let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
         let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
-        let local_type_declarations = Arc::new(std::mem::take(&mut ctx.type_declarations));
+        let raw_local_type_declarations = Arc::new(std::mem::take(&mut ctx.type_declarations));
+        let preliminary_raw_scope = Arc::new(TypeDeclarationScope::new(vec![
+            raw_local_type_declarations.clone(),
+        ]));
+        let local_type_declarations = Arc::new(attach_resolution_scope_to_declarations(
+            raw_local_type_declarations.as_ref(),
+            preliminary_raw_scope,
+        ));
         let lowered_type_declarations = local_type_declarations.len() as u64;
         let collect_duration = collect_start.elapsed();
         preliminary_type_diagnostics.extend(
@@ -61,12 +70,15 @@ pub(crate) fn collect_preliminary_module_type_bindings(
             metrics.collect_type_declarations_duration += collect_duration;
         });
 
+        let preliminary_resolution_scope = Arc::new(TypeDeclarationScope::new(vec![
+            local_type_declarations.clone(),
+        ]));
         let preliminary_export_table = build_module_export_table(
             parsed_file,
             local_type_declarations.as_ref(),
             &SymbolTable::new(), // empty symbols
             &SymbolTable::new(), // imports not resolved yet in the preliminary pass
-            None,
+            Some(preliminary_resolution_scope),
             ctx,
         );
 
@@ -138,6 +150,27 @@ pub(crate) fn collect_preliminary_module_type_bindings(
         preliminary_module_import_bindings,
         preliminary_type_diagnostics,
     )
+}
+
+fn attach_resolution_scope_to_declarations(
+    declarations: &TypeDeclarationTable,
+    scope: Arc<TypeDeclarationScope>,
+) -> TypeDeclarationTable {
+    let mut attached = TypeDeclarationTable::new();
+    for (name, declaration) in declarations.iter() {
+        let declaration = match declaration.clone() {
+            TypeDeclarationInfo::Alias(mut alias) => {
+                alias.resolution_scope = Some(scope.clone());
+                TypeDeclarationInfo::Alias(alias)
+            }
+            TypeDeclarationInfo::Interface(mut interface) => {
+                interface.resolution_scope = Some(scope.clone());
+                TypeDeclarationInfo::Interface(interface)
+            }
+        };
+        let _ = attached.insert(name.as_ref(), declaration);
+    }
+    attached
 }
 
 pub(crate) fn collect_module_analyses_with_bindings(

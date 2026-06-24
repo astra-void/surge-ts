@@ -291,11 +291,12 @@ pub(crate) fn file_has_explicit_default_export(file: &ParsedProgramFile) -> bool
 }
 
 pub(crate) fn allows_synthetic_default_import(
+    ctx: &CheckerContext,
     resolved_index: Option<usize>,
     parsed_files: &[ParsedProgramFile],
 ) -> bool {
     let Some(resolved_index) = resolved_index else {
-        return false;
+        return ctx.options.allow_synthetic_default_imports();
     };
 
     let Some(file) = parsed_files.get(resolved_index) else {

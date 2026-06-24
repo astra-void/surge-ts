@@ -77,7 +77,7 @@ pub(crate) fn evaluate_logical_expression(
     else {
         return InferredExpression::Unknown;
     };
-    if *left_ty == Type::Unknown || *right_ty == Type::Unknown {
+    if left_ty.is_unknown() || right_ty.is_unknown() {
         return InferredExpression::Unknown;
     }
 
@@ -115,7 +115,7 @@ pub(crate) fn evaluate_conditional_expression(
         return InferredExpression::Unknown;
     };
 
-    if matches!(true_type, Type::Unknown) || matches!(false_type, Type::Unknown) {
+    if true_type.is_unknown() || false_type.is_unknown() {
         return InferredExpression::Unknown;
     }
 
@@ -150,7 +150,7 @@ pub(crate) fn evaluate_unary_expression(
                 return InferredExpression::Unknown;
             };
 
-            if matches!(operand_type, Type::Unknown) {
+            if operand_type.is_unknown() {
                 return InferredExpression::Unknown;
             }
 
@@ -182,7 +182,7 @@ fn evaluate_add_binary(
         return InferredExpression::Unknown;
     };
 
-    if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+    if left_type.is_unknown() || right_type.is_unknown() {
         return InferredExpression::Unknown;
     }
 
@@ -250,7 +250,7 @@ fn evaluate_arithmetic_binary(
         return InferredExpression::Unknown;
     };
 
-    if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+    if left_type.is_unknown() || right_type.is_unknown() {
         return InferredExpression::Unknown;
     }
 
@@ -296,7 +296,7 @@ fn evaluate_comparison_binary(
         return InferredExpression::Unknown;
     };
 
-    if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+    if left_type.is_unknown() || right_type.is_unknown() {
         return InferredExpression::Unknown;
     }
 
@@ -356,7 +356,7 @@ fn evaluate_equality_binary(
         return InferredExpression::Unknown;
     };
 
-    if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+    if left_type.is_unknown() || right_type.is_unknown() {
         return InferredExpression::Unknown;
     }
 
@@ -390,7 +390,7 @@ fn inferred_type(result: &InferredExpression) -> Option<&Type> {
 }
 
 fn is_known_non_unknown(result: &InferredExpression) -> bool {
-    matches!(result, InferredExpression::Known(ty) if *ty != Type::Unknown)
+    matches!(result, InferredExpression::Known(ty) if !ty.is_unknown())
 }
 
 fn is_number_like_for_arithmetic(ty: &Type) -> bool {

@@ -6,7 +6,6 @@
 //! construct signature, registered as a value symbol so `new Class(...)`,
 //! `Class.staticMember`, and `typeof Class` all work).
 
-
 use surge_ts_syntax::{
     ParsedBindingName, ParsedClassAccessor, ParsedClassDeclaration, ParsedClassMember,
     ParsedClassMethod, ParsedClassProperty, ParsedFunctionParameter, ParsedFunctionType,
@@ -322,9 +321,12 @@ fn check_implicit_override(class: &ParsedClassDeclaration, ctx: &mut CheckerCont
 
     for member in &class.members {
         let (name, name_span, is_static, is_override) = match member {
-            ParsedClassMember::Method(method) => {
-                (&method.name, method.name_span, method.is_static, method.is_override)
-            }
+            ParsedClassMember::Method(method) => (
+                &method.name,
+                method.name_span,
+                method.is_static,
+                method.is_override,
+            ),
             ParsedClassMember::Property(property) => (
                 &property.name,
                 property.name_span,
@@ -366,7 +368,8 @@ fn collect_inherited_instance_member_names(
         if !visited.insert(base_name.clone()) {
             continue;
         }
-        if let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&base_name) {
+        if let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&base_name)
+        {
             // Only source-declared base classes participate. A base resolved from a
             // declaration file (a dependency, an ambient module like
             // `cloudflare:workers`, or a generated `.d.ts`) may not resolve the same

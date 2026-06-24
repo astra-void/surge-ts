@@ -33,6 +33,7 @@ pub(crate) fn infer_unary_expression(
                 InferredExpression::Known(Type::Number)
             }
             InferredExpression::Known(Type::Unknown)
+            | InferredExpression::Known(Type::GenuineUnknown)
             | InferredExpression::UnresolvedIdentifier { .. }
             | InferredExpression::MissingProperty { .. }
             | InferredExpression::Unknown
@@ -67,7 +68,7 @@ pub(crate) fn infer_logical_expression(
 
     match (left_type, right_type) {
         (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
-            if left_ty != Type::Unknown && right_ty != Type::Unknown =>
+            if !left_ty.is_unknown() && !right_ty.is_unknown() =>
         {
             // `a || b` -> `NonNullable<a> | b`; `a && b` -> `a | b`. See
             // `ops::evaluate_logical_expression`.
@@ -75,9 +76,7 @@ pub(crate) fn infer_logical_expression(
                 surge_ts_syntax::ParsedLogicalOperator::Or => {
                     union_type(vec![surge_ts_types::remove_nullish(&left_ty), right_ty])
                 }
-                surge_ts_syntax::ParsedLogicalOperator::And => {
-                    union_type(vec![left_ty, right_ty])
-                }
+                surge_ts_syntax::ParsedLogicalOperator::And => union_type(vec![left_ty, right_ty]),
             };
             InferredExpression::Known(result)
         }
@@ -100,12 +99,10 @@ pub(crate) fn infer_conditional_expression(
     // Narrow a discriminated union for each branch: `x.kind === "a" ? x.a : x.b`
     // sees `x` as the `"a"` member in `when_true` and its complement in
     // `when_false`.
-    let true_symbols = crate::checks::function::narrow_condition_symbol_table(
-        condition, symbols, true,
-    );
-    let false_symbols = crate::checks::function::narrow_condition_symbol_table(
-        condition, symbols, false,
-    );
+    let true_symbols =
+        crate::checks::function::narrow_condition_symbol_table(condition, symbols, true);
+    let false_symbols =
+        crate::checks::function::narrow_condition_symbol_table(condition, symbols, false);
     let true_type = infer_expression(when_true, true_symbols.as_ref().unwrap_or(symbols), ctx);
     let false_type = infer_expression(when_false, false_symbols.as_ref().unwrap_or(symbols), ctx);
 
@@ -114,7 +111,7 @@ pub(crate) fn infer_conditional_expression(
             InferredExpression::Known(Type::Any)
         }
         (InferredExpression::Known(true_ty), InferredExpression::Known(false_ty))
-            if true_ty != Type::Unknown && false_ty != Type::Unknown =>
+            if !true_ty.is_unknown() && !false_ty.is_unknown() =>
         {
             if true_ty == false_ty {
                 InferredExpression::Known(true_ty)

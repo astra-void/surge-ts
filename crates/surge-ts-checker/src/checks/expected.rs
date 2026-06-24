@@ -223,7 +223,7 @@ fn evaluate_array_literal_with_expected_type(
 
         match inferred_element {
             InferredExpression::Known(actual_type) => {
-                if actual_type == Type::Unknown {
+                if actual_type.is_unknown() {
                     continue;
                 }
 
@@ -290,7 +290,7 @@ fn evaluate_tuple_literal_with_expected_type(
 
         match inferred_element {
             InferredExpression::Known(actual_type) => {
-                if actual_type == Type::Unknown {
+                if actual_type.is_unknown() {
                     continue;
                 }
 
@@ -354,11 +354,9 @@ fn evaluate_object_literal_with_expected_type(
     let has_spread = properties.iter().any(|property| property.is_spread);
     if !expected_object_type.allows_string_index_access()
         && !expected_object_type.properties.is_empty()
-        && let Some(property) = properties
-            .iter()
-            .find(|property| {
-                !property.is_spread && !expected_object_type.contains_property(&property.name)
-            })
+        && let Some(property) = properties.iter().find(|property| {
+            !property.is_spread && !expected_object_type.contains_property(&property.name)
+        })
     {
         let diagnostic = Diagnostic::ts2353(
             &property.name,
@@ -422,7 +420,7 @@ fn evaluate_object_literal_with_expected_type(
 
         match inferred_property {
             InferredExpression::Known(actual_type) => {
-                if actual_type == Type::Unknown {
+                if actual_type.is_unknown() {
                     inferred_property_types.insert(property.name.clone(), Type::Unknown);
                     continue;
                 }
@@ -582,9 +580,18 @@ fn evaluate_conditional_expression_with_expected_type(
 
     if *expected_type == Type::Any {
         let _ = evaluate_expression(condition, condition_span.or(fallback_span), symbols, ctx);
-        let _ = evaluate_expression(when_true, when_true_span.or(fallback_span), true_symbols, ctx);
-        let _ =
-            evaluate_expression(when_false, when_false_span.or(fallback_span), false_symbols, ctx);
+        let _ = evaluate_expression(
+            when_true,
+            when_true_span.or(fallback_span),
+            true_symbols,
+            ctx,
+        );
+        let _ = evaluate_expression(
+            when_false,
+            when_false_span.or(fallback_span),
+            false_symbols,
+            ctx,
+        );
 
         return InferredExpression::Known(Type::Any);
     }
@@ -662,7 +669,7 @@ fn check_conditional_branch_expected_type(
 ) -> bool {
     match branch_result {
         InferredExpression::Known(branch_type) => {
-            if branch_type == Type::Unknown {
+            if branch_type.is_unknown() {
                 return false;
             }
 
@@ -687,7 +694,7 @@ fn check_conditional_branch_expected_type(
 
 fn known_branch_type(branch_result: &InferredExpression) -> Option<&Type> {
     match branch_result {
-        InferredExpression::Known(ty) if *ty != Type::Unknown => Some(ty),
+        InferredExpression::Known(ty) if !ty.is_unknown() => Some(ty),
         _ => None,
     }
 }

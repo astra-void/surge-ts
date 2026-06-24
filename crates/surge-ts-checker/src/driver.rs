@@ -10,8 +10,8 @@ use surge_ts_syntax::{
 
 use crate::checks::{assign, call, expr, function as check_function, var};
 use crate::context::{CheckerContext, DeclarationNamespace, DeclarationResolutionKey, FileKind};
+use crate::default_lib::load_generated_default_lib_inputs;
 use crate::infer::{report_duplicate_type_parameters, validate_local_type_declaration};
-use crate::load_generated_default_lib_inputs;
 use crate::paths::canonicalize_if_exists_string;
 use crate::program::collect_function_signatures_from_statements;
 use crate::symbols::{InterfaceInfo, TypeAliasInfo, TypeDeclarationInfo};
@@ -133,9 +133,16 @@ pub(crate) fn collect_global_augmentations(
     let mut block_tables = Vec::new();
     for parsed_file in parsed_files {
         ctx.set_file_name(parsed_file.file_name.clone());
-        for_each_global_augmentation_block(&parsed_file.statements, ctx, |block_statements, ctx| {
-            block_tables.push(collect_global_augmentation_block_types(block_statements, ctx));
-        });
+        for_each_global_augmentation_block(
+            &parsed_file.statements,
+            ctx,
+            |block_statements, ctx| {
+                block_tables.push(collect_global_augmentation_block_types(
+                    block_statements,
+                    ctx,
+                ));
+            },
+        );
     }
     crate::symbols::merge_shared_arena_tables_into(
         std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
@@ -162,7 +169,10 @@ pub(crate) fn collect_global_augmentations_from_statements(
 ) {
     let mut block_tables = Vec::new();
     for_each_global_augmentation_block(statements, ctx, |block_statements, ctx| {
-        block_tables.push(collect_global_augmentation_block_types(block_statements, ctx));
+        block_tables.push(collect_global_augmentation_block_types(
+            block_statements,
+            ctx,
+        ));
     });
     crate::symbols::merge_shared_arena_tables_into(
         std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
@@ -444,6 +454,36 @@ fn collect_local_type_declarations_from_statement(
                         .find_map(|(_, declaration)| match declaration {
                             TypeDeclarationInfo::Interface(info)
                                 if info.name == interface.name
+                                    && canonicalize_if_exists_string(std::path::Path::new(
+                                        &info.file_name,
+                                    )) == canonicalize_if_exists_string(
+                                        std::path::Path::new(file_name),
+                                    ) =>
+                            {
+                                Some(declaration)
+                            }
+                            _ => None,
+                        })
+            {
+                local_declarations.push(attach_current_type_scope_if_missing(
+                    declaration.clone(),
+                    ctx,
+                ));
+            }
+        }
+        ParsedStatement::ClassDeclaration(class) => {
+            let key = DeclarationResolutionKey {
+                file_name: canonicalize_if_exists_string(std::path::Path::new(file_name)),
+                name: class.name.clone(),
+                namespace: DeclarationNamespace::Type,
+            };
+            if seen.insert(key)
+                && let Some(declaration) =
+                    ctx.type_declarations
+                        .iter()
+                        .find_map(|(_, declaration)| match declaration {
+                            TypeDeclarationInfo::Interface(info)
+                                if info.name == class.name
                                     && canonicalize_if_exists_string(std::path::Path::new(
                                         &info.file_name,
                                     )) == canonicalize_if_exists_string(
@@ -1137,7 +1177,7 @@ pub(crate) fn parsed_type_display(ty: &ParsedType) -> Option<String> {
         ParsedType::Undefined => "undefined".to_string(),
         ParsedType::Void => "void".to_string(),
         ParsedType::Any => "any".to_string(),
-        ParsedType::Unknown => "unknown".to_string(),
+        ParsedType::Unknown | ParsedType::UnknownKeyword => "unknown".to_string(),
         ParsedType::Never => "never".to_string(),
         ParsedType::StringLiteral(value) => format!("\"{value}\""),
         ParsedType::NumberLiteral(value) => value.clone(),

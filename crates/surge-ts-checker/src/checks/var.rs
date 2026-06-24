@@ -91,10 +91,17 @@ pub(crate) fn check_variable_declaration_against_symbols(
     // before this check runs, so the duplicate probe would always find the
     // declaration's own pre-registration and report a spurious redeclaration.
     // Ambient declarations do not conflict with themselves; skip the report.
+    // A module-scoped `let`/`const` shadows an ambient global of the same name
+    // (`let name = …` over the DOM `declare var name`) without conflict — tsc
+    // only reports a redeclaration when both declarations share a scope. The
+    // merged symbol table folds ambient globals in flat, so exclude a name that
+    // is solely an ambient global here; a genuine same-scope redeclaration still
+    // reports through the span-tracked path in `check_variable_declaration`.
     if options.report_duplicate_let_const
         && !variable.is_declare
         && matches!(symbol_kind, SymbolKind::Let | SymbolKind::Const)
         && symbols.contains_let_or_const(&variable.name)
+        && ctx.ambient_global_symbols.get(&variable.name).is_none()
     {
         let diagnostic = Diagnostic::ts2451(&variable.name, ctx.file_name.clone());
         let diagnostic = match variable.name_span {
@@ -132,7 +139,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
     let mut inferred_symbol_type = match &inferred_initializer {
         InferredExpression::Known(inferred_initializer_type) => {
             if let Some(ref declared_type) = declared_type {
-                if *inferred_initializer_type != Type::Unknown
+                if !inferred_initializer_type.is_unknown()
                     && !type_contains_unknown(declared_type)
                     && !type_contains_unknown(inferred_initializer_type)
                     && !is_assignable_to(inferred_initializer_type, declared_type)
@@ -156,7 +163,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
                 }
             }
 
-            if declared_type.is_none() && *inferred_initializer_type != Type::Unknown {
+            if declared_type.is_none() && !inferred_initializer_type.is_unknown() {
                 Some(widen_implicit_variable_initializer_type(
                     symbol_kind,
                     inferred_initializer_type,
@@ -196,7 +203,7 @@ pub(crate) fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, 
 
 fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
-        Type::Unknown => true,
+        Type::Unknown | Type::GenuineUnknown => true,
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {

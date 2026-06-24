@@ -3,8 +3,11 @@
 use super::*;
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{ParsedCallArgument, ParsedObjectType, ParsedType, TextSpan};
+use surge_ts_syntax::{
+    ParsedCallArgument, ParsedNamedType, ParsedObjectType, ParsedType, TextSpan,
+};
 use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
 use crate::arena::{alloc_function_type, alloc_object_type};
@@ -18,7 +21,7 @@ use crate::program::{
     record_generic_call_inference_success, record_generic_call_inference_tuple_return_suppressed,
     record_generic_call_inference_unresolved_argument_skip,
 };
-use crate::symbols::{FunctionSignatureInfo, SymbolTable};
+use crate::symbols::{FunctionSignatureInfo, SymbolTable, TypeDeclarationInfo};
 
 pub(crate) fn instantiate_function_type<'a>(
     function_type: &'a FunctionType,
@@ -75,7 +78,7 @@ pub(crate) fn instantiate_function_type<'a>(
 
     if substitution
         .iter()
-        .all(|(_, candidate)| *candidate == Type::Unknown)
+        .all(|(_, candidate)| candidate.is_unknown())
     {
         record_generic_call_inference_failed();
         return Cow::Borrowed(function_type);
@@ -296,12 +299,19 @@ pub(crate) fn infer_type_argument_substitution(
             continue;
         };
 
-        if argument_type == Type::Unknown || type_contains_unknown(&argument_type) {
+        if argument_type.is_unknown() || type_contains_unknown(&argument_type) {
             record_generic_call_inference_unresolved_argument_skip();
             continue;
         }
 
-        collect_inferred_type_argument(parameter_type, &argument_type, &mut substitution, false);
+        collect_inferred_type_argument(
+            parameter_type,
+            &argument_type,
+            &mut substitution,
+            false,
+            ctx,
+            0,
+        );
     }
 
     substitution
@@ -312,6 +322,8 @@ pub(crate) fn collect_inferred_type_argument(
     argument_type: &Type,
     substitution: &mut TypeParameterSubstitution,
     widen_literals: bool,
+    ctx: &mut CheckerContext,
+    depth: usize,
 ) {
     if type_contains_unknown(argument_type) {
         return;
@@ -325,6 +337,19 @@ pub(crate) fn collect_inferred_type_argument(
                 argument_type,
                 widen_literals,
             );
+            // A generic-instantiation parameter (`Wrapper<T>`,
+            // `SignalDefinition<TPayload>`) carries its type parameters inside the
+            // declaration's members, not at the surface — match the argument
+            // against that shape so `T` is inferred from the nested field.
+            if !named_type.type_arguments.is_empty() {
+                infer_through_generic_reference(
+                    named_type,
+                    argument_type,
+                    substitution,
+                    ctx,
+                    depth,
+                );
+            }
         }
         ParsedType::Array(element_type) => match argument_type {
             Type::Array(actual_element_type) => {
@@ -333,6 +358,8 @@ pub(crate) fn collect_inferred_type_argument(
                     actual_element_type.as_ref(),
                     substitution,
                     true,
+                    ctx,
+                    depth,
                 );
             }
             Type::Tuple(elements) => {
@@ -342,6 +369,8 @@ pub(crate) fn collect_inferred_type_argument(
                         element,
                         substitution,
                         true,
+                        ctx,
+                        depth,
                     );
                 }
             }
@@ -359,6 +388,8 @@ pub(crate) fn collect_inferred_type_argument(
                         actual_element,
                         substitution,
                         true,
+                        ctx,
+                        depth,
                     );
                 }
             }
@@ -369,6 +400,8 @@ pub(crate) fn collect_inferred_type_argument(
                     expected_object_type,
                     actual_object_type,
                     substitution,
+                    ctx,
+                    depth,
                 );
             }
         }
@@ -384,6 +417,8 @@ pub(crate) fn collect_inferred_type_argument(
                         actual_element,
                         substitution,
                         widen_literals,
+                        ctx,
+                        depth,
                     );
                 }
             }
@@ -392,10 +427,121 @@ pub(crate) fn collect_inferred_type_argument(
     }
 }
 
+/// Infers type parameters that appear *inside* a generic parameter
+/// (`def: SignalDefinition<TPayload>`, `w: Wrapper<T>`). When the argument is an
+/// instantiation of the same declaration we match type arguments positionally;
+/// when it is an object literal we resolve the declaration's members, substitute
+/// the declaration's own type parameters with this position's type arguments, and
+/// match member-by-member. Bounded by `depth` so mutually-generic declarations
+/// cannot loop.
+fn infer_through_generic_reference(
+    named_type: &ParsedNamedType,
+    argument_type: &Type,
+    substitution: &mut TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    depth: usize,
+) {
+    const MAX_DEPTH: usize = 6;
+    if depth >= MAX_DEPTH {
+        return;
+    }
+
+    if let Type::Reference(reference) = argument_type {
+        for (pattern_argument, actual_argument) in named_type
+            .type_arguments
+            .iter()
+            .zip(reference.arguments.iter())
+        {
+            collect_inferred_type_argument(
+                pattern_argument,
+                actual_argument,
+                substitution,
+                true,
+                ctx,
+                depth + 1,
+            );
+        }
+        return;
+    }
+
+    let Type::Object(actual_object) = argument_type else {
+        return;
+    };
+
+    let body = {
+        let Some(handle) = ctx.lookup_type_declaration_handle(&named_type.name) else {
+            return;
+        };
+        match handle.get() {
+            TypeDeclarationInfo::Interface(info) => info.body.clone(),
+            _ => return,
+        }
+    };
+    if body.type_parameters.len() != named_type.type_arguments.len() {
+        return;
+    }
+
+    let parameter_map: HashMap<String, ParsedType> = body
+        .type_parameters
+        .iter()
+        .zip(named_type.type_arguments.iter())
+        .map(|(parameter, argument)| (parameter.name.clone(), argument.clone()))
+        .collect();
+
+    for member in &body.members {
+        let Some(actual_member_type) = actual_object.get_property_access_type(&member.name) else {
+            continue;
+        };
+        let expected_member_type = substitute_parsed_type_parameters(&member.ty, &parameter_map);
+        collect_inferred_type_argument(
+            &expected_member_type,
+            &actual_member_type,
+            substitution,
+            true,
+            ctx,
+            depth + 1,
+        );
+    }
+}
+
+/// Substitutes bare named references in a parsed type using `map`, recursing into
+/// generic arguments and array elements. Used to rewrite a declaration's member
+/// types from the declaration's own type parameters into the enclosing call's
+/// type parameters before inference.
+fn substitute_parsed_type_parameters(
+    parsed_type: &ParsedType,
+    map: &HashMap<String, ParsedType>,
+) -> ParsedType {
+    match parsed_type {
+        ParsedType::Named(named) => {
+            if named.type_arguments.is_empty() {
+                if let Some(replacement) = map.get(&named.name) {
+                    return replacement.clone();
+                }
+                ParsedType::Named(named.clone())
+            } else {
+                let mut substituted = named.clone();
+                substituted.type_arguments = named
+                    .type_arguments
+                    .iter()
+                    .map(|argument| substitute_parsed_type_parameters(argument, map))
+                    .collect();
+                ParsedType::Named(substituted)
+            }
+        }
+        ParsedType::Array(element) => {
+            ParsedType::Array(Box::new(substitute_parsed_type_parameters(element, map)))
+        }
+        other => other.clone(),
+    }
+}
+
 pub(crate) fn collect_object_type_candidates(
     expected_object_type: &ParsedObjectType,
     actual_object_type: &surge_ts_types::ObjectType,
     substitution: &mut TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    depth: usize,
 ) {
     for property in &expected_object_type.properties {
         let Some(actual_property_type) =
@@ -404,7 +550,14 @@ pub(crate) fn collect_object_type_candidates(
             continue;
         };
 
-        collect_inferred_type_argument(&property.ty, &actual_property_type, substitution, true);
+        collect_inferred_type_argument(
+            &property.ty,
+            &actual_property_type,
+            substitution,
+            true,
+            ctx,
+            depth,
+        );
     }
 }
 
@@ -425,7 +578,7 @@ pub(crate) fn record_type_argument_candidate(
         with_type_copy_reason(TypeCopyReason::CallResolution, || argument_type.clone())
     };
 
-    if existing == Type::Unknown {
+    if existing.is_unknown() {
         substitution.set(type_parameter_name.to_string(), candidate, false);
         return;
     }

@@ -10,8 +10,9 @@ use surge_ts_syntax::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedNamespaceDeclaration,
     ParsedStatement, ParsedType, TextSpan,
 };
-use surge_ts_types::{Type, TypeCopyReason};
+use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type, TypeCopyReason};
 
+use crate::checks::function as check_function;
 use crate::checks::var::{VariableCheckOptions, check_variable_declaration_with_symbols};
 use crate::context::{CheckerContext, FileKind};
 use crate::program::{ParsedProgramFile, record_program_timing};
@@ -475,7 +476,8 @@ pub(crate) fn resolve_module_export_table(
 
         ctx.set_file_name(parsed_file.file_name.clone());
 
-        let resolved_type_declarations = Arc::make_mut(&mut resolved_export_table.type_declarations);
+        let resolved_type_declarations =
+            Arc::make_mut(&mut resolved_export_table.type_declarations);
         for (name, declaration) in target_export_table.type_declarations.iter() {
             if resolved_type_declarations.get(name.as_ref()).is_none() {
                 let _ = resolved_type_declarations.insert(name.clone(), declaration.clone());
@@ -662,19 +664,21 @@ pub(crate) fn collect_exports_from_statement(
 ) {
     match statement {
         ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
-            ParsedExportDeclaration::Statement { declaration, .. } => collect_exports_from_statement(
-                declaration.as_ref(),
-                exportable_values,
-                imported_symbols,
-                local_type_declarations,
-                local_symbols,
-                resolution_scope,
-                type_declarations,
-                symbols,
-                default_symbol,
-                export_assignment_symbol,
-                ctx,
-            ),
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                collect_exports_from_statement(
+                    declaration.as_ref(),
+                    exportable_values,
+                    imported_symbols,
+                    local_type_declarations,
+                    local_symbols,
+                    resolution_scope,
+                    type_declarations,
+                    symbols,
+                    default_symbol,
+                    export_assignment_symbol,
+                    ctx,
+                )
+            }
             ParsedExportDeclaration::Equals { exported_name, .. } => {
                 // `export = identifier` binds the module's single export-assignment
                 // value to the named local value symbol. An unresolved target binds
@@ -692,6 +696,17 @@ pub(crate) fn collect_exports_from_statement(
                 for (key, declaration) in local_type_declarations.iter() {
                     if key.as_str().starts_with(&prefix) {
                         let _ = type_declarations.insert(key.as_str(), declaration.clone());
+                        let exported_member_name = &key.as_str()[prefix.len()..];
+                        let _ = type_declarations.insert(
+                            exported_member_name,
+                            rename_type_declaration(
+                                attach_type_resolution_scope_if_missing(
+                                    declaration.clone(),
+                                    resolution_scope,
+                                ),
+                                exported_member_name.to_string(),
+                            ),
+                        );
                     }
                 }
             }
@@ -756,23 +771,41 @@ pub(crate) fn collect_exports_from_statement(
             }
             ParsedExportDeclaration::Default { declaration, span } => match declaration {
                 ParsedDefaultExportDeclaration::Function(function) => {
-                    if let Some(symbol) = local_symbols.get_shared(&function.name) {
-                        if default_symbol.is_some() {
-                            push_duplicate_default_export_diagnostic(
-                                ctx,
-                                function.name_span.or(*span),
-                            );
-                        } else {
-                            *default_symbol = Some(symbol);
-                        }
-                    } else {
+                    if default_symbol.is_some() {
                         push_duplicate_default_export_diagnostic(ctx, function.name_span.or(*span));
+                    } else {
+                        let mut signature_symbols =
+                            exportable_values.clone_with_reason(TypeCopyReason::ModuleExport);
+                        let mut function_type =
+                            check_function::collect_function_declaration_signature(
+                                function,
+                                &mut signature_symbols,
+                                ctx,
+                            );
+                        if let Some(value_type) =
+                            promise_value_type(&function.return_type, resolution_scope, ctx)
+                        {
+                            function_type = FunctionType::new(
+                                function_type.parameters().to_vec(),
+                                promise_like_type(value_type),
+                                function_type.is_variadic(),
+                                function_type.required_parameter_count(),
+                            );
+                        }
+                        *default_symbol = Some(Arc::new(SymbolInfo {
+                            ty: Type::Function(function_type),
+                            kind: SymbolKind::Function,
+                            function_signature: None,
+                        }));
                     }
                 }
                 ParsedDefaultExportDeclaration::Class(class) => {
                     if let Some(symbol) = local_symbols.get_shared(&class.name) {
                         if default_symbol.is_some() {
-                            push_duplicate_default_export_diagnostic(ctx, class.name_span.or(*span));
+                            push_duplicate_default_export_diagnostic(
+                                ctx,
+                                class.name_span.or(*span),
+                            );
                         } else {
                             *default_symbol = Some(symbol);
                         }
@@ -860,6 +893,81 @@ pub(crate) fn collect_exports_from_statement(
         }
         _ => {}
     }
+}
+
+pub(crate) const PROMISE_LIKE_VALUE_PROPERTY: &str = "\0surgePromiseValue";
+
+pub(crate) fn promise_like_type(value_type: Type) -> Type {
+    let mut properties = PropertyMap::new();
+    properties.insert(
+        PROMISE_LIKE_VALUE_PROPERTY.to_string(),
+        ObjectProperty::required(value_type.clone()),
+    );
+    properties.insert(
+        "then".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType::new(
+            vec![Type::Function(FunctionType::new(
+                vec![value_type],
+                Type::Unknown,
+                false,
+                1,
+            ))],
+            Type::Unknown,
+            true,
+            1,
+        ))),
+    );
+    properties.insert(
+        "catch".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType::new(
+            vec![Type::Any],
+            Type::Unknown,
+            true,
+            0,
+        ))),
+    );
+    properties.insert(
+        "finally".to_string(),
+        ObjectProperty::required(Type::Function(FunctionType::new(
+            vec![Type::Any],
+            Type::Unknown,
+            true,
+            0,
+        ))),
+    );
+    Type::Object(crate::arena::alloc_object_type(properties, None))
+}
+
+fn promise_value_type(
+    return_type: &Option<ParsedType>,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Some(ParsedType::Named(named)) = return_type else {
+        return None;
+    };
+    if !matches!(named.name.as_str(), "Promise" | "PromiseLike") {
+        return None;
+    }
+    let value_type = named.type_arguments.first()?;
+    let saved_scope = ctx.type_declaration_scope.clone();
+    let saved_type_declarations = if resolution_scope.is_some() {
+        Some(std::mem::replace(
+            &mut ctx.type_declarations,
+            TypeDeclarationTable::new(),
+        ))
+    } else {
+        None
+    };
+    if let Some(resolution_scope) = resolution_scope {
+        ctx.type_declaration_scope = Some(resolution_scope.clone());
+    }
+    let ty = crate::infer::map_parsed_type(value_type.clone(), ctx).peeled();
+    ctx.type_declaration_scope = saved_scope;
+    if let Some(saved_type_declarations) = saved_type_declarations {
+        ctx.type_declarations = saved_type_declarations;
+    }
+    Some(ty)
 }
 
 pub(crate) fn export_local_type_name(

@@ -302,7 +302,8 @@ pub(crate) fn narrow_discriminant_symbol_table(
     match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let symbol = symbols.get(name)?;
-            let narrowed = narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)?;
+            let narrowed =
+                narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)?;
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
             narrowed_symbols.insert(
                 name.clone(),
@@ -330,8 +331,12 @@ pub(crate) fn narrow_discriminant_symbol_table(
                 return None;
             };
             let base_property_type = object_type.properties.get(base_property)?;
-            let narrowed_property =
-                narrow_union_by_discriminant(&base_property_type.ty, property, &literal, keep_matching)?;
+            let narrowed_property = narrow_union_by_discriminant(
+                &base_property_type.ty,
+                property,
+                &literal,
+                keep_matching,
+            )?;
 
             let mut new_object = object_type.clone();
             let properties = std::sync::Arc::make_mut(&mut new_object.properties);
@@ -467,9 +472,7 @@ fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<T
 
 /// Parses a `typeof x === "tag"` / `!==` guard, returning the operand expression,
 /// the tag string, and whether the operator is equality (vs inequality).
-fn parse_typeof_condition(
-    condition: &ParsedExpression,
-) -> Option<(&ParsedExpression, &str, bool)> {
+fn parse_typeof_condition(condition: &ParsedExpression) -> Option<(&ParsedExpression, &str, bool)> {
     use surge_ts_syntax::ParsedBinaryOperator;
     let ParsedExpression::Binary {
         left,
@@ -539,7 +542,7 @@ fn narrow_typeof_symbol_table(
 /// `unknown`), so the member is kept in both branches.
 fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
     match member {
-        Type::Any | Type::Unknown => None,
+        Type::Any | Type::Unknown | Type::GenuineUnknown => None,
         Type::String
         | Type::StringLiteral(_)
         | Type::Number
@@ -582,9 +585,7 @@ fn narrow_union_by_instanceof(ty: &Type, ctor_name: &str, keep_matching: bool) -
 /// Parses an `x instanceof Ctor` guard, returning the operand expression and the
 /// constructor identifier name. (`instanceof` has no equality polarity — the
 /// then-branch always keeps the matching members.)
-fn parse_instanceof_condition(
-    condition: &ParsedExpression,
-) -> Option<(&ParsedExpression, &str)> {
+fn parse_instanceof_condition(condition: &ParsedExpression) -> Option<(&ParsedExpression, &str)> {
     use surge_ts_syntax::ParsedBinaryOperator;
     let ParsedExpression::Binary {
         left,
@@ -595,7 +596,10 @@ fn parse_instanceof_condition(
     else {
         return None;
     };
-    let ParsedExpression::Identifier { name: ctor_name, .. } = right.as_ref() else {
+    let ParsedExpression::Identifier {
+        name: ctor_name, ..
+    } = right.as_ref()
+    else {
         return None;
     };
     Some((left.as_ref(), ctor_name.as_str()))
@@ -656,7 +660,7 @@ fn narrow_union_by_arrayness(ty: &Type, keep_arrays: bool) -> Option<Type> {
         .types()
         .iter()
         .filter(|member| match member {
-            Type::Any | Type::Unknown => true,
+            Type::Any | Type::Unknown | Type::GenuineUnknown => true,
             Type::Array(_) | Type::Tuple(_) => keep_arrays,
             _ => !keep_arrays,
         })
@@ -752,7 +756,7 @@ fn narrow_union_by_arraybufferview(ty: &Type, keep_views: bool) -> Option<Type> 
         .types()
         .iter()
         .filter(|member| match member {
-            Type::Any | Type::Unknown => true,
+            Type::Any | Type::Unknown | Type::GenuineUnknown => true,
             _ => is_array_buffer_view_type(member) == keep_views,
         })
         .cloned()
@@ -846,7 +850,8 @@ fn narrow_single_guard_for_identifier(
     {
         return narrow_union_by_instanceof(ty, ctor_name, branch_is_true);
     }
-    if let Some((ParsedExpression::Identifier { name, .. }, tag, eq)) = parse_typeof_condition(condition)
+    if let Some((ParsedExpression::Identifier { name, .. }, tag, eq)) =
+        parse_typeof_condition(condition)
         && name == var_name
     {
         return narrow_union_by_typeof(ty, tag, branch_is_true == eq);
@@ -910,6 +915,54 @@ fn narrow_logical_guard_in_scope(
 
 /// Collects the distinct identifiers tested by single guards within a
 /// (possibly `||`/`&&`/`!`-composed) condition.
+/// The identifiers a condition guards as whole values: the `typeof`/`in`/
+/// `instanceof`/`Array.isArray` operands plus any bare-truthy identifier across
+/// an `&&` chain. A guard on such an identifier removes its genuine-unknownness
+/// in the branch where the condition holds (property bases like `x.p` are
+/// excluded — guarding `x.p` does not narrow `x`).
+pub(crate) fn guarded_value_identifiers(condition: &ParsedExpression) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_guard_operand_identifiers(condition, &mut names);
+
+    let mut truthy = Vec::new();
+    collect_and_chain_truthy_targets(condition, &mut truthy);
+    for target in truthy {
+        if let TruthyGuardTarget::Identifier(name) = target {
+            if !names.iter().any(|existing| existing == &name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Drops a guarded [`Type::GenuineUnknown`] identifier to [`Type::Unknown`] in a
+/// scope stack, so an access inside the guarded branch is not reported as
+/// `TS18046`.
+fn downgrade_guarded_genuine_unknown_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+) {
+    downgrade_genuine_unknown_in_scope(&guarded_value_identifiers(condition), scopes);
+}
+
+/// Drops each named [`Type::GenuineUnknown`] binding to [`Type::Unknown`] in a
+/// scope stack, so an access in the guarded branch is not reported as `TS18046`.
+pub(crate) fn downgrade_genuine_unknown_in_scope(names: &[String], scopes: &mut ScopeStack) {
+    for name in names {
+        let downgraded = scopes.resolve(name).and_then(|symbol| {
+            matches!(symbol.ty, Type::GenuineUnknown).then(|| SymbolInfo {
+                ty: Type::Unknown,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            })
+        });
+        if let Some(downgraded) = downgraded {
+            let _ = scopes.insert_current(name.clone(), downgraded);
+        }
+    }
+}
+
 fn collect_guard_operand_identifiers(condition: &ParsedExpression, names: &mut Vec<String>) {
     match condition {
         ParsedExpression::Unary {
@@ -996,13 +1049,46 @@ pub(crate) fn narrow_truthy_operand_symbol_table(
 
     let mut targets = Vec::new();
     collect_and_chain_truthy_targets(operand, &mut targets);
-    if targets.is_empty() {
+
+    // Identifiers the left side guards as a whole value — `typeof x === "object"`,
+    // `"p" in x`, `x instanceof C`, `Array.isArray(x)`, and a bare truthy `x`.
+    // A guard on a genuinely-`unknown` value (`x: unknown`) makes tsc narrow it,
+    // so a later access (`typeof x === "object" && "p" in x && x.p`) is not a
+    // `TS18046`. surge does not compute the narrowed shape for `unknown`, but it
+    // must at least stop treating the value as a genuine-unknown receiver — drop
+    // it to the degradation sentinel so the property-access check stays silent,
+    // matching tsc's no-cascade behavior.
+    let mut guarded_identifiers = Vec::new();
+    collect_guard_operand_identifiers(operand, &mut guarded_identifiers);
+    for target in &targets {
+        if let TruthyGuardTarget::Identifier(name) = target {
+            if !guarded_identifiers.iter().any(|existing| existing == name) {
+                guarded_identifiers.push(name.clone());
+            }
+        }
+    }
+
+    if targets.is_empty() && guarded_identifiers.is_empty() {
         return structured;
     }
 
     let base = structured.as_ref().unwrap_or(symbols);
     let mut narrowed = base.clone_with_reason(TypeCopyReason::ScopeOrContext);
     let mut changed = structured.is_some();
+
+    for name in &guarded_identifiers {
+        let downgraded = narrowed.get(name).and_then(|symbol| {
+            matches!(symbol.ty, Type::GenuineUnknown).then(|| SymbolInfo {
+                ty: Type::Unknown,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            })
+        });
+        if let Some(downgraded) = downgraded {
+            narrowed.insert(name.clone(), downgraded);
+            changed = true;
+        }
+    }
     for target in targets {
         let base_name = match &target {
             TruthyGuardTarget::Identifier(name) => name,
@@ -1059,6 +1145,15 @@ pub(crate) fn narrow_discriminant_in_scope(
         return;
     }
 
+    // In the branch where the condition holds, a guard on a genuinely-`unknown`
+    // value narrows it (tsc), so a later access inside the branch is not a
+    // `TS18046`. Drop the guarded identifier to the degradation sentinel so the
+    // property-access check stays silent. See the matching `&&`-operand path in
+    // `narrow_truthy_operand_symbol_table`.
+    if branch_is_true {
+        downgrade_guarded_genuine_unknown_in_scope(condition, scopes);
+    }
+
     if narrow_logical_guard_in_scope(condition, scopes, branch_is_true) {
         return;
     }
@@ -1072,6 +1167,9 @@ pub(crate) fn narrow_discriminant_in_scope(
         return;
     }
     if narrow_arraybuffer_isview_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
+    if narrow_truthy_identifier_in_scope(condition, scopes, branch_is_true) {
         return;
     }
 
@@ -1156,6 +1254,45 @@ pub(crate) fn narrow_discriminant_in_scope(
     // else/fall-through branch (which would then narrow an already-narrowed
     // non-union to nothing). `pop_child` restores the shadow.
     let _ = scopes.insert_current(base_name, narrowed_symbol);
+}
+
+/// Positive truthy narrowing of a bare-identifier guard (`if (x) { … }`): the
+/// true branch drops the nullish members (`undefined`/`void`) the truthy test
+/// excludes, so a `T | undefined` callee/value resolves to `T` inside the block.
+/// Only the true branch narrows; the falsy complement (`""`, `0`, `false`, …) is
+/// not modelled, so the false branch keeps the original type. The `!guard` unwrap
+/// in [`narrow_discriminant_in_scope`] routes `if (!x)` else/fall-through here
+/// with `branch_is_true` already flipped. Returns whether the condition was a
+/// bare identifier (always handled, so equality-discriminant parsing is skipped).
+fn narrow_truthy_identifier_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let ParsedExpression::Identifier { name, .. } = condition else {
+        return false;
+    };
+    if !branch_is_true {
+        return true;
+    }
+    let Some(symbol) = scopes.resolve(name) else {
+        return true;
+    };
+    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        surge_ts_types::remove_nullish(&symbol.ty)
+    });
+    if narrowed == symbol.ty {
+        return true;
+    }
+    let _ = scopes.insert_current(
+        name.clone(),
+        SymbolInfo {
+            ty: narrowed,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        },
+    );
+    true
 }
 
 /// Applies `typeof x === "tag"` narrowing in place to a `ScopeStack` (the if-body
@@ -1304,11 +1441,7 @@ pub(crate) fn evaluate_condition_expression_with_truthy_guards(
                 &narrowed_symbols,
                 ctx,
             );
-            ops::evaluate_logical_expression(
-                ParsedLogicalOperator::Or,
-                left_result,
-                right_result,
-            )
+            ops::evaluate_logical_expression(ParsedLogicalOperator::Or, left_result, right_result)
         }
         _ => evaluate_expression(expression, fallback_span, symbols, ctx),
     }

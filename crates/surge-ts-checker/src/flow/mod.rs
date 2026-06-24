@@ -71,6 +71,13 @@ pub(crate) struct FunctionFlowState {
     tracked_local_count: usize,
     scopes: Vec<FlowScope>,
     branch_captures: Vec<FlowBranchCapture>,
+    /// Maps a boolean `const`/`let` alias to the value identifiers its
+    /// initializer guards (`const ok = error && isError(error) && …` →
+    /// `["error"]`). An early-exit `if (!ok) return;` then narrows those
+    /// identifiers in the fall-through, the way tsc tracks aliased conditions.
+    /// Used only to drop a guarded genuine-`unknown` to the degradation
+    /// sentinel so a later access is not a spurious `TS18046`.
+    alias_guard_targets: HashMap<String, Vec<String>>,
 }
 
 impl Clone for FunctionFlowState {
@@ -87,6 +94,7 @@ impl Clone for FunctionFlowState {
             tracked_local_count: self.tracked_local_count,
             scopes: self.scopes.clone(),
             branch_captures: self.branch_captures.clone(),
+            alias_guard_targets: self.alias_guard_targets.clone(),
         }
     }
 }
@@ -171,11 +179,25 @@ impl FunctionFlowState {
             tracked_local_count: 0,
             scopes: Vec::new(),
             branch_captures: Vec::new(),
+            alias_guard_targets: HashMap::new(),
         }
     }
 
     pub(crate) fn tracked_local_count(&self) -> usize {
         self.tracked_local_count
+    }
+
+    /// Records that the boolean alias `name` guards `targets` (see
+    /// [`FunctionFlowState::alias_guard_targets`] field docs).
+    pub(crate) fn record_alias_guard_targets(&mut self, name: String, targets: Vec<String>) {
+        if targets.is_empty() {
+            return;
+        }
+        self.alias_guard_targets.insert(name, targets);
+    }
+
+    pub(crate) fn alias_guard_targets(&self, name: &str) -> Option<&[String]> {
+        self.alias_guard_targets.get(name).map(Vec::as_slice)
     }
 
     pub(crate) fn is_enabled(&self) -> bool {

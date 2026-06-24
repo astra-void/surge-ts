@@ -5,7 +5,9 @@ use super::*;
 use std::time::Instant;
 
 use surge_ts_syntax::{ParsedArrayElement, ParsedExpression, ParsedObjectProperty};
-use surge_ts_types::{ObjectProperty, PropertyMap, Type, TypeCopyReason, union_type, with_type_copy_reason};
+use surge_ts_types::{
+    ObjectProperty, PropertyMap, Type, TypeCopyReason, union_type, with_type_copy_reason,
+};
 
 use crate::arena::alloc_object_type;
 use crate::checks::function::check_arrow_function_expression;
@@ -74,6 +76,7 @@ pub(crate) fn infer_array_literal(
                 return InferredExpression::Known(Type::Array(Box::new(Type::Any)));
             }
             InferredExpression::Known(Type::Unknown)
+            | InferredExpression::Known(Type::GenuineUnknown)
             | InferredExpression::UnresolvedIdentifier { .. }
             | InferredExpression::MissingProperty { .. }
             | InferredExpression::Unknown => {

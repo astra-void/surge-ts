@@ -310,7 +310,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
         match body {
             ParsedArrowFunctionBody::Expression(expression) => {
                 let return_type_for_body = match &return_type {
-                    Type::Any | Type::Unknown | Type::Void => None,
+                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Void => None,
                     ty => Some(ty),
                 };
                 let inferred_body = match return_type_for_body {
@@ -327,7 +327,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
 
                 if !has_explicit_return_type {
                     if let InferredExpression::Known(body_type) = inferred_body {
-                        if body_type != Type::Unknown {
+                        if !body_type.is_unknown() {
                             return_type = body_type;
                         }
                     }
@@ -341,7 +341,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                 );
                 let body_flow = analyze_function_body_flow(&statements);
                 let return_type_for_body = match &return_type {
-                    Type::Any | Type::Unknown | Type::Void => None,
+                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Void => None,
                     ty => Some(ty),
                 };
                 check_function_body(

@@ -169,8 +169,9 @@ pub(crate) fn collect_global_variables(
             let var = match statement {
                 ParsedStatement::VariableDeclaration(var) => Some(var),
                 ParsedStatement::ExportDeclaration(export) => {
-                    if let surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } =
-                        export.as_ref()
+                    if let surge_ts_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    } = export.as_ref()
                     {
                         if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
                             Some(var)

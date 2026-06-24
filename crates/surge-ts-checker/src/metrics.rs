@@ -411,8 +411,7 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     let canonicalize_hit_rate = if io_counters.canonicalize_call_count == 0 {
         0.0
     } else {
-        io_counters.canonicalize_cache_hit_count as f64
-            / io_counters.canonicalize_call_count as f64
+        io_counters.canonicalize_cache_hit_count as f64 / io_counters.canonicalize_call_count as f64
             * 100.0
     };
     eprintln!("    canonicalize_cache_hit_rate: {canonicalize_hit_rate:.1}%");

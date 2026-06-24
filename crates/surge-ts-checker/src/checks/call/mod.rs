@@ -74,14 +74,14 @@ pub(crate) fn check_call_like(
         return None;
     };
 
-    if matches!(symbol.ty, Type::Unknown) {
+    if symbol.ty.is_unknown() {
         return None;
     }
 
     // A callee typed by a named declaration (`declare var Number: NumberConstructor`)
     // is a nominal reference; peel it so its call/construct signature is visible.
     let callee_ty = symbol.ty.peeled();
-    if matches!(callee_ty, Type::Unknown) {
+    if callee_ty.is_unknown() {
         return None;
     }
 
@@ -170,7 +170,7 @@ fn check_callable_union_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    if union.types().iter().any(|ty| matches!(ty, Type::Unknown)) {
+    if union.types().iter().any(|ty| ty.is_unknown()) {
         return None;
     }
 
@@ -407,7 +407,7 @@ pub(crate) fn check_new_like(
             )
         }
         Type::Any => Some(Type::Any),
-        Type::Unknown => None,
+        Type::Unknown | Type::GenuineUnknown => None,
         _ => {
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2351(ctx.file_name.clone()),
@@ -434,7 +434,7 @@ pub(crate) fn check_optional_call_like(
         _ => return None,
     };
 
-    if callee_type == Type::Unknown {
+    if callee_type.is_unknown() {
         return None;
     }
 
@@ -442,7 +442,7 @@ pub(crate) fn check_optional_call_like(
 
     match base_type {
         Type::Any => Some(Type::Any),
-        Type::Unknown => None,
+        Type::Unknown | Type::GenuineUnknown => None,
         Type::Function(function_type) => check_function_type_call(
             &function_type,
             callee_span,
@@ -560,7 +560,7 @@ pub(crate) fn check_function_type_call(
 
         match inferred_argument {
             InferredExpression::Known(argument_type) => {
-                if argument_type == Type::Unknown {
+                if argument_type.is_unknown() {
                     continue;
                 }
 
@@ -677,14 +677,17 @@ fn substituted_construct_signature(
 fn parameter_is_void_optional(ty: &Type) -> bool {
     match ty {
         Type::Void => true,
-        Type::Union(union) => union.types().iter().any(|member| matches!(member, Type::Void)),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| matches!(member, Type::Void)),
         _ => false,
     }
 }
 
 fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
-        Type::Unknown => true,
+        Type::Unknown | Type::GenuineUnknown => true,
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {

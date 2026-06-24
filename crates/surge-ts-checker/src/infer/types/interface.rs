@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 use surge_ts_syntax::{ParsedFunctionType, ParsedInterfaceMember, ParsedNamedType, ParsedType};
 use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type};
 
@@ -235,7 +234,7 @@ pub(crate) fn resolve_interface_declaration(
                 }
             }
             Type::Any => base_is_open = true,
-            Type::Unknown => base_is_open |= in_declaration_file,
+            Type::Unknown | Type::GenuineUnknown => base_is_open |= in_declaration_file,
             _ => {}
         }
     }

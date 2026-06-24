@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedConditionalType, ParsedFunctionType, ParsedFunctionTypeParameter,
@@ -10,9 +9,8 @@ use surge_ts_syntax::{
     ParsedTemplateLiteralType, ParsedType, ParsedTypeParameter, TextSpan,
 };
 use surge_ts_types::{
-    NumberLiteralType, ObjectProperty, PropertyMap, Type, TypeCopyReason, is_assignable_to,
-    union_type,
-    with_type_copy_reason,
+    NumberLiteralType, ObjectProperty, ObjectType, PropertyMap, Type, TypeCopyReason,
+    is_assignable_to, union_type, with_type_copy_reason,
 };
 
 use crate::arena::{alloc_function_type, alloc_object_type};
@@ -54,6 +52,10 @@ pub(crate) fn resolve_parsed_type(
         },
         ParsedType::Unknown => ResolvedType {
             ty: Type::Unknown,
+            had_error: false,
+        },
+        ParsedType::UnknownKeyword => ResolvedType {
+            ty: Type::GenuineUnknown,
             had_error: false,
         },
         ParsedType::Never => ResolvedType {
@@ -158,7 +160,10 @@ pub(crate) fn resolve_parsed_type(
                 }
             }
 
-            ResolvedType { ty, had_error: false }
+            ResolvedType {
+                ty,
+                had_error: false,
+            }
         }
         ParsedType::KeyOf(inner) => {
             let resolved_inner = resolve_parsed_type(*inner, ctx, resolving, substitution);
@@ -329,6 +334,11 @@ pub(crate) fn resolve_conditional_type(
         _ => None,
     };
 
+    // Kept for `infer X` binding: the parsed pattern is matched structurally
+    // against the resolved check type on the true branch so captures like
+    // `T` in `S extends Box<infer T> ? T : never` resolve to the real argument.
+    let extends_pattern = (*conditional.extends_type).clone();
+
     let resolved_extends =
         resolve_parsed_type(*conditional.extends_type, ctx, resolving, substitution);
     // Only bail when the extends pattern is structureless: a usable shape that
@@ -337,7 +347,7 @@ pub(crate) fn resolve_conditional_type(
     // still enough to decide the branch assignability test, so the conditional
     // must proceed rather than collapse — that collapse is what blocked
     // `ComponentProps<"input">` from selecting its `JSX.IntrinsicElements[T]` branch.
-    if resolved_extends.had_error && matches!(resolved_extends.ty, Type::Unknown) {
+    if resolved_extends.had_error && resolved_extends.ty.is_unknown() {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,
@@ -379,9 +389,10 @@ pub(crate) fn resolve_conditional_type(
             // lets `ComponentProps<"input">` skip its `JSXElementConstructor<infer>`
             // branch (whose body resolves to `unknown` here) and reach the
             // `keyof JSX.IntrinsicElements` branch.
-            let branch = if !matches!(resolved_extends.ty, Type::Unknown)
+            let branch = if !resolved_extends.ty.is_unknown()
                 && is_assignable_to(&member, &resolved_extends.ty)
             {
+                bind_infer_captures(&extends_pattern, &member, &mut member_substitution);
                 (*conditional.true_type).clone()
             } else {
                 (*conditional.false_type).clone()
@@ -405,7 +416,7 @@ pub(crate) fn resolve_conditional_type(
     // Non-distributive: only evaluate when the check type is concrete enough for a
     // meaningful assignability test. An unresolved generic parameter resolves to
     // `Unknown`, which we treat as "cannot decide" and degrade.
-    if matches!(resolved_check.ty, Type::Unknown) || matches!(resolved_extends.ty, Type::Unknown) {
+    if resolved_check.ty.is_unknown() || resolved_extends.ty.is_unknown() {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,
@@ -424,13 +435,56 @@ pub(crate) fn resolve_conditional_type(
         };
     }
 
-    let branch = if is_assignable_to(&resolved_check.ty, &resolved_extends.ty) {
-        *conditional.true_type
+    if is_assignable_to(&resolved_check.ty, &resolved_extends.ty) {
+        let mut branch_substitution =
+            substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+        bind_infer_captures(
+            &extends_pattern,
+            &resolved_check.ty,
+            &mut branch_substitution,
+        );
+        resolve_parsed_type(*conditional.true_type, ctx, resolving, &branch_substitution)
     } else {
-        *conditional.false_type
-    };
+        resolve_parsed_type(*conditional.false_type, ctx, resolving, substitution)
+    }
+}
 
-    resolve_parsed_type(branch, ctx, resolving, substitution)
+/// Structurally matches the parsed `extends` pattern against the resolved check
+/// type, binding each `infer X` capture to the corresponding fragment so the
+/// conditional's true branch can reference it. Handles the common
+/// `Name<… infer X …>` and `Array<infer X>` shapes (recursing into nested
+/// arguments); positions surge cannot line up are left unbound, so the branch
+/// degrades like any other unresolved name rather than misbinding.
+fn bind_infer_captures(
+    extends: &ParsedType,
+    check: &Type,
+    substitution: &mut TypeParameterSubstitution,
+) {
+    match extends {
+        ParsedType::Infer(name) => {
+            substitution.insert(name.clone(), check.clone());
+        }
+        ParsedType::Named(named) => {
+            if named.type_arguments.is_empty() {
+                return;
+            }
+            if named.name == "Array"
+                && named.type_arguments.len() == 1
+                && let Type::Array(element) = check
+            {
+                bind_infer_captures(&named.type_arguments[0], element, substitution);
+                return;
+            }
+            if let Type::Reference(reference) = check {
+                for (pattern_argument, check_argument) in
+                    named.type_arguments.iter().zip(reference.arguments.iter())
+                {
+                    bind_infer_captures(pattern_argument, check_argument, substitution);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn resolve_tuple_type(
@@ -671,10 +725,7 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         return Type::Any;
     }
 
-    let members: Vec<Type> = members
-        .into_iter()
-        .filter(|ty| !matches!(ty, Type::Unknown))
-        .collect();
+    let members: Vec<Type> = members.into_iter().filter(|ty| !ty.is_unknown()).collect();
 
     // `T & unknown ⇒ T`: with the `unknown` operands dropped, a lone survivor is
     // returned unchanged. Peeling and re-merging it (below) would force a lazy
@@ -705,6 +756,27 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         })
         .collect();
 
+    // Brand idiom: `string & { _?: never }` (and other `Base & {…all-optional…}`
+    // shapes, e.g. `LiteralUnion<L, B> = L | (B & { _?: never })`). When every
+    // object operand only contributes optional members, the object side is a
+    // phantom "brand" and the intersection is structurally just the non-object
+    // side — tsc treats `string & {}` as assignable both to and from `string`.
+    // Collapsing to the non-object member keeps that bidirectional behavior;
+    // falling through to the object-merge below would keep only `{ _?: never }`
+    // and wrongly reject `(string & brand) → string`.
+    if !object_members.is_empty()
+        && object_members
+            .iter()
+            .all(|object| is_brand_like_object(object))
+    {
+        let mut non_object = members.iter().filter(|ty| !matches!(ty, Type::Object(_)));
+        if let Some(first) = non_object.next() {
+            if non_object.next().is_none() {
+                return first.clone();
+            }
+        }
+    }
+
     if !object_members.is_empty() {
         let mut properties: PropertyMap = PropertyMap::new();
         let mut string_index_type: Option<Type> = None;
@@ -734,6 +806,20 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         Some(member) => member,
         None => Type::Unknown,
     }
+}
+
+/// Whether an object contributes no required structure to an intersection — all
+/// properties optional, no index signature, no call/construct signature. Such an
+/// operand is a phantom "brand" (`{ _?: never }`), so `Base & brand` is
+/// structurally just `Base`.
+fn is_brand_like_object(object: &ObjectType) -> bool {
+    object.string_index_type.is_none()
+        && object.call_signature().is_none()
+        && object.construct_signature().is_none()
+        && object
+            .properties
+            .values()
+            .all(|property| property.is_optional())
 }
 
 pub(crate) fn resolve_named_type(
@@ -1054,7 +1140,26 @@ fn tag_generic_object_reference(
     cacheable: bool,
     ctx: &CheckerContext,
 ) -> ResolvedType {
-    match (display_name, arguments, &resolved.ty) {
+    // When the parsed arguments were not renderable (e.g. an object-literal type
+    // argument), synthesize a display from the resolved argument types so the
+    // instantiation still becomes a nominal `Type::Reference` carrying its
+    // arguments. That representation is what conditional `infer` capture matches
+    // against; without it an object-argument instantiation degraded to a bare
+    // structural object and lost its arguments.
+    let effective_display: Option<String> = match (display_name, &arguments) {
+        (Some(display), _) => Some(display.to_string()),
+        (None, Some(arguments)) if !arguments.is_empty() => Some(format!(
+            "{}<{}>",
+            decl_key.name,
+            arguments
+                .iter()
+                .map(|argument| argument.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        _ => None,
+    };
+    match (effective_display.as_deref(), arguments, &resolved.ty) {
         (Some(display), Some(arguments), Type::Object(object)) if !resolved.had_error => {
             // Tag the structural object with the instantiation's display name so a
             // site that peels the reference (e.g. the TS2353 excess-property
@@ -1223,7 +1328,10 @@ pub(crate) fn resolve_mapped_type(
         let resolved_value =
             resolve_parsed_type(*mapped.value_type, ctx, resolving, &value_substitution);
         return ResolvedType {
-            ty: Type::Object(alloc_object_type(PropertyMap::new(), Some(resolved_value.ty))),
+            ty: Type::Object(alloc_object_type(
+                PropertyMap::new(),
+                Some(resolved_value.ty),
+            )),
             had_error: resolved_value.had_error,
         };
     }
@@ -1645,9 +1753,9 @@ fn resolve_indexed_access_type(
     //   report `TS2339`/`TS2538` there, so it must not be suppressed.
     let object_is_explicit_top_keyword = matches!(
         object_type_for_placeholder.as_ref(),
-        ParsedType::Unknown | ParsedType::Any
+        ParsedType::Unknown | ParsedType::UnknownKeyword | ParsedType::Any
     );
-    if matches!(resolved_object.ty, Type::Unknown)
+    if resolved_object.ty.is_unknown()
         && object_placeholder_name.is_none()
         && !object_is_explicit_top_keyword
     {
@@ -1725,8 +1833,11 @@ fn resolve_indexed_access_type(
                     had_error: false,
                 }
             } else {
-                let mut diagnostic =
-                    Diagnostic::ts2339(&num.value, &resolved_object.ty.name(), ctx.file_name.clone());
+                let mut diagnostic = Diagnostic::ts2339(
+                    &num.value,
+                    &resolved_object.ty.name(),
+                    ctx.file_name.clone(),
+                );
                 if let Some(span) = indexed_access.span {
                     diagnostic = diagnostic.with_span(convert_span(span));
                 }

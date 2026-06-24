@@ -367,7 +367,7 @@ pub(crate) fn evaluate_expression(
 
             match (left_result, right_result) {
                 (InferredExpression::Known(left_type), InferredExpression::Known(right_type)) => {
-                    if left_type == Type::Any || left_type == Type::Unknown {
+                    if left_type == Type::Any || left_type.is_unknown() {
                         InferredExpression::Known(left_type)
                     } else if left_type == Type::Undefined {
                         InferredExpression::Known(right_type)
@@ -376,10 +376,18 @@ pub(crate) fn evaluate_expression(
                         InferredExpression::Known(union_type(vec![filtered_left, right_type]))
                     }
                 }
-                (InferredExpression::Known(Type::Unknown) | InferredExpression::Unknown, _)
-                | (_, InferredExpression::Known(Type::Unknown) | InferredExpression::Unknown) => {
-                    InferredExpression::Unknown
-                }
+                (
+                    InferredExpression::Known(Type::Unknown)
+                    | InferredExpression::Known(Type::GenuineUnknown)
+                    | InferredExpression::Unknown,
+                    _,
+                )
+                | (
+                    _,
+                    InferredExpression::Known(Type::Unknown)
+                    | InferredExpression::Known(Type::GenuineUnknown)
+                    | InferredExpression::Unknown,
+                ) => InferredExpression::Unknown,
                 _ => InferredExpression::Unknown,
             }
         }
@@ -397,9 +405,7 @@ pub(crate) fn evaluate_expression(
             // x.p`) plus each identifier/property the `&&` chain proves non-nullish
             // (`a.b && a.b > c`).
             let narrowed = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::And)
-                .then(|| {
-                    crate::checks::function::narrow_truthy_operand_symbol_table(left, symbols)
-                })
+                .then(|| crate::checks::function::narrow_truthy_operand_symbol_table(left, symbols))
                 .flatten();
             let right_result = evaluate_expression(
                 right,
@@ -463,9 +469,8 @@ pub(crate) fn evaluate_expression(
             // x.b` checks `x.a` against the `"a"` member only.
             let true_symbols =
                 crate::checks::function::narrow_condition_symbol_table(condition, symbols, true);
-            let false_symbols = crate::checks::function::narrow_condition_symbol_table(
-                condition, symbols, false,
-            );
+            let false_symbols =
+                crate::checks::function::narrow_condition_symbol_table(condition, symbols, false);
             let true_result = evaluate_expression(
                 when_true,
                 when_true_span.or(fallback_span),
@@ -754,11 +759,13 @@ pub(crate) fn evaluate_expression(
         }
         ParsedExpression::PropertyAccess {
             object,
+            object_span,
             property_name,
             property_span,
             is_bracketed,
             ..
         } => {
+            maybe_emit_unknown_property_receiver(object, *object_span, fallback_span, symbols, ctx);
             let inferred_expression = infer_expression(expression, symbols, ctx);
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
@@ -825,7 +832,7 @@ pub(crate) fn report_inferred_expression(
 ) {
     match inferred_expression {
         InferredExpression::Known(known_type) => {
-            if known_type == Type::Unknown {
+            if known_type.is_unknown() {
                 return;
             }
         }
@@ -880,6 +887,45 @@ pub(crate) fn report_inferred_expression(
     }
 }
 
+fn maybe_emit_unknown_property_receiver(
+    object: &ParsedExpression,
+    object_span: Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let InferredExpression::Known(Type::GenuineUnknown) = infer_expression(object, symbols, ctx)
+    else {
+        return;
+    };
+
+    let Some(name) = property_receiver_name(object) else {
+        return;
+    };
+
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts18046(name, ctx.file_name.clone()),
+        choose_span(object_span, fallback_span),
+    ));
+}
+
+fn property_receiver_name(expression: &ParsedExpression) -> Option<String> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => Some(name.clone()),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let mut name = property_receiver_name(object)?;
+            name.push('.');
+            name.push_str(property_name);
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
 fn suggested_unresolved_name(name: &str, ctx: &CheckerContext) -> Option<String> {
     let mut candidates = ctx
         .symbols
@@ -924,7 +970,7 @@ fn evaluate_optional_index_access(
 
     match base_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
         Type::Tuple(elements) => {
             let index_result =
                 evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
@@ -980,7 +1026,7 @@ fn evaluate_optional_index_access(
             ]))
         }
         Type::Array(element_type) => {
-            if matches!(element_type.as_ref(), Type::Unknown) {
+            if element_type.as_ref().is_unknown() {
                 return InferredExpression::Unknown;
             }
 
@@ -1043,7 +1089,7 @@ fn evaluate_index_access(
 
     match &symbol.ty {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
         Type::Tuple(elements) => {
             let index_result =
                 evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
@@ -1094,7 +1140,7 @@ fn evaluate_index_access(
             InferredExpression::Known(union_type(elements.to_vec()))
         }
         Type::Array(element_type) => {
-            if matches!(element_type.as_ref(), Type::Unknown) {
+            if element_type.as_ref().is_unknown() {
                 return InferredExpression::Unknown;
             }
 
@@ -1154,10 +1200,22 @@ fn evaluate_index_access(
             // …) resolves to an indexed-access type (`T[K]`, an index-signature
             // value, …) and is NOT a missing-property error — emitting one here was
             // a false positive that mis-named the receiver as the absent property.
-            if matches!(
-                index_type,
-                Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
-            ) {
+            //
+            // Only an object-like receiver can be missing a literal-named member.
+            // Primitives carry an apparent type with index signatures (`string`'s
+            // numeric index returns `string`, `string["length"]` is a real member,
+            // …), so a literal index there is never a TS2339 — emitting one was a
+            // false positive (`path[0]` reported as `Property 'path' ... 'string'`).
+            let receiver_is_object_like = matches!(
+                symbol.ty,
+                Type::Object(_) | Type::Function(_) | Type::Reference(_)
+            );
+            if receiver_is_object_like
+                && matches!(
+                    index_type,
+                    Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+                )
+            {
                 let object_type_name = symbol.ty.name();
                 ctx.push(diagnostic_with_syntax_span(
                     Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone()),

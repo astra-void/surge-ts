@@ -358,17 +358,36 @@ fn resolve_default_and_named_import(
             }
         }
         None => {
-            if !should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files)
+            if allows_synthetic_default_import(ctx, resolved_index, program_files) && !*is_type_only
             {
+                bind_synthetic_default_import(local_name, local_symbols, symbols);
+            } else if !should_bind_unknown_for_missing_export(
+                &export_table,
+                resolved_index,
+                program_files,
+            ) {
                 emit_missing_export_diagnostic(
                     ctx,
                     &import.module_specifier,
                     "default",
                     *name_span,
                 );
-            }
-
-            if *is_type_only {
+                if *is_type_only {
+                    let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+                        local_name.clone(),
+                        ctx.file_name.clone(),
+                        *name_span,
+                        vec![],
+                        ParsedType::Unknown,
+                        None,
+                    ));
+                    if type_declarations.get(local_name).is_none() {
+                        let _ = type_declarations.insert(local_name.clone(), declaration);
+                    }
+                } else {
+                    insert_unknown_value_import(local_name, symbols);
+                }
+            } else if *is_type_only {
                 let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
                     local_name.clone(),
                     ctx.file_name.clone(),
@@ -520,17 +539,8 @@ fn resolve_default_import(
     };
 
     let Some(default_symbol) = export_table.get_shared_value("default") else {
-        if allows_synthetic_default_import(resolved_index, program_files) {
-            if local_symbols.get(local_name).is_none() {
-                symbols.insert(
-                    local_name.clone(),
-                    SymbolInfo {
-                        ty: Type::Any,
-                        kind: SymbolKind::Const,
-                        function_signature: None,
-                    },
-                );
-            }
+        if allows_synthetic_default_import(ctx, resolved_index, program_files) {
+            bind_synthetic_default_import(local_name, local_symbols, symbols);
             return;
         }
 
@@ -595,6 +605,25 @@ fn resolve_import_equals(
         }
         None => insert_unknown_value_import(local_name, symbols),
     }
+}
+
+fn bind_synthetic_default_import(
+    local_name: &str,
+    local_symbols: &SymbolTable,
+    symbols: &mut SymbolTable,
+) {
+    if local_symbols.get(local_name).is_some() {
+        return;
+    }
+
+    symbols.insert(
+        local_name.to_string(),
+        SymbolInfo {
+            ty: Type::Any,
+            kind: SymbolKind::Const,
+            function_signature: None,
+        },
+    );
 }
 
 thread_local! {

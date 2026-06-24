@@ -77,11 +77,19 @@ pub struct CheckerOptions {
 }
 
 impl CheckerOptions {
+    pub const ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL: &'static str =
+        "\0allowSyntheticDefaultImports";
+
     /// Whether `compilerOptions.types` contained the `"*"` wildcard. Selects the
     /// node install-hint variant (TS2580 with a wildcard, TS2591 without),
     /// matching TypeScript's `usesWildcardTypes` branch.
     pub(crate) fn types_uses_wildcard(&self) -> bool {
         self.types.iter().any(|name| name == "*")
+    }
+
+    pub(crate) fn allow_synthetic_default_imports(&self) -> bool {
+        self.resolved_modules
+            .contains_key(Self::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL)
     }
 }
 
@@ -154,7 +162,12 @@ pub(crate) struct CheckerContext {
     // O(D^2) — e.g. a single file with thousands of unresolved-name reports. The
     // set makes the check O(1); `diagnostic_keys_len` lets `push` detect when
     // `diagnostics` was mutated directly (clear/take/truncate) and rebuild lazily.
-    diagnostic_keys: HashSet<(String, String, String, Option<surge_ts_diagnostics::TextSpan>)>,
+    diagnostic_keys: HashSet<(
+        String,
+        String,
+        String,
+        Option<surge_ts_diagnostics::TextSpan>,
+    )>,
     diagnostic_keys_len: usize,
     pub(crate) stats: CompatibilityStats,
     pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
@@ -561,7 +574,10 @@ impl CheckerContext {
             self.diagnostic_keys_len = self.diagnostics.len();
         }
 
-        if !self.diagnostic_keys.insert(Self::diagnostic_dedup_key(&diagnostic)) {
+        if !self
+            .diagnostic_keys
+            .insert(Self::diagnostic_dedup_key(&diagnostic))
+        {
             return;
         }
 
@@ -571,7 +587,12 @@ impl CheckerContext {
 
     fn diagnostic_dedup_key(
         diagnostic: &Diagnostic,
-    ) -> (String, String, String, Option<surge_ts_diagnostics::TextSpan>) {
+    ) -> (
+        String,
+        String,
+        String,
+        Option<surge_ts_diagnostics::TextSpan>,
+    ) {
         (
             diagnostic.code.to_string(),
             diagnostic.file_name.clone(),

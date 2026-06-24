@@ -7,9 +7,7 @@
 use std::collections::HashSet;
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{
-    ParsedExportDeclaration, ParsedImportKind, ParsedStatement, TextSpan,
-};
+use surge_ts_syntax::{ParsedExportDeclaration, ParsedImportKind, ParsedStatement, TextSpan};
 
 use crate::context::{CheckerContext, convert_span};
 

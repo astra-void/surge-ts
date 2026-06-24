@@ -64,7 +64,8 @@ pub(crate) fn check_array_map_call(
             }),
         ))),
         InferredExpression::Known(Type::Any) => Some(Type::Array(Box::new(Type::Any))),
-        InferredExpression::Known(Type::Unknown) => None,
+        InferredExpression::Known(Type::Unknown)
+        | InferredExpression::Known(Type::GenuineUnknown) => None,
         InferredExpression::UnresolvedIdentifier { .. }
         | InferredExpression::MissingProperty { .. }
         | InferredExpression::Unknown => None,
@@ -112,7 +113,8 @@ pub(crate) fn check_array_find_call(
             Type::Undefined,
         ])),
         InferredExpression::Known(Type::Any) => Some(Type::Any),
-        InferredExpression::Known(Type::Unknown) => None,
+        InferredExpression::Known(Type::Unknown)
+        | InferredExpression::Known(Type::GenuineUnknown) => None,
         InferredExpression::UnresolvedIdentifier { .. }
         | InferredExpression::MissingProperty { .. }
         | InferredExpression::Unknown => None,

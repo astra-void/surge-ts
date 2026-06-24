@@ -8,6 +8,7 @@ use surge_ts_syntax::{ParsedExpression, TextSpan};
 use surge_ts_types::{Type, is_assignable_to, union_type};
 
 use crate::context::CheckerContext;
+use crate::modules::{PROMISE_LIKE_VALUE_PROPERTY, promise_like_type};
 use crate::program::{record_program_timing, record_property_lookup};
 use crate::symbols::SymbolTable;
 
@@ -30,7 +31,7 @@ pub(crate) fn infer_index_access(
 
     match &symbol.ty {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in union_type.types() {
@@ -50,7 +51,7 @@ pub(crate) fn infer_index_access(
                     }
                     Type::Array(element_type) => {
                         let element_type = element_type.as_ref();
-                        if matches!(element_type, Type::Unknown) {
+                        if element_type.is_unknown() {
                             return InferredExpression::Unknown;
                         }
 
@@ -74,7 +75,7 @@ pub(crate) fn infer_index_access(
         }
         Type::Array(element_type) => {
             let element_type = element_type.as_ref();
-            if matches!(element_type, Type::Unknown) {
+            if element_type.is_unknown() {
                 return InferredExpression::Unknown;
             }
 
@@ -159,7 +160,7 @@ pub(crate) fn infer_property_access(
 
     let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in union_type.types() {
@@ -217,7 +218,10 @@ pub(crate) fn infer_property_call(
 
     let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
+        _ if property_name == "then" && promise_like_value_type(&object_type).is_some() => {
+            InferredExpression::Known(promise_like_type(Type::Unknown))
+        }
         Type::Array(element_type) if property_name == "find" => {
             InferredExpression::Known(surge_ts_types::union_type(vec![
                 element_type.as_ref().clone(),
@@ -264,6 +268,15 @@ pub(crate) fn infer_property_call(
     result
 }
 
+fn promise_like_value_type(ty: &Type) -> Option<Type> {
+    let Type::Object(object_type) = ty.peeled() else {
+        return None;
+    };
+    object_type
+        .get_property_type(PROMISE_LIKE_VALUE_PROPERTY)
+        .cloned()
+}
+
 /// Non-optional element access on an arbitrary object expression (`expr[index]`).
 /// Mirrors tuple/array indexing without the `| undefined` that optional access
 /// adds, so a destructured `const [, setX] = useState()` reads the exact element
@@ -292,7 +305,7 @@ pub(crate) fn infer_element_access(
             infer_tuple_index_access(elements, index, index_span, symbols, ctx)
         }
         Type::Array(element_type) => {
-            if matches!(element_type.as_ref(), Type::Unknown) {
+            if element_type.as_ref().is_unknown() {
                 return InferredExpression::Unknown;
             }
             match infer_expression(index, symbols, ctx) {
@@ -329,7 +342,7 @@ pub(crate) fn infer_optional_index_access(
 
     match &base_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
         Type::Tuple(elements) => {
             let result = infer_tuple_index_access(elements, index, index_span, symbols, ctx);
             match result {
@@ -341,7 +354,7 @@ pub(crate) fn infer_optional_index_access(
         }
         Type::Array(element_type) => {
             let element_type = element_type.as_ref();
-            if matches!(element_type, Type::Unknown) {
+            if element_type.is_unknown() {
                 return InferredExpression::Unknown;
             }
 
@@ -385,13 +398,15 @@ pub(crate) fn infer_optional_property_access(
     let base_type = surge_ts_types::remove_undefined(&object_type);
 
     let result_type = match base_type {
-        Type::Unknown | Type::Any => InferredExpression::Known(base_type.clone()),
+        Type::Unknown | Type::GenuineUnknown | Type::Any => {
+            InferredExpression::Known(base_type.clone())
+        }
         Type::Union(ref union_type) => {
             let mut result_types = Vec::new();
             let mut saw_known = false;
 
             for ty in union_type.types() {
-                if *ty == Type::Undefined || *ty == Type::Unknown {
+                if *ty == Type::Undefined || ty.is_unknown() {
                     continue;
                 }
 

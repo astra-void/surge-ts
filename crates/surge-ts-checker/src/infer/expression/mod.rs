@@ -194,7 +194,7 @@ pub(crate) fn infer_expression(
 
             match (left_type, right_type) {
                 (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty)) => {
-                    if left_ty == Type::Any || left_ty == Type::Unknown {
+                    if left_ty == Type::Any || left_ty.is_unknown() {
                         InferredExpression::Known(left_ty)
                     } else if left_ty == Type::Undefined {
                         InferredExpression::Known(right_ty)
@@ -267,7 +267,7 @@ pub(crate) fn infer_expression(
                         );
                     InferredExpression::Known(return_type)
                 }
-                Type::Unknown | Type::Any => InferredExpression::Unknown,
+                Type::Unknown | Type::GenuineUnknown | Type::Any => InferredExpression::Unknown,
                 _ => InferredExpression::Unknown,
             },
             None => InferredExpression::Unknown,
@@ -382,5 +382,5 @@ pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {
 }
 
 fn is_known_non_unknown(result: &InferredExpression) -> bool {
-    matches!(result, InferredExpression::Known(ty) if *ty != Type::Unknown)
+    matches!(result, InferredExpression::Known(ty) if !ty.is_unknown())
 }

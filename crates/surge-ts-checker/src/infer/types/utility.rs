@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{ParsedType, TextSpan};
 use surge_ts_types::{ObjectProperty, PropertyMap, Type};
@@ -109,7 +108,10 @@ pub(crate) fn resolve_type_alias(
     // builtin utilities (which clone the source property, keeping optionality)
     // even from the physical lib.
     let physical_modifier_utility = is_physical_default_lib_file_name(&alias.file_name)
-        && matches!(alias.name.as_str(), "Pick" | "Omit" | "Required" | "Readonly");
+        && matches!(
+            alias.name.as_str(),
+            "Pick" | "Omit" | "Required" | "Readonly"
+        );
     if from_default_lib || physical_modifier_utility {
         if let Some(resolved) = resolve_builtin_utility_alias(
             &alias.name,
@@ -131,7 +133,17 @@ pub(crate) fn resolve_type_alias(
         };
     }
 
-    let namespace_prefix = alias.name.rsplit_once('.').map(|(prefix, _)| prefix.to_string());
+    // Derive the namespace prefix from the *original* declared name, not the local
+    // binding: a namespace member imported by name (`import { MouseEventHandler }
+    // from "react"`) is renamed to its bare form, but its body still references
+    // siblings (`EventHandler`, `MouseEvent`) that only resolve under the `React.`
+    // prefix. `declared_name` preserves the qualified source name (`React.X`).
+    let namespace_prefix = alias
+        .declared_name
+        .as_deref()
+        .unwrap_or(&alias.name)
+        .rsplit_once('.')
+        .map(|(prefix, _)| prefix.to_string());
     let is_namespace_member = namespace_prefix.is_some();
     if let Some(prefix) = namespace_prefix {
         ctx.namespace_member_resolution_depth += 1;
@@ -500,7 +512,10 @@ mod tests {
             panic!("Omit must resolve to an object");
         };
         let a = object.properties.get("a").expect("`a` is kept");
-        assert!(a.is_optional(), "Omit must keep `a` optional, not force it required");
+        assert!(
+            a.is_optional(),
+            "Omit must keep `a` optional, not force it required"
+        );
         assert!(object.properties.get("b").is_none(), "`b` is omitted");
     }
 }

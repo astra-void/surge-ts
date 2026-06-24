@@ -49,6 +49,7 @@ pub(crate) fn infer_arrow_function(
                 surge_ts_syntax::ParsedType::Boolean => Some(Type::Boolean),
                 surge_ts_syntax::ParsedType::Any => Some(Type::Any),
                 surge_ts_syntax::ParsedType::Unknown => Some(Type::Unknown),
+                surge_ts_syntax::ParsedType::UnknownKeyword => Some(Type::GenuineUnknown),
                 surge_ts_syntax::ParsedType::Undefined => Some(Type::Undefined),
                 surge_ts_syntax::ParsedType::Void => Some(Type::Void),
                 _ => None,

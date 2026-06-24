@@ -7,8 +7,8 @@ use surge_ts_diagnostics::{Diagnostic, DiagnosticCode};
 use surge_ts_syntax::{
     ParsedAssignment, ParsedBindingName, ParsedExpression, ParsedForOfStatement,
     ParsedFunctionBodyStatement, ParsedIfStatement, ParsedReturnStatement, ParsedSwitchStatement,
-    ParsedThisPropertyAssignment, ParsedTryStatement, ParsedType, ParsedVariableDeclaration,
-    ParsedVariableKind, ParsedWhileStatement,
+    ParsedThisPropertyAssignment, ParsedTryStatement, ParsedType, ParsedUnaryOperator,
+    ParsedVariableDeclaration, ParsedVariableKind, ParsedWhileStatement,
 };
 use surge_ts_types::{Type, TypeCopyReason, is_assignable_to, union_type, with_type_copy_reason};
 
@@ -34,7 +34,7 @@ use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
 pub(crate) fn should_check_missing_return(return_type: &Type) -> bool {
     !matches!(
         return_type,
-        Type::Any | Type::Unknown | Type::Undefined | Type::Void
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Undefined | Type::Void
     ) && !type_contains_unknown(return_type)
 }
 
@@ -48,7 +48,7 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
             const { std::cell::RefCell::new(Vec::new()) };
     }
     match ty {
-        Type::Unknown => true,
+        Type::Unknown | Type::GenuineUnknown => true,
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {
@@ -179,7 +179,13 @@ pub(crate) fn check_function_body_statement(
         ParsedFunctionBodyStatement::Function(_) => {}
         ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
-            check_function_variable_declaration(*variable, statement_index, scopes, flow_state, ctx);
+            check_function_variable_declaration(
+                *variable,
+                statement_index,
+                scopes,
+                flow_state,
+                ctx,
+            );
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.variable_declaration_checking += start.elapsed()
             });
@@ -323,6 +329,14 @@ pub(crate) fn check_function_variable_declaration(
     let variable_kind = variable.kind;
     let has_initializer = variable.initializer.is_some();
 
+    // Track a boolean alias of a guard expression (`const ok = error &&
+    // isError(error) && …`) so a later `if (!ok) return;` can narrow the guarded
+    // identifiers in the fall-through, matching tsc's aliased-condition handling.
+    if let Some(initializer) = variable.initializer.as_ref() {
+        flow_state
+            .record_alias_guard_targets(local_name.clone(), guarded_value_identifiers(initializer));
+    }
+
     check_local_duplicate_declaration(&variable, scopes, ctx);
 
     let initializer_flow_blocked = variable.initializer.as_ref().is_some_and(|initializer| {
@@ -382,6 +396,33 @@ pub(crate) fn check_function_block(
     scopes.push_child();
     check_function_body(block_body, return_type, scopes, flow_state, ctx);
     scopes.pop_child();
+}
+
+/// `if (!ok) <exit>` where `ok` is a boolean alias of a guard expression
+/// narrows, in the fall-through, the identifiers that alias guarded — dropping a
+/// guarded genuine-`unknown` to the degradation sentinel so a later access is
+/// not a spurious `TS18046`. Mirrors tsc's aliased-condition narrowing, limited
+/// to the genuine-unknown downgrade.
+fn narrow_aliased_guard_after_exit(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    flow_state: &FunctionFlowState,
+) {
+    let ParsedExpression::Unary {
+        operator: ParsedUnaryOperator::Not,
+        operand,
+        ..
+    } = condition
+    else {
+        return;
+    };
+    let ParsedExpression::Identifier { name, .. } = operand.as_ref() else {
+        return;
+    };
+    if let Some(targets) = flow_state.alias_guard_targets(name) {
+        let targets = targets.to_vec();
+        downgrade_genuine_unknown_in_scope(&targets, scopes);
+    }
 }
 
 pub(crate) fn check_function_if_statement(
@@ -460,6 +501,7 @@ pub(crate) fn check_function_if_statement(
         if !has_else_body && then_diverts_control {
             narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
             narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
+            narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
 
         merge_branch_deltas(flow_state, &branch_deltas, !has_else_body);
@@ -485,6 +527,7 @@ pub(crate) fn check_function_if_statement(
         if !has_else_body && then_diverts_control {
             narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
             narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
+            narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
     }
 }
@@ -801,7 +844,10 @@ pub(crate) fn check_function_try_statement(
             scopes.push_child();
             if let Some(binding_name) = handler_clause.binding_name.as_ref() {
                 if let Some(declared_type) = handler_clause.declared_type.as_ref() {
-                    if !matches!(declared_type, ParsedType::Any | ParsedType::Unknown) {
+                    if !matches!(
+                        declared_type,
+                        ParsedType::Any | ParsedType::Unknown | ParsedType::UnknownKeyword
+                    ) {
                         let mut diagnostic = Diagnostic::new(
                             DiagnosticCode::TypeScript(1196),
                             "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
@@ -862,7 +908,10 @@ pub(crate) fn check_function_try_statement(
             scopes.push_child();
             if let Some(binding_name) = handler_clause.binding_name.as_ref() {
                 if let Some(declared_type) = handler_clause.declared_type.as_ref() {
-                    if !matches!(declared_type, ParsedType::Any | ParsedType::Unknown) {
+                    if !matches!(
+                        declared_type,
+                        ParsedType::Any | ParsedType::Unknown | ParsedType::UnknownKeyword
+                    ) {
                         let mut diagnostic = Diagnostic::new(
                             DiagnosticCode::TypeScript(1196),
                             "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
@@ -1013,7 +1062,7 @@ pub(crate) fn check_this_property_assignment(
         return;
     };
 
-    if value_type == Type::Unknown || property_type == Type::Unknown {
+    if value_type.is_unknown() || property_type.is_unknown() {
         return;
     }
 
@@ -1040,7 +1089,7 @@ pub(crate) fn update_assigned_symbol_type(
         return;
     };
 
-    if value_ty == Type::Unknown {
+    if value_ty.is_unknown() {
         return;
     }
 
@@ -1055,7 +1104,7 @@ pub(crate) fn update_assigned_symbol_type(
         ])
     } else if symbol.ty == value_ty || is_assignable_to(&value_ty, &symbol.ty) {
         with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
-    } else if matches!(symbol.ty, Type::Any | Type::Unknown) {
+    } else if matches!(symbol.ty, Type::Any | Type::Unknown | Type::GenuineUnknown) {
         union_type(vec![
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone()),
             value_ty,
@@ -1153,7 +1202,7 @@ pub(crate) fn check_function_return_statement(
 
     match inferred_expression {
         InferredExpression::Known(source_type) => {
-            if source_type == Type::Unknown {
+            if source_type.is_unknown() {
                 return;
             }
 

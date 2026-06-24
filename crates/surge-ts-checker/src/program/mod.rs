@@ -14,9 +14,9 @@ use surge_ts_types::FunctionType;
 pub(crate) use crate::metrics::*;
 
 use crate::context::{CheckerContext, CheckerOptions, CompatibilityStats, FileKind};
+use crate::default_lib::load_generated_default_lib_inputs;
 use crate::driver::validate_direct_utility_aliases;
 use crate::driver::{sync_global_this_symbol, validate_local_type_declarations};
-use crate::load_generated_default_lib_inputs;
 use crate::modules::{ModuleExportTable, ModuleImportBindings, resolve_module_export_tables};
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{
@@ -466,8 +466,10 @@ fn parse_program_files(
                     if file_index >= files.len() {
                         break;
                     }
-                    worker_results
-                        .push((file_index, parse_program_file(&files[file_index], timings.as_ref())));
+                    worker_results.push((
+                        file_index,
+                        parse_program_file(&files[file_index], timings.as_ref()),
+                    ));
                 }
                 worker_results
             }));
@@ -899,10 +901,9 @@ fn check_program_file(
         // `typeof <importedFn>` in a parameter annotation still resolves.
         let mut signature_local_symbols = crate::symbols::SymbolTable::new();
         for (name, symbol) in validation_symbols.iter_shared() {
-            let is_local_function_declaration = matches!(
-                symbol.kind,
-                crate::symbols::SymbolKind::Function
-            ) && module_analysis.local_symbols.get(name).is_some();
+            let is_local_function_declaration =
+                matches!(symbol.kind, crate::symbols::SymbolKind::Function)
+                    && module_analysis.local_symbols.get(name).is_some();
             if !is_local_function_declaration {
                 signature_local_symbols.insert_shared(name.clone(), symbol.clone());
             }

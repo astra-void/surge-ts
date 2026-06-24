@@ -6,10 +6,9 @@ use std::sync::Arc;
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
-    ParsedBindingName, ParsedFunctionBodyStatement, ParsedFunctionParameter,
-    ParsedArrayBindingPattern, ParsedObjectBindingElement, ParsedObjectBindingPattern, ParsedType,
-    ParsedTypeParameter,
-    TextSpan,
+    ParsedArrayBindingPattern, ParsedBindingName, ParsedFunctionBodyStatement,
+    ParsedFunctionParameter, ParsedObjectBindingElement, ParsedObjectBindingPattern, ParsedType,
+    ParsedTypeParameter, TextSpan,
 };
 use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
@@ -23,9 +22,7 @@ use crate::infer::{
     InferredExpression, TypeParameterSubstitution, map_parsed_type_with_substitution,
     report_duplicate_type_parameters,
 };
-use crate::symbols::{
-    FunctionSignatureInfo, ScopeStack, SymbolInfo, SymbolKind, SymbolTable,
-};
+use crate::symbols::{FunctionSignatureInfo, ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
 pub(crate) fn emit_parameter_diagnostics(
     parameter: &ParsedFunctionParameter,
@@ -210,9 +207,9 @@ pub(crate) fn insert_array_binding_pattern_bindings(
         // enough to keep `rest` usable without an exact `slice` shape.
         let rest_type = match &source_type {
             Type::Array(_) => source_type.clone(),
-            Type::Tuple(elements) => Type::Array(Box::new(
-                elements.last().cloned().unwrap_or(Type::Any),
-            )),
+            Type::Tuple(elements) => {
+                Type::Array(Box::new(elements.last().cloned().unwrap_or(Type::Any)))
+            }
             _ => Type::Any,
         };
         insert_binding_name(rest, rest_type, scopes);
@@ -427,7 +424,7 @@ pub(crate) fn has_contextual_unknown_object_binding_pattern(
             && parameter.declared_type.is_none()
             && contextual_parameter_types
                 .get(index)
-                .is_some_and(|ty| *ty == Type::Unknown)
+                .is_some_and(|ty| ty.is_unknown())
     })
 }
 

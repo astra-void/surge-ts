@@ -101,8 +101,9 @@ pub(crate) fn collect_ambient_globals(
             let var = match stmt {
                 ParsedStatement::VariableDeclaration(var) => Some(var),
                 ParsedStatement::ExportDeclaration(export) => {
-                    if let surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } =
-                        export.as_ref()
+                    if let surge_ts_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    } = export.as_ref()
                     {
                         if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
                             Some(var)
@@ -179,8 +180,9 @@ pub(crate) fn collect_ambient_globals(
             let class = match stmt {
                 ParsedStatement::ClassDeclaration(class) => Some(class),
                 ParsedStatement::ExportDeclaration(export) => {
-                    if let surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } =
-                        export.as_ref()
+                    if let surge_ts_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    } = export.as_ref()
                     {
                         if let ParsedStatement::ClassDeclaration(class) = declaration.as_ref() {
                             Some(class)
@@ -375,8 +377,7 @@ pub(crate) fn collect_ambient_modules(
                 // `declare module "x"` inside a module file augments an existing
                 // module rather than declaring a new ambient one. It is merged
                 // into the resolved target on import, never made resolvable here.
-                match Arc::make_mut(&mut ctx.module_augmentations)
-                    .get_mut(&module.module_specifier)
+                match Arc::make_mut(&mut ctx.module_augmentations).get_mut(&module.module_specifier)
                 {
                     Some(existing) => merge_module_export_tables(existing, &raw_export_table),
                     None => {

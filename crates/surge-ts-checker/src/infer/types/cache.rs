@@ -216,7 +216,10 @@ impl ResolveReference for LazyInstantiation {
             // typed-array/iterator clusters do), which the exact-key check misses
             // because every key differs. A few repeats are allowed for legitimate
             // self-nesting before the back-edge degrades to `unknown`.
-            let same_decl = stack.iter().filter(|entry| entry.0 == self.decl_key).count();
+            let same_decl = stack
+                .iter()
+                .filter(|entry| entry.0 == self.decl_key)
+                .count();
             same_decl >= MAX_SAME_DECLARATION_PEELS || stack.iter().any(|entry| *entry == guard_key)
         });
         if blocked {
@@ -270,8 +273,12 @@ impl ResolveReference for LazyInstantiation {
             return resolved.ty;
         }
 
-        let interned =
-            intern_instantiation(&self.snapshot, &self.decl_key, &self.resolved_arguments, resolved.ty);
+        let interned = intern_instantiation(
+            &self.snapshot,
+            &self.decl_key,
+            &self.resolved_arguments,
+            resolved.ty,
+        );
         let _ = self.memo.set(interned.clone());
         (*interned).clone()
     }

@@ -310,7 +310,7 @@ fn infer_attribute_type(
                 ctx,
             );
             match inferred {
-                InferredExpression::Known(ty) if ty != Type::Unknown => Some(ty),
+                InferredExpression::Known(ty) if !ty.is_unknown() => Some(ty),
                 _ => None,
             }
         }
@@ -332,7 +332,7 @@ fn check_known_prop(
         property.ty.clone()
     };
 
-    if *attribute_type == Type::Unknown {
+    if attribute_type.is_unknown() {
         return;
     }
 
@@ -400,7 +400,7 @@ fn check_children(
                     let inferred =
                         evaluate_expression(expression, span.or(fallback_span), symbols, ctx);
                     let child_type = match inferred {
-                        InferredExpression::Known(ty) if ty != Type::Unknown => Some(ty),
+                        InferredExpression::Known(ty) if !ty.is_unknown() => Some(ty),
                         _ => None,
                     };
                     content_children.push(ChildContent::Expression(child_type));
@@ -480,6 +480,6 @@ fn present_attribute_object_name(attributes: &[ParsedJsxAttribute]) -> String {
 }
 
 fn type_contains_unknown_or_any(ty: &Type) -> bool {
-    matches!(ty, Type::Unknown | Type::Any)
+    matches!(ty, Type::Unknown | Type::GenuineUnknown | Type::Any)
         || matches!(ty, Type::Union(union) if union.types().iter().any(type_contains_unknown_or_any))
 }
