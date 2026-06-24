@@ -2,4 +2,4 @@ function listener(): string {
   return "ok";
 }
 
-let listeners: (() => number)[] = [listener];
+let listeners: (() => void)[] = [listener];

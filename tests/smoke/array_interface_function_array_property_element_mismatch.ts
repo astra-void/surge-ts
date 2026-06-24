@@ -1,5 +1,5 @@
 interface Store {
-  listeners: (() => void)[];
+  listeners: (() => number)[];
 }
 
 function listener(): string {

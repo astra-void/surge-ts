@@ -1237,28 +1237,41 @@ fn span_ts2339_tuple_out_of_range_index() {
 }
 
 #[test]
-fn span_ts2339_index_non_array_receiver() {
-    let source = "let value = 1; value[0];";
-    let diagnostics = check_source_with_options(
-        source,
-        "example.ts",
-        CheckerOptions {
-            diagnostic_profile: Default::default(),
-            resolved_modules: Default::default(),
-            stub_external_modules: false,
-            no_implicit_any: false,
-            no_implicit_returns: false,
-            no_fallthrough_cases_in_switch: false,
-            no_implicit_override: false,
-            no_property_access_from_index_signature: false,
-            no_unused_locals: false,
-            no_unused_parameters: false,
-            no_lib: false,
-            skip_lib_check: false,
-            types: Vec::new(),
-        },
-    );
-    assert_single_span(source, diagnostics, "TS2339", span_nth(source, "value", 1));
+fn index_access_primitive_receiver_no_ts2339() {
+    // A literal index on a primitive receiver is never a TS2339. tsc resolves it
+    // against the primitive's apparent type: `string` carries a numeric index
+    // signature (`s[0]: string`) and `number`/`boolean` have no index signature,
+    // so under `noImplicitAny: false` the access is implicitly `any` with no
+    // diagnostic at all (under `noImplicitAny: true` it would be TS7053/TS7015,
+    // never TS2339). Emitting TS2339 here — mis-naming the receiver as the absent
+    // property (`value[0]` reported as `Property 'value' ... 'number'`) — was a
+    // false positive; see the object-like guard in `evaluate_index_access`.
+    for source in [
+        "let value = 1; value[0];",
+        "let text = \"x\"; text[0];",
+        "let flag = true; flag[0];",
+    ] {
+        let diagnostics = check_source_with_options(
+            source,
+            "example.ts",
+            CheckerOptions {
+                diagnostic_profile: Default::default(),
+                resolved_modules: Default::default(),
+                stub_external_modules: false,
+                no_implicit_any: false,
+                no_implicit_returns: false,
+                no_fallthrough_cases_in_switch: false,
+                no_implicit_override: false,
+                no_property_access_from_index_signature: false,
+                no_unused_locals: false,
+                no_unused_parameters: false,
+                no_lib: false,
+                skip_lib_check: false,
+                types: Vec::new(),
+            },
+        );
+        assert!(diagnostics.is_empty(), "source: {source}: {diagnostics:?}");
+    }
 }
 
 #[test]

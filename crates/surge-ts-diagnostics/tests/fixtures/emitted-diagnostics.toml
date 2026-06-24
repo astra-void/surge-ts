@@ -13,6 +13,12 @@ oracle = [
   "tests/compat-projects/satisfies-basic",
 ]
 
+[TS18046]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+
 [TS2304]
 status = "emitted"
 fixtures = [

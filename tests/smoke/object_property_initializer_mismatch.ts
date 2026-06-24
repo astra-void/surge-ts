@@ -1,2 +1,2 @@
 const user = { age: 1 };
-const name: string = user.age;
+const label: string = user.age;

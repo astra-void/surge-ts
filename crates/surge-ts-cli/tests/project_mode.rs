@@ -33,7 +33,15 @@ fn run_cli(args: &[&str]) -> (String, String) {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    // surge mirrors tsc's exit codes: 0 when clean, 2 when diagnostics were
+    // reported. Both are normal completions for these tests; only an unexpected
+    // status (a panic/abort, or a config/usage error) is a failure.
+    assert!(
+        matches!(output.status.code(), Some(0) | Some(2)),
+        "surge exited with unexpected status {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let normalize_paths = !args
         .windows(2)
@@ -810,8 +818,8 @@ fn project_mode_top_level_variable_not_shared_policy() {
         "tsconfig.json",
         r#"{ "compilerOptions": {}, "include": ["src/**/*.ts"] }"#,
     );
-    write_file(&root, "src/a.ts", "let name = \"Ada\";");
-    write_file(&root, "src/b.ts", "let value: string = name;");
+    write_file(&root, "src/a.ts", "let greeting = \"Ada\";");
+    write_file(&root, "src/b.ts", "let value: string = greeting;");
 
     let project = root.join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
@@ -4476,6 +4484,17 @@ fn cli_reference_types_directive_in_dependency_dts_is_followed() {
     let parsed = run_cli_json(&[
         "--project",
         "../../tests/compat-projects/reference-types-dependency-dts-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(json_diagnostic_codes(&parsed), Vec::<String>::new());
+}
+
+#[test]
+fn cli_reference_types_missing_in_dependency_dts_respects_skip_lib_check() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/reference-types-missing-dependency-dts-skip-lib-check-basic/tsconfig.json",
         "--format",
         "json",
     ]);

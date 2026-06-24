@@ -1,5 +1,5 @@
-interface Event {
+interface Ev {
   kind?: "click";
 }
 
-let event: Event = { kind: "click" };
+let ev: Ev = { kind: "click" };

@@ -1,2 +1,2 @@
-const user = { name: "Ada" };
-const name: string = user.name;
+const user = { label: "Ada" };
+const label: string = user.label;

@@ -102,6 +102,65 @@ fn program_api_generated_default_lib_array_global_from_dts() {
 }
 
 #[test]
+fn program_unknown_property_access_reports_ts18046() {
+    let diagnostics = program(&[("example.ts", "const json: unknown = {}; json.result;")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS18046"]);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("'json' is of type 'unknown'.")
+    );
+}
+
+#[test]
+fn program_node_fetch_json_result_reports_ts18046() {
+    let mut options = CheckerOptions::default();
+    options.resolved_modules.insert(
+        "node-fetch".to_string(),
+        "node_modules/node-fetch/@types/index.d.ts".to_string(),
+    );
+
+    let diagnostics = program_with_options(
+        &[
+            (
+                "globals.d.ts",
+                "interface Response { json(): Promise<any>; }",
+            ),
+            (
+                "node_modules/node-fetch/@types/index.d.ts",
+                "export type HeadersInit = Record<string, string>;\n\
+                 export type BodyInit = string;\n\
+                 export interface RequestInit { body?: BodyInit; headers?: HeadersInit; method?: string; }\n\
+                 export type RequestInfo = string | Request;\n\
+                 declare class BodyMixin {\n\
+                   constructor(body?: BodyInit, options?: { size?: number });\n\
+                   readonly body: NodeJS.ReadableStream | null;\n\
+                   json(): Promise<unknown>;\n\
+                 }\n\
+                 export class Request extends BodyMixin {}\n\
+                 export class Response extends BodyMixin {}\n\
+                 export default function fetch(url: URL | RequestInfo, init?: RequestInit): Promise<Response>;",
+            ),
+            (
+                "src/index.ts",
+                "import fetch from 'node-fetch';\n\
+                 fetch('https://mds3.fido.tools/getEndpoints', {\n\
+                   method: 'POST',\n\
+                   body: JSON.stringify({ endpoint: 'https://example.com' }),\n\
+                   headers: { 'Content-Type': 'application/json' },\n\
+                 })\n\
+                   .then((resp) => resp.json())\n\
+                   .then((json) => { const mdsServers: string[] = json.result; });",
+            ),
+        ],
+        options,
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS18046"], "{diagnostics:#?}");
+}
+
+#[test]
 fn program_api_no_lib_hides_generated_default_libs() {
     let diagnostics = program_with_options(
         &[(
@@ -369,8 +428,8 @@ fn program_property_call_cross_file_type_valid() {
 #[test]
 fn program_top_level_let_not_shared_or_policy_pinned() {
     let diagnostics = program(&[
-        ("a.ts", "let name = \"Ada\";"),
-        ("b.ts", "let value: string = name;"),
+        ("a.ts", "let greeting = \"Ada\";"),
+        ("b.ts", "let value: string = greeting;"),
     ]);
 
     assert_eq!(codes(&diagnostics), vec!["TS2304"]);
@@ -380,8 +439,8 @@ fn program_top_level_let_not_shared_or_policy_pinned() {
 #[test]
 fn program_top_level_const_not_shared_or_policy_pinned() {
     let diagnostics = program(&[
-        ("a.ts", "const name = \"Ada\";"),
-        ("b.ts", "let value: string = name;"),
+        ("a.ts", "const greeting = \"Ada\";"),
+        ("b.ts", "let value: string = greeting;"),
     ]);
 
     assert_eq!(codes(&diagnostics), vec!["TS2304"]);
@@ -391,8 +450,8 @@ fn program_top_level_const_not_shared_or_policy_pinned() {
 #[test]
 fn program_file_local_variable_does_not_leak() {
     let diagnostics = program(&[
-        ("a.ts", "let name = \"Ada\";"),
-        ("b.ts", "function f(): string { return name; }"),
+        ("a.ts", "let greeting = \"Ada\";"),
+        ("b.ts", "function f(): string { return greeting; }"),
     ]);
 
     assert_eq!(codes(&diagnostics), vec!["TS2304"]);
@@ -584,14 +643,22 @@ fn no_implicit_returns_reports_ts7030_on_arrow_block_body() {
 fn no_implicit_returns_silent_when_flag_off() {
     let source = "export function a(x: number) { if (x > 0) return 1; }";
     let diagnostics = check_source_with_options(source, "a.ts", no_implicit_returns_options(false));
-    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+    assert!(
+        codes(&diagnostics).is_empty(),
+        "got {:?}",
+        codes(&diagnostics)
+    );
 }
 
 #[test]
 fn no_implicit_returns_silent_when_all_paths_return() {
     let source = "export function b(x: number) { if (x > 0) return 1; return 2; }";
     let diagnostics = check_source_with_options(source, "b.ts", no_implicit_returns_options(true));
-    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+    assert!(
+        codes(&diagnostics).is_empty(),
+        "got {:?}",
+        codes(&diagnostics)
+    );
 }
 
 #[test]
@@ -600,7 +667,11 @@ fn no_implicit_returns_silent_when_all_paths_exit_without_value() {
     // implicit fall-through — tsc emits nothing here even under noImplicitReturns.
     let source = "export function c(x: number) { if (x > 0) return 1; return; }";
     let diagnostics = check_source_with_options(source, "c.ts", no_implicit_returns_options(true));
-    assert!(codes(&diagnostics).is_empty(), "got {:?}", codes(&diagnostics));
+    assert!(
+        codes(&diagnostics).is_empty(),
+        "got {:?}",
+        codes(&diagnostics)
+    );
 }
 
 #[test]
@@ -630,7 +701,8 @@ fn no_implicit_returns_silent_on_throw_only_body() {
 fn no_implicit_returns_silent_on_exhaustive_switch_with_default() {
     // Every clause returns and a `default` makes the switch exhaustive, so no
     // path falls through — tsc emits no TS7030.
-    let source = "export function s(x: number) { switch (x) { case 1: return 'a'; default: return 'b'; } }";
+    let source =
+        "export function s(x: number) { switch (x) { case 1: return 'a'; default: return 'b'; } }";
     let diagnostics = check_source_with_options(source, "s.ts", no_implicit_returns_options(true));
     assert_eq!(codes(&diagnostics), Vec::<String>::new());
 }
@@ -639,7 +711,8 @@ fn no_implicit_returns_silent_on_exhaustive_switch_with_default() {
 fn no_implicit_returns_reports_switch_without_default() {
     // No `default`: the discriminant may match no clause and fall through, so
     // tsc reports TS7030.
-    let source = "export function s(x: number) { switch (x) { case 1: return 'a'; case 2: return 'b'; } }";
+    let source =
+        "export function s(x: number) { switch (x) { case 1: return 'a'; case 2: return 'b'; } }";
     let diagnostics = check_source_with_options(source, "s.ts", no_implicit_returns_options(true));
     assert_eq!(codes(&diagnostics), vec!["TS7030"]);
 }
@@ -686,8 +759,7 @@ fn no_fallthrough_options(no_fallthrough_cases_in_switch: bool) -> CheckerOption
 
 #[test]
 fn no_fallthrough_reports_ts7029_on_reachable_clause_end() {
-    let source =
-        "export function a(x: number) { switch (x) { case 1: x; case 2: return; default: return; } }";
+    let source = "export function a(x: number) { switch (x) { case 1: x; case 2: return; default: return; } }";
     let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(true));
     assert_eq!(codes(&diagnostics), vec!["TS7029"]);
 }
@@ -702,16 +774,14 @@ fn no_fallthrough_allows_empty_stacked_labels() {
 
 #[test]
 fn no_fallthrough_allows_terminated_clauses() {
-    let source =
-        "export function a(x: number) { switch (x) { case 1: return; case 2: throw x; default: break; } }";
+    let source = "export function a(x: number) { switch (x) { case 1: return; case 2: throw x; default: break; } }";
     let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(true));
     assert_eq!(codes(&diagnostics), Vec::<String>::new());
 }
 
 #[test]
 fn no_fallthrough_silent_when_flag_off() {
-    let source =
-        "export function a(x: number) { switch (x) { case 1: x; case 2: return; default: return; } }";
+    let source = "export function a(x: number) { switch (x) { case 1: x; case 2: return; default: return; } }";
     let diagnostics = check_source_with_options(source, "a.ts", no_fallthrough_options(false));
     assert!(
         !codes(&diagnostics).iter().any(|code| code == "TS7029"),
@@ -778,7 +848,8 @@ fn no_implicit_override_reports_transitively() {
 #[test]
 fn no_implicit_override_silent_when_flag_off() {
     let source = "class Base { greet(): string { return 'a'; } } class Derived extends Base { greet(): string { return 'b'; } }";
-    let diagnostics = check_source_with_options(source, "a.ts", no_implicit_override_options(false));
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_implicit_override_options(false));
     assert!(
         !codes(&diagnostics).iter().any(|code| code == "TS4114"),
         "got {:?}",
@@ -786,7 +857,9 @@ fn no_implicit_override_silent_when_flag_off() {
     );
 }
 
-fn no_property_access_index_options(no_property_access_from_index_signature: bool) -> CheckerOptions {
+fn no_property_access_index_options(
+    no_property_access_from_index_signature: bool,
+) -> CheckerOptions {
     CheckerOptions {
         no_property_access_from_index_signature,
         ..Default::default()
@@ -803,8 +876,7 @@ fn no_property_access_from_index_signature_reports_ts4111_on_dot_access() {
 
 #[test]
 fn no_property_access_from_index_signature_allows_declared_property() {
-    let source =
-        "interface D { [k: string]: number; declared: number; } declare const d: D; const a = d.declared;";
+    let source = "interface D { [k: string]: number; declared: number; } declare const d: D; const a = d.declared;";
     let diagnostics =
         check_source_with_options(source, "a.ts", no_property_access_index_options(true));
     assert!(
@@ -883,8 +955,7 @@ fn no_unused_locals_exempts_unused_class() {
 
 #[test]
 fn no_unused_locals_exempts_used_and_exported() {
-    let source =
-        "const used = 1;\nexport const reexported = 2;\nexport const x = used;\n";
+    let source = "const used = 1;\nexport const reexported = 2;\nexport const x = used;\n";
     assert!(ts6133_program_codes(source, true).is_empty());
 }
 
@@ -1079,8 +1150,8 @@ fn program_function_first_signature_wins_for_calls() {
 #[test]
 fn program_top_level_variable_not_shared() {
     let diagnostics = program(&[
-        ("a.ts", "let name = \"Ada\";"),
-        ("b.ts", "let value: string = name;"),
+        ("a.ts", "let greeting = \"Ada\";"),
+        ("b.ts", "let value: string = greeting;"),
     ]);
 
     assert_eq!(codes(&diagnostics), vec!["TS2304"]);
@@ -2945,12 +3016,12 @@ fn module_re_export_star_does_not_export_default() {
 #[test]
 fn module_re_export_star_conflict_policy_pinned() {
     let diagnostics = program(&[
-        ("a.ts", "export const name: string = \"Ada\";"),
-        ("b.ts", "export const name: number = 1;"),
+        ("a.ts", "export const greeting: string = \"Ada\";"),
+        ("b.ts", "export const greeting: number = 1;"),
         ("index.ts", "export * from \"./a\";\nexport * from \"./b\";"),
         (
             "app.ts",
-            "import { name } from \"./index\";\nlet value: string = name;",
+            "import { greeting } from \"./index\";\nlet value: string = greeting;",
         ),
     ]);
 
@@ -2960,14 +3031,14 @@ fn module_re_export_star_conflict_policy_pinned() {
 #[test]
 fn module_re_export_star_local_explicit_wins() {
     let diagnostics = program(&[
-        ("other.ts", "export const name: number = 1;"),
+        ("other.ts", "export const greeting: number = 1;"),
         (
             "index.ts",
-            "export const name: string = \"Ada\";\nexport * from \"./other\";",
+            "export const greeting: string = \"Ada\";\nexport * from \"./other\";",
         ),
         (
             "app.ts",
-            "import { name } from \"./index\";\nlet value: string = name;",
+            "import { greeting } from \"./index\";\nlet value: string = greeting;",
         ),
     ]);
 
@@ -3238,6 +3309,41 @@ fn namespace_generic_member_shadows_nongeneric_ambient_global() {
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
 }
 
+#[test]
+fn imported_namespace_member_alias_resolves_siblings_under_original_prefix() {
+    // `import { Handler }` renames the namespace member to its bare local form, but
+    // its body still references siblings (`Fn`, `Ev`) that only resolve under the
+    // member's original `NS.` prefix. The prefix is recovered from `declared_name`
+    // (the qualified source name), not the bare binding. Regression for React's
+    // `import { MouseEventHandler } from "react"` falsely reporting TS7006 on the
+    // contextually-typed callback parameter.
+    let mut options = CheckerOptions::default();
+    options.no_implicit_any = true;
+    options
+        .resolved_modules
+        .insert("lib".to_string(), "node_modules/lib/index.d.ts".to_string());
+    let diagnostics = program_with_options(
+        &[
+            (
+                "node_modules/lib/index.d.ts",
+                "export = NS;\n\
+                 declare namespace NS {\n\
+                   interface Ev<T> { x: T }\n\
+                   type Fn<E> = (e: E) => void;\n\
+                   type Handler<T> = Fn<Ev<T>>;\n\
+                 }",
+            ),
+            (
+                "src/index.ts",
+                "import { Handler } from 'lib';\n\
+                 const h: Handler<number> = (e) => e.x;",
+            ),
+        ],
+        options,
+    );
+
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+}
 
 #[test]
 fn program_stub_external_modules_keeps_relative_missing_module_ts2307() {

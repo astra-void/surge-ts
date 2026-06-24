@@ -8,7 +8,11 @@ fn run_cli(args: &[&str]) -> (String, String) {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(
+        matches!(output.status.code(), Some(0) | Some(2)),
+        "surge exited with unexpected status {:?}",
+        output.status.code()
+    );
     (
         String::from_utf8(output.stdout).unwrap(),
         String::from_utf8(output.stderr).unwrap(),

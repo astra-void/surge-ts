@@ -1,2 +1,2 @@
-let value: string = "ok";
-let result: string = value[0];
+let values: { name: string } = { name: "ok" };
+let result: string = values[0];

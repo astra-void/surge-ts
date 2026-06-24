@@ -1,4 +1,19 @@
 [[case]]
+name = "aliased-guard-const-narrows-unknown-after-early-return"
+path = "tests/smoke/aliased_guard_const_narrows_unknown_after_early_return.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "intersection-brand-collapse-to-primitive"
+path = "tests/smoke/intersection_brand_collapse_to_primitive.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "intersection-required-member-not-brand"
+path = "tests/smoke/intersection_required_member_not_brand.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
 name = "primitive-initializer-mismatch"
 path = "tests/smoke/primitive_initializer_mismatch.ts"
 expected_diagnostics = ["TS2322"]
@@ -3091,6 +3106,21 @@ path = "tests/smoke/array_function_type_element_return_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "array-function-type-element-void-return-ok"
+path = "tests/smoke/array_function_type_element_void_return_ok.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "conditional-infer-capture-binds-true-branch"
+path = "tests/smoke/conditional_infer_capture_binds_true_branch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "generic-inference-through-interface-parameter"
+path = "tests/smoke/generic_inference_through_interface_parameter.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
 name = "array-function-type-index-access-valid"
 path = "tests/smoke/array_function_type_index_access_valid.ts"
 expected_diagnostics = []
@@ -5947,19 +5977,19 @@ expected_diagnostics = ["TS2307"]
 [[case]]
 name = "module-re-export-star-conflict-policy-pinned"
 files = [
-  { file_name = "a.ts", source_text = "export const name: string = \"Ada\";" },
-  { file_name = "b.ts", source_text = "export const name: number = 1;" },
+  { file_name = "a.ts", source_text = "export const label: string = \"Ada\";" },
+  { file_name = "b.ts", source_text = "export const label: number = 1;" },
   { file_name = "index.ts", source_text = "export * from \"./a\";\nexport * from \"./b\";" },
-  { file_name = "app.ts", source_text = "import { name } from \"./index\";\nlet value: string = name;" },
+  { file_name = "app.ts", source_text = "import { label } from \"./index\";\nlet value: string = label;" },
 ]
 expected_diagnostics = []
 
 [[case]]
 name = "module-re-export-star-local-explicit-wins"
 files = [
-  { file_name = "other.ts", source_text = "export const name: number = 1;" },
-  { file_name = "index.ts", source_text = "export const name: string = \"Ada\";\nexport * from \"./other\";" },
-  { file_name = "app.ts", source_text = "import { name } from \"./index\";\nlet value: string = name;" },
+  { file_name = "other.ts", source_text = "export const label: number = 1;" },
+  { file_name = "index.ts", source_text = "export const label: string = \"Ada\";\nexport * from \"./other\";" },
+  { file_name = "app.ts", source_text = "import { label } from \"./index\";\nlet value: string = label;" },
 ]
 expected_diagnostics = []
 

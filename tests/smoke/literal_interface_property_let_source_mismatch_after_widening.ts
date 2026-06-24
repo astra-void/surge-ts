@@ -1,6 +1,6 @@
-interface Event {
+interface Ev {
   kind: "click";
 }
 
 let kind = "click";
-let event: Event = { kind: kind };
+let ev: Ev = { kind: kind };

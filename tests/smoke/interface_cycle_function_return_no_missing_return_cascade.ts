@@ -1,6 +1,6 @@
-interface Node {
-  next: Node;
+interface Lnk {
+  next: Lnk;
 }
 
-function make(): Node {
+function make(): Lnk {
 }

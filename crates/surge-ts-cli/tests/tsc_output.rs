@@ -38,11 +38,11 @@ const TSCONFIG: &str =
 fn run_in(root: &PathBuf, args: &[&str], force_color: bool) -> String {
     let mut command = Command::new(env!("CARGO_BIN_EXE_surge"));
     command.current_dir(root).args(args);
+    command.env_remove("NO_COLOR");
     if force_color {
         command.env("FORCE_COLOR", "1");
     } else {
         command.env_remove("FORCE_COLOR");
-        command.env_remove("NO_COLOR");
     }
     let output = command.output().unwrap();
     assert!(output.status.success() || !output.stdout.is_empty());

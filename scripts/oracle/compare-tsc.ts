@@ -265,6 +265,7 @@ export const fixturePresets: Record<string, string> = {
   'reference-types-recursive-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-recursive-basic/tsconfig.json'),
   'reference-types-missing-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-missing-basic/tsconfig.json'),
   'reference-types-dependency-dts-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-dependency-dts-basic/tsconfig.json'),
+  'reference-types-missing-dependency-dts-skip-lib-check-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-missing-dependency-dts-skip-lib-check-basic/tsconfig.json'),
   'reference-types-with-type-roots-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-with-type-roots-basic/tsconfig.json'),
   'reference-types-dedupe-order-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-dedupe-order-basic/tsconfig.json'),
   'node-protocol-buffer-basic': path.join(workspaceRoot, 'tests/compat-projects/node-protocol-buffer-basic/tsconfig.json'),
