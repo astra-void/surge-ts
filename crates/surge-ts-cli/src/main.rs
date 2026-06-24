@@ -1,8 +1,3 @@
-mod import_graph;
-mod io_stats;
-mod package_declarations;
-mod package_resolution;
-mod path_mapping;
 mod report;
 
 use std::io::IsTerminal;
@@ -16,13 +11,8 @@ use report::{
     render_project_diagnostics_preview,
 };
 use serde_json::{Map, Value};
-use surge_ts_checker::{
-    CheckerOptions, DefaultLibRequest, SourceFileInput, check_program_with_stats_and_jobs,
-    check_source_with_options, load_default_lib_inputs,
-};
-use surge_ts_config::{
-    ScriptTarget, TsConfigLoadOptions, canonicalize_if_exists_string, load_tsconfig,
-};
+use surge_ts::{Checker, CheckerOptions, Project, ProjectOptions, ProjectTimings};
+use surge_ts_config::canonicalize_if_exists_string;
 use surge_ts_diagnostics::{
     Diagnostic, DiagnosticCode, TscRenderItem, TscRenderOptions, render_diagnostics,
     render_diagnostics_tsc,
@@ -383,10 +373,8 @@ fn run_single_file_mode(
 
     let file_name = canonicalize_if_exists_string(&file_path);
 
-    let diagnostics = check_source_with_options(
-        &source_text,
-        &file_name,
-        CheckerOptions {
+    let diagnostics = Checker::new()
+        .options(CheckerOptions {
             no_implicit_any,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -400,8 +388,8 @@ fn run_single_file_mode(
             resolved_modules: std::collections::HashMap::new(),
             types: Vec::new(),
             diagnostic_profile,
-        },
-    );
+        })
+        .check_source(&source_text, &file_name);
     // `--showSpans` is a debug aid that forces the custom span renderer even
     // under the default tsc style; JSON output ignores it.
     let force_custom = matches!(style, DiagnosticStyle::Custom) || show_spans;
@@ -439,7 +427,11 @@ fn run_single_file_mode(
         DiagnosticStyle::Custom => unreachable!("custom handled by force_custom"),
     }
 
-    ExitCode::SUCCESS
+    if diagnostics.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
 }
 
 /// Render single-file diagnostics in tsc-compatible form. The display label is
@@ -500,24 +492,6 @@ fn physical_libs_explicitly_requested(cli_flag: bool, config_path: &std::path::P
         .unwrap_or(false)
 }
 
-/// Map a configured `target` to the lib name base used to derive the default
-/// `lib.<base>.full.d.ts` aggregate when `compilerOptions.lib` is unset.
-fn target_lib_basename(target: ScriptTarget) -> &'static str {
-    match target {
-        ScriptTarget::ES2015 => "es2015",
-        ScriptTarget::ES2016 => "es2016",
-        ScriptTarget::ES2017 => "es2017",
-        ScriptTarget::ES2018 => "es2018",
-        ScriptTarget::ES2019 => "es2019",
-        ScriptTarget::ES2020 => "es2020",
-        ScriptTarget::ES2021 => "es2021",
-        ScriptTarget::ES2022 => "es2022",
-        ScriptTarget::ES2023 => "es2023",
-        ScriptTarget::ES2024 => "es2024",
-        ScriptTarget::ESNext => "esnext",
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn run_project_mode(
     project: PathBuf,
@@ -538,17 +512,18 @@ fn run_project_mode(
 
     let run_start = Instant::now();
     let config_start = run_start;
-    let loaded = load_tsconfig(TsConfigLoadOptions { project });
+    let project = Project::load(project);
     if timings_enabled {
         timings.config_project_loading += config_start.elapsed();
     }
+    let loaded = project.config();
 
-    for diagnostic in &loaded.diagnostics {
+    for diagnostic in project.config_diagnostics() {
         eprintln!("{diagnostic}");
     }
 
     if show_config {
-        let config = build_show_config_json(&loaded);
+        let config = build_show_config_json(loaded);
         println!("{}", serde_json::to_string_pretty(&config).unwrap());
         if timings_enabled {
             timings.total = run_start.elapsed();
@@ -558,10 +533,10 @@ fn run_project_mode(
     }
 
     if loaded.files.is_empty() {
-        let diagnostics = vec![project_has_no_source_files_diagnostic(&loaded)];
+        let diagnostics = vec![project_has_no_source_files_diagnostic(loaded)];
         let stats = surge_ts_checker::CompatibilityStats::default();
         let exit_code = render_project_mode_output(
-            &loaded,
+            loaded,
             &diagnostics,
             &[],
             &stats,
@@ -581,268 +556,36 @@ fn run_project_mode(
         return exit_code;
     }
 
-    let file_discovery_start = Instant::now();
-    let read_workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .max(jobs)
-        .min(loaded.files.len());
-    let source_read_nanos = std::sync::atomic::AtomicU64::new(0);
-    let source_entries = match read_project_sources(&loaded.files, read_workers, &source_read_nanos)
-    {
-        Ok(entries) => entries,
-        Err((file_path, error)) => {
-            eprintln!("failed to read {}: {error}", file_path.display());
+    let options = ProjectOptions {
+        jobs,
+        stub_external_modules,
+        diagnostic_profile,
+        physical_libs_requested: physical_libs_explicitly_requested(
+            physical_libs_flag,
+            &loaded.config_path,
+        ),
+        collect_timings: timings_enabled,
+    };
+
+    let result = match project.check(&options) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("{error}");
             return ExitCode::from(1);
         }
     };
 
-    let mut inputs = Vec::with_capacity(source_entries.len());
-    let mut sources = Vec::with_capacity(source_entries.len());
-    for (file_path, file_name, source_text) in source_entries {
-        inputs.push(SourceFileInput {
-            file_name: file_name.clone(),
-            source_text: source_text.clone(),
-        });
-        sources.push((file_path, file_name, source_text));
+    for warning in &result.warnings {
+        eprintln!("warning: {warning}");
     }
     if timings_enabled {
-        timings.file_discovery += file_discovery_start.elapsed();
-        timings.source_read_io += std::time::Duration::from_nanos(
-            source_read_nanos.load(std::sync::atomic::Ordering::Relaxed),
-        );
-        timings.source_files_read += inputs.len() as u64;
-        timings.source_bytes_read += inputs
-            .iter()
-            .map(|input| input.source_text.len() as u64)
-            .sum::<u64>();
+        merge_project_timings(&mut timings, &result.timings);
     }
 
-    let default_lib_loading_start = Instant::now();
-    let default_lib_load = load_default_lib_inputs(DefaultLibRequest {
-        no_lib: loaded.compiler_options.no_lib,
-        lib_entries: loaded.compiler_options.lib.as_slice(),
-        root_dir: &loaded.root_dir,
-        target_basename: target_lib_basename(loaded.compiler_options.target),
-    });
-    for unknown in &default_lib_load.unknown_libs {
-        eprintln!(
-            "warning: unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
-        );
-    }
-    // `--physicalLibs` (and its env/marker equivalents) is now only a debug aid:
-    // physical loading is the default, so the flag merely surfaces a warning when
-    // the TypeScript package could not be found and the generated subset was used.
-    if physical_libs_explicitly_requested(physical_libs_flag, &loaded.config_path)
-        && !default_lib_load.used_physical
-        && !loaded.compiler_options.no_lib
-    {
-        eprintln!(
-            "warning: --physicalLibs requested but no TypeScript package was found under node_modules; falling back to the generated default-lib subset"
-        );
-    }
-    let default_lib_io = default_lib_load.io_stats;
-    let default_lib_inputs = default_lib_load.inputs;
-    if timings_enabled {
-        timings.default_lib_loading += default_lib_loading_start.elapsed();
-        timings.default_lib_files_read += default_lib_inputs.len() as u64;
-        timings.default_lib_bytes_read += default_lib_inputs
-            .iter()
-            .map(|input| input.source_text.len() as u64)
-            .sum::<u64>();
-        timings.default_lib_read_io += default_lib_io.read_io;
-        timings.default_lib_existence_probes += default_lib_io.existence_probes;
-        timings.default_lib_canonicalize_syscalls += default_lib_io.canonicalize_syscalls;
-    }
-
-    let mut resolved_modules = std::collections::HashMap::new();
-    let mut package_resolution_cache =
-        package_declarations::PackageDeclarationResolverCache::default();
-
-    let resolver_options = package_resolution::ResolverOptions {
-        module_resolution: loaded.compiler_options.module_resolution,
-        resolve_exports: loaded.compiler_options.resolve_package_json_exports,
-        resolve_imports: loaded.compiler_options.resolve_package_json_imports,
-        custom_conditions: loaded.compiler_options.custom_conditions.clone(),
-    };
-
-    let type_package_resolution = package_declarations::resolve_type_packages(
-        &mut inputs,
-        &mut sources,
-        &loaded.root_dir,
-        loaded.compiler_options.types.as_deref(),
-        &loaded.compiler_options.type_roots,
-        &mut package_resolution_cache,
-    );
-
-    // Explicit `/// <reference types="..." />` directives resolve through the same
-    // type roots as `compilerOptions.types`. The resolver is re-run inside the
-    // expansion loop so directives in dependency declaration files (added by
-    // package resolution / import-graph expansion) participate too.
-    let mut reference_type_resolver = package_declarations::ReferenceTypeDirectiveResolver::new(
-        &loaded.root_dir,
-        &loaded.compiler_options.type_roots,
-    );
-
-    loop {
-        let files_before = inputs.len();
-
-        let package_start = Instant::now();
-        let package_modules =
-            package_declarations::resolve_package_declaration_entrypoints_with_cache(
-                &mut inputs,
-                &mut sources,
-                &loaded.root_dir,
-                &resolver_options,
-                &mut package_resolution_cache,
-            );
-        if timings_enabled {
-            timings.package_declaration_discovery += package_start.elapsed();
-        }
-        for (specifier, resolved_file) in package_modules {
-            resolved_modules.insert(specifier, resolved_file);
-        }
-
-        let import_graph_start = Instant::now();
-        let graph_loaded = import_graph::expand_project_inputs(
-            &mut inputs,
-            &mut sources,
-            &loaded.root_dir,
-            &loaded.compiler_options.paths,
-        );
-        if timings_enabled {
-            timings.import_graph_expansion += import_graph_start.elapsed();
-        }
-
-        reference_type_resolver.scan_and_resolve(
-            &mut inputs,
-            &mut sources,
-            &mut package_resolution_cache,
-        );
-
-        if graph_loaded == 0 && inputs.len() == files_before {
-            break;
-        }
-    }
-
-    if timings_enabled {
-        let io = io_stats::snapshot();
-        timings.expansion_read_io += io.expansion_read_io;
-        timings.expansion_files_read += io.expansion_files_read;
-        timings.expansion_bytes_read += io.expansion_bytes_read;
-        timings.package_json_reads += io.package_json_reads;
-        timings.fs_existence_probes += io.fs_existence_probes;
-        timings.fs_read_dir_count += io.fs_read_dir_count;
-    }
-
-    // Default-lib sources never contribute project imports or package specifiers,
-    // so they stay out of the package-declaration / import-graph scan above (which
-    // would otherwise re-parse ~3MB of lib `.d.ts` on every pass). Splice them to
-    // the front now, preserving the original `[default libs..., project files...]`
-    // order the checker expects.
-    if !default_lib_inputs.is_empty() {
-        let default_lib_sources = default_lib_inputs
-            .iter()
-            .map(|input| {
-                (
-                    PathBuf::from(&input.file_name),
-                    input.file_name.clone(),
-                    input.source_text.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-        inputs.splice(0..0, default_lib_inputs);
-        sources.splice(0..0, default_lib_sources);
-    }
-
-    let reference_type_resolution = reference_type_resolver.into_resolution();
-
-    // Pass the resolved type-package names to the checker so node-specific
-    // builtins and the `@types` ambient-global gate fire for them. Reference-type
-    // packages join the configured ones; when the project used the `"*"` wildcard,
-    // keep the literal `"*"` sentinel so the checker selects the node install-hint
-    // variant (TS2580 vs TS2591) like tsc's `usesWildcardTypes`.
-    let mut checker_types = type_package_resolution.effective_type_names.clone();
-    for name in &reference_type_resolution.effective_type_names {
-        if !checker_types.contains(name) {
-            checker_types.push(name.clone());
-        }
-    }
-    if loaded
-        .compiler_options
-        .types
-        .as_deref()
-        .is_some_and(|types| types.iter().any(|name| name == "*"))
-    {
-        checker_types.push("*".to_string());
-    }
-
-    let path_mapping_start = Instant::now();
-    let path_modules = path_mapping::resolve_path_mappings(
-        &inputs,
-        &loaded.compiler_options.paths,
-        &loaded.root_dir,
-    );
-
-    for (k, v) in path_modules {
-        resolved_modules.insert(k, v);
-    }
-    if timings_enabled {
-        timings.path_mapping_resolution += path_mapping_start.elapsed();
-    }
-
-    let checker_options = CheckerOptions {
-        no_implicit_any: loaded.compiler_options.no_implicit_any,
-        no_implicit_returns: loaded.compiler_options.no_implicit_returns,
-        no_fallthrough_cases_in_switch: loaded.compiler_options.no_fallthrough_cases_in_switch,
-        no_implicit_override: loaded.compiler_options.no_implicit_override,
-        no_property_access_from_index_signature: loaded.compiler_options.no_property_access_from_index_signature,
-        no_unused_locals: loaded.compiler_options.no_unused_locals,
-        no_unused_parameters: loaded.compiler_options.no_unused_parameters,
-        no_lib: loaded.compiler_options.no_lib,
-        skip_lib_check: loaded.compiler_options.skip_lib_check,
-        stub_external_modules,
-        resolved_modules,
-        types: checker_types,
-        diagnostic_profile,
-    };
-
-    let checking_start = Instant::now();
-    let result = check_program_with_stats_and_jobs(inputs, checker_options, jobs);
-    if timings_enabled {
-        timings.checking += checking_start.elapsed();
-    }
-    let mut diagnostics = apply_project_no_lib_compatibility_diagnostics(
-        result.diagnostics,
-        loaded.compiler_options.no_lib,
-        diagnostic_profile,
-    );
-    diagnostics.extend(
-        type_package_resolution
-            .missing
-            .iter()
-            .map(|type_name| Diagnostic::ts2688(type_name, String::new())),
-    );
-    for missing in &reference_type_resolution.missing {
-        // tsc locates the TS2688 at the directive in its containing file. When that
-        // file is a declaration file, the diagnostic is suppressed under
-        // `skipLibCheck`, like any other `.d.ts` diagnostic.
-        if loaded.compiler_options.skip_lib_check && missing.from_declaration_file {
-            continue;
-        }
-        diagnostics.push(
-            Diagnostic::ts2688(&missing.type_name, missing.file_name.clone()).with_span(
-                surge_ts_diagnostics::TextSpan {
-                    start: missing.value_span.start,
-                    end: missing.value_span.end,
-                },
-            ),
-        );
-    }
     let exit_code = render_project_mode_output(
-        &loaded,
-        &diagnostics,
-        &sources,
+        loaded,
+        &result.diagnostics,
+        &result.sources,
         &result.stats,
         show_spans,
         compat_report,
@@ -860,61 +603,29 @@ fn run_project_mode(
     exit_code
 }
 
-type ProjectSource = (PathBuf, String, String);
-
-fn read_one_source(
-    file_path: &PathBuf,
-    read_nanos: &std::sync::atomic::AtomicU64,
-) -> Result<ProjectSource, (PathBuf, std::io::Error)> {
-    let read_start = Instant::now();
-    let read = fs::read_to_string(file_path);
-    read_nanos.fetch_add(
-        read_start.elapsed().as_nanos() as u64,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    match read {
-        Ok(source_text) => {
-            let file_name = canonicalize_if_exists_string(file_path);
-            Ok((file_path.clone(), file_name, source_text))
-        }
-        Err(error) => Err((file_path.clone(), error)),
-    }
-}
-
-// Project source reads are I/O-bound and independent, so reading them across a
-// few threads overlaps the waits. Contiguous chunks keep the original file
-// ordering, which the checker relies on.
-fn read_project_sources(
-    files: &[PathBuf],
-    workers: usize,
-    read_nanos: &std::sync::atomic::AtomicU64,
-) -> Result<Vec<ProjectSource>, (PathBuf, std::io::Error)> {
-    if workers <= 1 || files.len() <= 1 {
-        return files.iter().map(|f| read_one_source(f, read_nanos)).collect();
-    }
-
-    let chunk_size = (files.len() + workers - 1) / workers;
-    let chunk_results: Vec<Result<Vec<ProjectSource>, (PathBuf, std::io::Error)>> =
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = files
-                .chunks(chunk_size)
-                .map(|chunk| {
-                    scope.spawn(move || {
-                        chunk.iter().map(|f| read_one_source(f, read_nanos)).collect()
-                    })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|handle| handle.join().expect("source reader thread panicked"))
-                .collect()
-        });
-
-    let mut sources = Vec::with_capacity(files.len());
-    for chunk in chunk_results {
-        sources.extend(chunk?);
-    }
-    Ok(sources)
+/// Fold the facade's per-phase project timings into the CLI's timing record,
+/// which additionally tracks config loading, diagnostic rendering, and total.
+fn merge_project_timings(timings: &mut CliTimings, project: &ProjectTimings) {
+    timings.file_discovery += project.file_discovery;
+    timings.default_lib_loading += project.default_lib_loading;
+    timings.package_declaration_discovery += project.package_declaration_discovery;
+    timings.import_graph_expansion += project.import_graph_expansion;
+    timings.path_mapping_resolution += project.path_mapping_resolution;
+    timings.checking += project.checking;
+    timings.source_read_io += project.source_read_io;
+    timings.source_files_read += project.source_files_read;
+    timings.source_bytes_read += project.source_bytes_read;
+    timings.default_lib_files_read += project.default_lib_files_read;
+    timings.default_lib_bytes_read += project.default_lib_bytes_read;
+    timings.default_lib_read_io += project.default_lib_read_io;
+    timings.default_lib_existence_probes += project.default_lib_existence_probes;
+    timings.default_lib_canonicalize_syscalls += project.default_lib_canonicalize_syscalls;
+    timings.expansion_read_io += project.expansion_read_io;
+    timings.expansion_files_read += project.expansion_files_read;
+    timings.expansion_bytes_read += project.expansion_bytes_read;
+    timings.package_json_reads += project.package_json_reads;
+    timings.fs_existence_probes += project.fs_existence_probes;
+    timings.fs_read_dir_count += project.fs_read_dir_count;
 }
 
 /// `0` is the checker's sentinel for automatic worker-count selection, so `auto`
@@ -1025,7 +736,11 @@ fn render_project_mode_output(
         timings.diagnostic_rendering += render_start.elapsed();
     }
 
-    ExitCode::SUCCESS
+    if diagnostics.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
 }
 
 /// Render project diagnostics in tsc-compatible form. Diagnostics are grouped by
@@ -1092,50 +807,6 @@ fn render_project_diagnostics_tsc(
         ));
     }
     out
-}
-
-fn apply_project_no_lib_compatibility_diagnostics(
-    diagnostics: Vec<Diagnostic>,
-    no_lib: bool,
-    diagnostic_profile: surge_ts_checker::DiagnosticProfile,
-) -> Vec<Diagnostic> {
-    if !no_lib || diagnostic_profile != surge_ts_checker::DiagnosticProfile::Tsc {
-        return diagnostics;
-    }
-
-    let mut filtered = diagnostics
-        .into_iter()
-        .filter(|diagnostic| !matches!(diagnostic.code, DiagnosticCode::TypeScript(2304)))
-        .collect::<Vec<_>>();
-
-    filtered.extend(project_no_lib_missing_global_type_diagnostics());
-    filtered
-}
-
-fn project_no_lib_missing_global_type_diagnostics() -> Vec<Diagnostic> {
-    let file_name = String::new();
-
-    [
-        "Array",
-        "Boolean",
-        "CallableFunction",
-        "Function",
-        "IArguments",
-        "NewableFunction",
-        "Number",
-        "Object",
-        "RegExp",
-        "String",
-    ]
-    .into_iter()
-    .map(|global_type| {
-        Diagnostic::new(
-            DiagnosticCode::TypeScript(2318),
-            format!("Cannot find global type '{global_type}'."),
-            file_name.clone(),
-        )
-    })
-    .collect()
 }
 
 fn render_cli_timings(timings: &CliTimings) {
@@ -1461,6 +1132,14 @@ fn build_compiler_options_json(
     options.insert(
         "skipLibCheck".to_string(),
         Value::Bool(compiler_options.skip_lib_check),
+    );
+    options.insert(
+        "esModuleInterop".to_string(),
+        Value::Bool(compiler_options.es_module_interop),
+    );
+    options.insert(
+        "allowSyntheticDefaultImports".to_string(),
+        Value::Bool(compiler_options.allow_synthetic_default_imports),
     );
     options.insert("noLib".to_string(), Value::Bool(compiler_options.no_lib));
 
