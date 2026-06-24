@@ -40,13 +40,19 @@ pub struct NormalizedCompilerOptions {
     pub check_js: bool,
     pub no_emit: bool,
     pub skip_lib_check: bool,
+    pub es_module_interop: bool,
+    pub allow_synthetic_default_imports: bool,
     pub no_lib: bool,
     pub lib: Vec<String>,
     pub paths: Vec<PathMapping>,
+    /// `compilerOptions.baseUrl`, resolved to an absolute path against the
+    /// config directory. `paths` substitutions and non-relative bare-import
+    /// fallback resolution are anchored here, matching `tsc`. `None` when unset.
+    pub base_url: Option<PathBuf>,
     pub type_roots: Vec<PathBuf>,
-    /// `compilerOptions.types`. `None` means the option was absent (TypeScript
-    /// then auto-includes every visible `@types` package); `Some(list)` means it
-    /// was specified — `Some(vec![])` disables automatic inclusion entirely.
+    /// `compilerOptions.types`. Under the pinned TypeScript 6 behavior, absent
+    /// and empty both include no type packages; `["*"]` opts into visible
+    /// `@types` discovery.
     pub types: Option<Vec<String>>,
     /// `compilerOptions.resolvePackageJsonExports`. When false, the package
     /// `exports` field is bypassed during declaration resolution. Defaults to
@@ -80,9 +86,12 @@ impl Default for NormalizedCompilerOptions {
             check_js: false,
             no_emit: false,
             skip_lib_check: false,
+            es_module_interop: false,
+            allow_synthetic_default_imports: false,
             no_lib: false,
             lib: Vec::new(),
             paths: Vec::new(),
+            base_url: None,
             type_roots: Vec::new(),
             types: None,
             resolve_package_json_exports: true,

@@ -571,7 +571,11 @@ fn no_implicit_returns_parses_into_normalized_options() {
 #[test]
 fn no_implicit_returns_defaults_off() {
     let root = temp_dir("no-implicit-returns-default");
-    write_file(&root, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": true } }"#,
+    );
 
     let loaded = load(root.join("tsconfig.json"));
     assert!(!loaded.compiler_options.no_implicit_returns);
@@ -590,7 +594,11 @@ fn no_implicit_override_parses_and_defaults_off() {
     assert!(loaded_on.compiler_options.no_implicit_override);
 
     let off = temp_dir("no-implicit-override-off");
-    write_file(&off, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+    write_file(
+        &off,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": true } }"#,
+    );
     let loaded_off = load(off.join("tsconfig.json"));
     assert!(!loaded_off.compiler_options.no_implicit_override);
 }
@@ -605,12 +613,24 @@ fn no_property_access_from_index_signature_parses_and_defaults_off() {
     );
     let loaded_on = load(on.join("tsconfig.json"));
     assert!(loaded_on.diagnostics.is_empty());
-    assert!(loaded_on.compiler_options.no_property_access_from_index_signature);
+    assert!(
+        loaded_on
+            .compiler_options
+            .no_property_access_from_index_signature
+    );
 
     let off = temp_dir("no-prop-access-index-off");
-    write_file(&off, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+    write_file(
+        &off,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": true } }"#,
+    );
     let loaded_off = load(off.join("tsconfig.json"));
-    assert!(!loaded_off.compiler_options.no_property_access_from_index_signature);
+    assert!(
+        !loaded_off
+            .compiler_options
+            .no_property_access_from_index_signature
+    );
 }
 
 #[test]
@@ -627,7 +647,11 @@ fn no_unused_locals_and_parameters_parse_and_default_off() {
     assert!(loaded_on.compiler_options.no_unused_parameters);
 
     let off = temp_dir("no-unused-off");
-    write_file(&off, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+    write_file(
+        &off,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": true } }"#,
+    );
     let loaded_off = load(off.join("tsconfig.json"));
     assert!(!loaded_off.compiler_options.no_unused_locals);
     assert!(!loaded_off.compiler_options.no_unused_parameters);
@@ -646,7 +670,11 @@ fn no_fallthrough_cases_in_switch_parses_and_defaults_off() {
     assert!(loaded_on.compiler_options.no_fallthrough_cases_in_switch);
 
     let off = temp_dir("no-fallthrough-off");
-    write_file(&off, "tsconfig.json", r#"{ "compilerOptions": { "strict": true } }"#);
+    write_file(
+        &off,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": true } }"#,
+    );
     let loaded_off = load(off.join("tsconfig.json"));
     assert!(!loaded_off.compiler_options.no_fallthrough_cases_in_switch);
 }
@@ -711,20 +739,26 @@ fn target_es5_is_legacy_and_falls_back_to_es2015() {
 }
 
 #[test]
-fn base_url_is_legacy_and_emits_config_diagnostic() {
+fn base_url_is_supported_and_resolved_against_config_dir() {
     let root = temp_dir("base-url");
     write_file(
         &root,
         "tsconfig.json",
-        r#"{ "compilerOptions": { "baseUrl": "." } }"#,
+        r#"{ "compilerOptions": { "baseUrl": "src" } }"#,
     );
 
     let loaded = load(root.join("tsconfig.json"));
-    assert!(loaded.compiler_options.paths.is_empty());
-    assert!(has_diagnostic(
+    assert!(!has_diagnostic(
         &loaded.diagnostics,
         ConfigDiagnosticCode::UnsupportedLegacyCompilerOption
     ));
+    let base_url = loaded
+        .compiler_options
+        .base_url
+        .as_ref()
+        .expect("baseUrl should be resolved");
+    assert!(base_url.ends_with("src"));
+    assert!(base_url.is_absolute());
 }
 
 #[test]

@@ -57,8 +57,9 @@ pub(crate) fn normalize_compiler_options(
                         .unwrap_or(normalized.no_property_access_from_index_signature);
             }
             "noUnusedLocals" => {
-                normalized.no_unused_locals = parse_bool_option(key, value, config_dir, diagnostics)
-                    .unwrap_or(normalized.no_unused_locals);
+                normalized.no_unused_locals =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_unused_locals);
             }
             "noUnusedParameters" => {
                 normalized.no_unused_parameters =
@@ -94,12 +95,25 @@ pub(crate) fn normalize_compiler_options(
                 normalized.skip_lib_check = parse_bool_option(key, value, config_dir, diagnostics)
                     .unwrap_or(normalized.skip_lib_check);
             }
+            "esModuleInterop" => {
+                normalized.es_module_interop =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.es_module_interop);
+            }
+            "allowSyntheticDefaultImports" => {
+                normalized.allow_synthetic_default_imports =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.allow_synthetic_default_imports);
+            }
             "noLib" => {
                 normalized.no_lib = parse_bool_option(key, value, config_dir, diagnostics)
                     .unwrap_or(normalized.no_lib);
             }
             "paths" => {
                 normalized.paths = parse_paths_option(value, diagnostics, config_dir);
+            }
+            "baseUrl" => {
+                normalized.base_url = parse_base_url_option(value, config_dir, diagnostics);
             }
             "lib" => {
                 normalized.lib = parse_string_list_option(value, diagnostics, config_dir);
@@ -152,6 +166,9 @@ pub(crate) fn normalize_compiler_options(
     }
 
     normalized.no_implicit_any = explicit_no_implicit_any.unwrap_or(normalized.strict);
+    if normalized.es_module_interop {
+        normalized.allow_synthetic_default_imports = true;
+    }
 
     normalized
 }
@@ -388,7 +405,7 @@ fn handle_legacy_tsconfig_option(
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) {
     match definition.name {
-        "baseUrl" | "outFile" => {
+        "outFile" => {
             if value.as_str().is_none() {
                 diagnostics.push(ConfigDiagnostic {
                     code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
@@ -422,6 +439,23 @@ fn handle_legacy_tsconfig_option(
         ),
         file_name: config_dir.to_path_buf(),
     });
+}
+
+fn parse_base_url_option(
+    value: &Value,
+    config_dir: &Path,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) -> Option<PathBuf> {
+    let Some(raw) = value.as_str() else {
+        diagnostics.push(ConfigDiagnostic {
+            code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
+            message: "`baseUrl` must be a string".to_string(),
+            file_name: config_dir.to_path_buf(),
+        });
+        return None;
+    };
+
+    Some(resolve_path(config_dir, raw))
 }
 
 fn parse_path_list_option(

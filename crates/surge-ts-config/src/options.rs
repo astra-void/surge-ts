@@ -330,7 +330,7 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
     TsConfigOptionDefinition {
         name: "baseUrl",
         value_kind: TsConfigOptionValueKind::String,
-        support: TsConfigOptionSupport::UnsupportedLegacy,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "downlevelIteration",
