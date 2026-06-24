@@ -1,18 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::SourceFileInput;
 
 use super::physical::{
-    DefaultLibIoStats, default_full_lib_seed_for_target, resolve_physical_default_libs,
+    DefaultLibIoStats, default_full_lib_seed_for_target, resolve_default_libs_from_lib_dir,
+    resolve_physical_default_libs,
 };
-use super::registry::selected_default_lib_sources;
-use super::source::default_lib_selection_from_tsconfig;
 
-/// Inputs for resolving a project's default libs.
-///
-/// Default-lib loading prefers the real physical TypeScript `lib*.d.ts` graph
-/// shipped by the installed `typescript` package and only falls back to the
-/// generated subset when that package cannot be located.
 pub struct DefaultLibRequest<'a> {
     /// `compilerOptions.noLib`. When true, no default libs are loaded at all.
     pub no_lib: bool,
@@ -25,24 +19,18 @@ pub struct DefaultLibRequest<'a> {
     pub target_basename: &'a str,
 }
 
-/// Result of default-lib resolution, including metadata used for diagnostics.
 #[derive(Debug, Default)]
 pub struct DefaultLibLoad {
     /// Source inputs in deterministic, dependency-first load order.
     pub inputs: Vec<SourceFileInput>,
-    /// True when the real TypeScript package supplied the libs; false when the
-    /// generated subset was used because the package was unavailable.
+    /// True when a local TypeScript package supplied the libs.
     pub used_physical: bool,
     /// `compilerOptions.lib` entries with no matching `lib*.d.ts` file.
     pub unknown_libs: Vec<String>,
-    /// Filesystem I/O incurred while resolving the physical lib graph. Zero on
-    /// the generated-subset fallback, which serves embedded sources.
+    /// Filesystem I/O incurred while resolving the lib graph.
     pub io_stats: DefaultLibIoStats,
 }
 
-/// Load the default libs for a project, preferring the real physical TypeScript
-/// `lib*.d.ts` graph and falling back to the generated subset only when the
-/// TypeScript package cannot be located. `noLib` is honored on both paths.
 pub fn load_default_lib_inputs(request: DefaultLibRequest<'_>) -> DefaultLibLoad {
     let seed = default_full_lib_seed_for_target(request.target_basename);
     if let Some(resolution) =
@@ -56,29 +44,39 @@ pub fn load_default_lib_inputs(request: DefaultLibRequest<'_>) -> DefaultLibLoad
         };
     }
 
+    let fallback = load_generated_default_lib_resolution(
+        request.no_lib,
+        request.lib_entries,
+        request.target_basename,
+    );
     DefaultLibLoad {
-        inputs: load_generated_default_lib_inputs(request.no_lib, Some(request.lib_entries)),
+        inputs: fallback.inputs,
         used_physical: false,
-        unknown_libs: Vec::new(),
-        io_stats: DefaultLibIoStats::default(),
+        unknown_libs: fallback.unknown_libs,
+        io_stats: fallback.io_stats,
     }
 }
 
-/// Load the generated default-lib subset.
-///
-/// This is the fallback path when the physical TypeScript package is missing and
-/// the source of default libs for single-file checks, which have no project root
-/// from which to resolve `node_modules/typescript`.
 pub fn load_generated_default_lib_inputs(
     no_lib: bool,
     lib_entries: Option<&[String]>,
 ) -> Vec<SourceFileInput> {
-    let selection = default_lib_selection_from_tsconfig(no_lib, lib_entries);
-    selected_default_lib_sources(selection)
-        .into_iter()
-        .map(|source| SourceFileInput {
-            file_name: source.file_name.to_string_lossy().into_owned(),
-            source_text: source.source_text,
-        })
-        .collect()
+    load_generated_default_lib_resolution(no_lib, lib_entries.unwrap_or_default(), "es2024").inputs
+}
+
+fn load_generated_default_lib_resolution(
+    no_lib: bool,
+    lib_entries: &[String],
+    target_basename: &str,
+) -> super::physical::PhysicalLibResolution {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let generated_dir = manifest_dir.join("generated-libs");
+    let seed = default_full_lib_seed_for_target(target_basename);
+    resolve_default_libs_from_lib_dir(
+        generated_dir,
+        no_lib,
+        lib_entries,
+        &seed,
+        DefaultLibIoStats::default(),
+    )
 }

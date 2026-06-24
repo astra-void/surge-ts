@@ -4,73 +4,33 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import { extractAuthenticatorTransport, generateDefaultLibs } from "./generate-default-libs.ts";
+import { generateDefaultLibs } from "./generate-default-libs.ts";
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const domLibPath = path.join(workspaceRoot, "node_modules/typescript/lib/lib.dom.d.ts");
+const typescriptLibDir = path.join(workspaceRoot, "node_modules/typescript/lib");
+const generatedLibDir = path.join(workspaceRoot, "crates/surge-ts-checker/generated-libs");
 
-test("extractAuthenticatorTransport reads the local DOM lib", () => {
-  assert.ok(fs.existsSync(domLibPath), `missing ${domLibPath}`);
-  const source = fs.readFileSync(domLibPath, "utf8");
-  assert.deepEqual(extractAuthenticatorTransport(source), [
-    "ble",
-    "cable",
-    "hybrid",
-    "internal",
-    "nfc",
-    "smart-card",
-    "usb",
-  ]);
-});
-
-test("generateDefaultLibs writes deterministic generated files with the supported surface", () => {
+test("generateDefaultLibs copies the local TypeScript lib files deterministically", () => {
   const first = generateDefaultLibs();
   const second = generateDefaultLibs();
 
   assert.equal(first.stableHash, second.stableHash);
-  assert.deepEqual(first.generatedFiles, [
-    "lib.es.generated.d.ts",
-    "lib.dom.generated.d.ts",
-  ]);
+  assert.ok(first.generatedFiles.includes("lib.es5.d.ts"));
+  assert.ok(first.generatedFiles.includes("lib.es2024.full.d.ts"));
+  assert.ok(first.generatedFiles.includes("lib.dom.d.ts"));
+  assert.ok(!first.generatedFiles.includes("lib.es.generated.d.ts"));
+  assert.ok(!first.generatedFiles.includes("lib.dom.generated.d.ts"));
 
-  const esPath = path.join(
-    workspaceRoot,
-    "crates/surge-ts-checker/generated-libs/lib.es.generated.d.ts",
-  );
-  const domPath = path.join(
-    workspaceRoot,
-    "crates/surge-ts-checker/generated-libs/lib.dom.generated.d.ts",
-  );
+  const sourceDom = fs.readFileSync(path.join(typescriptLibDir, "lib.dom.d.ts"), "utf8");
+  const copiedDom = fs.readFileSync(path.join(generatedLibDir, "lib.dom.d.ts"), "utf8");
+  assert.equal(copiedDom, sourceDom);
 
-  const esSource = fs.readFileSync(esPath, "utf8");
-  const domSource = fs.readFileSync(domPath, "utf8");
+  const sourceEs5 = fs.readFileSync(path.join(typescriptLibDir, "lib.es5.d.ts"), "utf8");
+  const copiedEs5 = fs.readFileSync(path.join(generatedLibDir, "lib.es5.d.ts"), "utf8");
+  assert.equal(copiedEs5, sourceEs5);
 
-  for (const needle of [
-    "interface Array<T> {",
-    "map<U>(callback: (value: T, index: number, array: T[]) => U): U[];",
-    "find(callback: (value: T, index: number, array: T[]) => unknown): T | undefined;",
-    "join(separator?: string): string;",
-    "includes(value: T): boolean;",
-    "push(...items: T[]): number;",
-    "interface Promise<T> {}",
-    "interface Map<K, V> {",
-    "get(key: K): any;",
-    "set(key: K, value: V): any;",
-    "has(key: K): boolean;",
-    "delete(key: K): boolean;",
-    "clear(): void;",
-    "size: number;",
-    "interface Uint8Array extends Array<number> {}",
-    "declare function Uint8Array(value?: unknown): Uint8Array;",
-  ]) {
-    assert.ok(esSource.includes(needle), `missing ${needle} in lib.es.generated.d.ts`);
-  }
-
-  assert.ok(
-    domSource.includes("type AuthenticatorTransport =\n  | \"ble\"") &&
-      domSource.includes("  | \"usb\"\n;"),
-    "missing AuthenticatorTransport union in lib.dom.generated.d.ts",
-  );
-  assert.ok(domSource.includes("interface TextEncoder {"));
-  assert.ok(domSource.includes("declare function TextEncoder(): TextEncoder;"));
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(generatedLibDir, "manifest.json"), "utf8"),
+  ) as typeof first;
+  assert.deepEqual(manifest, first);
 });

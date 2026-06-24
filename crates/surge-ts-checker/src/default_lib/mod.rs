@@ -1,6 +1,5 @@
 mod loader;
 mod physical;
-mod registry;
 mod source;
 
 pub use loader::{

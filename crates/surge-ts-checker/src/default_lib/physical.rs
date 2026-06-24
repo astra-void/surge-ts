@@ -1,19 +1,3 @@
-//! Physical TypeScript `lib*.d.ts` discovery and reference-graph loading.
-//!
-//! Unlike the generated default-lib subset (see `registry.rs`), this module
-//! resolves the *real* declaration files shipped by the pinned local
-//! `typescript` package and follows their `/// <reference lib="..." />` graph.
-//! The resulting [`SourceFileInput`]s are parsed and lowered through the normal
-//! ambient-global pipeline (routed via `FileKind::PhysicalDefaultLib`), so no
-//! pre-baked snapshot is involved.
-//!
-//! Physical loading is the default and requires the pinned `typescript` package
-//! to be installed. When the package cannot be found the resolver returns `None`
-//! and callers fall back to the generated subset. The CLI `--physicalLibs` flag
-//! (and the `.physicalLibs` marker file / `SURGE_PHYSICAL_LIBS` env
-//! var) are now only a debug aid: they no longer toggle the default, but surface
-//! a warning when physical loading was requested yet the package was missing.
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,11 +68,27 @@ pub fn resolve_physical_default_libs(
     let mut io_stats = DefaultLibIoStats::default();
     let lib_dir = find_typescript_lib_dir(root_dir, &mut io_stats)?;
 
+    Some(resolve_default_libs_from_lib_dir(
+        lib_dir,
+        no_lib,
+        lib_entries,
+        default_seed,
+        io_stats,
+    ))
+}
+
+pub(crate) fn resolve_default_libs_from_lib_dir(
+    lib_dir: PathBuf,
+    no_lib: bool,
+    lib_entries: &[String],
+    default_seed: &str,
+    io_stats: DefaultLibIoStats,
+) -> PhysicalLibResolution {
     if no_lib {
-        return Some(PhysicalLibResolution {
+        return PhysicalLibResolution {
             io_stats,
             ..Default::default()
-        });
+        };
     }
 
     let mut seeds: Vec<String> = Vec::new();
@@ -110,12 +110,12 @@ pub fn resolve_physical_default_libs(
     }
     let (inputs, loaded_files, io_stats) = loader.run();
 
-    Some(PhysicalLibResolution {
+    PhysicalLibResolution {
         inputs,
         loaded_files,
         unknown_libs,
         io_stats,
-    })
+    }
 }
 
 /// Map the configured `target` to the `lib.<name>.full.d.ts` aggregate that
@@ -137,9 +137,20 @@ pub fn default_full_lib_seed_for_target(target: &str) -> String {
     format!("{base}.full")
 }
 
-/// Walk up from `root_dir` looking for `node_modules/typescript/lib`.
+/// Walk up from `root_dir` looking for `node_modules/typescript/lib`, then fall
+/// back to the checker crate/workspace location used to build this binary.
 fn find_typescript_lib_dir(root_dir: &Path, io_stats: &mut DefaultLibIoStats) -> Option<PathBuf> {
-    let mut current: Option<&Path> = Some(root_dir);
+    find_typescript_lib_dir_from(root_dir, io_stats).or_else(|| {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        find_typescript_lib_dir_from(manifest_dir, io_stats)
+    })
+}
+
+fn find_typescript_lib_dir_from(
+    start_dir: &Path,
+    io_stats: &mut DefaultLibIoStats,
+) -> Option<PathBuf> {
+    let mut current: Option<&Path> = Some(start_dir);
     while let Some(dir) = current {
         let candidate = dir.join("node_modules").join("typescript").join("lib");
         io_stats.existence_probes += 1;
