@@ -496,6 +496,81 @@ generic-constructor inference (+ function→`Function` assignability), and the
 and `&&`-chain truthy-property narrowing). The detailed root-cause taxonomy
 lives in the working notes, not this doc.
 
+## ofetch (Fetch-API real-project measurement)
+
+`ofetch` is [unjs/ofetch](https://github.com/unjs/ofetch): a small Fetch-API
+wrapper, 7 source files under `src/` plus a `test/` suite, `tsconfig` with
+`module`/`moduleResolution: NodeNext`, `strict`, `verbatimModuleSyntax`,
+`isolatedModules`, `isolatedDeclarations`, `composite`. **`tsc` reports 1
+diagnostic** (`TS5107` — `esModuleInterop=false` is deprecated), so it is a near
+false-positive corpus rather than a strict 0-baseline.
+
+- Command: `pnpm run real:ofetch`
+  (`measure-project.ts --project .local-projects/ofetch --name ofetch
+  --allowMissing`), plus `pnpm run oracle:compare -- --project
+  .local-projects/ofetch/tsconfig.json --maxDiagnostics 300`.
+- Local project present: gated. `.local-projects/` is gitignored — ofetch is
+  **not vendored**; `--allowMissing` keeps the script honest when absent.
+
+### Measured baseline
+
+| Metric | Before this pass | After this pass |
+| --- | ---: | ---: |
+| TypeScript (tsc) diagnostics | 1 (`TS5107`) | 1 (`TS5107`) |
+| surge-ts diagnostics | 5 | 2 |
+| surge-ts over-reports (false positives) | 5 | 2 |
+
+tsc's single diagnostic is the `esModuleInterop=false` deprecation
+(`TS5107`), which surge does not model (no compiler-option deprecation
+diagnostics exist yet) — an under-report, not a false positive.
+
+### False positives fixed this pass (5 → 2)
+
+Three checker over-reports were root-caused and fixed (each verified against the
+oracle preset sweep, still green):
+
+- **`TS2339` on primitive literal index access** — `path[0]` (with `path:
+  string`) reported `Property 'path' does not exist on type 'string'`. The
+  statement-level index-access evaluator emitted a missing-property error for any
+  literal index on any receiver, naming the *receiver* as the absent property.
+  Restricted to object-like receivers (`Object`/`Function`/`Reference`):
+  primitives carry an apparent type with index signatures (`string[number] ->
+  string`), so a literal index there is never a `TS2339`.
+  ([`checks/expr.rs`](crates/surge-ts-checker/src/checks/expr.rs))
+- **`TS2349` "not callable" after truthy narrowing** — `if (hooks) { hooks(ctx) }`
+  with `hooks: Hook | undefined` reported the call as not callable. The
+  positive-branch narrowing handled `typeof`/`instanceof`/`Array.isArray`/
+  discriminant guards but not a bare-identifier truthy guard, so `undefined` was
+  never dropped and the callee stayed `Hook | undefined`. Added bare-identifier
+  truthy narrowing (`remove_nullish` on the true branch); the existing `!guard`
+  unwrap routes `if (!x)` else/fall-through through the same path.
+  ([`checks/function/narrowing.rs`](crates/surge-ts-checker/src/checks/function/narrowing.rs))
+- **`TS2339` for `Object.prototype` members on object/named types** —
+  `error.toString()` reported `Property 'toString' does not exist on type
+  'Error'`. Object and named-interface apparent types now expose the
+  `Object.prototype` members.
+  ([`types/object.rs`](crates/surge-ts-types/src/object.rs))
+
+### Remaining (2): `node:*` import resolution via transitively-loaded `@types/node`
+
+Both remaining over-reports are `TS2591` on `import … from "node:stream"`
+(`src/fetch.ts`, `test/index.test.ts`). tsc resolves these because `@types/node`
+is **loaded transitively** — a dependency `.d.ts` (vitest/vite) carries a `///
+<reference types="node" />` that pulls the package into the program, which makes
+its `declare module "node:stream"` visible. surge does not follow that transitive
+type-reference chain, so the specifier stays unresolved and surge emits the
+install hint.
+
+A stub-resolution heuristic ("treat Node-core imports as resolved when an
+`@types/node` package exists on disk") was prototyped and **rejected**: tsc does
+*not* resolve `node:*` from an on-disk `@types/node` alone (with `types` absent or
+`types: []`, a minimal project still reports `TS2591`), and the heuristic
+regressed `node-protocol-no-node-types-basic` by suppressing two real `TS2591`s
+it picked up from the repo-root `node_modules/@types/node`. The faithful fix is
+transitive `/// <reference types="..." />` loading from dependency declaration
+files, tracked as future work; full Node/`@types` resolution parity stays out of
+scope.
+
 ## v0.84 Real-Project Audit
 
 The old `trpc` baseline is retired as the active real-project target.
@@ -666,21 +741,27 @@ type semantics, lib overload resolution, and the remaining deeper `lib.d.ts`
 type semantics.
 
 ## Note on Type Assertions (v0.73)
+
 Type assertions (`as` expressions) were chosen for v0.73 because they are extremely common in real TypeScript projects, particularly around parsed data, library boundaries, and compatibility shims. By implementing a narrow parsing and inference surface for primitive assertions, aliases, and built-in arrays, we significantly reduce false-positive TS2322 cascades without needing full TypeScript assertion semantics. Dominant blockers remaining after this phase continue to revolve around ambient `@types` package discovery, missing DOM/Node globals, and `lib.d.ts` semantics which often surface as TS2304 errors.
 
 ## Note on Optional Chaining and Nullish Coalescing (v0.74/v0.74.1)
+
 v0.74.1 supports nested optional property/call chains in a conservative way, and optional element access for arrays and tuples. Every optional chain segment still widens the result with `undefined`. `??` removes `undefined` only in the supported subset. `null`-accurate semantics, full control-flow narrowing, `??=`, and non-null assertions remain unsupported.
 
 ## Note on Benchmark Harness (v0.75/v0.75.2)
+
 v0.75/v0.75.2 adds a compiler speed benchmark harness (`scripts/bench/compare-compilers.ts`) along with diagnostic-drift-aware reporting. This is a developer-facing regression tool comparing no-emit project checks across `tsc`, `tsgo` (optional), and the `surge-ts-cli` release binary. It enforces a TS 7-oriented policy that avoids `ignoreDeprecations` in committed fixtures and requires looking at semantic equivalence alongside wall-clock performance. These are local-machine-relative developer aids; SVG/HTML reports are visualization aids, not marketing claims. Diagnostic drift must be read with timing.
 
 ## Note on Type Operators (v0.78)
+
 v0.78 implements a parser-safe foundation for `typeof value`, `keyof T`, and the `keyof typeof constObject` pattern, in a narrow type-position subset. The `typeof` type query resolves top-level or in-scope values to their inferred types. `keyof` resolves object and interface types to string literal unions of their properties. If a value or type is unresolved or unsupported, `surge-ts` defaults to parser-safe conservative emission, outputting `TS2304` or resolving to `Unknown` to match TypeScript's fallback behavior. Advanced types like `typeof import("pkg")`, namespace/class constructor `typeof`, conditional types, template literal types, index signatures, and exact intersection-of-keys semantics for unions remain unsupported.
 
 ## Note on Indexed Access Types (v0.79/v0.79.2)
+
 v0.79 implements a parser-safe indexed access type foundation (`T[K]`, `T[keyof T]`). It supports narrow indexed access types including object/interface string-literal property lookup, `T[keyof T]` value unions, and tuple numeric literal indexing. v0.79.2 fixes unresolved-key indexed access diagnostic parity and non-null assertion optional chain parity, ensuring that the default `tsc` profile emits `TS2304` and `TS2538` cascades correctly, and that optional chain `undefined` propagation behaves accurately around non-null assertions and `satisfies` expressions, matching TypeScript's cascading behavior. Advanced usages like conditional types, template literal types, index signatures, and generic indexed access remain unsupported at that historical point. v1.1 later adds a narrow concrete-substitution slice for `T["key"]`, `T[K]`, and `T[keyof T]`, so this note should be read as pre-v1.1 context only.
 
 ## Note on Mapped Types (v0.80.1)
+
 v0.80.1 supports a narrow mapped type foundation.
 Supported: `{ [K in keyof T]: T[K] }` and `{ [K in keyof T]?: T[K] }` over concrete object/interface inputs after explicit generic substitution.
 Unsupported: key remapping, conditional types, template literal types, index signatures, readonly mapped semantics, modifier arithmetic, generic inference, `@types`, physical `lib.d.ts`, DOM/Node globals.

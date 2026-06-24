@@ -8,6 +8,11 @@
 - When modifying existing files, do not increase comment noise. Remove stale or misleading comments if they are directly related to the edited code.
 - Comments should justify themselves; if a comment does not explain why the code exists or why it is written that way, do not add it.
 
+## Search
+
+- Prefer `rg` (ripgrep) over `grep` for all code searches. It respects `.gitignore`, is faster, and handles binary files safely.
+- Fall back to `grep` only when `rg` is unavailable or a POSIX-compatible invocation is strictly required (e.g. inside a shell script that must be portable).
+
 ## Verification
 
 - Rust crates: run the workspace tests with nextest.

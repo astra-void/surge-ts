@@ -2,9 +2,8 @@
 
 This documents how project mode resolves `compilerOptions.types` /
 `compilerOptions.typeRoots` and loads type-package declarations. The logic lives
-in [`src/package_declarations.rs`](src/package_declarations.rs)
-(`resolve_type_packages`) and is wired from `run_project_mode` in
-[`src/main.rs`](src/main.rs).
+in the `surge-ts` facade's `package_declarations` module and is wired from
+`Project::check`.
 
 ## Important: TypeScript 6.0 removed implicit `@types` inclusion
 
