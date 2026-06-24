@@ -104,13 +104,23 @@ mod tests {
 
     #[test]
     fn name_uses_display_not_structural_expansion() {
-        let ty = reference("box.ts\u{0}Box", "Box<string>", vec![Type::String], Type::String);
+        let ty = reference(
+            "box.ts\u{0}Box",
+            "Box<string>",
+            vec![Type::String],
+            Type::String,
+        );
         assert_eq!(ty.name(), "Box<string>");
     }
 
     #[test]
     fn same_declaration_and_arguments_are_nominally_equal() {
-        let a = reference("box.ts\u{0}Box", "Box<string>", vec![Type::String], Type::String);
+        let a = reference(
+            "box.ts\u{0}Box",
+            "Box<string>",
+            vec![Type::String],
+            Type::String,
+        );
         let b = reference(
             "box.ts\u{0}Box",
             "Box<string> (other display)",
@@ -125,8 +135,18 @@ mod tests {
 
     #[test]
     fn different_arguments_are_not_nominally_equal() {
-        let a = reference("box.ts\u{0}Box", "Box<string>", vec![Type::String], Type::String);
-        let b = reference("box.ts\u{0}Box", "Box<number>", vec![Type::Number], Type::Number);
+        let a = reference(
+            "box.ts\u{0}Box",
+            "Box<string>",
+            vec![Type::String],
+            Type::String,
+        );
+        let b = reference(
+            "box.ts\u{0}Box",
+            "Box<number>",
+            vec![Type::Number],
+            Type::Number,
+        );
         assert_ne!(a, b);
     }
 

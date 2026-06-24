@@ -14,6 +14,17 @@ pub enum Type {
     Void,
     Any,
     Unknown,
+    /// The genuine `unknown` type as written with the `unknown` keyword (or
+    /// flowing from a declaration that uses it). Behaves identically to
+    /// [`Type::Unknown`] in every type operation — assignability, display,
+    /// narrowing — and is matched together with it via [`Type::is_unknown`].
+    /// The sole distinction is provenance: `Unknown` is also surge's
+    /// graceful-degradation sentinel for types it cannot resolve, whereas
+    /// `GenuineUnknown` is only produced by an actual `unknown` annotation. The
+    /// checker uses that distinction to emit `TS18046` ('x' is of type
+    /// 'unknown') on a genuine-unknown receiver while staying silent on a
+    /// degraded one, matching tsc's no-cascade behavior.
+    GenuineUnknown,
     Never,
     StringLiteral(String),
     NumberLiteral(NumberLiteralType),
@@ -91,6 +102,14 @@ fn array_iterator_type(yields: Type) -> Type {
 }
 
 impl Type {
+    /// Whether this is the `unknown` type, regardless of provenance — both the
+    /// degradation sentinel [`Type::Unknown`] and the genuine
+    /// [`Type::GenuineUnknown`]. Use this in place of `== Type::Unknown` at every
+    /// site that cares about unknown-ness rather than provenance.
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, Type::Unknown | Type::GenuineUnknown)
+    }
+
     pub fn base_primitive(&self) -> Option<Type> {
         match self {
             Type::String | Type::StringLiteral(_) => Some(Type::String),
@@ -121,9 +140,7 @@ impl Type {
             Type::Object(object) => {
                 object.get_property(name).is_none() && object.allows_string_index_access()
             }
-            Type::Reference(reference) => {
-                reference.resolve().property_only_from_string_index(name)
-            }
+            Type::Reference(reference) => reference.resolve().property_only_from_string_index(name),
             _ => false,
         }
     }
@@ -222,7 +239,7 @@ impl Type {
             Type::Undefined => "undefined".to_string(),
             Type::Void => "void".to_string(),
             Type::Any => "any".to_string(),
-            Type::Unknown => "unknown".to_string(),
+            Type::Unknown | Type::GenuineUnknown => "unknown".to_string(),
             Type::Never => "never".to_string(),
             Type::StringLiteral(value) => format!("{value:?}"),
             Type::NumberLiteral(value) => value.value.clone(),
@@ -295,9 +312,7 @@ fn string_property_access_type(name: &str) -> Option<Type> {
             false,
             2,
         )),
-        "indexOf" | "lastIndexOf" => {
-            Some(function_type(vec![Type::String], Type::Number, true, 1))
-        }
+        "indexOf" | "lastIndexOf" => Some(function_type(vec![Type::String], Type::Number, true, 1)),
         "search" => Some(function_type(vec![Type::Any], Type::Number, false, 1)),
         // `match`/`matchAll` return regex match data we do not model; `Any` keeps
         // any downstream access conservative rather than cascading.
@@ -314,8 +329,8 @@ fn string_property_access_type(name: &str) -> Option<Type> {
         "startsWith" | "endsWith" | "includes" => {
             Some(function_type(vec![Type::String], Type::Boolean, true, 1))
         }
-        "toLowerCase" | "toUpperCase" | "toLocaleLowerCase" | "toLocaleUpperCase"
-        | "trim" | "trimStart" | "trimEnd" | "trimLeft" | "trimRight" | "normalize" => {
+        "toLowerCase" | "toUpperCase" | "toLocaleLowerCase" | "toLocaleUpperCase" | "trim"
+        | "trimStart" | "trimEnd" | "trimLeft" | "trimRight" | "normalize" => {
             Some(function_type(vec![], Type::String, false, 0))
         }
         "toString" | "valueOf" => Some(function_type(vec![], Type::String, false, 0)),
@@ -469,9 +484,7 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
         // `reduce`/`reduceRight` carry an accumulator type we do not infer; the
         // callback and result degrade to `Any` so chained access stays
         // conservative rather than cascading.
-        "reduce" | "reduceRight" => {
-            Some(function_type(vec![Type::Any], Type::Any, true, 1))
-        }
+        "reduce" | "reduceRight" => Some(function_type(vec![Type::Any], Type::Any, true, 1)),
         "join" => Some(function_type(vec![Type::String], Type::String, true, 0)),
         "concat" => Some(function_type(
             vec![Type::Any],
@@ -518,7 +531,12 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             0,
         )),
         "push" | "unshift" => Some(function_type(vec![element.clone()], Type::Number, true, 1)),
-        "pop" | "shift" => Some(function_type(vec![], element_or_undefined(element), false, 0)),
+        "pop" | "shift" => Some(function_type(
+            vec![],
+            element_or_undefined(element),
+            false,
+            0,
+        )),
         "at" => Some(function_type(
             vec![Type::Number],
             element_or_undefined(element),
@@ -567,7 +585,7 @@ fn array_element_name(element: &Type) -> String {
 /// already includes it needs no addition.
 fn optional_property_display(ty: &Type) -> String {
     match ty {
-        Type::Any | Type::Unknown | Type::Undefined => ty.name(),
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Undefined => ty.name(),
         Type::Union(union) if union.types().iter().any(|m| matches!(m, Type::Undefined)) => {
             ty.name()
         }
@@ -853,6 +871,9 @@ mod tests {
             .return_type()
             .get_property_access_type("value")
             .expect("iterator result has value");
-        assert_eq!(value, crate::union_type(vec![Type::Number, Type::Undefined]));
+        assert_eq!(
+            value,
+            crate::union_type(vec![Type::Number, Type::Undefined])
+        );
     }
 }

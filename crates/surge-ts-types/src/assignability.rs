@@ -67,7 +67,7 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         || matches!(from, Type::Any)
         || matches!(from, Type::Never)
         || matches!(to, Type::Any)
-        || matches!(to, Type::Unknown)
+        || to.is_unknown()
     {
         return true;
     }
@@ -190,7 +190,10 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
             | Type::Tuple(_),
             Type::Object(target),
         ) => {
-            target.properties.values().all(|property| property.is_optional())
+            target
+                .properties
+                .values()
+                .all(|property| property.is_optional())
                 && target.string_index_type.is_none()
                 && target.call_signature().is_none()
                 && target.construct_signature().is_none()
@@ -234,26 +237,28 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
             // `BooleanConstructor`'s `<T>(value?: T) => boolean`) usable as a
             // typed callback such as an array predicate.
             source_parameter == target_parameter
-                || matches!(source_parameter, Type::Unknown | Type::Any)
+                || source_parameter.is_unknown()
+                || matches!(source_parameter, Type::Any)
                 || (is_assignable_to(source_parameter, target_parameter)
                     && is_assignable_to(target_parameter, source_parameter))
         });
 
-    parameters_compatible && is_assignable_to(source.return_type(), target.return_type())
+    // A `void`-returning target ignores whatever the source returns: tsc accepts
+    // any function as a `() => void` slot (`Array.prototype.forEach` callbacks,
+    // event handlers, etc.). Outside that case the source return must be
+    // assignable to the target's.
+    let return_compatible = matches!(target.return_type(), Type::Void)
+        || is_assignable_to(source.return_type(), target.return_type());
+
+    parameters_compatible && return_compatible
 }
 
-fn object_assignable(
-    from_obj: &ObjectType,
-    to_obj: &ObjectType,
-    from: &Type,
-    to: &Type,
-) -> bool {
+fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to: &Type) -> bool {
     let key = (
         Arc::as_ptr(&from_obj.properties) as usize,
         Arc::as_ptr(&to_obj.properties) as usize,
     );
-    let newly_inserted =
-        OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().insert(key));
+    let newly_inserted = OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().insert(key));
     if !newly_inserted {
         return true;
     }
@@ -271,7 +276,9 @@ fn object_assignable(
 /// targets like `{name: string}`. Mirrors `function_property_access_type` in
 /// `ty.rs`, but keyed off the object's call signature for `call`/`apply`/`bind`.
 fn callable_object_function_member(source: &ObjectType, name: &str) -> Option<Type> {
-    let signature = source.call_signature().or_else(|| source.construct_signature())?;
+    let signature = source
+        .call_signature()
+        .or_else(|| source.construct_signature())?;
     match name {
         "length" => Some(Type::Number),
         "name" => Some(Type::String),
@@ -349,8 +356,8 @@ pub fn object_assignability_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FunctionType, NumberLiteralType, ObjectProperty, ObjectType, union_type};
     use crate::PropertyMap;
+    use crate::{FunctionType, NumberLiteralType, ObjectProperty, ObjectType, union_type};
 
     fn function_type(
         parameters: Vec<Type>,
@@ -370,6 +377,20 @@ mod tests {
         let mut properties = PropertyMap::new();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
         Type::Object(ObjectType::new(properties, None))
+    }
+
+    #[test]
+    fn function_with_any_return_assignable_to_void_returning_target() {
+        // A `void`-returning target ignores the source return type, so a function
+        // returning a value still satisfies it (e.g. an event handler slot).
+        let source = function_type(vec![Type::Unknown], Type::Unknown, false, 1);
+        let target = function_type(vec![Type::Unknown], Type::Void, false, 1);
+        assert!(is_assignable_to(&source, &target));
+
+        // The reverse does not hold: a non-`void` target still checks the return.
+        let source_void = function_type(vec![Type::Unknown], Type::Void, false, 1);
+        let target_number = function_type(vec![Type::Unknown], Type::Number, false, 1);
+        assert!(!is_assignable_to(&source_void, &target_number));
     }
 
     #[test]
@@ -393,10 +414,11 @@ mod tests {
     fn constructor_object_assignable_to_name_object() {
         // `typeof SomeClass` (a construct-signature object) satisfies
         // `{name: string}` via the synthesized `Function.name` member.
-        let constructor = Type::Object(
-            ObjectType::new(PropertyMap::new(), None)
-                .with_construct_signature(FunctionType::new(vec![], Type::Void, false, 0)),
-        );
+        let constructor =
+            Type::Object(
+                ObjectType::new(PropertyMap::new(), None)
+                    .with_construct_signature(FunctionType::new(vec![], Type::Void, false, 0)),
+            );
         assert!(is_assignable_to(&constructor, &name_target()));
     }
 
@@ -441,7 +463,10 @@ mod tests {
         // `Object.fromEntries([...])`: an array satisfies a no-required-member
         // object target (`{}`) just like any non-nullish value.
         let empty = Type::Object(ObjectType::new(PropertyMap::new(), None));
-        assert!(is_assignable_to(&Type::Array(Box::new(Type::Number)), &empty));
+        assert!(is_assignable_to(
+            &Type::Array(Box::new(Type::Number)),
+            &empty
+        ));
         assert!(is_assignable_to(
             &Type::Tuple(vec![Type::String, Type::Any]),
             &empty

@@ -51,8 +51,8 @@ impl PartialEq for ObjectType {
         // map `Arc`; comparing their pointers short-circuits the O(size) structural
         // compare, which dominates checking projects with large library object
         // graphs (DOM `Request`/`Response`, …) reached through nominal references.
-        let properties_equal = Arc::ptr_eq(&self.properties, &other.properties)
-            || self.properties == other.properties;
+        let properties_equal =
+            Arc::ptr_eq(&self.properties, &other.properties) || self.properties == other.properties;
         properties_equal && self.string_index_type == other.string_index_type
     }
 }
@@ -157,7 +157,17 @@ impl ObjectType {
             return Some(property.ty.clone());
         }
 
-        self.string_index_type.as_deref().cloned()
+        if let Some(indexed) = self.string_index_type.as_deref() {
+            return Some(indexed.clone());
+        }
+
+        // Every object type's apparent type includes the global `Object`
+        // interface members, so `error.toString()` / `value.hasOwnProperty(k)`
+        // resolve even when the declared interface (e.g. lib's `Error`) never
+        // restates them. Without this fallback the access was a TS2339 false
+        // positive. Only consulted after declared members and the index
+        // signature, mirroring tsc's member-precedence order.
+        object_prototype_member_type(name)
     }
 
     pub fn contains_property(&self, name: &str) -> bool {
@@ -175,6 +185,23 @@ impl ObjectType {
     pub fn optional_properties(&self) -> impl Iterator<Item = (&String, &ObjectProperty)> + '_ {
         self.properties.iter().filter(|entry| entry.1.is_optional())
     }
+}
+
+/// The members of the global `Object` interface (lib.es5), shared by the apparent
+/// type of every non-nullish value. Parameter types are approximated as `any`
+/// (the real signatures take `PropertyKey`/`Object`) since only arity and the
+/// return type matter for the diagnostics surge emits.
+fn object_prototype_member_type(name: &str) -> Option<Type> {
+    let member = match name {
+        "toString" | "toLocaleString" => FunctionType::new(vec![], Type::String, false, 0),
+        "valueOf" => FunctionType::new(vec![], Type::Any, false, 0),
+        "hasOwnProperty" | "isPrototypeOf" | "propertyIsEnumerable" => {
+            FunctionType::new(vec![Type::Any], Type::Boolean, false, 1)
+        }
+        "constructor" => return Some(Type::Any),
+        _ => return None,
+    };
+    Some(Type::Function(member))
 }
 
 impl Clone for ObjectType {
