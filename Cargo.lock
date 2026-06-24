@@ -716,6 +716,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "surge-ts"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "surge-ts-checker",
+ "surge-ts-config",
+ "surge-ts-diagnostics",
+ "surge-ts-syntax",
+]
+
+[[package]]
 name = "surge-ts-checker"
 version = "0.1.0"
 dependencies = [
@@ -733,6 +744,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "serde_json",
+ "surge-ts",
  "surge-ts-checker",
  "surge-ts-config",
  "surge-ts-diagnostics",

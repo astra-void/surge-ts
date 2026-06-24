@@ -1,7 +1,16 @@
 [package]
 name = "surge-ts-diagnostics"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Diagnostic types and tsc-compatible message catalog for the surge-ts checker."
+keywords = ["typescript", "diagnostics", "type-checker"]
+categories = ["development-tools"]
+readme = "README.md"
 
 [lib]
 doctest = false

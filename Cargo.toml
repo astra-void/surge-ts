@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/surge-ts",
   "crates/surge-ts-cli",
   "crates/surge-ts-syntax",
   "crates/surge-ts-checker",
@@ -9,3 +10,12 @@ members = [
   "crates/surge-ts-config",
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/astra-void/surge-ts"
+homepage = "https://github.com/astra-void/surge-ts"
+authors = ["astra-void"]
