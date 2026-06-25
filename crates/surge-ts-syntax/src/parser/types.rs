@@ -15,7 +15,8 @@ use crate::{
 };
 
 use super::function_types::{
-    parse_function_type, parse_function_type_parameter, parse_function_type_rest_parameter,
+    parse_constructor_type, parse_function_type, parse_function_type_parameter,
+    parse_function_type_rest_parameter,
 };
 use super::spans::text_span_from_oxc_span;
 
@@ -55,6 +56,13 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSTupleType(tuple_type) => parse_tuple_type(tuple_type),
         TSType::TSFunctionType(function_type) => {
             parse_function_type(function_type).map(ParsedType::Function)
+        }
+        // A constructor type (`new (args) => T`) is lowered to a callable
+        // signature; surge does not distinguish newability, and keeping it parsed
+        // prevents a union member like `JSXElementConstructor`'s `new (...) => …`
+        // from collapsing the whole alias to `Unknown`.
+        TSType::TSConstructorType(constructor_type) => {
+            parse_constructor_type(constructor_type).map(ParsedType::Function)
         }
         TSType::TSParenthesizedType(parenthesized_type) => {
             parse_type(&parenthesized_type.type_annotation)

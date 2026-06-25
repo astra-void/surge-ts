@@ -1,10 +1,39 @@
 use crate::{ParsedFunctionType, ParsedFunctionTypeParameter};
 use oxc_ast::ast::{
-    BindingPattern, FormalParameter, FormalParameterRest, TSFunctionType, TSThisParameter,
+    BindingPattern, FormalParameter, FormalParameterRest, TSConstructorType, TSFunctionType,
+    TSThisParameter,
 };
 
 use super::spans::text_span_from_oxc_span;
 use super::types::{parse_type_annotation, parse_type_parameters};
+
+/// Lowers a constructor type (`new (args) => T`, `abstract new (args) => T`) to a
+/// plain callable signature. surge does not model newability separately, and the
+/// only thing downstream inference needs from a constructor type is its parameter
+/// and return shapes — so reusing [`ParsedFunctionType`] keeps a union member like
+/// React's `JSXElementConstructor<P>` (`((props: P) => …) | (new (props: P) => …)`)
+/// fully parsed instead of collapsing the whole union to `Unknown`.
+pub(crate) fn parse_constructor_type(
+    constructor_type: &TSConstructorType<'_>,
+) -> Option<ParsedFunctionType> {
+    let mut parameters = Vec::new();
+
+    for parameter in &constructor_type.params.items {
+        parameters.push(parse_function_type_parameter(parameter)?);
+    }
+
+    if let Some(rest) = constructor_type.params.rest.as_deref() {
+        parameters.push(parse_function_type_rest_parameter(rest)?);
+    }
+
+    let return_type = parse_type_annotation(&constructor_type.return_type)?;
+
+    Some(ParsedFunctionType {
+        parameters,
+        return_type: Box::new(return_type),
+        type_parameters: parse_type_parameters(constructor_type.type_parameters.as_deref()),
+    })
+}
 
 pub(crate) fn parse_function_type(
     function_type: &TSFunctionType<'_>,
