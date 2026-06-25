@@ -4240,3 +4240,72 @@ fn indexed_access_unresolved_object_reports_only_missing_type() {
     let diagnostics = check_program_with_options(files, CheckerOptions::default());
     assert_eq!(codes(&diagnostics), vec!["TS2304"]);
 }
+
+// `infer` capture inside a function-parameter position resolves to the matched
+// argument: the excess-property error proves `R` is the concrete `{ id: string }`
+// props object, not a degraded `unknown`/`any`. Regression guard for the
+// function-pattern arm of conditional `infer` binding (the core of
+// `React.ComponentProps<typeof FunctionComponent>`).
+#[test]
+fn infer_capture_through_inline_function_parameter() {
+    let diagnostics = check_source(
+        "type FirstParam<T> = T extends (props: infer P) => any ? P : never;\n\
+         declare const comp: (props: { id: string }) => void;\n\
+         type R = FirstParam<typeof comp>;\n\
+         const bad: R = { nope: 1 };\n",
+        "example.ts",
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS2353"]);
+}
+
+// `infer` capture reached by expanding a generic alias whose body is a function
+// (`Ctor<infer P>`), matching React's `JSXElementConstructor<infer Props>` shape.
+#[test]
+fn infer_capture_through_generic_function_alias() {
+    let diagnostics = check_source(
+        "type Ctor<P> = (props: P) => unknown;\n\
+         type PropsOf<T> = T extends Ctor<infer P> ? P : never;\n\
+         declare const comp: (props: { id: string }) => unknown;\n\
+         type R = PropsOf<typeof comp>;\n\
+         const bad: R = { nope: 1 };\n",
+        "example.ts",
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS2353"]);
+}
+
+// A constructor signature (`new (...) => T`) as a union member must not collapse
+// the whole union to `unknown`. This mirrors React's
+// `JSXElementConstructor<P> = ((props: P) => …) | (new (props: P) => …)`; the
+// props type is recovered from the call-signature member.
+#[test]
+fn constructor_type_union_member_preserves_call_signature_infer() {
+    let diagnostics = check_source(
+        "type ElementCtor<P> = ((props: P) => string) | (new (props: P) => object);\n\
+         type PropsOf<T> = T extends ElementCtor<infer P> ? P : never;\n\
+         declare const widget: (props: { title: string }) => string;\n\
+         type R = PropsOf<typeof widget>;\n\
+         const bad: R = { other: 1 };\n",
+        "example.ts",
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS2353"]);
+}
+
+// `infer` capture against a callable object (an interface carrying a call
+// signature, e.g. React's `ForwardRefExoticComponent<P>`) resolves through the
+// object's call signature rather than degrading.
+#[test]
+fn infer_capture_through_callable_interface_signature() {
+    let diagnostics = check_source(
+        "interface Callable { (props: { id: string }): void; }\n\
+         declare const callable: Callable;\n\
+         type FirstParam<T> = T extends (props: infer P) => any ? P : never;\n\
+         type R = FirstParam<typeof callable>;\n\
+         const bad: R = { nope: 1 };\n",
+        "example.ts",
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS2353"]);
+}
