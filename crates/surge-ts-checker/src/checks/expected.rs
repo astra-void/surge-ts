@@ -111,6 +111,23 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
         return InferredExpression::Known(Type::Function(function_type));
     }
 
+    // A callable object expected type — an interface carrying a call signature, such
+    // as React's `ForwardRefRenderFunction` — contextually types an arrow the same
+    // way a bare function type does, so its parameters are not implicit-any.
+    if let (Type::Object(expected_object), ParsedExpression::ArrowFunction(arrow)) =
+        (expected_type, expression)
+    {
+        if let Some(call_signature) = expected_object.call_signature() {
+            let function_type = check_arrow_function_expression_with_expected_type(
+                with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
+                Some(call_signature),
+                symbols,
+                ctx,
+            );
+            return InferredExpression::Known(Type::Function(function_type));
+        }
+    }
+
     if let ParsedExpression::ConstAssertion {
         expression: inner, ..
     } = expression

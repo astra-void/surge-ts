@@ -5,7 +5,9 @@ use surge_ts_syntax::{
     ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind, ParsedJsxChild,
     ParsedNamedType, ParsedType, TextSpan as SyntaxTextSpan,
 };
-use surge_ts_types::{ObjectProperty, ObjectType, PropertyMap, Type, is_assignable_to, union_type};
+use surge_ts_types::{
+    FunctionType, ObjectProperty, ObjectType, PropertyMap, Type, is_assignable_to, union_type,
+};
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use super::expr::{evaluate_expression, source_display_name};
@@ -118,22 +120,30 @@ fn resolve_props_type(
     }
 }
 
-/// The props type for a component value: the first parameter of a function
-/// component (or an empty object for a zero-parameter component). Non-function
-/// values (including `any`) yield `None` so no prop check runs.
+/// The props type for a component value: the first parameter of its call (or, for
+/// a class component, construct) signature, or an empty object for a zero-parameter
+/// component. A `forwardRef`/`memo` component is a callable object rather than a
+/// bare function, so its call signature is consulted too. Non-callable values
+/// (including `any`) yield `None` so no prop check runs.
 fn component_props_type(component_type: &Type) -> Option<Type> {
     // `const Foo: FC<Props> = …` types the component as a nominal reference; peel
-    // it to reach the underlying function and its props parameter.
-    match &component_type.peeled() {
-        Type::Function(function_type) => Some(
-            function_type
-                .parameters()
-                .first()
-                .cloned()
-                .unwrap_or_else(|| Type::Object(alloc_object_type(PropertyMap::new(), None))),
-        ),
-        _ => None,
-    }
+    // it to reach the underlying signature and its props parameter.
+    let peeled = component_type.peeled();
+    let signature: &FunctionType = match &peeled {
+        Type::Function(function_type) => function_type,
+        Type::Object(object) => object
+            .call_signature()
+            .or_else(|| object.construct_signature())?,
+        _ => return None,
+    };
+
+    Some(
+        signature
+            .parameters()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Type::Object(alloc_object_type(PropertyMap::new(), None))),
+    )
 }
 
 /// Looks up `<tag>` in `JSX.IntrinsicElements`. Returns the element's attribute

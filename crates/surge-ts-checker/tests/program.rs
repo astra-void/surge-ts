@@ -4309,3 +4309,49 @@ fn infer_capture_through_callable_interface_signature() {
 
     assert_eq!(codes(&diagnostics), vec!["TS2353"]);
 }
+
+// An arrow argument whose parameter type is a callable object (an interface
+// carrying a call signature, e.g. React's `ForwardRefRenderFunction`) is
+// contextually typed by that call signature rather than left implicit-any: `v`
+// resolves to `number`, so assigning it to `string` is the only diagnostic.
+#[test]
+fn callable_object_parameter_contextually_types_arrow() {
+    let diagnostics = check_source(
+        "interface Render { (x: number): void; }\n\
+         declare function take(fn: Render): void;\n\
+         take((v) => { const s: string = v; });\n",
+        "example.ts",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+// A function value is assignable to a callable object target when it matches the
+// target's call signature, and not when its parameter is incompatible — so only
+// the mismatched call is rejected.
+#[test]
+fn function_assignable_to_callable_object_target() {
+    let diagnostics = check_source(
+        "interface Render { (x: number): void; }\n\
+         declare function take(fn: Render): void;\n\
+         const ok = (n: number): void => { void n; };\n\
+         const bad = (s: string): void => { void s; };\n\
+         take(ok);\n\
+         take(bad);\n",
+        "example.ts",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+}
+
+// A callable object used as a JSX component (a `forwardRef`/`memo`-style exotic
+// component, which is callable rather than a bare function) has its props checked
+// through its call signature.
+#[test]
+fn jsx_callable_object_component_checks_props() {
+    let diagnostics = check_source(
+        "interface Btn { (props: { label: string }): null; }\n\
+         declare const Button: Btn;\n\
+         const bad = <Button label={123} />;\n",
+        "example.tsx",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
