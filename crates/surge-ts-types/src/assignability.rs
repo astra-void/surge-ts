@@ -154,16 +154,21 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         (Type::Object(source), Type::Function(target)) => source
             .call_signature()
             .is_some_and(|call_signature| is_function_assignable_to(call_signature, target)),
-        // A function value carries `Function.prototype` members (`name`, `length`,
-        // `call`/`apply`/`bind`, …). It satisfies a plain object target whose
-        // required members are all drawn from that set — e.g. the cross-realm
-        // `cls: {name: string}` idiom that accepts `typeof SomeClass`. Targets
-        // that demand call/construct signatures or an index signature are left to
-        // the dedicated arms above (or rejected).
-        (Type::Function(_), Type::Object(target)) => {
-            target.call_signature().is_none()
-                && target.construct_signature().is_none()
+        // A function satisfies an object target when it matches the target's call
+        // signature (if any) and supplies its required members. A callable interface
+        // such as React's `ForwardRefRenderFunction` is the call-signature case; a
+        // plain object whose members are all drawn from `Function.prototype` (`name`,
+        // `length`, `call`/`apply`/`bind`, …) is the no-call-signature case — e.g. the
+        // cross-realm `cls: {name: string}` idiom that accepts `typeof SomeClass`. A
+        // construct-signature or index-signature target is left to the dedicated arms
+        // above (or rejected), since a plain function value models neither.
+        (Type::Function(source), Type::Object(target)) => {
+            target.construct_signature().is_none()
                 && target.string_index_type.is_none()
+                && match target.call_signature() {
+                    Some(call_signature) => is_function_assignable_to(source, call_signature),
+                    None => true,
+                }
                 && target.properties.iter().all(|(name, target_property)| {
                     match from.get_property_access_type(name) {
                         Some(source_ty) => is_assignable_to(&source_ty, &target_property.ty),
