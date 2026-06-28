@@ -170,6 +170,7 @@ pub(crate) fn infer_property_access(
                 }
                 match ty.get_property_access_type(property_name) {
                     Some(ty) => result_types.push(ty),
+                    None if no_lib_array_member(ty, ctx) => result_types.push(Type::Any),
                     None => {
                         return InferredExpression::MissingProperty {
                             property_name: property_name.to_string(),
@@ -184,10 +185,16 @@ pub(crate) fn infer_property_access(
         _ => object_type
             .get_property_access_type(property_name)
             .map(InferredExpression::Known)
-            .unwrap_or_else(|| InferredExpression::MissingProperty {
-                property_name: property_name.to_string(),
-                object_type: object_type.clone(),
-                span: *property_span,
+            .unwrap_or_else(|| {
+                if no_lib_array_member(&object_type, ctx) {
+                    InferredExpression::Known(Type::Any)
+                } else {
+                    InferredExpression::MissingProperty {
+                        property_name: property_name.to_string(),
+                        object_type: object_type.clone(),
+                        span: *property_span,
+                    }
+                }
             }),
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {
@@ -259,6 +266,7 @@ pub(crate) fn infer_property_call(
                 InferredExpression::Known(function_type.return_type().clone())
             }
             Some(Type::Any) => InferredExpression::Known(Type::Any),
+            None if no_lib_array_member(&object_type, ctx) => InferredExpression::Known(Type::Any),
             Some(_) | None => InferredExpression::Unknown,
         },
     };
@@ -266,6 +274,17 @@ pub(crate) fn infer_property_call(
         timings.property_access_checking += property_call_start.elapsed()
     });
     result
+}
+
+/// Under `noLib` the array member surface comes from the configured replacement
+/// lib (roblox-ts's `Array` adds `size`/`push`/`pop`/… that the standard JS array
+/// surface lacks). surge collapses that interface to `Type::Array` for
+/// assignability, discarding its member set, so a member the std surface does not
+/// know is not a real typo here — stay permissive instead of over-reporting
+/// TS2339. Without `noLib` the std array surface is authoritative and a miss is a
+/// genuine error.
+fn no_lib_array_member(object_type: &Type, ctx: &CheckerContext) -> bool {
+    ctx.options.no_lib && matches!(object_type, Type::Array(_))
 }
 
 fn promise_like_value_type(ty: &Type) -> Option<Type> {

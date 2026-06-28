@@ -117,6 +117,10 @@ pub(crate) fn check_property_call_like(
                 }
 
                 let Some(property_type) = ty.get_property_access_type(property_name) else {
+                    if no_lib_array_member(ty, ctx) {
+                        result_types.push(Type::Any);
+                        continue;
+                    }
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone()),
                         crate::spans::choose_span(property_span, object_span),
@@ -169,6 +173,9 @@ pub(crate) fn check_property_call_like(
             }
 
             let Some(property_type) = object_ty.get_property_access_type(property_name) else {
+                if no_lib_array_member(&object_ty, ctx) {
+                    return Some(Type::Any);
+                }
                 let diagnostic =
                     Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone());
                 ctx.push(diagnostic_with_syntax_span(
@@ -339,6 +346,10 @@ pub(crate) fn check_optional_property_call(
                 }
 
                 let Some(property_type) = ty.get_property_access_type(property_name) else {
+                    if no_lib_array_member(ty, ctx) {
+                        result_types.push(Type::Any);
+                        continue;
+                    }
                     let diagnostic =
                         Diagnostic::ts2339(property_name, &base_type_name, ctx.file_name.clone());
                     ctx.push(diagnostic_with_syntax_span(
@@ -413,6 +424,9 @@ pub(crate) fn check_optional_property_call(
             }
 
             let Some(property_type) = base_type.get_property_access_type(property_name) else {
+                if no_lib_array_member(&base_type, ctx) {
+                    return Some(surge_ts_types::union_type(vec![Type::Any, Type::Undefined]));
+                }
                 let diagnostic =
                     Diagnostic::ts2339(property_name, &base_type_name, ctx.file_name.clone());
                 ctx.push(diagnostic_with_syntax_span(
@@ -450,4 +464,14 @@ pub(crate) fn check_optional_property_call(
             }
         }
     }
+}
+
+/// Under `noLib` the array member surface comes from the configured replacement
+/// lib (roblox-ts's `Array` adds `size`/`push`/`pop`/… absent from the standard
+/// JS array surface). surge collapses that interface to `Type::Array` for
+/// assignability, discarding its member set, so a method the std surface does not
+/// know is not a real typo here — resolve it permissively instead of emitting
+/// TS2339. Without `noLib` the std array surface is authoritative.
+fn no_lib_array_member(object_type: &Type, ctx: &CheckerContext) -> bool {
+    ctx.options.no_lib && matches!(object_type, Type::Array(_))
 }
