@@ -213,6 +213,13 @@ pub(crate) struct CheckerContext {
     /// declaration's `file_name`. Populated once before the check phase; empty
     /// during the binding passes (where no diagnostics surface).
     pub(crate) module_scope_by_file: Arc<HashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
+    /// Each module's local value symbols, keyed by `file_name`. The value analogue
+    /// of [`Self::module_scope_by_file`]: when an imported type alias's body is
+    /// resolved while checking a *consumer* file, a `typeof <localValue>` in that
+    /// body must resolve against the *declaring* module's values, not the
+    /// consumer's `symbols`. Populated once (read-only) before the check phase and
+    /// shared across jobs. Consulted via `get` only.
+    pub(crate) module_local_values_by_file: Arc<HashMap<Arc<str>, Arc<SymbolTable>>>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     // Parallel to `type_parameter_scopes`: the declared constraint (if any) for
     // each in-scope type parameter, used to recognize `K extends keyof T` so a
@@ -287,6 +294,7 @@ impl CheckerContext {
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
             module_file_index_by_identity: Arc::new(HashMap::new()),
             module_scope_by_file: Arc::new(HashMap::new()),
+            module_local_values_by_file: Arc::new(HashMap::new()),
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
@@ -554,6 +562,24 @@ impl CheckerContext {
         file_name: &str,
     ) -> Option<Arc<TypeDeclarationScope>> {
         self.module_scope_by_file.get(file_name).cloned()
+    }
+
+    pub(crate) fn set_module_local_values_by_file(
+        &mut self,
+        module_local_values_by_file: HashMap<Arc<str>, Arc<SymbolTable>>,
+    ) {
+        self.module_local_values_by_file = Arc::new(module_local_values_by_file);
+    }
+
+    /// The local value symbols of the module that declared `file_name`, used to
+    /// resolve a `typeof <localValue>` inside an imported declaration's body
+    /// (resolved under the declaring file's name via `with_file_name`, but against
+    /// the consumer's value `symbols`). See [`Self::module_local_values_by_file`].
+    pub(crate) fn module_local_values_for_file(
+        &self,
+        file_name: &str,
+    ) -> Option<Arc<SymbolTable>> {
+        self.module_local_values_by_file.get(file_name).cloned()
     }
 
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {

@@ -114,6 +114,17 @@ pub(crate) fn resolve_parsed_type(
                     ctx.module_value_fallback
                         .as_ref()
                         .and_then(|table| table.get(&type_of.name).cloned())
+                })
+                .or_else(|| {
+                    // `typeof X` inside an imported declaration's body is resolved
+                    // under the declaring file's name (set by `with_file_name`), but
+                    // the consumer's value `symbols`/`module_value_fallback` do not
+                    // hold that module's locals. Consult the declaring module's own
+                    // value table so a cross-module `Alias<typeof localConst>`
+                    // resolves instead of falsely reporting TS2304.
+                    let file_name = ctx.file_name.clone();
+                    ctx.module_local_values_for_file(&file_name)
+                        .and_then(|table| table.get(&type_of.name).cloned())
                 });
 
             let Some(symbol) = symbol else {

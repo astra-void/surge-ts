@@ -363,6 +363,53 @@ pub fn check_program_with_stats_and_jobs(
         module_resolution_scopes,
     };
 
+    // Per-file value tables for cross-module `typeof`. When a consumer resolves an
+    // imported type alias whose body contains `typeof <localValue>`, the value is
+    // declared in the alias's module, not the consumer's — so a per-file value
+    // table (consulted via `ctx.file_name`, which `with_file_name` sets to the
+    // declaring file during alias resolution) is needed. Built once here, before
+    // the (possibly parallel) check phase, so every job shares it read-only and the
+    // result is order-independent. The check loop is untouched. `module_analyses`'s
+    // `local_symbols` carries only function signatures, so a fresh
+    // `collect_exportable_value_symbols` pass is required to capture `const`/`class`
+    // value declarations. The seed table omits the ambient globals (they are added
+    // as a parent fallback inside the collector); the result is consulted via `get`
+    // only, so the parent fallback covers them.
+    {
+        let saved_file_name = ctx.file_name.clone();
+        let saved_type_declarations = std::mem::take(&mut ctx.type_declarations);
+        let mut module_local_values: HashMap<Arc<str>, Arc<SymbolTable>> = HashMap::new();
+        for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+            if !parsed_file.is_module || parsed_file.file_kind.is_declaration() {
+                continue;
+            }
+            let Some(analysis) = shared_state.module_analyses[file_index].as_ref() else {
+                continue;
+            };
+            let mut seed = SymbolTable::new();
+            if let Some(bindings) = shared_state.module_import_bindings[file_index].as_ref() {
+                for (name, symbol) in bindings.symbols.iter_shared() {
+                    let _ = seed.insert_shared(name.clone(), symbol.clone());
+                }
+            }
+            for (name, symbol) in analysis.local_symbols.iter_shared() {
+                let _ = seed.insert_shared(name.clone(), symbol.clone());
+            }
+            ctx.file_name = parsed_file.file_name.clone();
+            ctx.type_declarations = analysis.local_type_declarations.as_ref().clone();
+            let table = crate::modules::collect_exportable_value_symbols(
+                &parsed_file.statements,
+                &analysis.local_type_declarations,
+                &seed,
+                &ctx,
+            );
+            module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(table));
+        }
+        ctx.file_name = saved_file_name;
+        ctx.type_declarations = saved_type_declarations;
+        ctx.set_module_local_values_by_file(module_local_values);
+    }
+
     // All cross-file program state now lives in `shared_state`; the per-file check
     // phase receives only the current file plus `shared_state`, never the file
     // slice. Under `skipLibCheck`, that phase skips declaration files outright, so
