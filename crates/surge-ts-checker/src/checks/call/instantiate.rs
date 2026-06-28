@@ -293,7 +293,18 @@ pub(crate) fn infer_type_argument_substitution(
             continue;
         };
 
+        // This is an inference *probe*: the argument is evaluated only to infer the
+        // call's type parameters, without the contextual parameter type the
+        // authoritative `check_function_type_call` pass supplies afterwards. An
+        // object-literal argument with a method (`{ run(ctx, input) {} }`) would
+        // here type those parameters as implicit `any` and emit a spurious TS7006,
+        // even though the instantiated parameter type gives them real contextual
+        // types in the authoritative pass. Discard any diagnostics this probe
+        // emits; the authoritative pass re-evaluates every argument and reports the
+        // genuine ones.
+        let diagnostics_before = ctx.diagnostics().len();
         let inferred_argument = infer_expression(&argument.expression, symbols, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
         let InferredExpression::Known(argument_type) = inferred_argument else {
             record_generic_call_inference_unresolved_argument_skip();
             continue;
