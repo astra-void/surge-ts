@@ -144,7 +144,20 @@ pub(crate) fn parameter_scope_type(
 ) -> Type {
     match &parameter.binding_name {
         ParsedBindingName::Identifier { .. } => {
-            with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone())
+            let ty =
+                with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone());
+            // An optional parameter (`x?: T`) is `T | undefined` inside the body,
+            // so comparing it to `undefined` is intentional and `=> undefined`
+            // flows through narrowing. A defaulted parameter (`x: T = …`) is not
+            // optional in the body (the default fills the gap), and a rest
+            // parameter is already an array, so neither widens. This only affects
+            // the in-body view; the signature's parameter type (used to check
+            // call arguments) is unchanged.
+            if parameter.optional && parameter.initializer.is_none() && !parameter.rest {
+                surge_ts_types::union_type(vec![ty, Type::Undefined])
+            } else {
+                ty
+            }
         }
         ParsedBindingName::ObjectPattern(_)
         | ParsedBindingName::ArrayPattern(_)
