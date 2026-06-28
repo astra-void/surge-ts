@@ -146,6 +146,29 @@ pub(crate) fn resolve_interface(
         }
     }
 
+    // Under `noLib`, a configured `types` package may replace the standard lib
+    // (roblox-ts's `@rbxts/compiler-types` redeclares `Array`/`ReadonlyArray`
+    // with the same structural shape as `T[]`). Collapse them exactly like the
+    // physical lib so `Array<T>` unifies with `T[]` and the self-referential
+    // generic interface never re-enters its own resolution (which would
+    // otherwise degrade to `unknown` via the generic cycle path above).
+    //
+    // `Promise` is intentionally NOT collapsed here: roblox-ts code uses the
+    // Promise object surface (`.then`/`.catch`) directly, so mapping it to its
+    // awaited value (as the physical-lib path does for implicit-await) would
+    // strip those members and over-report.
+    if ctx.options.no_lib
+        && matches!(interface.name.as_str(), "Array" | "ReadonlyArray")
+        && crate::program::is_configured_types_global_file(&interface.file_name, &ctx.options.types)
+    {
+        let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
+        resolving.pop();
+        return ResolvedType {
+            ty: Type::Array(Box::new(element_type)),
+            had_error: false,
+        };
+    }
+
     let namespace_prefix = interface
         .name
         .rsplit_once('.')

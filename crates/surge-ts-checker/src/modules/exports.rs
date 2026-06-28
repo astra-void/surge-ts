@@ -602,10 +602,22 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
 /// namespace's member *set* is precise — enabling TS2339 on real typos — without
 /// re-resolving a partially modelled surface and cascading. Used to bind an
 /// `export = <namespace>` value so `import * as Ns` exposes `Ns.member`.
-fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
+pub(crate) fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
+    let mut properties = surge_ts_types::PropertyMap::new();
+    fill_namespace_value_properties(namespace, &mut properties);
+    Type::Object(crate::arena::alloc_object_type(properties, None))
+}
+
+/// Accumulate a `declare namespace`'s value members into `properties`. Split into
+/// its own function so a namespace declared across multiple merged blocks (e.g.
+/// roblox-ts's `math`, declared with `noise`/`clamp` in one file and the Lua math
+/// surface in another) can be assembled into a single value object.
+pub(crate) fn fill_namespace_value_properties(
+    namespace: &ParsedNamespaceDeclaration,
+    properties: &mut surge_ts_types::PropertyMap,
+) {
     use surge_ts_types::{FunctionType, ObjectProperty};
 
-    let mut properties = surge_ts_types::PropertyMap::new();
     for statement in &namespace.statements {
         let inner = match statement {
             ParsedStatement::ExportDeclaration(export) => {
@@ -645,8 +657,6 @@ fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
             _ => {}
         }
     }
-
-    Type::Object(crate::arena::alloc_object_type(properties, None))
 }
 
 pub(crate) fn collect_exports_from_statement(

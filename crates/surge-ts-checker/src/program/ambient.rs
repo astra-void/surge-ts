@@ -208,6 +208,78 @@ pub(crate) fn collect_ambient_globals(
         ctx.type_declarations = saved_type_declarations;
         ctx.type_declaration_scope = saved_type_declaration_scope;
     }
+
+    lower_ambient_namespace_values(parsed_files, ctx);
+}
+
+/// `declare namespace X { ... }` contributes a global value object whose members
+/// are the namespace's declarations. roblox-ts's lib uses this heavily (`math`,
+/// `task`, `utf8`, `buffer`, `vector`, `os`); user code accesses them as values
+/// (`math.floor`, `task.wait`). Without this the name resolves only as a type
+/// (TS2693) or not at all (TS2304).
+///
+/// Namespaces merge across blocks and files exactly like interfaces — roblox-ts's
+/// `math` is split across declarations — so members are accumulated across every
+/// ambient block of the same name before a single value symbol is inserted. A
+/// real value symbol (`declare const`/`function`/`class` of the same name) takes
+/// precedence and is left untouched.
+fn lower_ambient_namespace_values(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
+    use surge_ts_types::PropertyMap;
+
+    let mut merged: HashMap<String, PropertyMap> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+
+    for parsed_file in parsed_files {
+        if !is_ambient_global_declaration_file(parsed_file, ctx) {
+            continue;
+        }
+
+        for stmt in &parsed_file.statements {
+            let namespace = match stmt {
+                ParsedStatement::NamespaceDeclaration(namespace) => Some(namespace),
+                ParsedStatement::ExportDeclaration(export) => {
+                    if let surge_ts_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    } = export.as_ref()
+                    {
+                        if let ParsedStatement::NamespaceDeclaration(namespace) =
+                            declaration.as_ref()
+                        {
+                            Some(namespace)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(namespace) = namespace {
+                let entry = merged.entry(namespace.name.clone()).or_insert_with(|| {
+                    order.push(namespace.name.clone());
+                    PropertyMap::new()
+                });
+                crate::modules::fill_namespace_value_properties(namespace, entry);
+            }
+        }
+    }
+
+    for name in order {
+        if ctx.ambient_global_symbols.get(&name).is_some() {
+            continue;
+        }
+        let properties = merged.remove(&name).unwrap_or_default();
+        ctx.ambient_global_symbols.insert(
+            name,
+            crate::symbols::SymbolInfo {
+                ty: surge_ts_types::Type::Object(crate::arena::alloc_object_type(properties, None)),
+                kind: crate::symbols::SymbolKind::Const,
+                function_signature: None,
+            },
+        );
+    }
 }
 
 /// Whether a parsed file contributes to the ambient global scope. Declaration
@@ -231,13 +303,24 @@ fn is_ambient_global_declaration_file(
 }
 
 /// Whether `file_name` belongs to one of the configured `compilerOptions.types`
-/// packages under `node_modules/@types/<mangled>`. Scoped names map like
-/// TypeScript: `@scope/pkg` -> `scope__pkg`.
-fn is_configured_types_global_file(file_name: &str, types: &[String]) -> bool {
+/// packages. Two layouts contribute global declarations: DefinitelyTyped stubs
+/// under `node_modules/@types/<mangled>` (scoped names map like TypeScript:
+/// `@scope/pkg` -> `scope__pkg`), and packages that ship their own ambient
+/// declarations directly under `node_modules/<name>` (e.g. roblox-ts's
+/// `@rbxts/types` / `@rbxts/compiler-types`, which replace the default lib). The
+/// `types` list passed here already includes packages discovered through
+/// `/// <reference types="..." />` closure, so a referenced package is covered
+/// even when only its referrer is named explicitly.
+pub(crate) fn is_configured_types_global_file(file_name: &str, types: &[String]) -> bool {
+    let normalized = file_name.replace('\\', "/");
     types.iter().any(|type_name| {
+        if type_name == "*" {
+            return false;
+        }
         let mangled = mangle_types_package_name(type_name);
-        let needle = format!("/@types/{mangled}/");
-        file_name.contains(&needle)
+        let at_types = format!("/@types/{mangled}/");
+        let direct = format!("/node_modules/{type_name}/");
+        normalized.contains(&at_types) || normalized.contains(&direct)
     })
 }
 
