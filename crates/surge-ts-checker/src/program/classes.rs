@@ -28,11 +28,12 @@ pub(crate) fn class_instance_interface_info(
     class: &ParsedClassDeclaration,
     file_name: String,
 ) -> InterfaceInfo {
-    let members = class
+    let mut members: Vec<_> = class
         .members
         .iter()
         .filter_map(class_member_to_interface_member)
         .collect();
+    members.extend(constructor_parameter_property_members(class));
 
     InterfaceInfo::new(
         class.name.clone(),
@@ -77,6 +78,42 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
         }
         _ => None,
     }
+}
+
+/// Synthesizes instance members for constructor parameter properties — a
+/// parameter carrying a `public`/`private`/`protected`/`readonly` modifier
+/// declares a field of the same name and type. Only identifier-named parameters
+/// can be parameter properties (TS rejects destructuring patterns here).
+fn constructor_parameter_property_members(
+    class: &ParsedClassDeclaration,
+) -> Vec<ParsedInterfaceMember> {
+    class
+        .members
+        .iter()
+        .find_map(|member| match member {
+            ParsedClassMember::Constructor(constructor) => Some(&constructor.parameters),
+            _ => None,
+        })
+        .map(|parameters| {
+            parameters
+                .iter()
+                .filter(|parameter| parameter.is_parameter_property)
+                .filter_map(|parameter| {
+                    let ParsedBindingName::Identifier { name, span } = &parameter.binding_name
+                    else {
+                        return None;
+                    };
+                    Some(ParsedInterfaceMember {
+                        name: name.clone(),
+                        name_span: *span,
+                        optional: parameter.optional,
+                        is_abstract: false,
+                        ty: parameter.declared_type.clone().unwrap_or(ParsedType::Any),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Lowers an accessor to the type of the property it presents. A getter's

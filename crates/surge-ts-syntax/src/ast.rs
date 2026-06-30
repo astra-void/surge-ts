@@ -941,6 +941,10 @@ pub struct ParsedFunctionParameter {
     /// `...args` rest parameter. Marks the signature variadic so arity checks
     /// accept any number of trailing arguments.
     pub rest: bool,
+    /// Constructor parameter property: the parameter carries an accessibility
+    /// (`public`/`private`/`protected`) or `readonly` modifier, which declares a
+    /// class instance member of the same name and type.
+    pub is_parameter_property: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

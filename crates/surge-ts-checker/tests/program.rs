@@ -4090,6 +4090,32 @@ fn class_new_expression_checks_constructor_args_and_returns_instance() {
 }
 
 #[test]
+fn class_constructor_parameter_property_declares_instance_member() {
+    let diagnostics = program(&[(
+        "example.ts",
+        "class C {\n\
+         constructor(private readonly buf: string) {}\n\
+         method(): string { return this.buf; }\n\
+         }\n\
+         const c = new C(\"a\");\n\
+         const s: string = c.method();",
+    )]);
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn class_constructor_plain_parameter_is_not_a_member() {
+    let diagnostics = program(&[(
+        "example.ts",
+        "class C {\n\
+         constructor(buf: string) {}\n\
+         method(): string { return this.buf; }\n\
+         }",
+    )]);
+    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+}
+
+#[test]
 fn class_instance_access_of_static_member_reports_ts2576() {
     let diagnostics = program(&[(
         "example.ts",

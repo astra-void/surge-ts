@@ -408,6 +408,7 @@ pub(crate) fn parse_function_parameter(
         initializer_span,
         optional: parameter.optional || parameter.initializer.is_some(),
         rest: false,
+        is_parameter_property: parameter.accessibility.is_some() || parameter.readonly,
     })
 }
 
@@ -426,6 +427,7 @@ pub(crate) fn parse_rest_function_parameter(
         initializer_span: None,
         optional: false,
         rest: true,
+        is_parameter_property: false,
     })
 }
 
