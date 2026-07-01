@@ -92,6 +92,51 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         }
     }
 
+    // Two instantiations of the *same* generic declaration compare by their type
+    // arguments rather than by their (often deeply self-referential) structural
+    // expansion. tsc treats `Foo<A>` assignable to `Foo<B>` when the arguments are
+    // pairwise compatible — an `any` argument matches anything in either
+    // direction. A `unknown` *source* argument is also accepted: it is surge's
+    // sentinel for a generic the checker could not infer (a method's own type
+    // parameter, `pipeThrough<T>(...): ReadableStream<T>`), so failing it
+    // structurally would be a false positive. Structural comparison of two
+    // expansions that differ only in an `any`/`unknown` argument is exactly where
+    // self-referential library generics (`Uint8Array`, `ReadableStream`, `Set`)
+    // spuriously diverge.
+    if let (Type::Reference(from_ref), Type::Reference(to_ref)) = (from, to) {
+        if from_ref.id == to_ref.id && from_ref.arguments.len() == to_ref.arguments.len() {
+            let arguments_compatible =
+                from_ref
+                    .arguments
+                    .iter()
+                    .zip(to_ref.arguments.iter())
+                    .all(|(from_arg, to_arg)| {
+                        matches!(from_arg, Type::Any | Type::Unknown | Type::GenuineUnknown)
+                            || matches!(to_arg, Type::Any)
+                            || is_assignable_to(from_arg, to_arg)
+                    });
+            if arguments_compatible {
+                return true;
+            }
+        }
+    }
+
+    // A reference assignable to a union member must be tried *before* the source
+    // reference is resolved to its structural form below: otherwise `Set<any>`
+    // against `Set<string> | undefined` would resolve `Set<any>` structurally and
+    // compare it to the `Set<string>` member structurally, losing the nominal
+    // `any`-argument shortcut above. Scoped to a `from` reference so a `from` union
+    // still flows through the all-members `(Union, _)` arm.
+    if let (Type::Reference(_), Type::Union(to_union)) = (from, to) {
+        if to_union
+            .types()
+            .iter()
+            .any(|to_ty| is_assignable_to(from, to_ty))
+        {
+            return true;
+        }
+    }
+
     // Nominal references compare nominally first (same declaration + arguments is
     // handled by the `from == to` fast path above); anything else falls back to
     // comparing the structural expansion, so a reference stays interchangeable
@@ -491,6 +536,55 @@ mod tests {
         assert!(is_assignable_to(&Type::Never, &Type::String));
         assert!(is_assignable_to(&Type::Never, &Type::Number));
         assert!(is_assignable_to(&Type::Never, &Type::Never));
+    }
+
+    /// A reference whose structural expansion is keyed on its own display name,
+    /// so any two distinct instantiations are structurally incompatible — a
+    /// passing assertion proves the nominal argument path was taken rather than
+    /// the structural fallback.
+    fn opaque_generic(id: &str, display: &str, argument: Type) -> Type {
+        struct Opaque(String);
+        impl crate::ResolveReference for Opaque {
+            fn resolve(&self) -> Type {
+                let mut members = PropertyMap::new();
+                members.insert(self.0.clone(), ObjectProperty::required(Type::Never));
+                Type::Object(ObjectType::new(members, None))
+            }
+        }
+        Type::Reference(crate::TypeReference::new(
+            id,
+            display,
+            vec![argument],
+            std::sync::Arc::new(Opaque(display.to_string())),
+        ))
+    }
+
+    #[test]
+    fn same_generic_declaration_compares_by_arguments_not_structure() {
+        let set_any = opaque_generic("lib\u{0}Set", "Set<any>", Type::Any);
+        let set_string = opaque_generic("lib\u{0}Set", "Set<string>", Type::String);
+        let set_unknown = opaque_generic("lib\u{0}Set", "Set<unknown>", Type::Unknown);
+        let set_number = opaque_generic("lib\u{0}Set", "Set<number>", Type::Number);
+
+        assert!(is_assignable_to(&set_any, &set_string));
+        assert!(is_assignable_to(&set_string, &set_any));
+        assert!(is_assignable_to(&set_unknown, &set_string));
+        assert!(!is_assignable_to(&set_string, &set_number));
+    }
+
+    #[test]
+    fn different_generic_declarations_do_not_compare_by_arguments() {
+        let set = opaque_generic("lib\u{0}Set", "Set<any>", Type::Any);
+        let map = opaque_generic("lib\u{0}Map", "Map<any>", Type::Any);
+        assert!(!is_assignable_to(&set, &map));
+    }
+
+    #[test]
+    fn same_generic_reference_assignable_to_union_member() {
+        let set_any = opaque_generic("lib\u{0}Set", "Set<any>", Type::Any);
+        let set_string = opaque_generic("lib\u{0}Set", "Set<string>", Type::String);
+        let target = union_type(vec![set_string, Type::Undefined]);
+        assert!(is_assignable_to(&set_any, &target));
     }
 
     #[test]
