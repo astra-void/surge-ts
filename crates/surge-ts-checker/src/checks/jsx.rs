@@ -179,7 +179,7 @@ fn resolve_intrinsic_props_type(
     }
 
     ctx.push(diagnostic_with_syntax_span(
-        Diagnostic::ts2339(tag_name, intrinsic_type.name(), ctx.file_name.clone()),
+        Diagnostic::ts2339(tag_name, INTRINSIC_ELEMENTS, ctx.file_name.clone()),
         element_span,
     ));
     None

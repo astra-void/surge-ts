@@ -188,6 +188,7 @@ struct LazyInstantiation {
     type_arguments: Vec<surge_ts_syntax::ParsedType>,
     resolved_arguments: Vec<Type>,
     substitution: TypeParameterSubstitution,
+    display: Arc<str>,
     memo: std::sync::OnceLock<Arc<Type>>,
 }
 
@@ -273,11 +274,27 @@ impl ResolveReference for LazyInstantiation {
             return resolved.ty;
         }
 
+        // The eager named-type path tags the resolved object with its declaration
+        // name so diagnostics display the nominal form (`Client`, `Box<string>`)
+        // instead of the structural expansion. A library-scoped interface is
+        // routed here instead, so attach the same display name on peel; otherwise
+        // a peeled reference (e.g. the TS2741 target type) renders structurally.
+        // Display-only: `alias_name` is excluded from equality, so assignability
+        // is unchanged.
+        let resolved_ty = match resolved.ty {
+            Type::Object(object)
+                if object.alias_name.is_none() && !object.properties.is_empty() =>
+            {
+                Type::Object(object.with_alias_name(Arc::clone(&self.display)))
+            }
+            other => other,
+        };
+
         let interned = intern_instantiation(
             &self.snapshot,
             &self.decl_key,
             &self.resolved_arguments,
-            resolved.ty,
+            resolved_ty,
         );
         let _ = self.memo.set(interned.clone());
         (*interned).clone()
@@ -310,6 +327,7 @@ pub(crate) fn make_lazy_type_reference(
             type_arguments,
             resolved_arguments,
             substitution,
+            display: Arc::from(display),
             memo: std::sync::OnceLock::new(),
         }),
     ))
