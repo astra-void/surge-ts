@@ -1340,7 +1340,18 @@ pub(crate) fn resolve_named_type(
     // collapses to `unknown` when resolved, so two structurally-distinct
     // instantiations would share an interner key and a reused entry would return
     // the wrong type. Only a fully concrete instantiation is context-independent.
-    let concrete_instantiation = ctx.type_parameter_scopes.is_empty();
+    // An instantiation is concrete when no type *parameters* are in scope. The
+    // scope stack depth is not a proxy for this: a non-generic function body still
+    // pushes an (empty) scope via `with_type_parameter_scope`, so checking
+    // `is_empty()` would treat every instantiation built inside a plain function
+    // body as non-concrete — eagerly expanding library generics (`new Uint8Array`)
+    // into degraded structural objects (self-referential members collapse to
+    // `unknown`) instead of nominal lazy references. Only a scope that actually
+    // binds a parameter introduces placeholders, so gate on that.
+    let concrete_instantiation = ctx
+        .type_parameter_scopes
+        .iter()
+        .all(|scope| scope.is_empty());
 
     // Perf short-circuit: reuse a previously-interned instantiation with the same
     // resolved arguments without re-expanding the body. The interner holds only
