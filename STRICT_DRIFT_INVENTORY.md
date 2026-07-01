@@ -468,3 +468,110 @@ cargo fmt --check && pnpm run oracle:test && pnpm run real:auth-kit             
 # (cargo test --workspace skipped this pass at the user's request — runtime; the
 #  changes are display-only and validated through the oracle sweeps.)
 ```
+
+## 10. After library-scoped named-object peel display pass
+
+Follow-up sweep on the now-78-preset registry (the suite grew from 75 since §9;
+the §9 `jsx-intrinsic-elements-basic` member-order row is no longer present). A
+fresh sweep surfaced exactly two remaining `--strictMessages` rows, both the same
+class as §9 (§4.3 alias/structural display) but on a *peeled* object that the §9
+eager-path fix did not reach. **Diagnostic display only — no checker semantics,
+type inference, diagnostic codes, fixtures, gates, libs, or TypeScript version
+changed.** `alias_name` is excluded from type equality and no `alias_id` is added,
+so assignability is unchanged. Normal gate stays **78 PASS / 0 FAIL**;
+`--strictSpans` stays **78 PASS / 0 FAIL**.
+
+| Run | Before | After |
+| --- | --- | --- |
+| Normal gate | 78 PASS / 0 FAIL | **78 PASS / 0 FAIL** |
+| `--strictMessages` | 76 PASS / 2 FAIL | **78 PASS / 0 FAIL** |
+| `--strictSpans` | 78 PASS / 0 FAIL | **78 PASS / 0 FAIL** |
+| both | 76 PASS / 2 FAIL | **78 PASS / 0 FAIL** |
+
+**Fixes (display only):**
+
+- **`JSX.IntrinsicElements` name in the unknown-tag TS2339**
+  (`jsx-intrinsic-elements-basic`, `<unknown-tag />`). The message built the type
+  name from `intrinsic_type.name()`, which expanded the resolved
+  `JSX.IntrinsicElements` object structurally
+  (`{ div: {…}; button: {…}; }`). tsc prints the nominal `JSX.IntrinsicElements`.
+  Since the lookup already holds that constant, the diagnostic now passes it
+  directly. `checks/jsx.rs` (`resolve_intrinsic_props_type`).
+- **Nominal name on a peeled library-scoped interface for TS2741**
+  (`module-augmentation-package-interface-basic`). `Client` is declared in a
+  dependency (`node_modules/pkg`, a `DependencyDeclaration` → library-scoped) and
+  augmented in-project to add `token`. A library-scoped non-generic interface is
+  routed to a deferred `Type::Reference` whose body is expanded on peel by
+  `LazyInstantiation::resolve`, which returned the structural object **without**
+  attaching the declaration name — so the TS2741 "required in type 'X'" target
+  (built from the *peeled* object's `.name()`) printed
+  `{ id: string; token: string; }` instead of `Client`. The eager named-type path
+  (`attach_object_alias_name`) tags the object, but the lazy path bypassed it.
+  Now the lazy peel attaches the reference's display name as `alias_name` on a
+  clean, non-empty resolved object before interning — mirroring the eager path and
+  the §9 had_error/empty gate, and covering the generic case too (the stored
+  display is the full `Box<string>` form, not a bare name). `infer/types/cache.rs`
+  (`LazyInstantiation` gains a `display` field; `make_lazy_type_reference` populates
+  it from the existing `display` argument).
+
+**Commands run:**
+
+```bash
+pnpm run oracle:sweep -- --all --maxDiagnostics 200                                   # 78/78
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages                  # 78/78
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans                     # 78/78
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans    # 78/78
+cargo fmt (jsx.rs, cache.rs) && cargo nextest run --workspace                         # 1391 passed
+pnpm run oracle:test                                                                  # 21 passed
+```
+
+**Note (pre-existing, fixed in §11):** `real:auth-kit` and `real:ky` no longer
+report 0/0 — auth-kit emits `Uint8Array<any>` TS2322 rows and ky emits a TS2345 /
+TS2554 pair. auth-kit was confirmed to reproduce on `main` *without* this pass's
+changes (stashed the two files, rebuilt, re-ran — identical rows). ky's rows are
+argument-assignability (TS2345) and argument-count (TS2554) diagnostics, which a
+display-only `alias_name` (excluded from equality) cannot produce, so they are
+likewise pre-existing. Both are unrelated regressions from intervening commits
+against the lib `Uint8Array`/optional-argument surface; §11 root-causes and fixes
+them.
+
+## 11. Real-project regression fixes (auth-kit `Uint8Array<any>`, ky TS2345/TS2554)
+
+Follow-up to the §10 note. Three checker fixes restore `real:auth-kit` and
+`real:ky` to **0 TypeScript / 0 surge-ts** diagnostics. Normal gate stays
+**78 PASS / 0 FAIL** and both strict gates stay clean (78/78).
+
+- **Nominal type-argument comparison for same-declaration references**
+  (`surge-ts-types/src/assignability.rs`). Two instantiations of the *same*
+  generic declaration now compare by their type arguments instead of their
+  (often deeply self-referential) structural expansion, matching tsc. An `any`
+  argument matches in either direction; an `unknown`/`GenuineUnknown` *source*
+  argument is accepted because it is surge's sentinel for a generic the checker
+  could not infer. This removes the auth-kit `Uint8Array<any>` → `Uint8Array`
+  TS2322 rows, where the two expansions spuriously diverged only in the
+  `any`-argument positions. A companion arm tries a `from`-reference against
+  each member of a union target *before* resolving the reference structurally
+  (`Set<any>` vs `Set<string> | undefined`). Unit-tested with structurally
+  opaque references so the tests prove the nominal path.
+- **Concrete-instantiation gate fixed to check bound parameters, not scope
+  depth** (`infer/types/resolve.rs`). `resolve_named_type` treated *any*
+  non-empty `type_parameter_scopes` stack as non-concrete, but a plain
+  (non-generic) function body also pushes an empty scope — so every library
+  generic instantiated inside a function body (`new Uint8Array(...)`) was
+  eagerly expanded into a degraded structural object (self-referential members
+  collapse to `unknown`) instead of staying a nominal lazy reference. Now only
+  a scope that actually binds a parameter marks the instantiation
+  context-dependent.
+- **Optional parameters accept `undefined` at call sites**
+  (`checks/call/mod.rs`). An argument passed to an optional parameter
+  (declared past the required count) is checked against `T | undefined`
+  rather than the bare `T`, matching tsc. This removes ky's TS2345/TS2554
+  pair on forwarding an optional argument.
+
+Verified: `cargo nextest run --workspace` (1391 passed, plus new
+`surge-ts-types` assignability unit tests), oracle sweep normal + both strict
+flags (78/78 each), `pnpm run oracle:test` (21 passed), `real:auth-kit` 0/0,
+`real:ky` 0/0, `real:ofetch` 0 surge-only (the single only-TypeScript row is
+tsc's TS5107 `esModuleInterop` deprecation notice, out of checker scope).
+`real:zod` is unchanged from `main` (494 surge-only, capped; verified by
+stash/rebuild/re-run) — a pre-existing gap, not affected by this pass.
