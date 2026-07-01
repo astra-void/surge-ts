@@ -544,7 +544,18 @@ pub(crate) fn check_function_type_call(
         let parameter_type: Type = if is_rest_position {
             rest_parameter_element_type(&function_type.parameters()[expected - 1])
         } else if i < expected {
-            function_type.parameters()[i].clone()
+            let declared = function_type.parameters()[i].clone();
+            // An optional parameter (`x?: T`, declared past the required count)
+            // accepts `undefined` at the call site — passing `T | undefined` to it
+            // is valid, matching tsc. Widen so a provided argument is checked
+            // against `T | undefined` rather than the bare `T`.
+            if i >= function_type.required_parameter_count()
+                && !is_assignable_to(&Type::Undefined, &declared)
+            {
+                union_type(vec![declared, Type::Undefined])
+            } else {
+                declared
+            }
         } else {
             Type::Any
         };
