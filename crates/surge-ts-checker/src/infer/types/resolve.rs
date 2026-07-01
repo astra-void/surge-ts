@@ -661,10 +661,7 @@ fn try_function_infer_match(
     let mut candidate = base.clone_with_reason(TypeCopyReason::SubstitutionChanged);
     bind_infer_captures(extends, check, &mut candidate, ctx, resolving, 0, false);
 
-    if infer_names
-        .iter()
-        .any(|name| candidate.get(name).is_some())
-    {
+    if infer_names.iter().any(|name| candidate.get(name).is_some()) {
         Some(candidate)
     } else {
         None
@@ -679,7 +676,9 @@ fn try_function_infer_match(
 fn callable_signature(ty: &Type) -> Option<&surge_ts_types::FunctionType> {
     match ty {
         Type::Function(function) => Some(function),
-        Type::Object(object) => object.call_signature().or_else(|| object.construct_signature()),
+        Type::Object(object) => object
+            .call_signature()
+            .or_else(|| object.construct_signature()),
         _ => None,
     }
 }
@@ -783,9 +782,9 @@ fn substitute_parsed_type_parameters_deep(
                 .collect();
             ParsedType::Named(substituted)
         }
-        ParsedType::Array(element) => {
-            ParsedType::Array(Box::new(substitute_parsed_type_parameters_deep(element, map)))
-        }
+        ParsedType::Array(element) => ParsedType::Array(Box::new(
+            substitute_parsed_type_parameters_deep(element, map),
+        )),
         ParsedType::KeyOf(inner) => {
             ParsedType::KeyOf(Box::new(substitute_parsed_type_parameters_deep(inner, map)))
         }

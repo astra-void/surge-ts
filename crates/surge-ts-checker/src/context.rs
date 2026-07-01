@@ -575,10 +575,7 @@ impl CheckerContext {
     /// resolve a `typeof <localValue>` inside an imported declaration's body
     /// (resolved under the declaring file's name via `with_file_name`, but against
     /// the consumer's value `symbols`). See [`Self::module_local_values_by_file`].
-    pub(crate) fn module_local_values_for_file(
-        &self,
-        file_name: &str,
-    ) -> Option<Arc<SymbolTable>> {
+    pub(crate) fn module_local_values_for_file(&self, file_name: &str) -> Option<Arc<SymbolTable>> {
         self.module_local_values_by_file.get(file_name).cloned()
     }
 
