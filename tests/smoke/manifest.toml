@@ -4395,10 +4395,12 @@ name = "interface-cycle-through-type-alias-no-cascade"
 path = "tests/smoke/interface_cycle_through_type_alias_no_cascade.ts"
 expected_diagnostics = ["TS2741"]
 
+# The alias cycle passes through interface B's structure, which tsc treats as
+# legal recursion and reports the missing member instead of a cycle error.
 [[case]]
 name = "interface-cycle-type-alias-through-interface-no-cascade"
 path = "tests/smoke/interface_cycle_type_alias_through_interface_no_cascade.ts"
-expected_diagnostics = ["surge::type-alias-cycle"]
+expected_diagnostics = ["TS2741"]
 
 [[case]]
 name = "interface-cycle-function-parameter-no-cascade"

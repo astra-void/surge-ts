@@ -396,6 +396,17 @@ pub(crate) fn resolve_conditional_type(
         let mut results = Vec::new();
         let mut had_error = false;
         for member in members {
+            // Same "cannot decide" degrade as the non-distributive path below: a
+            // member that collapsed to the `unknown` sentinel (a value type surge
+            // could not model, e.g. `ComponentProps<typeof UnmodelledValue>`) must
+            // not deterministically select a branch — the false branch would
+            // produce a closed concrete shape (`{}`) and flag every real property
+            // as excess. The genuine `unknown` keyword is `GenuineUnknown` and
+            // still evaluates normally.
+            if matches!(member, Type::Unknown) {
+                results.push(Type::Unknown);
+                continue;
+            }
             let mut member_substitution =
                 substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
             member_substitution.insert(parameter_name.clone(), member.clone());
@@ -770,7 +781,7 @@ fn expand_named_alias_pattern(named: &ParsedNamedType, ctx: &CheckerContext) -> 
 /// objects, …). Unlike the shallower call-site helper, this reaches into function
 /// parameter and return positions, which is required to push an `infer` capture
 /// into an expanded alias body such as `JSXElementConstructor<infer P>`.
-fn substitute_parsed_type_parameters_deep(
+pub(crate) fn substitute_parsed_type_parameters_deep(
     ty: &ParsedType,
     map: &std::collections::HashMap<String, ParsedType>,
 ) -> ParsedType {
@@ -1841,6 +1852,17 @@ pub(crate) fn resolve_parsed_type_with_substitution(
     })
 }
 
+pub(crate) struct BoundTypeArguments {
+    pub(crate) substitution: TypeParameterSubstitution,
+    /// Whether any argument/default resolved with `had_error`. The binding
+    /// still proceeds with the degraded type — one failed argument must not
+    /// erase an otherwise-usable instantiation (a callable's degraded callback
+    /// parameter would otherwise strip the whole call signature) — but the
+    /// taint must reach the caller's `ResolvedType` so degraded expansions are
+    /// never interned.
+    pub(crate) had_error: bool,
+}
+
 pub(crate) fn bind_type_arguments(
     type_parameters: &[ParsedTypeParameter],
     type_arguments: Vec<ParsedType>,
@@ -1850,14 +1872,22 @@ pub(crate) fn bind_type_arguments(
     resolving: &mut Vec<DeclarationResolutionKey>,
     parent_substitution: &TypeParameterSubstitution,
     pre_resolved: Option<&[Type]>,
-) -> Option<TypeParameterSubstitution> {
+    declaration_scope: Option<(
+        &Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
+        &str,
+    )>,
+) -> Option<BoundTypeArguments> {
+    let mut bound_had_error = false;
     if type_parameters.is_empty() {
         if !type_arguments.is_empty() {
             emit_type_is_not_generic(name, name_span, ctx);
             return None;
         }
 
-        return Some(TypeParameterSubstitution::new());
+        return Some(BoundTypeArguments {
+            substitution: TypeParameterSubstitution::new(),
+            had_error: false,
+        });
     }
 
     if type_arguments.len() > type_parameters.len() {
@@ -1879,9 +1909,7 @@ pub(crate) fn bind_type_arguments(
             } else {
                 let resolved_argument =
                     resolve_parsed_type(argument.clone(), ctx, resolving, parent_substitution);
-                if resolved_argument.had_error {
-                    return None;
-                }
+                bound_had_error |= resolved_argument.had_error;
                 resolved_argument.ty
             };
 
@@ -1905,11 +1933,20 @@ pub(crate) fn bind_type_arguments(
 
         let default_type_is_placeholder =
             parsed_type_is_placeholder_reference(&default_type, &effective_substitution);
-        let resolved_default =
-            resolve_parsed_type(default_type, ctx, resolving, &effective_substitution);
-        if resolved_default.had_error {
-            return None;
-        }
+        // A type-parameter default (`T extends X = X`) is authored in the
+        // *declaring* module: resolve it under that module's scope and file, not
+        // the consumer's, so an imported generic alias/interface binds its
+        // defaults even when they name non-exported siblings.
+        let resolved_default = if let Some((scope, file_name)) = declaration_scope {
+            with_type_declaration_scope(scope, ctx, |ctx| {
+                with_file_name(ctx, file_name, |ctx| {
+                    resolve_parsed_type(default_type, ctx, resolving, &effective_substitution)
+                })
+            })
+        } else {
+            resolve_parsed_type(default_type, ctx, resolving, &effective_substitution)
+        };
+        bound_had_error |= resolved_default.had_error;
 
         if default_type_is_placeholder {
             substitution.insert_placeholder(parameter.name.clone(), resolved_default.ty);
@@ -1918,7 +1955,10 @@ pub(crate) fn bind_type_arguments(
         }
     }
 
-    Some(substitution)
+    Some(BoundTypeArguments {
+        substitution,
+        had_error: bound_had_error,
+    })
 }
 
 pub(crate) fn extend_substitution_with_type_parameters(

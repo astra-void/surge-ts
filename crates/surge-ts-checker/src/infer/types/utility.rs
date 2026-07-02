@@ -61,7 +61,19 @@ pub(crate) fn resolve_type_alias(
         // checks. Keeping `unknown` there preserves the previous (sound, if
         // under-reporting) behaviour. The (suppressed) note marks the degraded
         // resolution; a genuine structureless cycle keeps it as a real error.
-        if alias_body_supports_recursion(&alias.body.ty) && alias.body.type_parameters.is_empty() {
+        // A re-entry whose path passed through a structural frame (an interface
+        // body, or a structural alias body) is legal recursion even when this
+        // alias's own body is a bare union of named types — e.g. zod's
+        // `type $ZodIssue = … | $ZodIssueInvalidUnion` whose member interface
+        // carries `errors: $ZodIssue[][]`. Only a structureless chain
+        // (`type A = B; type B = A`) is a genuine tsc error.
+        let structural_crossing = ctx
+            .structural_resolution_frames
+            .iter()
+            .any(|&frame| frame > index);
+        let legal_recursion =
+            alias_body_supports_recursion(&alias.body.ty) || structural_crossing;
+        if legal_recursion && alias.body.type_parameters.is_empty() {
             return ResolvedType {
                 ty: make_recursive_cycle_reference(
                     ctx,
@@ -75,15 +87,21 @@ pub(crate) fn resolve_type_alias(
                 had_error: false,
             };
         }
-        emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
+        if !legal_recursion {
+            emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
+        }
         return ResolvedType {
             ty: Type::Unknown,
-            had_error: !alias_body_supports_recursion(&alias.body.ty),
+            had_error: !legal_recursion,
         };
     }
 
     resolving.push(declaration_key.clone());
-    let Some(local_substitution) = bind_type_arguments(
+    let effective_scope = alias
+        .resolution_scope
+        .clone()
+        .or_else(|| ctx.module_scope_for_file(&alias.file_name));
+    let Some(bound_arguments) = bind_type_arguments(
         &alias.body.type_parameters,
         type_arguments,
         &alias.name,
@@ -92,6 +110,7 @@ pub(crate) fn resolve_type_alias(
         resolving,
         substitution,
         pre_resolved_arguments,
+        Some((&effective_scope, &alias.file_name)),
     ) else {
         resolving.pop();
         return ResolvedType {
@@ -99,6 +118,8 @@ pub(crate) fn resolve_type_alias(
             had_error: true,
         };
     };
+    let arguments_had_error = bound_arguments.had_error;
+    let local_substitution = bound_arguments.substitution;
 
     let from_default_lib =
         alias.file_name == "<built-in>" || is_generated_default_lib_file_name(&alias.file_name);
@@ -149,10 +170,14 @@ pub(crate) fn resolve_type_alias(
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
     }
-    let effective_scope = alias
-        .resolution_scope
-        .clone()
-        .or_else(|| ctx.module_scope_for_file(&alias.file_name));
+    // A structural alias body (object/array/function/…) is a structural
+    // crossing, like an interface body: a cycle re-entered through it is legal
+    // recursion (see `CheckerContext::structural_resolution_frames`).
+    let structural_frame = alias_body_supports_recursion(&alias.body.ty);
+    if structural_frame {
+        ctx.structural_resolution_frames.push(resolving.len() - 1);
+    }
+    ctx.push_type_parameter_constraints_only(&alias.body.type_parameters);
     let resolved = with_type_declaration_scope(&effective_scope, ctx, |ctx| {
         with_file_name(ctx, &alias.file_name, |ctx| {
             resolve_parsed_type_with_substitution(
@@ -163,13 +188,20 @@ pub(crate) fn resolve_type_alias(
             )
         })
     });
+    ctx.pop_type_parameter_scope();
+    if structural_frame {
+        ctx.structural_resolution_frames.pop();
+    }
     if is_namespace_member {
         ctx.namespace_member_resolution_depth -= 1;
         ctx.namespace_member_prefix_stack.pop();
     }
     resolving.pop();
 
-    resolved
+    ResolvedType {
+        ty: resolved.ty,
+        had_error: resolved.had_error || arguments_had_error,
+    }
 }
 
 pub(crate) fn resolve_builtin_utility_alias(

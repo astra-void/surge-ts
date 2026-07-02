@@ -55,7 +55,11 @@ pub(crate) fn resolve_interface(
     }
 
     resolving.push(declaration_key.clone());
-    let Some(local_substitution) = bind_type_arguments(
+    let declaration_effective_scope = interface
+        .resolution_scope
+        .clone()
+        .or_else(|| ctx.module_scope_for_file(&interface.file_name));
+    let Some(bound_arguments) = bind_type_arguments(
         &interface.body.type_parameters,
         type_arguments,
         &interface.name,
@@ -64,6 +68,7 @@ pub(crate) fn resolve_interface(
         resolving,
         substitution,
         pre_resolved_arguments,
+        Some((&declaration_effective_scope, &interface.file_name)),
     ) else {
         resolving.pop();
         return ResolvedType {
@@ -71,6 +76,8 @@ pub(crate) fn resolve_interface(
             had_error: true,
         };
     };
+    let arguments_had_error = bound_arguments.had_error;
+    let local_substitution = bound_arguments.substitution;
 
     if is_generated_default_lib_file_name(&interface.file_name) {
         match interface.name.as_str() {
@@ -178,11 +185,12 @@ pub(crate) fn resolve_interface(
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
     }
-    let effective_scope = interface
-        .resolution_scope
-        .clone()
-        .or_else(|| ctx.module_scope_for_file(&interface.file_name));
-    let resolved = with_type_declaration_scope(&effective_scope, ctx, |ctx| {
+    // An interface body is a structural crossing: a type-alias cycle re-entered
+    // through this frame is legal recursion (see
+    // `CheckerContext::structural_resolution_frames`).
+    ctx.structural_resolution_frames.push(resolving.len() - 1);
+    ctx.push_type_parameter_constraints_only(&interface.body.type_parameters);
+    let resolved = with_type_declaration_scope(&declaration_effective_scope, ctx, |ctx| {
         with_file_name(ctx, &interface.file_name, |ctx| {
             resolve_interface_declaration(
                 &interface.body.extends,
@@ -196,13 +204,18 @@ pub(crate) fn resolve_interface(
             )
         })
     });
+    ctx.pop_type_parameter_scope();
+    ctx.structural_resolution_frames.pop();
     if is_namespace_member {
         ctx.namespace_member_resolution_depth -= 1;
         ctx.namespace_member_prefix_stack.pop();
     }
     resolving.pop();
 
-    resolved
+    ResolvedType {
+        ty: resolved.ty,
+        had_error: resolved.had_error || arguments_had_error,
+    }
 }
 
 pub(crate) fn resolve_interface_declaration(
@@ -218,6 +231,8 @@ pub(crate) fn resolve_interface_declaration(
     let mut properties = PropertyMap::new();
     let mut had_error = false;
     let mut inherited_index_type: Option<Type> = None;
+    let mut inherited_call_signature: Option<FunctionType> = None;
+    let mut inherited_construct_signature: Option<FunctionType> = None;
     // A base that resolves to `any` (e.g. a mixin) leaves the derived member set
     // unknown; tsc keeps the type open. A base that fails to resolve is only
     // treated as open inside declaration files, where the real base is assumed to
@@ -230,6 +245,10 @@ pub(crate) fn resolve_interface_declaration(
     for base in extends {
         let resolved_base = resolve_named_type(base.clone(), ctx, resolving, substitution);
         had_error |= resolved_base.had_error;
+        // A base that resolved with errors may be missing members surge could
+        // not model; the derived member set is incomplete, so keep it open
+        // rather than flagging every inherited access.
+        base_is_open |= resolved_base.had_error;
 
         // A generic base (`extends Dict<string>`) resolves to a nominal
         // `Type::Reference`; peel it so its inherited members and index signature
@@ -244,6 +263,17 @@ pub(crate) fn resolve_interface_declaration(
                         inherited_index_type = Some(index_type.as_ref().clone());
                     }
                 }
+                // Call/construct signatures are inherited like members: React's
+                // `ForwardRefExoticComponent extends ExoticComponent` carries its
+                // callability entirely from the base, and dropping it here strips
+                // the component's call signature (breaking `ComponentProps<typeof
+                // forwardRefComponent>` and JSX prop checking).
+                if inherited_call_signature.is_none() {
+                    inherited_call_signature = object_type.call_signature().cloned();
+                }
+                if inherited_construct_signature.is_none() {
+                    inherited_construct_signature = object_type.construct_signature().cloned();
+                }
                 // An empty-object base inside a declaration file is, in this
                 // checker, an unmodelled lib/dependency stub (e.g. the generated
                 // `interface Request {}` placeholder for the DOM type). tsc has the
@@ -257,7 +287,14 @@ pub(crate) fn resolve_interface_declaration(
                 }
             }
             Type::Any => base_is_open = true,
-            Type::Unknown | Type::GenuineUnknown => base_is_open |= in_declaration_file,
+            // A degraded (sentinel-`Unknown`) base is surge's own resolution
+            // failure — e.g. a base inside a cyclic module cluster — not a user
+            // error; tsc has the full base, so the derived type must stay open
+            // in user source too or every inherited member access is a false
+            // TS2339. Only the *genuine* `unknown` keyword keeps the derived
+            // type closed outside declaration files.
+            Type::Unknown => base_is_open = true,
+            Type::GenuineUnknown => base_is_open |= in_declaration_file,
             _ => {}
         }
     }
@@ -320,6 +357,8 @@ pub(crate) fn resolve_interface_declaration(
         if let Type::Function(function_type) = resolved.ty {
             object_type = object_type.with_call_signature(function_type);
         }
+    } else if let Some(inherited) = inherited_call_signature {
+        object_type = object_type.with_call_signature(inherited);
     }
 
     // Resolve every construct-signature overload and fold them into one permissive
@@ -344,6 +383,8 @@ pub(crate) fn resolve_interface_declaration(
     }
     if let Some(construct_signature) = merged_construct {
         object_type = object_type.with_construct_signature(construct_signature);
+    } else if let Some(inherited) = inherited_construct_signature {
+        object_type = object_type.with_construct_signature(inherited);
     }
 
     ResolvedType {

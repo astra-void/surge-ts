@@ -246,6 +246,15 @@ pub(crate) struct CheckerContext {
     /// A cycle reaching below `floor` means the result depends on an outer frame.
     /// See the generic instantiation cache in `resolve_named_type`.
     pub(crate) lowest_cycle_target_index: usize,
+    /// `resolving`-stack indices of the frames that cross a structural type —
+    /// an interface body, or a type alias whose body is itself structural
+    /// (object/array/function/…). A type-alias cycle whose re-entry path passes
+    /// through one of these frames is tsc-legal recursion (`type Issue = A |
+    /// InvalidUnion` where `InvalidUnion.errors: Issue[][]`), not a
+    /// structureless `type A = B; type B = A` cycle. Frames are recorded by
+    /// `resolve_interface`/`resolve_type_alias` for the duration of their body
+    /// resolution.
+    pub(crate) structural_resolution_frames: Vec<usize>,
     /// Shared, immutable snapshot of this context used to resolve a lazy library
     /// [`Type::Reference`] body on demand (see the lazy instantiation resolver in
     /// `infer::types`). Captured once, lazily, when the first library reference is
@@ -301,6 +310,7 @@ impl CheckerContext {
             namespace_member_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
+            structural_resolution_frames: Vec::new(),
             lazy_resolution_snapshot: None,
             file_kinds: Arc::new(file_kinds),
             module_value_fallback: None,
@@ -362,6 +372,27 @@ impl CheckerContext {
         self.type_parameter_constraint_scopes
             .pop()
             .expect("type parameter constraint scope stack must not underflow");
+    }
+
+    /// Registers only the *constraints* of `type_parameters` (an empty value
+    /// scope is pushed alongside to keep the stacks aligned). Used while
+    /// resolving a generic interface/alias body so `Internals["def"]` with
+    /// `Internals extends $ZodTypeInternals<…>` is recognised as
+    /// constraint-validated instead of cascading into TS2536 — without marking
+    /// the resolution non-concrete (an entry in `type_parameter_scopes` would
+    /// disable instantiation interning for everything resolved inside).
+    pub(crate) fn push_type_parameter_constraints_only(
+        &mut self,
+        type_parameters: &[ParsedTypeParameter],
+    ) {
+        let mut constraint_scope = HashMap::new();
+        for type_parameter in type_parameters {
+            if let Some(constraint) = type_parameter.constraint.clone() {
+                constraint_scope.insert(type_parameter.name.clone(), constraint);
+            }
+        }
+        self.type_parameter_scopes.push(HashMap::new());
+        self.type_parameter_constraint_scopes.push(constraint_scope);
     }
 
     /// When the in-scope type parameter `name` is declared as `name extends keyof X`,
