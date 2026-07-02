@@ -201,9 +201,14 @@ pub(crate) fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, 
     }
 }
 
+/// Whether `ty` carries the `unknown` *degradation sentinel* anywhere in its
+/// shape. The genuine `unknown` keyword ([`Type::GenuineUnknown`]) is
+/// deliberately NOT matched: a declared `{ input?: unknown }` member is a real,
+/// checkable type in tsc, and suppressing the assignability check for it hides
+/// genuine TS2322s. Only surge's could-not-model sentinel warrants no-cascade.
 fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
-        Type::Unknown | Type::GenuineUnknown => true,
+        Type::Unknown => true,
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {
