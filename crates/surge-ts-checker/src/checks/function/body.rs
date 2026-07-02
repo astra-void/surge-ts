@@ -763,10 +763,57 @@ pub(crate) fn check_function_switch_statement(
         );
     }
 
+    // `switch (x.kind) case "a":` narrows the case body exactly like
+    // `if (x.kind === "a")`. A fall-through group (`case "a": case "b": body`)
+    // narrows to the OR of the group's tests, matching tsc. Synthesize the
+    // equality/OR condition and reuse the if-branch narrowing.
+    let discriminant = switch_statement.discriminant.clone();
+    let discriminant_span = switch_statement.discriminant_span;
+    let equality_condition = |test: &ParsedExpression| ParsedExpression::Binary {
+        left: Box::new(discriminant.clone()),
+        left_span: discriminant_span,
+        operator: surge_ts_syntax::ParsedBinaryOperator::StrictEquals,
+        operator_span: None,
+        right: Box::new(test.clone()),
+        right_span: None,
+    };
+    // Per case: the tests of the maximal run of empty-consequent cases falling
+    // into it, plus its own test. `None` for a group containing `default`.
+    let case_group_conditions: Vec<Option<ParsedExpression>> = {
+        let mut group: Vec<Option<&ParsedExpression>> = Vec::new();
+        switch_statement
+            .cases
+            .iter()
+            .map(|switch_case| {
+                group.push(switch_case.test.as_ref());
+                let condition = if group.iter().any(|test| test.is_none()) {
+                    None
+                } else {
+                    group
+                        .iter()
+                        .filter_map(|test| *test)
+                        .map(equality_condition)
+                        .reduce(|left, right| ParsedExpression::Logical {
+                            left: Box::new(left),
+                            left_span: None,
+                            operator: surge_ts_syntax::ParsedLogicalOperator::Or,
+                            operator_span: None,
+                            right: Box::new(right),
+                            right_span: None,
+                        })
+                };
+                if !switch_case.consequent.is_empty() {
+                    group.clear();
+                }
+                condition
+            })
+            .collect()
+    };
+
     if flow_active {
         let mut branch_deltas = Vec::new();
 
-        for switch_case in switch_statement.cases {
+        for (case_index, switch_case) in switch_statement.cases.into_iter().enumerate() {
             let case_guarantees_value_return =
                 analyze_function_body_flow(&switch_case.consequent).guarantees_value_return;
             if let Some(test) = switch_case.test.as_ref() {
@@ -780,6 +827,9 @@ pub(crate) fn check_function_switch_statement(
             }
 
             scopes.push_child();
+            if let Some(condition) = case_group_conditions[case_index].as_ref() {
+                narrow_discriminant_in_scope(condition, scopes, true);
+            }
             flow_state.begin_branch_capture();
             check_function_body(
                 switch_case.consequent,
@@ -796,8 +846,11 @@ pub(crate) fn check_function_switch_statement(
 
         merge_branch_deltas(flow_state, &branch_deltas, false);
     } else {
-        for switch_case in switch_statement.cases {
+        for (case_index, switch_case) in switch_statement.cases.into_iter().enumerate() {
             scopes.push_child();
+            if let Some(condition) = case_group_conditions[case_index].as_ref() {
+                narrow_discriminant_in_scope(condition, scopes, true);
+            }
             check_function_body(
                 switch_case.consequent,
                 with_type_copy_reason(TypeCopyReason::ReturnChecking, || return_type.clone()),
