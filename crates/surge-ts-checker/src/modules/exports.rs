@@ -901,6 +901,41 @@ pub(crate) fn collect_exports_from_statement(
                 }
             }
         }
+        ParsedStatement::NamespaceDeclaration(namespace) => {
+            // `export namespace ns { … }` exports the namespace's value object
+            // and its type members. The members were collected under qualified
+            // `ns.<member>` keys (same shape the `export =` path consumes), so
+            // carry those keys into the export table for qualified references
+            // (`ns.Member`) on the importing side.
+            if let Some(symbol) = exportable_values.get_shared(&namespace.name) {
+                if symbols.get(&namespace.name).is_none() {
+                    symbols.insert_shared(namespace.name.clone(), symbol);
+                }
+            }
+
+            if let Some(type_declaration) = local_type_declarations.get(&namespace.name) {
+                export_local_type_declaration(
+                    type_declaration,
+                    &namespace.name,
+                    resolution_scope,
+                    type_declarations,
+                );
+            }
+
+            let prefix = format!("{}.", namespace.name);
+            for (key, declaration) in local_type_declarations.iter() {
+                if key.as_str().starts_with(&prefix) && type_declarations.get(key.as_str()).is_none()
+                {
+                    let _ = type_declarations.insert(
+                        key.as_str(),
+                        attach_type_resolution_scope_if_missing(
+                            declaration.clone(),
+                            resolution_scope,
+                        ),
+                    );
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1090,6 +1125,33 @@ pub(crate) fn lookup_type_export<'a>(
 ) -> Option<&'a TypeDeclarationInfo> {
     crate::program::record_module_export_borrowed_lookup_count();
     export_table.type_declarations.get(local_name)
+}
+
+/// Copy an exported namespace's qualified type members (`ns.Member`) into the
+/// importer's scope under the local binding name (`local.Member`), so qualified
+/// type references through a named namespace import resolve.
+/// Copies every `<imported_name>.<member>` qualified type export under the
+/// local binding name. Returns whether any member was copied — a `true` means
+/// the imported name exists as a (type-only) namespace even when it has no
+/// direct type/value export entry of its own.
+pub(crate) fn copy_qualified_type_exports(
+    export_table: &ModuleExportTable,
+    imported_name: &str,
+    local_name: &str,
+    type_declarations: &mut TypeDeclarationTable,
+) -> bool {
+    let prefix = format!("{imported_name}.");
+    let mut copied_any = false;
+    for (key, declaration) in export_table.type_declarations.iter() {
+        if let Some(member) = key.as_str().strip_prefix(&prefix) {
+            copied_any = true;
+            let local_key = format!("{local_name}.{member}");
+            if type_declarations.get(&local_key).is_none() {
+                let _ = type_declarations.insert(local_key.as_str(), declaration.clone());
+            }
+        }
+    }
+    copied_any
 }
 
 pub(crate) fn lookup_value_export(

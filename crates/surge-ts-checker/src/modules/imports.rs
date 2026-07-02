@@ -411,6 +411,13 @@ fn resolve_default_and_named_import(
         let type_export = lookup_type_export(&export_table, &specifier.imported_name);
         let value_export = lookup_value_export(&export_table, &specifier.imported_name);
 
+        let has_qualified_type_exports = copy_qualified_type_exports(
+            &export_table,
+            &specifier.imported_name,
+            &specifier.local_name,
+            type_declarations,
+        );
+
         if *is_type_only {
             if let Some(type_export) = type_export {
                 export_local_type_declaration(
@@ -419,6 +426,13 @@ fn resolve_default_and_named_import(
                     None,
                     type_declarations,
                 );
+                continue;
+            }
+
+            // A type-only namespace (`export namespace enumUtil { export type … }`)
+            // has no direct export entry, only qualified `ns.Member` ones; the
+            // import is still valid.
+            if has_qualified_type_exports {
                 continue;
             }
 
@@ -443,7 +457,7 @@ fn resolve_default_and_named_import(
             continue;
         }
 
-        let mut found = false;
+        let mut found = has_qualified_type_exports;
 
         if let Some(type_export) = type_export {
             export_local_type_declaration(
@@ -710,6 +724,23 @@ fn resolve_namespace_import(
         return;
     };
     if *is_type_only {
+        // `import type * as ns` still exposes the module's exported types under
+        // the qualified alias (`ns.Member`); only the value binding is elided.
+        if let Some((export_table, scope, resolved_index)) = try_resolve_module(
+            &import.module_specifier,
+            ctx,
+            program_files,
+            module_export_tables,
+            module_resolution_scopes,
+        ) {
+            namespace_alias_layers.push(namespace_alias_table(
+                &export_table,
+                local_name,
+                scope.as_ref(),
+                resolved_index,
+            ));
+        }
+
         let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
             local_name.clone(),
             ctx.file_name.clone(),
@@ -960,6 +991,12 @@ fn resolve_named_import(
     for specifier in specifiers {
         let type_export = lookup_type_export(&export_table, &specifier.imported_name);
         let value_export = lookup_value_export(&export_table, &specifier.imported_name);
+        let has_qualified_type_exports = copy_qualified_type_exports(
+            &export_table,
+            &specifier.imported_name,
+            &specifier.local_name,
+            type_declarations,
+        );
         if *is_type_only {
             if let Some(type_export) = type_export {
                 insert_type_export(
@@ -981,6 +1018,11 @@ fn resolve_named_import(
                 continue;
             }
 
+            // A type-only namespace exports only qualified `ns.Member` entries.
+            if has_qualified_type_exports {
+                continue;
+            }
+
             emit_missing_export_diagnostic(
                 ctx,
                 &import.module_specifier,
@@ -996,7 +1038,7 @@ fn resolve_named_import(
             continue;
         }
 
-        let mut found = false;
+        let mut found = has_qualified_type_exports;
 
         if let Some(type_export) = type_export {
             insert_type_export(
