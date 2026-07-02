@@ -1055,9 +1055,22 @@ pub(crate) fn resolve_intersection_type(
         resolved_types.push(resolved.ty);
     }
 
+    // One failed operand must not erase the others: `ComponentProps<"button"> &
+    // VariantProps<…>` with an unmodelled second operand still has a fully usable
+    // first operand, and collapsing the whole intersection to `unknown` is what
+    // strips contextual typing from every prop that flows through it. Merge the
+    // usable members (the merge already drops `unknown` operands) but keep
+    // `had_error` — the taint still gates every cache/bail exactly as before, so
+    // no degraded shape is interned or re-expanded.
     if had_error {
+        if resolved_types.iter().all(Type::is_unknown) {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: true,
+            };
+        }
         return ResolvedType {
-            ty: Type::Unknown,
+            ty: merge_intersection_members(resolved_types),
             had_error: true,
         };
     }
@@ -1073,6 +1086,25 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         return Type::Any;
     }
 
+    // A dropped `Type::Unknown` operand is surge's degradation sentinel for an
+    // operand it could not model (`ComponentProps<typeof UnmodelledValue> & {…}`),
+    // NOT the `unknown` keyword (`GenuineUnknown`). The failed operand may have
+    // contributed members we never saw, so a surviving *inline object* surface
+    // must stay OPEN — a closed merge would flag every dropped member's use as an
+    // excess property. A surviving nominal reference is returned untouched (see
+    // the lone-survivor comment below).
+    let dropped_unmodelled_operand = members.iter().any(|ty| matches!(ty, Type::Unknown));
+    let open_if_unmodelled = |ty: Type| -> Type {
+        match ty {
+            Type::Object(object) if dropped_unmodelled_operand && object.string_index_type.is_none() => {
+                let mut object = object;
+                object.string_index_type = Some(std::sync::Arc::new(Type::Any));
+                Type::Object(object)
+            }
+            other => other,
+        }
+    };
+
     let members: Vec<Type> = members.into_iter().filter(|ty| !ty.is_unknown()).collect();
 
     // `T & unknown ⇒ T`: with the `unknown` operands dropped, a lone survivor is
@@ -1081,7 +1113,7 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     // identity — e.g. `Window & typeof globalThis` would otherwise corrupt the
     // shared `Window` apparent type.
     if members.len() == 1 {
-        return members.into_iter().next().unwrap();
+        return open_if_unmodelled(members.into_iter().next().unwrap());
     }
 
     let display_name = (!members.is_empty()).then(|| {
@@ -1128,6 +1160,14 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     if !object_members.is_empty() {
         let mut properties: PropertyMap = PropertyMap::new();
         let mut string_index_type: Option<Type> = None;
+        // A callable operand (`F & { … }`, or an interface with a call signature)
+        // keeps the merged intersection callable; the first signature wins, like
+        // conflicting properties.
+        let mut call_signature = members.iter().find_map(|ty| match ty {
+            Type::Function(function_type) => Some(std::sync::Arc::new(function_type.clone())),
+            _ => None,
+        });
+        let mut construct_signature: Option<std::sync::Arc<surge_ts_types::FunctionType>> = None;
 
         for object in &object_members {
             for (name, property) in object.properties.iter() {
@@ -1140,6 +1180,12 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
             {
                 string_index_type = Some(index.clone());
             }
+            if call_signature.is_none() {
+                call_signature = object.call_signature.clone();
+            }
+            if construct_signature.is_none() {
+                construct_signature = object.construct_signature.clone();
+            }
         }
 
         let mut merged =
@@ -1147,7 +1193,9 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         if let Some(display_name) = display_name {
             merged = merged.with_alias_name(display_name);
         }
-        return Type::Object(merged);
+        merged.call_signature = call_signature;
+        merged.construct_signature = construct_signature;
+        return open_if_unmodelled(Type::Object(merged));
     }
 
     match members.into_iter().next() {
@@ -1665,6 +1713,15 @@ pub(crate) fn resolve_mapped_type(
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
+    // A homomorphic mapping (`[K in keyof X]`) preserves the source's
+    // per-property optionality and its string index signature (tsc keeps both;
+    // dropping the index signature turned `Flatten<T & Record<string, unknown>>`
+    // members into spurious TS2339s). Capture the `keyof` operand so the source
+    // shape is recoverable after the constraint is resolved to a key union.
+    let keyof_operand: Option<ParsedType> = match mapped.constraint.as_ref() {
+        ParsedType::KeyOf(inner) => Some(inner.as_ref().clone()),
+        _ => None,
+    };
     let resolved_constraint = resolve_parsed_type(*mapped.constraint, ctx, resolving, substitution);
 
     if resolved_constraint.had_error {
