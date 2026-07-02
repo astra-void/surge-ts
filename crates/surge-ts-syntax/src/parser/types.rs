@@ -337,14 +337,33 @@ fn parse_intersection_type(intersection_type: &TSIntersectionType<'_>) -> Parsed
     ParsedType::Intersection(types)
 }
 
+/// Tuple labels are display-only, so named members lower to their element type.
+/// Optional and rest members change tuple arity, which the fixed-length tuple
+/// model cannot express; degrade those tuples to `Unknown` so an alias like
+/// `type Args = [msg: string, extra?: any]` still resolves instead of dropping
+/// to TS2304 at every use site.
 fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
     let mut elements = Vec::new();
 
     for element in &tuple_type.element_types {
         match element {
-            TSTupleElement::TSNamedTupleMember(_)
-            | TSTupleElement::TSOptionalType(_)
-            | TSTupleElement::TSRestType(_) => return None,
+            TSTupleElement::TSNamedTupleMember(member) => {
+                if member.optional || matches!(member.element_type, TSTupleElement::TSRestType(_))
+                {
+                    return Some(ParsedType::Unknown);
+                }
+                let Some(inner) = member.element_type.as_ts_type() else {
+                    return Some(ParsedType::Unknown);
+                };
+                let Some(parsed_element) = parse_type(inner) else {
+                    return None;
+                };
+
+                elements.push(parsed_element);
+            }
+            TSTupleElement::TSOptionalType(_) | TSTupleElement::TSRestType(_) => {
+                return Some(ParsedType::Unknown);
+            }
             _ => {
                 let Some(parsed_element) = parse_type(element.as_ts_type()?) else {
                     return None;
