@@ -1777,6 +1777,14 @@ pub(crate) fn resolve_mapped_type(
         }
     };
 
+    let homomorphic_source = keyof_operand.and_then(|operand| {
+        let resolved = resolve_parsed_type(operand, ctx, resolving, substitution);
+        match resolved.ty.peeled() {
+            Type::Object(object) => Some(object),
+            _ => None,
+        }
+    });
+
     let mut properties = PropertyMap::new();
     let mut had_error = false;
 
@@ -1796,17 +1804,28 @@ pub(crate) fn resolve_mapped_type(
             had_error = true;
         }
 
+        let source_optional = homomorphic_source
+            .as_ref()
+            .and_then(|object| object.get_property(&key))
+            .is_some_and(|property| property.is_optional());
         properties.insert(
             key,
             ObjectProperty {
                 ty: resolved_value.ty,
-                optional: mapped.optional,
+                optional: mapped.optional || source_optional,
             },
         );
     }
 
+    // Reusing the source's index value type is exact for identity mappings
+    // (`T[k]`) and an approximation for transforming ones; either way it keeps
+    // index-signature reads legal, matching tsc's homomorphic behaviour.
+    let index_type = homomorphic_source
+        .as_ref()
+        .and_then(|object| object.string_index_type.as_deref().cloned());
+
     ResolvedType {
-        ty: Type::Object(alloc_object_type(properties, None)),
+        ty: Type::Object(alloc_object_type(properties, index_type)),
         had_error,
     }
 }
