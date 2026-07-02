@@ -148,6 +148,21 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::KnownNoop,
     },
     TsConfigOptionDefinition {
+        name: "experimentalDecorators",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "emitDecoratorMetadata",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
+        name: "pretty",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
         name: "importHelpers",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::KnownNoop,
