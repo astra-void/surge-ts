@@ -485,7 +485,10 @@ fn infer_through_generic_reference(
         };
         match handle.get() {
             TypeDeclarationInfo::Interface(info) => info.body.clone(),
-            _ => return,
+            TypeDeclarationInfo::Alias(info) => {
+                infer_through_generic_alias(info, named_type, argument_type, substitution, ctx, depth);
+                return;
+            }
         }
     };
     if body.type_parameters.len() != named_type.type_arguments.len() {
@@ -513,6 +516,49 @@ fn infer_through_generic_reference(
             depth + 1,
         );
     }
+}
+
+/// Infers through a generic *alias* parameter (`config?: Config<T>`). A plain
+/// object body matches like an interface's members. A conditional body whose
+/// check type is one of the alias's own parameters (`T extends ConfigSchema ?
+/// { variants?: T; … } : never` — the class-variance-authority shape) matches
+/// the argument against the substituted TRUE branch: selecting that branch is
+/// exactly what a successful inference implies, and its members are where the
+/// parameter occurs (tsc infers `T` from `variants` the same way).
+fn infer_through_generic_alias(
+    alias: &crate::symbols::TypeAliasInfo,
+    named_type: &ParsedNamedType,
+    argument_type: &Type,
+    substitution: &mut TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    depth: usize,
+) {
+    if alias.body.type_parameters.len() != named_type.type_arguments.len() {
+        return;
+    }
+    let parameter_map: HashMap<String, ParsedType> = alias
+        .body
+        .type_parameters
+        .iter()
+        .zip(named_type.type_arguments.iter())
+        .map(|(parameter, argument)| (parameter.name.clone(), argument.clone()))
+        .collect();
+
+    let mut body = &alias.body.ty;
+    if let ParsedType::Conditional(conditional) = body {
+        let check_is_own_parameter = matches!(
+            conditional.check_type.as_ref(),
+            ParsedType::Named(check) if parameter_map.contains_key(&check.name)
+        );
+        if !check_is_own_parameter {
+            return;
+        }
+        body = conditional.true_type.as_ref();
+    }
+
+    let substituted =
+        crate::infer::substitute_parsed_type_parameters_deep(body, &parameter_map);
+    collect_inferred_type_argument(&substituted, argument_type, substitution, true, ctx, depth + 1);
 }
 
 /// Substitutes bare named references in a parsed type using `map`, recursing into

@@ -522,6 +522,17 @@ pub(crate) fn collect_exportable_value_symbols(
 
     let _ = local_type_declarations;
     shadow_ctx.type_declarations = ctx.type_declarations.clone();
+    // The caller's full type-resolution surface must travel into the shadow, or
+    // an exported `const` whose annotation names an *imported* type (a generic
+    // arrow component's `ControllerProps<T, N>` parameter) resolves to `unknown`
+    // and every consumer loses its signature. All Arc-shared, read-only state.
+    shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
+    shadow_ctx.ambient_global_type_declarations = ctx.ambient_global_type_declarations.clone();
+    shadow_ctx.ambient_global_symbols = ctx
+        .ambient_global_symbols
+        .clone_with_reason(TypeCopyReason::ModuleExport);
+    shadow_ctx.module_scope_by_file = ctx.module_scope_by_file.clone();
+    shadow_ctx.module_local_values_by_file = ctx.module_local_values_by_file.clone();
 
     // The ambient globals (the lib `.d.ts` surface, ~1000 entries) are only a
     // read-only resolution backdrop here: the returned table is consulted via

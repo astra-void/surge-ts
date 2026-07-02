@@ -324,6 +324,61 @@ fn project_mode_physical_libs_required_omit_pick() {
 }
 
 #[test]
+fn project_mode_nested_namespace_member_resolves_siblings_on_lazy_peel() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // A generic alias indexing a nested-namespace interface
+    // (`T extends keyof Inner.Table ? Inner.Table[T] : never`, React's
+    // `ComponentProps<"button">` shape) finds the interface through its bare
+    // dual-registration key, which carries no resolution scope of its own. The
+    // lazy peel must reinstall the scope active where the reference was created,
+    // or every member referencing an outer sibling (`MyLib.Payload<string>`)
+    // degrades to `unknown` — losing the TS2322 below and implicit-any'ing the
+    // contextual callback. tsc reports exactly the one TS2322.
+    assert_eq!(
+        run_physical_fixture_codes("namespace-nested-member-lazy-scope-basic"),
+        vec!["TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_function_type_binding_pattern_parameter() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // A function-type parameter written as a destructuring pattern
+    // (`render: ({ field }: { field: T }) => string`, react-hook-form's
+    // `ControllerProps.render` shape) must parse: failing it degrades the whole
+    // function type — and any intersection containing it — to `unknown`,
+    // implicit-any'ing the render callback's bindings. Only the deliberate
+    // `Controller`-to-number probe reports.
+    assert_eq!(
+        run_physical_fixture_codes("function-type-binding-pattern-param-basic"),
+        vec!["TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_interface_extends_inherits_call_signature() {
+    if !typescript_lib_available() {
+        eprintln!("skipping: node_modules/typescript not installed");
+        return;
+    }
+    // A call signature declared on a base interface (React's
+    // `ForwardRefExoticComponent extends ExoticComponent` shape) must survive
+    // the extends merge, or `T extends (props: infer P) => unknown` cannot
+    // recover the props type from the component value. tsc reports exactly the
+    // one TS2322 probe.
+    assert_eq!(
+        run_physical_fixture_codes("interface-extends-call-signature-basic"),
+        vec!["TS2322"]
+    );
+}
+
+#[test]
 fn project_mode_physical_libs_no_lib_disables_globals() {
     if !typescript_lib_available() {
         eprintln!("skipping: node_modules/typescript not installed");

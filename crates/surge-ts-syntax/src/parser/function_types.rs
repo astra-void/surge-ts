@@ -112,8 +112,16 @@ pub(crate) fn parse_function_type_rest_parameter(
 pub(crate) fn parse_function_type_parameter(
     parameter: &FormalParameter<'_>,
 ) -> Option<ParsedFunctionTypeParameter> {
-    let BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
-        return None;
+    // A destructuring-pattern parameter (`render: ({ field }: Props) => …`,
+    // react-hook-form's `ControllerProps.render`) has no single name — only its
+    // annotation matters for the signature. Failing here would degrade the whole
+    // enclosing function type (and any intersection it sits in) to `Unknown`.
+    let (name, name_span) = match &parameter.pattern {
+        BindingPattern::BindingIdentifier(binding) => (
+            Some(binding.name.to_string()),
+            Some(text_span_from_oxc_span(binding.span)),
+        ),
+        _ => (None, None),
     };
 
     let ty = parameter
@@ -122,8 +130,8 @@ pub(crate) fn parse_function_type_parameter(
         .and_then(|annotation| parse_type_annotation(annotation))?;
 
     Some(ParsedFunctionTypeParameter {
-        name: Some(binding.name.to_string()),
-        name_span: Some(text_span_from_oxc_span(binding.span)),
+        name,
+        name_span,
         ty,
         optional: parameter.optional || parameter.initializer.is_some(),
         is_this: false,

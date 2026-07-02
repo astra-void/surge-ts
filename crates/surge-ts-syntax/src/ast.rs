@@ -697,14 +697,15 @@ pub struct ParsedJsxAttribute {
     pub value_kind: ParsedJsxAttributeValueKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ParsedJsxAttributeValueKind {
     /// The value is the `value` expression (`name={expr}`), an empty container
     /// (`name={}`), or a `{...spread}` argument.
     #[default]
     Expression,
-    /// A string-literal value, `name="literal"` — typed as `string`.
-    StringLiteral,
+    /// A string-literal value, `name="literal"` — typed as the string literal
+    /// (tsc keeps the literal, so `type="submit"` satisfies a literal union).
+    StringLiteral(String),
     /// Boolean shorthand, `name` — equivalent to `name={true}`.
     BooleanShorthand,
 }

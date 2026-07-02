@@ -310,12 +310,12 @@ fn parse_jsx_attribute_item(item: &JSXAttributeItem<'_>) -> Option<ParsedJsxAttr
                         ParsedJsxAttributeValueKind::Expression,
                     )
                 }
-                // A string-literal value (`id="x"`) types as `string`; keep its span
-                // so the checker can point a prop diagnostic at the value.
+                // A string-literal value (`id="x"`) keeps its text (typed as the
+                // literal) and its span so a prop diagnostic points at the value.
                 Some(JSXAttributeValue::StringLiteral(literal)) => (
                     None,
                     Some(text_span_from_oxc_span(literal.span)),
-                    ParsedJsxAttributeValueKind::StringLiteral,
+                    ParsedJsxAttributeValueKind::StringLiteral(literal.value.to_string()),
                 ),
                 // Boolean shorthand (`disabled`) is equivalent to `disabled={true}`.
                 None => (None, None, ParsedJsxAttributeValueKind::BooleanShorthand),

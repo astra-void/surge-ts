@@ -219,16 +219,53 @@ pub(crate) fn collect_module_analyses_with_bindings(
             timings.declaration_table_merging_cloning += merge_start.elapsed()
         });
 
-        let mut local_symbols = SymbolTable::new();
+        // `typeof <value>` inside a parameter annotation resolves against the
+        // module's value bindings — imports and `const`s alike — which signature
+        // collection alone never sees (function declarations hoist above them).
+        // Collect the signatures inside a seeded environment (imported bindings +
+        // the module's inferred value symbols, mirroring the check phase's merged
+        // environment) so the exported function types carry real parameter types.
+        // The seed is environment-only: `local_symbols` keeps just what collection
+        // itself declared (the file's functions and classes) — a leaked seed would
+        // re-report the declaration as TS2451 when the check phase declares it
+        // again. Declaration files skip the seeding: their exports resolve through
+        // the declaration tables, and running initializer inference over large
+        // dependency `.d.ts` files here would be pure cost.
+        let mut signature_env = SymbolTable::new();
+        let mut seeded_names: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
+        if !parsed_file.file_kind.is_declaration() {
+            let mut import_seed = SymbolTable::new();
+            if let Some(bindings) = preliminary_module_import_bindings[file_index].as_ref() {
+                for (name, symbol) in bindings.symbols.iter_shared() {
+                    let _ = import_seed.insert_shared(name.clone(), symbol.clone());
+                }
+            }
+            let value_env = crate::modules::collect_exportable_value_symbols(
+                &parsed_file.statements,
+                local_type_declarations.as_ref(),
+                &import_seed,
+                ctx,
+            );
+            for (name, symbol) in value_env.iter_shared() {
+                let _ = signature_env.insert_shared(name.clone(), symbol.clone());
+                seeded_names.insert(name.clone());
+            }
+        }
         let mut local_function_signatures = HashMap::new();
         let diagnostics_before_signatures = ctx.diagnostics().len();
         collect_function_signatures_from_statements(
             &parsed_file.statements,
             file_index,
-            &mut local_symbols,
+            &mut signature_env,
             &mut local_function_signatures,
             ctx,
         );
+        let mut local_symbols = SymbolTable::new();
+        for (name, symbol) in signature_env.iter_shared() {
+            if !seeded_names.contains(name) {
+                let _ = local_symbols.insert_shared(name.clone(), symbol.clone());
+            }
+        }
         ctx.truncate_diagnostics(diagnostics_before_signatures);
         ctx.resolved_named_types = Arc::new(Mutex::new(HashMap::new()));
 

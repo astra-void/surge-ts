@@ -183,6 +183,15 @@ thread_local! {
 /// the instantiations a consumer actually inspects.
 struct LazyInstantiation {
     snapshot: Arc<CheckerContext>,
+    /// The type-declaration scope installed where this reference was created.
+    /// The shared snapshot is captured once per context — often before any
+    /// module scope is installed — so a peel through it alone cannot see the
+    /// declaring module's siblings (a namespace member registered without its
+    /// own `resolution_scope`, like the bare `JSX.IntrinsicElements` dual key,
+    /// would resolve every member reference to `unknown`). Re-installing the
+    /// creation-time scope restores the lexical environment the reference was
+    /// formed in; a declaration carrying its own scope still overrides it.
+    creation_scope: Option<Arc<crate::symbols::TypeDeclarationScope>>,
     decl: crate::symbols::TypeDeclarationHandle,
     decl_key: DeclarationResolutionKey,
     type_arguments: Vec<surge_ts_syntax::ParsedType>,
@@ -232,6 +241,9 @@ impl ResolveReference for LazyInstantiation {
         // — the struct is large and a deep (but bounded) library `extends` chain
         // would otherwise overflow the stack with on-stack clones.
         let mut ctx = Box::new((*self.snapshot).clone());
+        if self.creation_scope.is_some() {
+            ctx.type_declaration_scope = self.creation_scope.clone();
+        }
         let mut resolving = Vec::new();
         let resolved = match self.decl.get() {
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
@@ -316,12 +328,14 @@ pub(crate) fn make_lazy_type_reference(
     substitution: TypeParameterSubstitution,
 ) -> Type {
     let snapshot = ctx.lazy_resolution_snapshot();
+    let creation_scope = ctx.type_declaration_scope.clone();
     Type::Reference(TypeReference::new(
         reference_id.to_string(),
         display.to_string(),
         resolved_arguments.clone(),
         Arc::new(LazyInstantiation {
             snapshot,
+            creation_scope,
             decl,
             decl_key,
             type_arguments,

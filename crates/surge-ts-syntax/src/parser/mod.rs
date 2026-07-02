@@ -370,7 +370,7 @@ fn parse_array_pattern_declarations(
     declarations
 }
 
-fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedStatement> {
+pub(crate) fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedStatement> {
     use oxc_span::GetSpan;
     let module_specifier = match &module.id {
         TSModuleDeclarationName::StringLiteral(literal) => literal.value.to_string(),

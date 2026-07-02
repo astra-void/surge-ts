@@ -306,8 +306,10 @@ fn infer_attribute_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    match attribute.value_kind {
-        ParsedJsxAttributeValueKind::StringLiteral => Some(Type::String),
+    match &attribute.value_kind {
+        ParsedJsxAttributeValueKind::StringLiteral(value) => {
+            Some(Type::StringLiteral(value.clone()))
+        }
         ParsedJsxAttributeValueKind::BooleanShorthand => Some(Type::BooleanLiteral(true)),
         ParsedJsxAttributeValueKind::Expression => {
             let value = attribute.value.as_ref()?;
@@ -461,9 +463,19 @@ enum ChildContent {
 /// The object-type name tsc shows for the attributes actually provided, used as
 /// the source type in excess-prop (TS2322) diagnostics.
 fn source_object_name(attribute_types: &BTreeMap<String, Type>) -> String {
+    // tsc renders the excess-prop source with widened literals (`href: string`,
+    // not `href: "/x"`), even though assignability keeps the literal.
     let properties = attribute_types
         .iter()
-        .map(|(name, ty)| (name.clone(), ObjectProperty::required(ty.clone())))
+        .map(|(name, ty)| {
+            let display_ty = match ty {
+                Type::StringLiteral(_) => Type::String,
+                Type::NumberLiteral(_) => Type::Number,
+                Type::BooleanLiteral(_) => Type::Boolean,
+                other => other.clone(),
+            };
+            (name.clone(), ObjectProperty::required(display_ty))
+        })
         .collect::<PropertyMap>();
     Type::Object(alloc_object_type(properties, None)).name()
 }

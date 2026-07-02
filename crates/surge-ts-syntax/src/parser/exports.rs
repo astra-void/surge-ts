@@ -83,7 +83,16 @@ pub(crate) fn parse_export_default_declaration(
 
     let parsed_declaration = match &declaration.declaration {
         ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
-            let Some(function) = parse_function_declaration(function) else {
+            // An anonymous `export default function () {}` binds as `default`.
+            let parsed = match function.id.as_ref() {
+                Some(_) => parse_function_declaration(function),
+                None => super::functions::parse_function_declaration_named(
+                    function,
+                    "default".to_string(),
+                    Some(text_span_from_oxc_span(function.span)),
+                ),
+            };
+            let Some(function) = parsed else {
                 return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
                     ParsedExportDeclaration::Default {
                         declaration: ParsedDefaultExportDeclaration::Unsupported {
@@ -275,6 +284,7 @@ fn parse_exported_declaration(
             .map(|interface| vec![ParsedStatement::InterfaceDeclaration(Box::new(interface))])?,
         Declaration::ClassDeclaration(class) => super::classes::parse_class_declaration(class)
             .map(|class| vec![ParsedStatement::ClassDeclaration(Box::new(class))])?,
+        Declaration::TSModuleDeclaration(module) => super::parse_ts_module_declaration(module),
         _ => return None,
     };
 

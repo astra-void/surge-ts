@@ -22,6 +22,20 @@ pub(crate) fn parse_function_declaration(
     function: &Function<'_>,
 ) -> Option<ParsedFunctionDeclaration> {
     let id = function.id.as_ref()?;
+    parse_function_declaration_named(
+        function,
+        id.name.to_string(),
+        Some(text_span_from_oxc_span(id.span)),
+    )
+}
+
+/// Parse a function whose binding name is supplied by the caller — used for an
+/// anonymous `export default function () {}`, which tsc binds as `default`.
+pub(crate) fn parse_function_declaration_named(
+    function: &Function<'_>,
+    name: String,
+    name_span: Option<crate::TextSpan>,
+) -> Option<ParsedFunctionDeclaration> {
     let mut parameters: Vec<_> = function
         .params
         .items
@@ -49,8 +63,8 @@ pub(crate) fn parse_function_declaration(
 
     Some(ParsedFunctionDeclaration {
         is_declare: function.declare,
-        name: id.name.to_string(),
-        name_span: Some(text_span_from_oxc_span(id.span)),
+        name,
+        name_span,
         type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
         parameters,
         return_type,

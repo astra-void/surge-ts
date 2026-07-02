@@ -264,6 +264,54 @@ fn is_function_like(ty: &Type) -> bool {
     }
 }
 
+/// Whether a parameter type carries the `unknown` degradation sentinel (NOT the
+/// `unknown` keyword, which is `GenuineUnknown`) in an argument, member, union
+/// arm, or signature position. Depth-bounded and reference-arguments-only (no
+/// peel), so cyclic library reference graphs cannot loop.
+fn parameter_carries_degraded_unknown(ty: &Type, depth: usize) -> bool {
+    if depth > 3 {
+        return false;
+    }
+    match ty {
+        Type::Unknown => true,
+        Type::Reference(reference) => {
+            reference
+                .arguments
+                .iter()
+                .any(|argument| parameter_carries_degraded_unknown(argument, depth + 1))
+                // A lazily-deferred instantiation may carry its unresolved holes
+                // only in the expanded body (its `arguments` can be empty for an
+                // un-substituted parameter, e.g. `SubmitEvent<T>` in a library
+                // signature resolved outside its generic context). Peel one level;
+                // the depth bound keeps cyclic reference graphs from looping.
+                || parameter_carries_degraded_unknown(&ty.peeled(), depth + 1)
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .any(|property| parameter_carries_degraded_unknown(&property.ty, depth + 1))
+                || object
+                    .string_index_type
+                    .as_deref()
+                    .is_some_and(|index| parameter_carries_degraded_unknown(index, depth + 1))
+        }
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| parameter_carries_degraded_unknown(member, depth + 1)),
+        Type::Function(function) => {
+            function
+                .parameters()
+                .iter()
+                .any(|parameter| parameter_carries_degraded_unknown(parameter, depth + 1))
+                || parameter_carries_degraded_unknown(function.return_type(), depth + 1)
+        }
+        Type::Array(element) => parameter_carries_degraded_unknown(element, depth + 1),
+        _ => false,
+    }
+}
+
 fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bool {
     // A source function may declare fewer parameters than the target expects —
     // the surplus arguments the target would pass are simply ignored — but it
@@ -286,11 +334,25 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
             // whose unconstrained type parameter collapsed to `unknown` (e.g.
             // `BooleanConstructor`'s `<T>(value?: T) => boolean`) usable as a
             // typed callback such as an array predicate.
+            // Contravariant, matching tsc under `strictFunctionTypes`: the
+            // parameter the target would supply must be acceptable to the
+            // source. Requiring covariance as well (the previous both-directions
+            // rule) rejected a handler whose declared event type relates to the
+            // slot's in only one direction, while pure covariance would wrongly
+            // accept a literal-narrowed source (`(v: "idle") => void` as
+            // `(v: string) => void`, TS2322 in tsc). A *degraded* target
+            // parameter (one carrying the `unknown` sentinel in an argument or
+            // member — e.g. a slot whose `KeyboardEvent<T>` kept an unresolved
+            // `T`) cannot support the contravariant test (its `unknown` holes are
+            // not assignable to the source's concrete members), so it falls back
+            // to the covariant direction rather than flagging a handler tsc
+            // accepts.
             source_parameter == target_parameter
                 || source_parameter.is_unknown()
                 || matches!(source_parameter, Type::Any)
-                || (is_assignable_to(source_parameter, target_parameter)
-                    && is_assignable_to(target_parameter, source_parameter))
+                || is_assignable_to(target_parameter, source_parameter)
+                || (parameter_carries_degraded_unknown(target_parameter, 0)
+                    && is_assignable_to(source_parameter, target_parameter))
         });
 
     // A `void`-returning target ignores whatever the source returns: tsc accepts
