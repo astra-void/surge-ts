@@ -146,6 +146,29 @@ pub(crate) fn check_function_body(
         record_flow_function_skipped_count();
     }
 
+    // Hoist nested `function` declarations into the current scope so a sibling
+    // closure can call them (function declarations are function-scoped and
+    // callable before their statement position).
+    for statement in &body {
+        if let ParsedFunctionBodyStatement::Function(function) = statement {
+            let function_type = crate::checks::function::signature::map_function_signature(
+                &function.parameters,
+                function.return_type.as_ref(),
+                &function.type_parameters,
+                None,
+                ctx,
+            );
+            scopes.insert_current_handle(
+                function.name.as_str(),
+                std::sync::Arc::new(SymbolInfo {
+                    ty: Type::Function(function_type),
+                    kind: crate::symbols::SymbolKind::Function,
+                    function_signature: None,
+                }),
+            );
+        }
+    }
+
     for (statement_index, statement) in body.into_iter().enumerate() {
         check_function_body_statement(
             statement,
