@@ -14,5 +14,14 @@ final-status-level = "slow"
 # In CI a stuck test should be reaped rather than hanging the job.
 slow-timeout = { period = "120s", terminate-after = 3 }
 
+# The smoke suite runs ~1300 manifest cases serially inside one test; on a
+# shared CI runner it is slow, not stuck. Schedule it alone with a long leash,
+# and skip retries — its assertions are deterministic.
+[[profile.ci.overrides]]
+filter = "test(=smoke_cases_emit_expected_codes)"
+slow-timeout = { period = "120s", terminate-after = 10 }
+threads-required = "num-cpus"
+retries = 0
+
 [profile.ci.junit]
 path = "junit.xml"
