@@ -85,26 +85,41 @@ pub fn select_export_target(
     subpath_key: &str,
     conditions: &[String],
 ) -> Option<String> {
+    select_export_targets(exports, subpath_key, conditions)
+        .into_iter()
+        .next()
+}
+
+/// Like [`select_export_target`], but returns *every* reachable target in
+/// priority order. tsc falls through to the next matching condition when the
+/// selected target does not resolve to a file (e.g. a source condition naming a
+/// file the published package does not ship), so the caller must be able to
+/// probe each candidate in turn rather than committing to the first.
+pub fn select_export_targets(
+    exports: &Value,
+    subpath_key: &str,
+    conditions: &[String],
+) -> Vec<String> {
     match exports {
         Value::String(_) | Value::Array(_) => {
             // Bare string / array sugar: the entire value is the `"."` target.
             if subpath_key == "." {
-                resolve_target_conditions(exports, conditions)
+                collect_targets(exports, conditions)
             } else {
-                None
+                Vec::new()
             }
         }
         Value::Object(map) => {
             if is_subpath_map(map, '.') {
-                select_from_subpath_map(map, subpath_key, conditions)
+                select_all_from_subpath_map(map, subpath_key, conditions)
             } else if subpath_key == "." {
                 // Conditions-only object is `"."` sugar.
-                resolve_target_conditions(exports, conditions)
+                collect_targets(exports, conditions)
             } else {
-                None
+                Vec::new()
             }
         }
-        _ => None,
+        _ => Vec::new(),
     }
 }
 
@@ -115,13 +130,25 @@ pub fn select_import_target(
     specifier: &str,
     conditions: &[String],
 ) -> Option<String> {
+    select_import_targets(imports, specifier, conditions)
+        .into_iter()
+        .next()
+}
+
+/// Like [`select_import_target`], but returns every reachable target in
+/// priority order (see [`select_export_targets`]).
+pub fn select_import_targets(
+    imports: &Value,
+    specifier: &str,
+    conditions: &[String],
+) -> Vec<String> {
     let Value::Object(map) = imports else {
-        return None;
+        return Vec::new();
     };
     if !is_subpath_map(map, '#') {
-        return None;
+        return Vec::new();
     }
-    select_from_subpath_map(map, specifier, conditions)
+    select_all_from_subpath_map(map, specifier, conditions)
 }
 
 /// Match `key` against an `exports`/`imports`/`typesVersions` subpath map and
@@ -130,13 +157,13 @@ pub fn select_import_target(
 /// Exact keys win over patterns; among patterns the longest static prefix wins
 /// (Node's specificity rule). A single `*` is supported; keys with more than one
 /// `*` are ignored.
-fn select_from_subpath_map(
+fn select_all_from_subpath_map(
     map: &serde_json::Map<String, Value>,
     key: &str,
     conditions: &[String],
-) -> Option<String> {
+) -> Vec<String> {
     if let Some(value) = map.get(key) {
-        return resolve_target_conditions(value, conditions);
+        return collect_targets(value, conditions);
     }
 
     let mut best: Option<(&str, &Value, String)> = None;
@@ -155,33 +182,56 @@ fn select_from_subpath_map(
         }
     }
 
-    let (_, value, captured) = best?;
-    let target = resolve_target_conditions(value, conditions)?;
-    Some(substitute_star(&target, &captured))
+    let Some((_, value, captured)) = best else {
+        return Vec::new();
+    };
+    collect_targets(value, conditions)
+        .into_iter()
+        .map(|target| substitute_star(&target, &captured))
+        .collect()
 }
 
 /// Walk a conditional target (string / array / nested condition object) and
-/// return the first reachable target string. `default` always matches; other
-/// keys match only when present in `conditions`. Object key order (the package
-/// author's order) decides priority. A `null` target blocks resolution.
-fn resolve_target_conditions(value: &Value, conditions: &[String]) -> Option<String> {
+/// collect every reachable target string in priority order. `default` always
+/// matches; other keys match only when present in `conditions`. Object key order
+/// (the package author's order) decides priority. A matched `null` target is an
+/// explicit block: collection stops there and later conditions are not
+/// consulted, matching Node (tsc only falls through when a matched target fails
+/// to *resolve*, never past an explicit `null`).
+fn collect_targets(value: &Value, conditions: &[String]) -> Vec<String> {
+    let mut targets = Vec::new();
+    collect_targets_into(value, conditions, &mut targets);
+    targets
+}
+
+/// Returns `false` when collection hit an explicit `null` block and the caller
+/// must not consult lower-priority alternatives.
+fn collect_targets_into(value: &Value, conditions: &[String], targets: &mut Vec<String>) -> bool {
     match value {
-        Value::String(s) => Some(s.clone()),
-        Value::Array(items) => items
-            .iter()
-            .find_map(|item| resolve_target_conditions(item, conditions)),
+        Value::String(s) => {
+            targets.push(s.clone());
+            true
+        }
+        // Array entries are fallbacks: unsupported/blocked entries are skipped
+        // rather than blocking (Node ignores invalid array members).
+        Value::Array(items) => {
+            for item in items {
+                collect_targets_into(item, conditions, targets);
+            }
+            true
+        }
         Value::Object(map) => {
             for (condition, target) in map {
                 if condition == "default" || conditions.iter().any(|c| c == condition) {
-                    if let Some(resolved) = resolve_target_conditions(target, conditions) {
-                        return Some(resolved);
+                    if !collect_targets_into(target, conditions, targets) {
+                        return false;
                     }
                 }
             }
-            None
+            true
         }
-        // `null` (and anything else) is an explicit block.
-        _ => None,
+        Value::Null => false,
+        _ => true,
     }
 }
 

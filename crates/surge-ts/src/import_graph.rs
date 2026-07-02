@@ -88,6 +88,9 @@ fn module_specifier_from_statement(statement: &ParsedStatement) -> Option<String
             } => Some(module_specifier.clone()),
             ParsedExportDeclaration::All {
                 module_specifier, ..
+            }
+            | ParsedExportDeclaration::Namespace {
+                module_specifier, ..
             } => Some(module_specifier.clone()),
             _ => None,
         },
@@ -255,14 +258,11 @@ fn candidate_is_existing_file(candidate: &Path, cache: &mut HashMap<String, bool
 
 fn is_loadable_graph_file(path: &Path) -> bool {
     let lower = path.to_string_lossy().to_ascii_lowercase();
-    if lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts") {
-        return true;
-    }
-
-    if lower.contains("/node_modules/") || lower.contains("\\node_modules\\") {
-        return false;
-    }
-
+    // TypeScript sources are loadable even under `node_modules`: tsc applies the
+    // same extension priority (`.ts` before `.d.ts`) to relative imports inside
+    // dependencies, so a package that ships sources (or is resolved through a
+    // source `exports` condition) gets its source graph checked, not its
+    // declarations.
     lower.ends_with(".ts")
         || lower.ends_with(".tsx")
         || lower.ends_with(".mts")

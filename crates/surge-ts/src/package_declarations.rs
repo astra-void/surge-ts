@@ -8,7 +8,8 @@ use surge_ts_syntax::{
 };
 
 use crate::package_resolution::{
-    ResolverOptions, select_export_target, select_import_target, types_versions_candidates,
+    ResolverOptions, select_export_target, select_export_targets, select_import_targets,
+    types_versions_candidates,
 };
 
 pub struct PackageDeclarationRequest {
@@ -718,8 +719,8 @@ fn resolve_imports_entrypoint(
     let (pkg_dir, json) = nearest_package_json(&req.importer_dir, cache)?;
     let imports = json.get("imports")?;
     let conditions = opts.active_conditions(importer_is_esm);
-    let target = select_import_target(imports, &req.specifier, &conditions)?;
-    resolve_target_in_package(&pkg_dir, &target)
+    let targets = select_import_targets(imports, &req.specifier, &conditions);
+    resolve_first_target_in_package(&pkg_dir, &targets)
 }
 
 /// Resolve a bare package import through an enclosing package whose `name`
@@ -743,8 +744,8 @@ fn resolve_self_name_entrypoint(
     let exports = json.get("exports")?;
     let subpath_key = subpath_key(req);
     let conditions = opts.active_conditions(importer_is_esm);
-    let target = select_export_target(exports, &subpath_key, &conditions)?;
-    resolve_target_in_package(&pkg_dir, &target)
+    let targets = select_export_targets(exports, &subpath_key, &conditions);
+    resolve_first_target_in_package(&pkg_dir, &targets)
 }
 
 fn resolve_package_entrypoint_in_directory(
@@ -769,8 +770,8 @@ fn resolve_package_entrypoint_in_directory(
             if let Some(exports) = json.get("exports") {
                 let subpath_key = subpath_key(req);
                 let conditions = opts.active_conditions(importer_is_esm);
-                return select_export_target(exports, &subpath_key, &conditions)
-                    .and_then(|target| resolve_target_in_package(pkg_dir, &target));
+                let targets = select_export_targets(exports, &subpath_key, &conditions);
+                return resolve_first_target_in_package(pkg_dir, &targets);
             }
         }
 
@@ -914,6 +915,31 @@ fn root_types_version_bases(json: &serde_json::Value) -> Vec<String> {
     }
     bases.push("index.d.ts".to_string());
     bases
+}
+
+/// Probe each candidate target in priority order, preferring the first
+/// declaration-kind resolution; a runtime-only hit is kept as a fallback so a
+/// lower-priority condition can still supply declarations. This mirrors tsc,
+/// which falls through to the next matching `exports`/`imports` condition when
+/// the selected target does not resolve to a type-providing file.
+fn resolve_first_target_in_package(
+    pkg_dir: &Path,
+    targets: &[String],
+) -> Option<PackageEntrypointResolution> {
+    let mut runtime_fallback = None;
+    for target in targets {
+        if let Some(resolution) = resolve_target_in_package(pkg_dir, target) {
+            match resolution.kind {
+                PackageEntrypointKind::Declaration => return Some(resolution),
+                PackageEntrypointKind::RuntimeOnly => {
+                    if runtime_fallback.is_none() {
+                        runtime_fallback = Some(resolution);
+                    }
+                }
+            }
+        }
+    }
+    runtime_fallback
 }
 
 /// Join an `exports`/`imports`/`typesVersions` target against the package root,
@@ -1123,18 +1149,45 @@ fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
         return vec![path];
     }
 
-    let declaration_stem = if is_runtime_javascript_file(&path) {
-        path.with_extension("")
-    } else if path.extension().is_none() {
-        path
-    } else {
+    // An explicit TypeScript-source target (a source-condition `exports` entry
+    // like `"@zod/source": "./src/index.ts"`, or a `main`/`types` field naming a
+    // shipped source) resolves to the source file itself, matching tsc — the
+    // file is loaded and checked like any other program source.
+    if is_typescript_source_file(&path) {
+        return vec![path];
+    }
+
+    // A runtime-JavaScript target substitutes its own module flavor, source
+    // extensions before declarations (tsc probes `.ts`/`.tsx` ahead of `.d.ts`
+    // even inside `node_modules`, so a dependency shipping sources gets them).
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    if is_runtime_javascript_file(&path) {
+        let stem = path.with_extension("");
+        return if lower.ends_with(".mjs") {
+            vec![stem.with_extension("mts"), stem.with_extension("d.mts")]
+        } else if lower.ends_with(".cjs") {
+            vec![stem.with_extension("cts"), stem.with_extension("d.cts")]
+        } else {
+            vec![
+                stem.with_extension("ts"),
+                stem.with_extension("tsx"),
+                stem.with_extension("d.ts"),
+            ]
+        };
+    }
+
+    if path.extension().is_some() {
         return Vec::new();
-    };
+    }
 
     vec![
-        declaration_stem.with_extension("d.ts"),
-        declaration_stem.with_extension("d.mts"),
-        declaration_stem.with_extension("d.cts"),
+        path.with_extension("ts"),
+        path.with_extension("tsx"),
+        path.with_extension("d.ts"),
+        path.with_extension("mts"),
+        path.with_extension("cts"),
+        path.with_extension("d.mts"),
+        path.with_extension("d.cts"),
     ]
 }
 
@@ -1153,6 +1206,17 @@ fn is_runtime_javascript_file(path: &Path) -> bool {
         || lower.ends_with(".jsx")
         || lower.ends_with(".mjs")
         || lower.ends_with(".cjs")
+}
+
+fn is_typescript_source_file(path: &Path) -> bool {
+    if is_declaration_file_path(path) {
+        return false;
+    }
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    lower.ends_with(".ts")
+        || lower.ends_with(".tsx")
+        || lower.ends_with(".mts")
+        || lower.ends_with(".cts")
 }
 
 fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
@@ -1191,6 +1255,9 @@ fn extract_packages_from_source(
                     ..
                 }
                 | ParsedExportDeclaration::All {
+                    module_specifier, ..
+                }
+                | ParsedExportDeclaration::Namespace {
                     module_specifier, ..
                 } => Some(module_specifier),
                 _ => None,
@@ -1306,15 +1373,37 @@ mod tests {
     }
 
     #[test]
-    fn test_declaration_candidates_skip_runtime_js() {
-        let candidates = declaration_candidates(PathBuf::from("pkg/subpath.js"));
+    fn test_declaration_candidates_substitute_runtime_js_flavor() {
+        // tsc probes source extensions before declarations, flavor-matched.
         assert_eq!(
-            candidates,
+            declaration_candidates(PathBuf::from("pkg/subpath.js")),
             vec![
+                PathBuf::from("pkg/subpath.ts"),
+                PathBuf::from("pkg/subpath.tsx"),
                 PathBuf::from("pkg/subpath.d.ts"),
-                PathBuf::from("pkg/subpath.d.mts"),
+            ]
+        );
+        assert_eq!(
+            declaration_candidates(PathBuf::from("pkg/subpath.cjs")),
+            vec![
+                PathBuf::from("pkg/subpath.cts"),
                 PathBuf::from("pkg/subpath.d.cts"),
             ]
+        );
+        assert_eq!(
+            declaration_candidates(PathBuf::from("pkg/subpath.mjs")),
+            vec![
+                PathBuf::from("pkg/subpath.mts"),
+                PathBuf::from("pkg/subpath.d.mts"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_declaration_candidates_keep_explicit_typescript_source() {
+        assert_eq!(
+            declaration_candidates(PathBuf::from("pkg/src/index.ts")),
+            vec![PathBuf::from("pkg/src/index.ts")]
         );
     }
 
