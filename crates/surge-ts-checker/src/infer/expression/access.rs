@@ -98,6 +98,8 @@ pub(crate) fn infer_index_access(
         | Type::String
         | Type::Number
         | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
         | Type::Void
         | Type::Never
         | Type::StringLiteral(_)

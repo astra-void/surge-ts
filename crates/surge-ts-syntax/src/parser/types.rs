@@ -37,8 +37,8 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         // `symbol` and `bigint` have no modelled representation; degrade to
         // `Unknown` rather than dropping the annotation, which would poison any
         // call/construct signature that mentions them (e.g. `SymbolConstructor`).
-        TSType::TSSymbolKeyword(_) => Some(ParsedType::Unknown),
-        TSType::TSBigIntKeyword(_) => Some(ParsedType::Unknown),
+        TSType::TSSymbolKeyword(_) => Some(ParsedType::Symbol),
+        TSType::TSBigIntKeyword(_) => Some(ParsedType::BigInt),
         TSType::TSVoidKeyword(_) => Some(ParsedType::Void),
         TSType::TSAnyKeyword(_) => Some(ParsedType::Any),
         TSType::TSUnknownKeyword(_) => Some(ParsedType::UnknownKeyword),

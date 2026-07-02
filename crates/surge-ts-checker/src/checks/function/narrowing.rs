@@ -440,6 +440,8 @@ fn typeof_tag_of(member: &Type) -> Option<&'static str> {
         Type::Number | Type::NumberLiteral(_) => Some("number"),
         Type::String | Type::StringLiteral(_) => Some("string"),
         Type::Boolean | Type::BooleanLiteral(_) => Some("boolean"),
+        Type::BigInt => Some("bigint"),
+        Type::Symbol => Some("symbol"),
         Type::Undefined | Type::Void => Some("undefined"),
         Type::Function(_) => Some("function"),
         Type::Object(_) | Type::Array(_) | Type::Tuple(_) => Some("object"),

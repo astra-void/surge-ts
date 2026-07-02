@@ -42,6 +42,8 @@ pub(crate) fn infer_unary_expression(
             | InferredExpression::Known(Type::String)
             | InferredExpression::Known(Type::Number)
             | InferredExpression::Known(Type::Boolean)
+            | InferredExpression::Known(Type::BigInt)
+            | InferredExpression::Known(Type::Symbol)
             | InferredExpression::Known(Type::StringLiteral(_))
             | InferredExpression::Known(Type::NumberLiteral(_))
             | InferredExpression::Known(Type::BooleanLiteral(_))

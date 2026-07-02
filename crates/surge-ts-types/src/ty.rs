@@ -10,6 +10,8 @@ pub enum Type {
     String,
     Number,
     Boolean,
+    BigInt,
+    Symbol,
     Undefined,
     Void,
     Any,
@@ -115,6 +117,8 @@ impl Type {
             Type::String | Type::StringLiteral(_) => Some(Type::String),
             Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
             Type::Boolean | Type::BooleanLiteral(_) => Some(Type::Boolean),
+            Type::BigInt => Some(Type::BigInt),
+            Type::Symbol => Some(Type::Symbol),
             Type::Reference(reference) => reference.resolve().base_primitive(),
             _ => None,
         }
@@ -155,6 +159,8 @@ impl Type {
             Type::Tuple(elements) => tuple_property_access_type(name, elements),
             Type::String | Type::StringLiteral(_) => string_property_access_type(name),
             Type::Number | Type::NumberLiteral(_) => number_property_access_type(name),
+            Type::BigInt => bigint_property_access_type(name),
+            Type::Symbol => symbol_property_access_type(name),
             Type::Function(function) => function_property_access_type(function, name),
             // Any property of `any` is `any`. A lazy reference can resolve to `any`
             // (e.g. `Promise<any>` collapses to its awaited `any`); without this arm
@@ -236,6 +242,8 @@ impl Type {
             Type::String => "string".to_string(),
             Type::Number => "number".to_string(),
             Type::Boolean => "boolean".to_string(),
+            Type::BigInt => "bigint".to_string(),
+            Type::Symbol => "symbol".to_string(),
             Type::Undefined => "undefined".to_string(),
             Type::Void => "void".to_string(),
             Type::Any => "any".to_string(),
@@ -360,6 +368,32 @@ fn string_property_access_type(name: &str) -> Option<Type> {
 fn number_property_access_type(name: &str) -> Option<Type> {
     match name {
         "toString" => Some(function_type(vec![Type::Number], Type::String, true, 0)),
+        "toFixed" | "toPrecision" | "toExponential" => {
+            Some(function_type(vec![Type::Number], Type::String, true, 0))
+        }
+        "toLocaleString" => Some(function_type(vec![], Type::String, true, 0)),
+        "valueOf" => Some(function_type(vec![], Type::Number, false, 0)),
+        _ => None,
+    }
+}
+
+fn bigint_property_access_type(name: &str) -> Option<Type> {
+    match name {
+        "toString" => Some(function_type(vec![Type::Number], Type::String, true, 0)),
+        "toLocaleString" => Some(function_type(vec![], Type::String, true, 0)),
+        "valueOf" => Some(function_type(vec![], Type::BigInt, false, 0)),
+        _ => None,
+    }
+}
+
+fn symbol_property_access_type(name: &str) -> Option<Type> {
+    match name {
+        "toString" => Some(function_type(vec![], Type::String, false, 0)),
+        "valueOf" => Some(function_type(vec![], Type::Symbol, false, 0)),
+        "description" => Some(Type::Union(UnionType::new(vec![
+            Type::String,
+            Type::Undefined,
+        ]))),
         _ => None,
     }
 }

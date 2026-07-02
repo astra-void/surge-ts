@@ -42,6 +42,14 @@ pub(crate) fn resolve_parsed_type(
             ty: Type::Boolean,
             had_error: false,
         },
+        ParsedType::BigInt => ResolvedType {
+            ty: Type::BigInt,
+            had_error: false,
+        },
+        ParsedType::Symbol => ResolvedType {
+            ty: Type::Symbol,
+            had_error: false,
+        },
         ParsedType::Undefined => ResolvedType {
             ty: Type::Undefined,
             had_error: false,
