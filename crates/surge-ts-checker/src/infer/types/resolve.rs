@@ -1401,19 +1401,19 @@ pub(crate) fn resolve_named_type(
     let alias_display_name =
         generic_instantiation_display_name(&named_type, declaration.declared_name());
 
-    // An instantiation is only interned/short-circuited when no type parameters
-    // are in scope. Inside a generic body, a placeholder argument (`Pick<T, K>`)
-    // collapses to `unknown` when resolved, so two structurally-distinct
-    // instantiations would share an interner key and a reused entry would return
-    // the wrong type. Only a fully concrete instantiation is context-independent.
-    // An instantiation is concrete when no type *parameters* are in scope. The
-    // scope stack depth is not a proxy for this: a non-generic function body still
-    // pushes an (empty) scope via `with_type_parameter_scope`, so checking
-    // `is_empty()` would treat every instantiation built inside a plain function
-    // body as non-concrete — eagerly expanding library generics (`new Uint8Array`)
-    // into degraded structural objects (self-referential members collapse to
-    // `unknown`) instead of nominal lazy references. Only a scope that actually
-    // binds a parameter introduces placeholders, so gate on that.
+    // An instantiation is interned/short-circuited only when it is *concrete* —
+    // no type parameter is bound in any active scope, so a program-wide entry keyed
+    // on (declaration, resolved arguments) matches a standalone resolution. A
+    // non-generic function body still pushes an (empty) scope via
+    // `with_type_parameter_scope`, so an `is_empty()` check per scope (not stack
+    // depth) is the right proxy; otherwise a library generic (`new Uint8Array`)
+    // built inside a plain body would be treated as non-concrete and eagerly expand
+    // its self-referential cluster into a degraded object instead of a nominal lazy
+    // reference. A binding scope active anywhere leaves the resolution
+    // context-dependent — an argument can name an in-scope parameter, or the body
+    // can capture one and (as measured on zod/ofetch) that capture survives in a
+    // form that no cheap post-resolution walk reliably detects — so it is not
+    // interned.
     let concrete_instantiation = ctx
         .type_parameter_scopes
         .iter()
@@ -1453,6 +1453,38 @@ pub(crate) fn resolve_named_type(
                 ctx,
             );
         }
+    }
+
+    // Defer a generic *alias* instantiation whose type arguments are all fully
+    // resolved (`Omit<ConcreteType, "k">`) even when it is built inside a generic
+    // body — `concrete_instantiation` is false whenever *any* type-parameter scope
+    // is open, so a utility alias with concrete arguments (`Omit`, `Identity`,
+    // `Partial`, `Flatten`; each expanded ~185k× on zod) is otherwise eagerly
+    // re-expanded from every reference. Deferring it to a lazy reference that
+    // captures this site's substitution expands the body only when a consumer peels
+    // it. This is gated on every argument being fully resolved: an argument that
+    // collapsed to `unknown` is a placeholder (`Normalize<T>` as a function's
+    // return type), and freezing a placeholder-dependent expansion into a shared
+    // reference would drop the members a later `T`-substitution should have added.
+    if !concrete_instantiation
+        && matches!(declaration, TypeDeclarationInfo::Alias(_))
+        && let (Some(display), Some(arguments)) =
+            (alias_display_name.as_ref(), reference_arguments.as_ref())
+        && arguments.iter().all(|argument| !argument.is_unknown())
+    {
+        return ResolvedType {
+            ty: make_lazy_type_reference(
+                ctx,
+                &reference_id,
+                display,
+                handle,
+                decl_key.clone(),
+                named_type.type_arguments,
+                arguments.clone(),
+                substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
+            ),
+            had_error: false,
+        };
     }
 
     // Defer a concrete library-scoped generic *interface* instantiation
@@ -1522,10 +1554,17 @@ pub(crate) fn resolve_named_type(
 
     let body_emitted_diagnostics = ctx.diagnostics().len() != diagnostics_before_body
         || ctx.utility_diagnostic_keys.len() != utility_keys_before_body;
-    let cacheable = concrete_instantiation
-        && subtree_lowest_cycle >= floor
-        && !body_emitted_diagnostics
-        && !resolved.had_error;
+    // A concrete instantiation that resolved cleanly is interned even when its body
+    // re-entered an outer frame (`subtree_lowest_cycle < floor`). A clean re-entry
+    // embeds the outer declaration as a lazy nominal `Type::Reference` (same id +
+    // resolved arguments regardless of stack state), so the interned structural
+    // expansion is context-free — the mutually-recursive user clusters (zod's
+    // `$ZodType`/`$ZodTypeInternals`, `RawIssue`) were otherwise re-expanded from
+    // every sibling reference, hundreds of thousands of times per file. A degraded
+    // re-entry (bounded peel, illegal cycle) sets `had_error`/emits, which the
+    // remaining guards still exclude, so a thin shape is never frozen program-wide.
+    let cacheable =
+        concrete_instantiation && !body_emitted_diagnostics && !resolved.had_error;
 
     if subtree_lowest_cycle >= floor {
         if let (Some(key), Some(arguments)) = (generic_cache_key, cached_arguments) {
