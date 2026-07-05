@@ -413,6 +413,10 @@ impl Project {
             stub_external_modules: options.stub_external_modules,
             resolved_modules,
             types: checker_types,
+            jsx_automatic_runtime: matches!(
+                loaded.compiler_options.jsx,
+                Some(surge_ts_config::JsxMode::ReactJsx | surge_ts_config::JsxMode::ReactJsxDev)
+            ),
             diagnostic_profile: options.diagnostic_profile,
         };
 

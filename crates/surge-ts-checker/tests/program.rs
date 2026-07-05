@@ -180,6 +180,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
             no_unused_parameters: false,
             no_lib: true,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -537,6 +538,7 @@ fn single_file_builtins_visible() {
         diagnostic_profile: Default::default(),
         no_lib: false,
         skip_lib_check: false,
+        jsx_automatic_runtime: false,
         types: Vec::new(),
         ..Default::default()
     };
@@ -562,6 +564,7 @@ fn single_file_no_lib_hides_builtins() {
         diagnostic_profile: Default::default(),
         no_lib: true,
         skip_lib_check: false,
+        jsx_automatic_runtime: false,
         types: Vec::new(),
         ..Default::default()
     };
@@ -588,6 +591,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -607,6 +611,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1088,6 +1093,7 @@ fn program_order_parser_before_type_prepass() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1678,6 +1684,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1706,6 +1713,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1731,6 +1739,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );

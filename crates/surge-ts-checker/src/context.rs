@@ -73,6 +73,11 @@ pub struct CheckerOptions {
     pub types: Vec<String>,
     pub no_lib: bool,
     pub skip_lib_check: bool,
+    /// `jsx: react-jsx`/`react-jsxdev`: the JSX namespace resolves through the
+    /// automatic runtime module, so intrinsic elements type-check without a
+    /// `React` binding in scope. Under `preserve`/classic modes tsc requires the
+    /// factory namespace to be visible, so the runtime fallback must not fire.
+    pub jsx_automatic_runtime: bool,
     pub diagnostic_profile: DiagnosticProfile,
 }
 
@@ -108,6 +113,7 @@ impl Default for CheckerOptions {
             types: Vec::new(),
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             diagnostic_profile: DiagnosticProfile::default(),
         }
     }
@@ -222,6 +228,14 @@ pub(crate) struct CheckerContext {
     /// consumer's `symbols`. Populated once (read-only) before the check phase and
     /// shared across jobs. Consulted via `get` only.
     pub(crate) module_local_values_by_file: Arc<HashMap<Arc<str>, Arc<SymbolTable>>>,
+    /// The export-table type declarations of the module that exports the
+    /// program's JSX intrinsic-elements interface, plus its key in that table
+    /// (`JSX.IntrinsicElements`), located once after module binding. Under the
+    /// automatic runtime (`jsx: react-jsx`) the JSX checker resolves intrinsic
+    /// tags through this table when no `JSX`/`React.JSX` binding is visible from
+    /// the consuming file — tsc reaches the namespace through the runtime module
+    /// import it synthesizes.
+    pub(crate) jsx_intrinsic_elements_declarer: Option<(Arc<TypeDeclarationTable>, String)>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     // Parallel to `type_parameter_scopes`: the declared constraint (if any) for
     // each in-scope type parameter, used to recognize `K extends keyof T` so a
@@ -306,6 +320,7 @@ impl CheckerContext {
             module_file_index_by_identity: Arc::new(HashMap::new()),
             module_scope_by_file: Arc::new(HashMap::new()),
             module_local_values_by_file: Arc::new(HashMap::new()),
+            jsx_intrinsic_elements_declarer: None,
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,

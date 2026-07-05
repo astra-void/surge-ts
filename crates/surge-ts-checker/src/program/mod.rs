@@ -357,6 +357,8 @@ pub fn check_program_with_stats_and_jobs(
         &parsed_files,
         &module_resolution_scopes,
     ));
+    ctx.jsx_intrinsic_elements_declarer =
+        locate_jsx_intrinsic_elements_declarer(&parsed_files, &module_export_tables);
     sync_global_this_symbol(&mut ctx);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
@@ -833,6 +835,31 @@ fn extend_diagnostics_dedup(
     new_diagnostics: Vec<surge_ts_diagnostics::Diagnostic>,
 ) {
     DiagnosticDeduper::with_existing(diagnostics).extend(diagnostics, new_diagnostics);
+}
+
+/// Finds the declaration-file module whose export table carries the JSX
+/// intrinsic-elements interface (`JSX.IntrinsicElements`, the key an
+/// `import * as React` would re-qualify as `React.JSX.IntrinsicElements`).
+/// Only dependency/root declaration files are considered so a user module
+/// re-declaring the name cannot hijack the program-wide fallback.
+fn locate_jsx_intrinsic_elements_declarer(
+    parsed_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<crate::modules::ModuleExportTable>],
+) -> Option<(Arc<TypeDeclarationTable>, String)> {
+    const CANDIDATE_KEYS: [&str; 2] = ["JSX.IntrinsicElements", "React.JSX.IntrinsicElements"];
+
+    for key in CANDIDATE_KEYS {
+        for (parsed_file, table) in parsed_files.iter().zip(module_export_tables) {
+            if !parsed_file.file_kind.is_declaration() {
+                continue;
+            }
+            let Some(table) = table else { continue };
+            if table.type_declarations.get(key).is_some() {
+                return Some((table.type_declarations.clone(), key.to_string()));
+            }
+        }
+    }
+    None
 }
 
 fn module_scope_by_file_map(

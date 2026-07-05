@@ -6,6 +6,7 @@ pub(crate) use types::{
     TypeParameterSubstitution, map_parsed_type, map_parsed_type_with_substitution,
     report_duplicate_type_parameters, string_literal_union_keys,
     substitute_parsed_type_parameters_deep, validate_local_type_declaration,
+    with_type_declaration_scope,
 };
 
 use surge_ts_syntax::TextSpan;

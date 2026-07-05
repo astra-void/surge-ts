@@ -387,6 +387,7 @@ fn run_single_file_mode(
             stub_external_modules,
             resolved_modules: std::collections::HashMap::new(),
             types: Vec::new(),
+            jsx_automatic_runtime: false,
             diagnostic_profile,
         })
         .check_source(&source_text, &file_name);

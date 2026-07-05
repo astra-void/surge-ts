@@ -1114,6 +1114,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );

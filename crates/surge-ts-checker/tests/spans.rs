@@ -66,6 +66,7 @@ fn native_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     )
@@ -90,6 +91,7 @@ fn span_ts2304_identifier_expression() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -115,6 +117,7 @@ fn span_ts2304_unknown_type_annotation_points_to_type_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -140,6 +143,7 @@ fn span_ts2304_unknown_type_alias_target() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -165,6 +169,7 @@ fn span_ts2304_unknown_interface_property_type() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -190,6 +195,7 @@ fn span_ts2304_unknown_function_parameter_type() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -215,6 +221,7 @@ fn span_ts2304_unknown_function_return_type() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -240,6 +247,7 @@ fn span_ts2304_unknown_tuple_element_type() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -265,6 +273,7 @@ fn span_ts2304_unknown_array_element_type() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -290,6 +299,7 @@ fn span_ts7006_points_to_parameter_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -315,6 +325,7 @@ fn span_ts7031_points_to_binding_element_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -340,6 +351,7 @@ fn span_uninitialized_variable_no_longer_emits_ts7005() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -365,6 +377,7 @@ fn span_ts2451_points_to_duplicate_variable_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -405,6 +418,7 @@ fn span_ts2393_points_to_duplicate_function_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -445,6 +459,7 @@ fn span_ts2300_points_to_duplicate_type_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -470,6 +485,7 @@ fn span_ts2588_points_to_assignment_target() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -495,6 +511,7 @@ fn span_ts2322_variable_initializer() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -522,6 +539,7 @@ fn span_ts2322_assignment_rhs() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -547,6 +565,7 @@ fn span_ts2322_return_expression() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -572,6 +591,7 @@ fn span_ts2322_object_property_value() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -599,6 +619,7 @@ fn span_ts2322_array_element() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -624,6 +645,7 @@ fn span_ts2322_tuple_element() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -649,6 +671,7 @@ fn span_tuple_length_too_few_points_to_array_literal() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -674,6 +697,7 @@ fn span_tuple_length_too_many_points_to_extra_element() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -699,6 +723,7 @@ fn span_ts2322_conditional_true_branch() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -724,6 +749,7 @@ fn span_ts2322_conditional_false_branch() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -749,6 +775,7 @@ fn span_ts2322_property_call_return_initializer() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -774,6 +801,7 @@ fn span_ts2322_index_access_initializer() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -799,6 +827,7 @@ fn span_ts2345_identifier_call_argument() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -824,6 +853,7 @@ fn span_ts2304_call_argument() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -849,6 +879,7 @@ fn span_ts2304_call_callee() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -874,6 +905,7 @@ fn span_ts2304_property_call_receiver() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -899,6 +931,7 @@ fn span_ts2304_index_receiver() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -924,6 +957,7 @@ fn span_ts2304_index_expression() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -949,6 +983,7 @@ fn span_ts2345_contextual_object_argument_property_value() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -975,6 +1010,7 @@ fn span_ts2345_contextual_array_argument_element() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1000,6 +1036,7 @@ fn span_ts2345_contextual_tuple_argument_element() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1025,6 +1062,7 @@ fn span_ts2554_identifier_call_arity_points_to_callee() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1050,6 +1088,7 @@ fn span_ts2554_property_call_arity_points_to_property_or_call() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1080,6 +1119,7 @@ fn span_ts2349_identifier_non_callable_points_to_callee() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1105,6 +1145,7 @@ fn span_ts2349_property_non_callable_points_to_property() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1130,6 +1171,7 @@ fn span_ts2339_property_access_missing_points_to_property_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1155,6 +1197,7 @@ fn span_ts2339_property_call_missing_points_to_property_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1180,6 +1223,7 @@ fn span_ts2536_invalid_generic_indexed_access_points_to_index_type() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1205,6 +1249,7 @@ fn span_ts2339_primitive_receiver_property_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1230,6 +1275,7 @@ fn span_ts2339_tuple_out_of_range_index() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1267,6 +1313,7 @@ fn index_access_primitive_receiver_no_ts2339() {
                 no_unused_parameters: false,
                 no_lib: false,
                 skip_lib_check: false,
+                jsx_automatic_runtime: false,
                 types: Vec::new(),
             },
         );
@@ -1293,6 +1340,7 @@ fn span_ts2353_excess_property_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1318,6 +1366,7 @@ fn span_ts2741_missing_required_object_literal() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1345,6 +1394,7 @@ fn span_object_literal_unresolved_property_value() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1370,6 +1420,7 @@ fn span_ts2362_left_operand() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1395,6 +1446,7 @@ fn span_ts2363_right_operand() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1420,6 +1472,7 @@ fn span_ts2365_operator() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1445,6 +1498,7 @@ fn span_ts2367_equality_operator() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1470,6 +1524,7 @@ fn span_ts2356_unary_operand() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1495,6 +1550,7 @@ fn span_ts2872_truthy_literal() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -1520,6 +1576,7 @@ fn span_ts2873_falsy_literal() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );
@@ -2172,6 +2229,7 @@ fn span_module_exported_unknown_type_points_to_type_name() {
             no_unused_parameters: false,
             no_lib: false,
             skip_lib_check: false,
+            jsx_automatic_runtime: false,
             types: Vec::new(),
         },
     );

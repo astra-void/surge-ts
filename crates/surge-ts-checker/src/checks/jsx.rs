@@ -154,18 +154,53 @@ fn resolve_intrinsic_props_type(
     element_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    const INTRINSIC_ELEMENTS: &str = "JSX.IntrinsicElements";
+    // React 19 removed the global `JSX` namespace: the interface lives at
+    // `React.JSX.IntrinsicElements` (per tsc's fallback to the React namespace's
+    // `JSX` member), so a bare-key miss must retry the qualified name before
+    // concluding no intrinsic table exists.
+    const INTRINSIC_ELEMENTS_CANDIDATES: [&str; 2] =
+        ["JSX.IntrinsicElements", "React.JSX.IntrinsicElements"];
 
-    if ctx.lookup_type_declaration(INTRINSIC_ELEMENTS).is_none() {
-        return None;
-    }
+    let in_scope = INTRINSIC_ELEMENTS_CANDIDATES
+        .into_iter()
+        .find(|name| ctx.lookup_type_declaration(name).is_some());
+
+    // Under the automatic runtime (`jsx: react-jsx`) tsc reaches the JSX
+    // namespace through the runtime module import it synthesizes, so intrinsic
+    // tags type-check in files with no `React` binding at all. Resolve through
+    // the declaring module's scope in that case; under `preserve`/classic modes
+    // the factory namespace must be visible, so the fallback stays off there.
+    let runtime_fallback = || {
+        if !ctx.options.jsx_automatic_runtime {
+            return None;
+        }
+        let (table, key) = ctx.jsx_intrinsic_elements_declarer.clone()?;
+        Some((
+            key,
+            std::sync::Arc::new(crate::symbols::TypeDeclarationScope::new(vec![table])),
+        ))
+    };
+
+    let (intrinsic_elements, declarer_scope) = match in_scope {
+        Some(name) => (name.to_string(), None),
+        None => {
+            let (key, scope) = runtime_fallback()?;
+            (key, Some(scope))
+        }
+    };
 
     let named = ParsedType::Named(ParsedNamedType {
-        name: INTRINSIC_ELEMENTS.to_string(),
+        name: intrinsic_elements,
         span: None,
         type_arguments: Vec::new(),
     });
-    let intrinsic_type = map_parsed_type(named, ctx).peeled();
+    let intrinsic_type = match declarer_scope {
+        Some(scope) => crate::infer::with_type_declaration_scope(&Some(scope), ctx, |ctx| {
+            map_parsed_type(named, ctx)
+        }),
+        None => map_parsed_type(named, ctx),
+    }
+    .peeled();
     let Type::Object(object) = &intrinsic_type else {
         return None;
     };
@@ -179,7 +214,7 @@ fn resolve_intrinsic_props_type(
     }
 
     ctx.push(diagnostic_with_syntax_span(
-        Diagnostic::ts2339(tag_name, INTRINSIC_ELEMENTS, ctx.file_name.clone()),
+        Diagnostic::ts2339(tag_name, "JSX.IntrinsicElements", ctx.file_name.clone()),
         element_span,
     ));
     None

@@ -217,7 +217,7 @@ fn with_file_name<R>(
     result
 }
 
-fn with_type_declaration_scope<R>(
+pub(crate) fn with_type_declaration_scope<R>(
     type_declaration_scope: &Option<Arc<crate::symbols::TypeDeclarationScope>>,
     ctx: &mut CheckerContext,
     f: impl FnOnce(&mut CheckerContext) -> R,
