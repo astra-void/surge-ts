@@ -4377,6 +4377,22 @@ fn function_assignable_to_callable_object_target() {
     assert_eq!(codes(&diagnostics), vec!["TS2345"]);
 }
 
+// A tuple-typed rest parameter (`...args: [name: string]`) — and a union of
+// tuples, next's cookie-store overload shape — accepts each argument at its
+// tuple position instead of comparing the whole tuple/union against every
+// argument. Only the genuinely mismatched call reports.
+#[test]
+fn tuple_rest_parameter_accepts_positional_arguments() {
+    let diagnostics = check_source(
+        "declare function get(...args: [string] | [{ name: string }]): void;\n\
+         get(\"NEXT_LOCALE\");\n\
+         get({ name: \"lang\" });\n\
+         get(123);\n",
+        "example.ts",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+}
+
 // A callable object used as a JSX component (a `forwardRef`/`memo`-style exotic
 // component, which is callable rather than a bare function) has its props checked
 // through its call signature.

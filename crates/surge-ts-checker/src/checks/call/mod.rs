@@ -483,9 +483,28 @@ fn excess_argument_span(
     })
 }
 
-fn rest_parameter_element_type(parameter_type: &Type) -> Type {
+fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Type {
     match parameter_type {
         Type::Array(element) => element.as_ref().clone(),
+        // A tuple-typed rest parameter (`...args: [name: string]`) accepts each
+        // argument at its tuple position; an overload folded into a union of
+        // tuples (`...args: [string] | [RequestCookie]`, next's cookie store)
+        // accepts the union of the per-position elements. Without these arms the
+        // whole tuple/union was compared against each single argument — a false
+        // TS2345 on every call.
+        Type::Tuple(elements) => elements
+            .get(rest_offset)
+            .or_else(|| elements.last())
+            .cloned()
+            .unwrap_or(Type::Any),
+        Type::Union(union) => union_type(
+            union
+                .types()
+                .iter()
+                .map(|member| rest_parameter_element_type(member, rest_offset))
+                .collect(),
+        ),
+        Type::Reference(_) => rest_parameter_element_type(&parameter_type.peeled(), rest_offset),
         other => other.clone(),
     }
 }
@@ -542,7 +561,10 @@ pub(crate) fn check_function_type_call(
         // the array itself — `cn(...inputs: string[])` accepts `cn("a", "b")`.
         let is_rest_position = function_type.is_variadic() && expected > 0 && i >= expected - 1;
         let parameter_type: Type = if is_rest_position {
-            rest_parameter_element_type(&function_type.parameters()[expected - 1])
+            rest_parameter_element_type(
+                &function_type.parameters()[expected - 1],
+                i - (expected - 1),
+            )
         } else if i < expected {
             let declared = function_type.parameters()[i].clone();
             // An optional parameter (`x?: T`, declared past the required count)
