@@ -23,3 +23,9 @@ digest.txt
 pnpm-debug.log*
 npm-debug.log*
 .DS_Store
+
+# Test fixtures ship hand-written node_modules (package-resolution tests read
+# them), so re-include them — including dist/ dirs inside — but keep OS cruft out.
+!tests/compat-projects/**/node_modules/
+!tests/compat-projects/**/node_modules/**
+tests/compat-projects/**/.DS_Store
