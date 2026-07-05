@@ -6,6 +6,12 @@ fail-fast = false
 # Checker/oracle tests can be heavy; warn when one runs long but don't kill it.
 slow-timeout = "60s"
 
+# Bound how many smoke shards run at once. Each shard checks ~1300/16 cases in
+# its own process and peaks around 1GB; capping concurrency keeps the combined
+# resident set within a shared CI runner regardless of core count.
+[test-groups.smoke]
+max-threads = 4
+
 [profile.ci]
 failure-output = "immediate-final"
 fail-fast = false
@@ -14,13 +20,14 @@ final-status-level = "slow"
 # In CI a stuck test should be reaped rather than hanging the job.
 slow-timeout = { period = "120s", terminate-after = 3 }
 
-# The smoke suite runs ~1300 manifest cases serially inside one test; on a
-# shared CI runner it is slow, not stuck. Schedule it alone with a long leash,
-# and skip retries — its assertions are deterministic.
+# The smoke suite is split into `smoke_cases_shard_NN` tests so nextest runs each
+# shard in its own process; caches reset at process exit, bounding peak memory to
+# one shard instead of accumulating across all ~1300 cases. Group them so their
+# concurrency is capped, and skip retries — the assertions are deterministic.
 [[profile.ci.overrides]]
-filter = "test(=smoke_cases_emit_expected_codes)"
-slow-timeout = { period = "120s", terminate-after = 10 }
-threads-required = "num-cpus"
+filter = "test(/^smoke_cases_shard_/)"
+test-group = "smoke"
+slow-timeout = { period = "120s", terminate-after = 4 }
 retries = 0
 
 [profile.ci.junit]

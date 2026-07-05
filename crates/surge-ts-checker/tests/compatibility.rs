@@ -60,11 +60,57 @@ struct SmokeCase {
     no_implicit_any: bool,
 }
 
-#[test]
-fn smoke_cases_emit_expected_codes() {
+/// The smoke suite runs ~1300 manifest cases. Each checked program leaves entries
+/// in process-lived thread-local caches (module resolution, namespace alias
+/// tables, star-export resolution), so running every case in one test accumulates
+/// several GB of resident memory and, on a CI runner, gets OOM-killed mid-run.
+/// Splitting the cases across independent `#[test]` functions lets nextest run
+/// each shard in its own process: caches reset at process exit, so peak memory is
+/// bounded to a single shard, and the shards run in parallel. Cases are assigned
+/// round-robin (`idx % SMOKE_SHARDS`) so the memory-heavy cases — which cluster
+/// near the front of the manifest — spread evenly across shards.
+const SMOKE_SHARDS: usize = 16;
+
+macro_rules! smoke_shards {
+    ($($name:ident => $shard:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                run_smoke_shard($shard);
+            }
+        )*
+    };
+}
+
+smoke_shards! {
+    smoke_cases_shard_00 => 0,
+    smoke_cases_shard_01 => 1,
+    smoke_cases_shard_02 => 2,
+    smoke_cases_shard_03 => 3,
+    smoke_cases_shard_04 => 4,
+    smoke_cases_shard_05 => 5,
+    smoke_cases_shard_06 => 6,
+    smoke_cases_shard_07 => 7,
+    smoke_cases_shard_08 => 8,
+    smoke_cases_shard_09 => 9,
+    smoke_cases_shard_10 => 10,
+    smoke_cases_shard_11 => 11,
+    smoke_cases_shard_12 => 12,
+    smoke_cases_shard_13 => 13,
+    smoke_cases_shard_14 => 14,
+    smoke_cases_shard_15 => 15,
+}
+
+fn run_smoke_shard(shard: usize) {
     let manifest = load_smoke_manifest();
 
-    for case in manifest.case {
+    for case in manifest
+        .case
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| idx % SMOKE_SHARDS == shard)
+        .map(|(_, case)| case)
+    {
         let use_native_profile = case
             .expected_diagnostics
             .iter()
