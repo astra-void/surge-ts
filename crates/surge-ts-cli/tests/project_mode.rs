@@ -2538,6 +2538,42 @@ fn cli_tsx_jsx_basic_fixture_reports_element_not_assignable() {
 }
 
 #[test]
+fn cli_jsx_runtime_module_namespace_fixture_types_intrinsic_callbacks() {
+    let project = compat_project_root("jsx-runtime-module-namespace-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    // React-19 shape: no global `JSX`; the namespace lives at `React.JSX` inside
+    // the react module. Under `jsx: react-jsx` an intrinsic tag in a file with no
+    // `React` binding still resolves through the runtime declarer, so the
+    // `onClick` arrow is contextually typed (TS2322 inside the body, no TS7006)
+    // and an unknown tag still reports TS2339.
+    assert_eq!(
+        json_diagnostic_codes(&parsed),
+        vec!["TS2322".to_string(), "TS2339".to_string()]
+    );
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2322"), vec![Some(1)]);
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2339"), vec![Some(2)]);
+}
+
+#[test]
+fn cli_jsx_imported_alias_props_fixture_types_component_callbacks() {
+    let project = compat_project_root("jsx-imported-alias-props-basic").join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    // A component whose props type is a LOCAL alias of an imported qualified type
+    // (`type ButtonProps = React.ButtonAttributes`): the alias must not bake a
+    // degraded signature during the binding passes (its attached scope carries no
+    // import layers — resolution falls back to the per-file module scope), so the
+    // `onClick` arrow is contextually typed: TS2322 inside the body, no TS7006.
+    assert_eq!(json_diagnostic_codes(&parsed), vec!["TS2322".to_string()]);
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2322"), vec![Some(9)]);
+}
+
+#[test]
 fn cli_tsx_jsx_expression_diagnostics_basic_fixture_reports_unresolved_child() {
     let project = compat_project_root("tsx-jsx-expression-diagnostics-basic").join("tsconfig.json");
     let project = project.to_string_lossy().into_owned();
