@@ -379,7 +379,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
 
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
-    let mut call_signature = None;
+    let mut call_signature: Option<Box<ParsedFunctionType>> = None;
 
     for member in &type_literal.members {
         let property = match member {
@@ -390,8 +390,19 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 parse_type_method_signature(method_signature)
             }
             TSSignature::TSCallSignatureDeclaration(signature) => {
-                if call_signature.is_none() {
-                    call_signature = parse_call_signature(signature).map(Box::new);
+                // Same-shaped overloads fold into one permissive signature
+                // (max parameters, everything past a shorter overload's arity
+                // optional), mirroring the interface overload merge — a callable
+                // type literal like expect-type's `_ExpectTypeOf` declares both
+                // `<T>(actual: T): …` and `<T>(): …`, and keeping only the
+                // first made every zero-argument call a false TS2554.
+                if let Some(parsed) = parse_call_signature(signature) {
+                    call_signature = Some(match call_signature.take() {
+                        Some(existing) => {
+                            Box::new(merge_parsed_call_signatures(&existing, &parsed))
+                        }
+                        None => Box::new(parsed),
+                    });
                 }
                 continue;
             }
@@ -413,6 +424,64 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
 
 /// Lowers a bare call signature (`(value?: any): number`) into a
 /// [`ParsedFunctionType`], shared by interface and object-type-literal parsing.
+/// Folds two call-signature overloads into one permissive signature: the longer
+/// parameter list wins, a position typed differently across overloads widens to
+/// `any`, and a position absent (or optional) in either overload is optional.
+/// The return type is taken from the first overload. This mirrors the checker's
+/// `merge_overload_signatures`, applied at parse time because a type literal
+/// stores a single call signature.
+fn merge_parsed_call_signatures(
+    a: &ParsedFunctionType,
+    b: &ParsedFunctionType,
+) -> ParsedFunctionType {
+    let (longer, shorter) = if a.parameters.len() >= b.parameters.len() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+
+    // The merged arity floor is the smaller overload's required count: a call
+    // that satisfies either overload must pass (`<E>(v: E): true` merged with
+    // `<E>(): true` requires nothing).
+    let required = |signature: &ParsedFunctionType| {
+        signature
+            .parameters
+            .iter()
+            .filter(|parameter| !parameter.is_this)
+            .take_while(|parameter| !parameter.optional && !parameter.rest)
+            .count()
+    };
+    let min_required = required(a).min(required(b));
+
+    let parameters = longer
+        .parameters
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| {
+            let mut merged = parameter.clone();
+            if let Some(other) = shorter.parameters.get(index)
+                && other.ty != merged.ty
+            {
+                merged.ty = ParsedType::Any;
+            }
+            if index >= min_required && !merged.rest {
+                merged.optional = true;
+            }
+            merged
+        })
+        .collect();
+
+    // Return type and type parameters must come from the SAME overload as the
+    // parameter list: mixing them leaves the return type referencing the other
+    // overload's type-parameter names (ky's `json` mixes `JsonType` and
+    // `Schema`), which surfaces as a false TS2304.
+    ParsedFunctionType {
+        parameters,
+        return_type: longer.return_type.clone(),
+        type_parameters: longer.type_parameters.clone(),
+    }
+}
+
 pub(crate) fn parse_call_signature(
     signature: &oxc_ast::ast::TSCallSignatureDeclaration<'_>,
 ) -> Option<ParsedFunctionType> {
