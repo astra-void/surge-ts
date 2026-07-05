@@ -2471,6 +2471,47 @@ fn resolve_indexed_access_type(
                 had_error: false,
             }
         }
+        // Index a union receiver by a string key (`(A | B)["k"]`, notably
+        // `T[number]["_zod"]`): read the key from each member and union the results.
+        // Each member is peeled by `get_property_access_type`, so a member that is a
+        // lazy/nominal reference (a deferred generic alias/interface instantiation)
+        // resolves to its structural shape instead of being misreported as missing
+        // the property. A member that degraded to `unknown`/`any` contributes that
+        // (no cascade), matching how the receiver-errored branch selects properties.
+        (Type::Union(union_ty), Type::StringLiteral(key)) => {
+            let mut types = Vec::new();
+            let mut missing = false;
+            for member in union_ty.types() {
+                if member.is_unknown() || matches!(member, Type::Any) {
+                    types.push(member.clone());
+                } else if let Some(property_ty) = member.get_property_access_type(key) {
+                    types.push(property_ty);
+                } else {
+                    missing = true;
+                    break;
+                }
+            }
+            if missing {
+                let mut diagnostic =
+                    Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
+                if let Some(span) = indexed_access.span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
+                ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                }
+            } else {
+                if generic_indexed_access {
+                    record_generic_indexed_access_success();
+                }
+                ResolvedType {
+                    ty: union_type(types),
+                    had_error: false,
+                }
+            }
+        }
         (_, Type::StringLiteral(key)) => {
             let mut diagnostic =
                 Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
