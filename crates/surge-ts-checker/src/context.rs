@@ -210,8 +210,10 @@ pub(crate) struct CheckerContext {
     /// it (the source module's scope is not yet available in that pass), leaving it
     /// `None`. Resolving such a declaration's body must still happen in its
     /// declaring module's scope, so resolution falls back to this map keyed by the
-    /// declaration's `file_name`. Populated once before the check phase; empty
-    /// during the binding passes (where no diagnostics surface).
+    /// declaration's `file_name`. Refreshed before each module-analysis round with
+    /// the freshest resolution scopes (signature collection resolves parameter
+    /// types through local aliases whose attached scope lacks import layers), then
+    /// set a final time before the check phase.
     pub(crate) module_scope_by_file: Arc<HashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     /// Each module's local value symbols, keyed by `file_name`. The value analogue
     /// of [`Self::module_scope_by_file`]: when an imported type alias's body is

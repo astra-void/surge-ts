@@ -210,6 +210,16 @@ pub fn check_program_with_stats_and_jobs(
         timings.preliminary_module_type_binding_collection += type_collection_start.elapsed()
     });
 
+    let scope_build_start = Instant::now();
+    let preliminary_module_resolution_scopes = build_module_resolution_scopes(
+        &local_type_declarations_by_module,
+        &preliminary_module_import_bindings,
+        timings.as_ref(),
+    );
+    record_program_timing(timings.as_ref(), |timings| {
+        timings.module_resolution_scope_construction += scope_build_start.elapsed()
+    });
+
     let type_collection_start = Instant::now();
     let preliminary_module_analyses = collect_module_analyses_with_bindings(
         &parsed_files,
@@ -236,15 +246,6 @@ pub fn check_program_with_stats_and_jobs(
         resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
     record_program_timing(timings.as_ref(), |timings| {
         timings.preliminary_export_table_resolution += export_resolution_start.elapsed()
-    });
-    let scope_build_start = Instant::now();
-    let preliminary_module_resolution_scopes = build_module_resolution_scopes(
-        &local_type_declarations_by_module,
-        &preliminary_module_import_bindings,
-        timings.as_ref(),
-    );
-    record_program_timing(timings.as_ref(), |timings| {
-        timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
     record_program_timing(timings.as_ref(), |timings| {
         timings.type_declaration_collection += type_declaration_collection_start.elapsed()
@@ -289,6 +290,21 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
+    // The per-file scope fallback (`module_scope_by_file`, consulted when a
+    // declaration's pre-attached `resolution_scope` is incomplete) must be
+    // available DURING the final module-analysis round, not just in the check
+    // phase: signature collection resolves parameter types through local aliases
+    // whose attached scope carries no import layers (`type BtnProps =
+    // React.ComponentProps<…>`), and without the fallback the alias silently
+    // degrades to `unknown` and the degraded signature is baked into the
+    // module's value symbols and export table. The PRELIMINARY analysis round
+    // deliberately runs without the map: its outputs are superseded by this
+    // round, and resolving the full import graph twice measurably regresses
+    // check time/memory on large cyclic programs (zod).
+    ctx.set_module_scope_by_file(module_scope_by_file_map(
+        &parsed_files,
+        &module_resolution_scopes,
+    ));
     let type_collection_start = Instant::now();
     let module_analyses = collect_module_analyses_with_bindings(
         &parsed_files,
@@ -337,16 +353,10 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
-    let module_scope_by_file = parsed_files
-        .iter()
-        .zip(module_resolution_scopes.iter())
-        .filter_map(|(parsed_file, scope)| {
-            scope
-                .as_ref()
-                .map(|scope| (Arc::from(parsed_file.file_name.as_str()), scope.clone()))
-        })
-        .collect();
-    ctx.set_module_scope_by_file(module_scope_by_file);
+    ctx.set_module_scope_by_file(module_scope_by_file_map(
+        &parsed_files,
+        &module_resolution_scopes,
+    ));
     sync_global_this_symbol(&mut ctx);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
@@ -823,6 +833,21 @@ fn extend_diagnostics_dedup(
     new_diagnostics: Vec<surge_ts_diagnostics::Diagnostic>,
 ) {
     DiagnosticDeduper::with_existing(diagnostics).extend(diagnostics, new_diagnostics);
+}
+
+fn module_scope_by_file_map(
+    parsed_files: &[ParsedProgramFile],
+    module_resolution_scopes: &[Option<Arc<crate::symbols::TypeDeclarationScope>>],
+) -> HashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>> {
+    parsed_files
+        .iter()
+        .zip(module_resolution_scopes.iter())
+        .filter_map(|(parsed_file, scope)| {
+            scope
+                .as_ref()
+                .map(|scope| (Arc::from(parsed_file.file_name.as_str()), scope.clone()))
+        })
+        .collect()
 }
 
 fn check_program_file(

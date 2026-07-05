@@ -231,6 +231,16 @@ pub(crate) fn collect_module_analyses_with_bindings(
         // again. Declaration files skip the seeding: their exports resolve through
         // the declaration tables, and running initializer inference over large
         // dependency `.d.ts` files here would be pure cost.
+        // The per-file scope fallback (`module_scope_by_file`) is live only for
+        // SIGNATURE collection: a parameter typed through a local alias of an
+        // imported qualified type (`type BtnProps = React.ComponentProps<…>`)
+        // must not bake a degraded signature into the module's symbols and
+        // export table (the alias's attached scope carries no import layers).
+        // Value collection and export-table construction stay map-less: with the
+        // fallback live they eagerly materialize every exported initializer of a
+        // large cyclic program (zod: +11s/+380MB), and their degraded shapes are
+        // re-resolved lazily by the check phase anyway.
+        let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
         let mut signature_env = SymbolTable::new();
         let mut seeded_names: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
         if !parsed_file.file_kind.is_declaration() {
@@ -251,6 +261,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
                 seeded_names.insert(name.clone());
             }
         }
+        ctx.module_scope_by_file = saved_module_scope_by_file;
         let mut local_function_signatures = HashMap::new();
         let diagnostics_before_signatures = ctx.diagnostics().len();
         collect_function_signatures_from_statements(
@@ -260,6 +271,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
             &mut local_function_signatures,
             ctx,
         );
+        let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
         let mut local_symbols = SymbolTable::new();
         for (name, symbol) in signature_env.iter_shared() {
             if !seeded_names.contains(name) {
@@ -288,6 +300,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
             Some(full_type_declarations_scope),
             ctx,
         );
+        ctx.module_scope_by_file = saved_module_scope_by_file;
 
         analyses.push(Some(ModuleAnalysis {
             local_type_declarations: local_type_declarations.clone(),
