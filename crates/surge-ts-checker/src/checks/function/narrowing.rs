@@ -556,8 +556,16 @@ fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
         | Type::Never => Some(false),
         // Match nominally on the member's own name (`Blob`, `URLSearchParams`):
         // a `Type::Reference` reports its referenced name without resolving, so
-        // do not peel (peeling would expand to the structural shape).
-        other => Some(other.name() == ctor_name),
+        // do not peel (peeling would expand to the structural shape). Compare the
+        // base name with any type arguments stripped, so a generic member
+        // (`Promise<T>`, `Map<K, V>`) matches its bare constructor (`Promise`,
+        // `Map`) instead of being treated as a different, undecidable type — the
+        // latter left `x instanceof Promise` unable to drop the non-Promise arm.
+        other => {
+            let name = other.name();
+            let base = name.split('<').next().unwrap_or(name.as_str());
+            Some(base == ctor_name)
+        }
     }
 }
 
@@ -565,7 +573,13 @@ fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
 /// members that are instances of `Ctor` (the `=== true` branch); otherwise
 /// removes them. Members whose membership is undecidable are kept either way.
 fn narrow_union_by_instanceof(ty: &Type, ctor_name: &str, keep_matching: bool) -> Option<Type> {
-    let Type::Union(union) = ty else {
+    // Peel a lazy/nominal reference to its structural form first: a deferred
+    // generic alias such as `MaybeAsync<T>` (= `T | Promise<T>`) reaches here as a
+    // `Type::Reference`, and matching `Type::Union` directly would miss the union
+    // it resolves to, leaving `x instanceof Promise` unable to drop the non-Promise
+    // arm.
+    let peeled = ty.peeled();
+    let Type::Union(union) = &peeled else {
         return None;
     };
     let kept: Vec<Type> = union
