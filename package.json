@@ -28,7 +28,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.3",
-		"@typescript/native-preview": "7.0.0-dev.20260615.1",
+		"@typescript/native-preview": "7.0.0-dev.20260702.3",
 		"tsx": "4.22.4",
 		"typescript": "6.0.3"
 	},
