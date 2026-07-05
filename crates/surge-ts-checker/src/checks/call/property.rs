@@ -128,7 +128,7 @@ pub(crate) fn check_property_call_like(
                     return None;
                 };
 
-                match property_type {
+                match callable_property_signature(property_type) {
                     Type::Function(function_type) => {
                         let return_type = check_function_type_call(
                             &function_type,
@@ -185,7 +185,7 @@ pub(crate) fn check_property_call_like(
                 return None;
             };
 
-            match property_type {
+            match callable_property_signature(property_type) {
                 Type::Function(function_type) => check_function_type_call(
                     &function_type,
                     property_span,
@@ -361,7 +361,7 @@ pub(crate) fn check_optional_property_call(
 
                 let property_type_base = surge_ts_types::remove_undefined(&property_type);
 
-                match property_type_base {
+                match callable_property_signature(property_type_base) {
                     Type::Function(function_type) => {
                         let return_type = check_function_type_call(
                             &function_type,
@@ -438,7 +438,7 @@ pub(crate) fn check_optional_property_call(
 
             let property_type_base = surge_ts_types::remove_undefined(&property_type);
 
-            match property_type_base {
+            match callable_property_signature(property_type_base) {
                 Type::Function(function_type) => check_function_type_call(
                     &function_type,
                     property_span,
@@ -472,6 +472,25 @@ pub(crate) fn check_optional_property_call(
 /// assignability, discarding its member set, so a method the std surface does not
 /// know is not a real typo here — resolve it permissively instead of emitting
 /// TS2339. Without `noLib` the std array surface is authoritative.
+/// A property typed as a callable object — a type literal carrying call
+/// signatures, like expect-type's `toEqualTypeOf: { <E>(v: E): true; <E>(): true }`
+/// — is invoked like a function. Surface its call signature so the property-call
+/// match treats it as callable instead of a false TS2349.
+fn callable_property_signature(ty: Type) -> Type {
+    let signature = match &ty {
+        Type::Object(object) => object.call_signature().cloned(),
+        Type::Reference(_) => match ty.peeled() {
+            Type::Object(object) => object.call_signature().cloned(),
+            _ => None,
+        },
+        _ => None,
+    };
+    match signature {
+        Some(signature) => Type::Function(signature),
+        None => ty,
+    }
+}
+
 fn no_lib_array_member(object_type: &Type, ctx: &CheckerContext) -> bool {
     ctx.options.no_lib && matches!(object_type, Type::Array(_))
 }
