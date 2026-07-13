@@ -25,8 +25,10 @@ const typescriptLib = path.join(repoRoot, 'node_modules', 'typescript', 'lib', '
 // clearing the emails cluster, 71 → 65) landed together; broader generic
 // instantiation interning shaved three more (65 → 62, 2026-07-13), and JSX
 // spread-attribute coverage plus the hyphenated-name excess exemption cleared
-// the shadcn ui/* cluster (62 → 49, 2026-07-13).
-const FALSE_POSITIVE_CEILING = 49;
+// the shadcn ui/* cluster (62 → 49, 2026-07-13). Instantiating imported
+// generic signatures under their declaring file cleared the next/font TS2304s
+// (49 → 45, 2026-07-13).
+const FALSE_POSITIVE_CEILING = 45;
 
 // One comparison serves both gates: the project run takes minutes, so each
 // test re-running it would double the gate's wall clock for the same data.
