@@ -4423,3 +4423,45 @@ fn jsx_callable_object_component_checks_props() {
     );
     assert_eq!(codes(&diagnostics), vec!["TS2322"]);
 }
+
+// tsc never excess-checks hyphenated JSX attribute names (`data-slot`,
+// `aria-*`), while a non-hyphenated unknown attribute still reports.
+#[test]
+fn jsx_hyphenated_attribute_is_not_excess_checked() {
+    let diagnostics = check_source(
+        "declare function Item(props: { label?: string }): null;\n\
+         const ok = <Item data-slot=\"x\" aria-bogus=\"y\" />;\n\
+         const bad = <Item dataslot=\"x\" />;\n",
+        "example.tsx",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+// A `{...spread}` whose type resolves to an object contributes its members, so
+// a required prop carried by the spread is not reported missing (the shadcn
+// wrapper idiom), while a spread without it still reports TS2741.
+#[test]
+fn jsx_spread_attributes_cover_required_props() {
+    let diagnostics = check_source(
+        "declare function Item(props: { label: string }): null;\n\
+         declare const full: { label: string };\n\
+         declare const partial: { id?: number };\n\
+         const ok = <Item {...full} />;\n\
+         const bad = <Item {...partial} />;\n",
+        "example.tsx",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2741"]);
+}
+
+// An opaque spread (`any`, unresolved) folds the whole attributes object into
+// `any` in tsc, so both the missing-required and excess checks stand down.
+#[test]
+fn jsx_opaque_spread_suppresses_presence_checks() {
+    let diagnostics = check_source(
+        "declare function Item(props: { label: string }): null;\n\
+         declare const rest: any;\n\
+         const ok = <Item {...rest} bonus={1} />;\n",
+        "example.tsx",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}

@@ -52,7 +52,7 @@ pub(crate) fn check_jsx_element(
         _ => None,
     };
 
-    check_attributes(
+    let spreads = check_attributes(
         attributes,
         props_object.as_ref(),
         fallback_span,
@@ -73,12 +73,25 @@ pub(crate) fn check_jsx_element(
         check_missing_required_props(
             object,
             attributes,
+            &spreads,
             children_provided,
             tag_name_span.or(element_span),
             fallback_span,
             ctx,
         );
     }
+}
+
+/// What `{...expr}` spread attributes contribute to the element's attributes
+/// object: the properties of every spread whose type resolved to an object, and
+/// whether any spread was opaque (non-object, `any`/`unknown`, or carrying a
+/// string index), in which case attribute coverage is unknowable and presence
+/// checks must stand down — tsc folds an `any` spread into the whole attributes
+/// type, silencing them likewise.
+#[derive(Default)]
+struct SpreadAttributes {
+    properties: BTreeMap<String, ObjectProperty>,
+    opaque: bool,
 }
 
 /// Resolves the props/attributes type the element is checked against, or `None`
@@ -264,20 +277,36 @@ fn check_attributes(
     fallback_span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
-) {
+) -> SpreadAttributes {
     let mut first_excess: Option<Option<SyntaxTextSpan>> = None;
     let mut attribute_types: BTreeMap<String, Type> = BTreeMap::new();
+    let mut spreads = SpreadAttributes::default();
 
     for attribute in attributes {
-        // `{...spread}` attributes carry no name; still evaluate the argument.
+        // `{...spread}` attributes carry no name; evaluate the argument and
+        // record what it contributes so presence checks see spread members.
         if attribute.name.is_empty() {
             if let Some(value) = &attribute.value {
-                let _ = evaluate_expression(
+                let inferred = evaluate_expression(
                     value,
                     attribute.value_span.or(fallback_span),
                     symbols,
                     ctx,
                 );
+                match inferred {
+                    InferredExpression::Known(ty) => match ty.peeled() {
+                        Type::Object(object) => {
+                            if object.allows_string_index_access() {
+                                spreads.opaque = true;
+                            }
+                            for (name, property) in object.properties.iter() {
+                                spreads.properties.insert(name.clone(), property.clone());
+                            }
+                        }
+                        _ => spreads.opaque = true,
+                    },
+                    _ => spreads.opaque = true,
+                }
             }
             continue;
         }
@@ -314,6 +343,10 @@ fn check_attributes(
                         let property = ObjectProperty::required(index_type.clone());
                         check_known_prop(attribute, attribute_type, &property, fallback_span, ctx);
                     }
+                } else if attribute.name.contains('-') {
+                    // tsc never excess-checks hyphenated JSX attribute names
+                    // (`data-slot`, `aria-*` — isKnownProperty), on components
+                    // and intrinsics alike.
                 } else if first_excess.is_none() {
                     first_excess = Some(attribute.name_span);
                 }
@@ -321,7 +354,9 @@ fn check_attributes(
         }
     }
 
-    if let (Some(object), Some(excess_span)) = (props_object, first_excess) {
+    // An opaque spread folds the whole attributes object into `any` in tsc, so
+    // an unmatched named attribute no longer reports there either.
+    if let (Some(object), Some(excess_span), false) = (props_object, first_excess, spreads.opaque) {
         let source = source_object_name(&attribute_types);
         let target = Type::Object(object.clone()).name();
         ctx.push(diagnostic_with_syntax_span(
@@ -329,6 +364,8 @@ fn check_attributes(
             excess_span.or(fallback_span),
         ));
     }
+
+    spreads
 }
 
 /// Infers the type of a single attribute value: `string` for a string literal,
@@ -396,17 +433,27 @@ fn check_known_prop(
 }
 
 /// Reports TS2741 for the first required prop that is neither passed as an
-/// attribute nor (for `children`) supplied as element children.
+/// attribute, contributed by a `{...spread}` whose type resolved, nor (for
+/// `children`) supplied as element children. An opaque spread may contribute
+/// anything, so the check stands down entirely.
 fn check_missing_required_props(
     props_object: &ObjectType,
     attributes: &[ParsedJsxAttribute],
+    spreads: &SpreadAttributes,
     children_provided: bool,
     tag_span: Option<SyntaxTextSpan>,
     fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) {
+    if spreads.opaque {
+        return;
+    }
+
     let missing = props_object.required_properties().find(|(name, _)| {
         if name.as_str() == "children" && children_provided {
+            return false;
+        }
+        if spreads.properties.contains_key(name.as_str()) {
             return false;
         }
         !attributes
@@ -418,7 +465,7 @@ fn check_missing_required_props(
         return;
     };
 
-    let present = present_attribute_object_name(attributes);
+    let present = present_attribute_object_name(attributes, spreads);
     let target = Type::Object(props_object.clone()).name();
     ctx.push(diagnostic_with_syntax_span(
         Diagnostic::ts2741(property_name, &present, &target, ctx.file_name.clone()),
@@ -516,17 +563,27 @@ fn source_object_name(attribute_types: &BTreeMap<String, Type>) -> String {
 }
 
 /// The `'{1}'` argument of TS2741: the object type of the attributes already
-/// present (tsc renders `{}` when none are).
-fn present_attribute_object_name(attributes: &[ParsedJsxAttribute]) -> String {
-    let properties = attributes
+/// present, including members contributed by resolved spreads (tsc renders the
+/// spread source's members with their declared types), or `{}` when none are.
+fn present_attribute_object_name(
+    attributes: &[ParsedJsxAttribute],
+    spreads: &SpreadAttributes,
+) -> String {
+    let properties = spreads
+        .properties
         .iter()
-        .filter(|attribute| !attribute.name.is_empty())
-        .map(|attribute| {
-            (
-                attribute.name.clone(),
-                ObjectProperty::required(Type::Unknown),
-            )
-        })
+        .map(|(name, property)| (name.clone(), property.clone()))
+        .chain(
+            attributes
+                .iter()
+                .filter(|attribute| !attribute.name.is_empty())
+                .map(|attribute| {
+                    (
+                        attribute.name.clone(),
+                        ObjectProperty::required(Type::Unknown),
+                    )
+                }),
+        )
         .collect::<PropertyMap>();
 
     if properties.is_empty() {
