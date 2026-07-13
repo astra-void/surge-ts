@@ -4393,6 +4393,23 @@ fn tuple_rest_parameter_accepts_positional_arguments() {
     assert_eq!(codes(&diagnostics), vec!["TS2345"]);
 }
 
+// A spread of a nominally-typed source (`{ ...defaults, ...props }` where both
+// are `Props`) contributes the reference's members instead of being skipped, so
+// destructured names resolve rather than reporting TS2339 on `{}`.
+#[test]
+fn object_literal_spread_peels_nominal_reference() {
+    let diagnostics = check_source(
+        "interface Props { url: string; email: string }\n\
+         const defaults: Props = { url: \"u\", email: \"e\" };\n\
+         function render(props: Props = defaults): string {\n\
+             const { url, email } = { ...defaults, ...props };\n\
+             return url + email;\n\
+         }\n",
+        "example.ts",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
 // A callable object used as a JSX component (a `forwardRef`/`memo`-style exotic
 // component, which is callable rather than a bare function) has its props checked
 // through its call signature.

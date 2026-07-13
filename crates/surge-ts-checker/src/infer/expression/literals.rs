@@ -33,9 +33,11 @@ pub(crate) fn infer_object_literal(
         if property.is_spread {
             // `{ ...source }` merges `source`'s own properties; later properties
             // (including later spreads) override earlier ones, matching tsc's
-            // left-to-right spread semantics. A spread whose type we cannot model
-            // as an object is skipped rather than collapsing the whole literal.
-            match infer_object_property_value(&property.value, symbols, ctx) {
+            // left-to-right spread semantics. The source is peeled so a nominal
+            // reference (`const d: Props = …; { ...d }`) contributes its members.
+            // A spread whose type we cannot model as an object is skipped rather
+            // than collapsing the whole literal.
+            match infer_object_property_value(&property.value, symbols, ctx).peeled() {
                 Type::Object(source) => {
                     for (name, source_property) in source.properties.iter() {
                         merged_properties.insert(name.clone(), source_property.clone());
