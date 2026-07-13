@@ -90,11 +90,14 @@ pub(crate) fn cache_named_type_resolution(
     }
 }
 
-/// Upper bound on distinct instantiations memoized per generic declaration. The
-/// hot library types resolve to a handful of top-level argument sets; the cap is
-/// a defensive guard against a pathological declaration accumulating an
-/// unbounded bucket that linear-search would have to scan.
-const GENERIC_INSTANTIATION_BUCKET_CAP: usize = 64;
+/// Upper bound on distinct instantiations memoized per generic declaration — a
+/// defensive guard against a pathological declaration accumulating an unbounded
+/// bucket that linear-search would have to scan. Sized for user utility aliases
+/// (`Omit`, `Identity`, …), which accumulate hundreds of distinct argument
+/// tuples on a large project; an entry evicted by a lower cap is re-expanded at
+/// every remaining reference, which dominates checking time and peak memory
+/// (measured on zod at the previous cap of 64).
+const GENERIC_INSTANTIATION_BUCKET_CAP: usize = 4096;
 
 pub(crate) fn get_persistent_generic_resolution(
     ctx: &CheckerContext,

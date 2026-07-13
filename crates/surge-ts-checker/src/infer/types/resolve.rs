@@ -1425,17 +1425,29 @@ pub(crate) fn resolve_named_type(
     // `tag_generic_object_reference`), so a reused entry cannot drop a body
     // diagnostic — the hazard that makes a naive generic cache unsound.
     if concrete_instantiation
-        && let (Some(display), Some(arguments)) =
-            (alias_display_name.as_deref(), reference_arguments.as_ref())
+        && let Some(arguments) = reference_arguments.as_ref()
         && let Some(entry) = lookup_instantiation(ctx, &decl_key, arguments)
     {
+        // An interned object with a display form keeps today's nominal wrapping;
+        // any other entry (union, reference, primitive, or a display-less bare
+        // reference — see the structural interning arm in
+        // `tag_generic_object_reference`) is returned structurally, exactly as a
+        // fresh expansion would have been, so reuse changes no downstream shape.
+        if let Some(display) = alias_display_name.as_deref()
+            && matches!(entry.resolved.as_ref(), Type::Object(_))
+        {
+            return ResolvedType {
+                ty: make_type_reference(
+                    reference_id.clone(),
+                    display.to_string(),
+                    arguments.clone(),
+                    entry.resolved,
+                ),
+                had_error: false,
+            };
+        }
         return ResolvedType {
-            ty: make_type_reference(
-                reference_id.clone(),
-                display.to_string(),
-                arguments.clone(),
-                entry.resolved,
-            ),
+            ty: (*entry.resolved).clone(),
             had_error: false,
         };
     }
@@ -1585,8 +1597,9 @@ pub(crate) fn resolve_named_type(
 /// Wraps a successfully-resolved generic *object* instantiation in a
 /// lazy/nominal [`Type::Reference`] over its interned structural expansion, so it
 /// carries nominal identity (declaration + resolved arguments) and a `Box<T>`
-/// display form without forcing re-expansion at later use sites. Non-object,
-/// errored, argument-unresolved, or display-less resolutions fall back to the
+/// display form without forcing re-expansion at later use sites. Other cacheable
+/// expansions (non-object bodies, display-less objects) are interned but returned
+/// structurally; errored or argument-unresolved resolutions fall back to the
 /// previous structural object tagging.
 fn tag_generic_object_reference(
     resolved: ResolvedType,
@@ -1642,7 +1655,37 @@ fn tag_generic_object_reference(
                 had_error: resolved.had_error,
             }
         }
+        // Any other cacheable expansion — a non-object body (union, nested
+        // reference, primitive: `Exclude<…>`, `Omit<…>` whose body is itself a
+        // reference) or a display-less object (a bare `$ZodType` reference whose
+        // parameters all defaulted) — is interned under the same soundness
+        // conditions, so the next reference to the same instantiation reuses it
+        // instead of re-expanding the body (measured on zod: ~490k of 860k body
+        // expansions were such cacheable re-expansions). The expansion is still
+        // returned structurally — only the short-circuit reuse changes, not the
+        // produced shape. An `unknown` result (or a union carrying one) may be a
+        // degradation sentinel from a bounded lazy peel, so it is never frozen
+        // program-wide.
+        (_, Some(arguments), ty) if cacheable && !type_may_carry_degradation(ty) => {
+            intern_instantiation(ctx, decl_key, &arguments, resolved.ty.clone());
+            resolved
+        }
         (display_name, _, _) => tag_generic_object_alias(resolved, display_name),
+    }
+}
+
+/// Whether an expansion may embed the `unknown` degradation sentinel (a bounded
+/// lazy peel returns `unknown` without setting `had_error`), making it unsafe to
+/// intern program-wide even when the resolution was otherwise clean.
+fn type_may_carry_degradation(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown => true,
+        Type::Union(union) => union
+            .payload()
+            .types
+            .iter()
+            .any(|member| matches!(member, Type::Unknown)),
+        _ => false,
     }
 }
 
