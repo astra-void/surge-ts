@@ -27,8 +27,11 @@ const typescriptLib = path.join(repoRoot, 'node_modules', 'typescript', 'lib', '
 // spread-attribute coverage plus the hyphenated-name excess exemption cleared
 // the shadcn ui/* cluster (62 → 49, 2026-07-13). Instantiating imported
 // generic signatures under their declaring file cleared the next/font TS2304s
-// (49 → 45, 2026-07-13).
-const FALSE_POSITIVE_CEILING = 45;
+// (49 → 45, 2026-07-13). Carrying namespace re-export member types (zod's
+// `export { z }`) cleared the TS2305s (45 → 43), and giving JSX expressions
+// ReactElement's structural members cleared the react-hook-form render
+// cluster (43 → 34, 2026-07-13).
+const FALSE_POSITIVE_CEILING = 34;
 
 // One comparison serves both gates: the project run takes minutes, so each
 // test re-running it would double the gate's wall clock for the same data.

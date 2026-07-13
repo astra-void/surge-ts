@@ -4491,3 +4491,37 @@ fn jsx_opaque_spread_suppresses_presence_checks() {
     );
     assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
+
+// `import * as z from "./external"; export { z }` (zod's index.d.ts shape)
+// re-exports the namespace's type members, so a type-only named import of `z`
+// can reference them as qualified names instead of reporting TS2305.
+#[test]
+fn namespace_import_reexport_exposes_member_types() {
+    let diagnostics = program(&[
+        ("external.ts", "export interface Payload { value: string }\n"),
+        (
+            "barrel.ts",
+            "import * as z from \"./external\";\nexport { z };\n",
+        ),
+        (
+            "main.ts",
+            "import type { z } from \"./barrel\";\n\
+             const p: z.Payload = { value: \"ok\" };\n\
+             export default p;\n",
+        ),
+    ]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+// A JSX expression types as ReactElement<any, any> in tsc, so it satisfies a
+// structurally-declared element shape (the react-hook-form `render` callback
+// return); an empty opaque stub would miss the required members.
+#[test]
+fn jsx_element_satisfies_react_element_shape() {
+    let diagnostics = check_source(
+        "declare function take(render: () => { type: string; props: unknown; key: string | null }): void;\n\
+         take(() => <div />);\n",
+        "example.tsx",
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
