@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use surge_ts_syntax::{
-    ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedNamespaceDeclaration,
-    ParsedStatement, ParsedType, TextSpan,
+    ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedImportKind,
+    ParsedNamespaceDeclaration, ParsedStatement, ParsedType, TextSpan,
 };
 use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type, TypeCopyReason};
 
@@ -434,6 +434,49 @@ pub(crate) fn resolve_module_export_table(
                     exported_name,
                     &target_export_table,
                 );
+                copy_namespace_member_type_exports(
+                    &target_export_table,
+                    exported_name,
+                    &mut resolved_export_table,
+                );
+            }
+            // `import * as z from "./m"; export { z }` re-exports the namespace
+            // binding (zod's `z`). The value symbol is carried by the local
+            // export pass; the namespace's TYPE side lives only in the importing
+            // file's alias scope layers, so the qualified `z.<member>` keys must
+            // be materialized into the export table here for the consumer-side
+            // `copy_qualified_type_exports` to find.
+            ParsedExportDeclaration::Named {
+                specifiers,
+                module_specifier: None,
+                ..
+            } => {
+                for specifier in specifiers {
+                    let Some(namespace_module_specifier) =
+                        namespace_import_module_specifier(parsed_file, &specifier.local_name)
+                    else {
+                        continue;
+                    };
+                    let Some((target_export_table, _resolved_index)) =
+                        try_resolve_module_export_table(
+                            &namespace_module_specifier,
+                            ctx,
+                            parsed_files,
+                            local_module_export_tables,
+                            resolved_module_export_tables,
+                            resolving,
+                            &parsed_file.file_name,
+                        )
+                    else {
+                        continue;
+                    };
+                    ctx.set_file_name(parsed_file.file_name.clone());
+                    copy_namespace_member_type_exports(
+                        &target_export_table,
+                        &specifier.exported_name,
+                        &mut resolved_export_table,
+                    );
+                }
             }
             _ => {}
         }
@@ -1174,6 +1217,43 @@ pub(crate) fn lookup_value_export(
     }
 
     export_table.get_shared_value(local_name)
+}
+
+/// The module specifier of a `import * as <local_name>` declaration in this
+/// file, if any — the binding a `export { <local_name> }` re-export refers to.
+fn namespace_import_module_specifier(
+    parsed_file: &ParsedProgramFile,
+    local_name: &str,
+) -> Option<String> {
+    parsed_file.statements.iter().find_map(|statement| {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            return None;
+        };
+        match &import.kind {
+            ParsedImportKind::Namespace {
+                local_name: import_local_name,
+                ..
+            } if import_local_name == local_name => Some(import.module_specifier.clone()),
+            _ => None,
+        }
+    })
+}
+
+/// Materializes a re-exported namespace's type members into the export table as
+/// qualified `<exported_name>.<member>` keys, mirroring how consumers of
+/// `import * as` see them through alias scope layers.
+fn copy_namespace_member_type_exports(
+    target_export_table: &ModuleExportTable,
+    exported_name: &str,
+    resolved_export_table: &mut ModuleExportTable,
+) {
+    let type_declarations = Arc::make_mut(&mut resolved_export_table.type_declarations);
+    for (key, declaration) in target_export_table.type_declarations.iter() {
+        let qualified = format!("{exported_name}.{key}");
+        if type_declarations.get(&qualified).is_none() {
+            let _ = type_declarations.insert(qualified.as_str(), declaration.clone());
+        }
+    }
 }
 
 pub(crate) fn insert_namespace_export(
