@@ -1,7 +1,9 @@
 use std::time::Instant;
 
 use surge_ts_syntax::ParsedExpression;
-use surge_ts_types::{NumberLiteralType, ObjectType, PropertyMap, Type, union_type};
+use surge_ts_types::{
+    NumberLiteralType, ObjectProperty, ObjectType, PropertyMap, Type, union_type,
+};
 
 use crate::context::CheckerContext;
 use crate::infer::map_parsed_type;
@@ -364,13 +366,20 @@ pub(crate) fn infer_expression(
 }
 
 /// The conservative type assigned to every JSX element and fragment. This is a
-/// parser-safe stand-in for `JSX.Element`: an opaque empty object tagged with the
-/// `Element` alias name so it renders exactly as tsc does in assignability
-/// diagnostics (`Type 'Element' is not assignable to type 'number'.`). It does not
-/// resolve the `JSX` namespace or validate intrinsic element props — both are out
-/// of scope for this slice.
+/// parser-safe stand-in for `JSX.Element`, tagged with the `Element` alias name
+/// so it renders exactly as tsc does in assignability diagnostics (`Type
+/// 'Element' is not assignable to type 'number'.`). It carries
+/// `ReactElement<any, any>`'s members (`type`/`props`/`key`, all `any` — the
+/// instantiation tsc gives JSX expressions), so a JSX value satisfies a
+/// structurally-resolved `ReactElement`/`ReactNode` target instead of failing as
+/// an empty object; it still fails targets that require any other member. It
+/// does not resolve the `JSX` namespace.
 pub(crate) fn jsx_element_type() -> Type {
-    Type::Object(ObjectType::new(PropertyMap::new(), None).with_alias_name("Element"))
+    let mut properties = PropertyMap::new();
+    properties.insert("type".to_string(), ObjectProperty::required(Type::Any));
+    properties.insert("props".to_string(), ObjectProperty::required(Type::Any));
+    properties.insert("key".to_string(), ObjectProperty::required(Type::Any));
+    Type::Object(ObjectType::new(properties, None).with_alias_name("Element"))
 }
 
 pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {
