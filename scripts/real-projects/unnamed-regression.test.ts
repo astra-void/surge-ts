@@ -10,11 +10,21 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const unnamedTsconfig = path.resolve(repoRoot, '../../nextjs/unnamed/tsconfig.json');
 const typescriptLib = path.join(repoRoot, 'node_modules', 'typescript', 'lib', 'lib.es5.d.ts');
 
-// The current false-positive watermark (2026-07-02). `unnamed` is a
+// The current false-positive watermark (2026-07-13). `unnamed` is a
 // tsc-reports-0 project, so every surge diagnostic is an over-report; this
 // ceiling only ratchets DOWN — lower it whenever a burn-down pass lands, and
 // never raise it to absorb a regression.
-const FALSE_POSITIVE_CEILING = 46;
+//
+// History: the previous ceiling of 46 (2026-07-02) was measured on a working
+// tree with uncommitted WIP and never held on committed code — a full bisect
+// (2026-07-06) showed committed main went 56 (db1f48e) → 60 (ac2671f,
+// cross-module typeof exposes the emails spread-merge cluster) → 70 (2989ab3,
+// intersection merges keep usable operands, exposing the react-hook-form
+// render TS2322 cluster) → 71 (c4593d2). The reset to the honestly measured
+// 71 and the first burn-down (object-literal spreads peel nominal references,
+// clearing the emails cluster, 71 → 65) landed together; broader generic
+// instantiation interning then shaved three more (65 → 62, 2026-07-13).
+const FALSE_POSITIVE_CEILING = 62;
 
 // One comparison serves both gates: the project run takes minutes, so each
 // test re-running it would double the gate's wall clock for the same data.
