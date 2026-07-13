@@ -569,7 +569,14 @@ pub(crate) fn collect_exportable_value_symbols(
     // an exported `const` whose annotation names an *imported* type (a generic
     // arrow component's `ControllerProps<T, N>` parameter) resolves to `unknown`
     // and every consumer loses its signature. All Arc-shared, read-only state.
-    shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
+    // Library declaration files are exempt from the scope: they have no
+    // initializers to infer and their exports resolve through the declaration
+    // tables, while a live scope makes the `check_initializer` walk fully expand
+    // library type graphs for every dependency module on every binding pass
+    // (unnamed: 775MB/4.9s -> 8.5GB/66s peak RSS).
+    if !ctx.is_library_scoped_file(&ctx.file_name) {
+        shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
+    }
     shadow_ctx.ambient_global_type_declarations = ctx.ambient_global_type_declarations.clone();
     shadow_ctx.ambient_global_symbols = ctx
         .ambient_global_symbols
