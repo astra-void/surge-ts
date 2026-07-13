@@ -23,8 +23,10 @@ const typescriptLib = path.join(repoRoot, 'node_modules', 'typescript', 'lib', '
 // render TS2322 cluster) → 71 (c4593d2). The reset to the honestly measured
 // 71 and the first burn-down (object-literal spreads peel nominal references,
 // clearing the emails cluster, 71 → 65) landed together; broader generic
-// instantiation interning then shaved three more (65 → 62, 2026-07-13).
-const FALSE_POSITIVE_CEILING = 62;
+// instantiation interning shaved three more (65 → 62, 2026-07-13), and JSX
+// spread-attribute coverage plus the hyphenated-name excess exemption cleared
+// the shadcn ui/* cluster (62 → 49, 2026-07-13).
+const FALSE_POSITIVE_CEILING = 49;
 
 // One comparison serves both gates: the project run takes minutes, so each
 // test re-running it would double the gate's wall clock for the same data.
