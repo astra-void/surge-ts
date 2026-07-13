@@ -685,6 +685,7 @@ fn substituted_construct_signature(
             .map(|parameter| Some(parameter.ty.clone()))
             .collect(),
         return_type: Some((*parsed.return_type).clone()),
+        declaring_file: None,
     };
     let mut substitution = crate::infer::TypeParameterSubstitution::new();
     for (type_parameter, argument) in parsed.type_parameters.iter().zip(type_arguments.iter()) {

@@ -101,7 +101,24 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
     suppress_tuple_return_type: bool,
     ctx: &mut CheckerContext,
 ) -> Cow<'a, FunctionType> {
-    with_type_copy_reason(TypeCopyReason::CallResolution, || {
+    // The declared parameter/return annotations may reference the declaring
+    // module's local types (an imported generic like react-hook-form's
+    // `useForm(props?: UseFormProps<…>)`), which the caller's file scope cannot
+    // see; resolving under the declaring file keys the `module_scope_by_file`
+    // fallback to the right per-file scope. Substituted type arguments are
+    // already-resolved `Type`s, so they are unaffected by the swap.
+    let declaring_file = function_signature
+        .declaring_file
+        .as_ref()
+        .filter(|file| file.as_str() != ctx.file_name)
+        .cloned();
+    let saved_file_name = declaring_file.as_ref().map(|file| {
+        let saved = ctx.file_name.clone();
+        ctx.set_file_name(file.clone());
+        saved
+    });
+
+    let instantiated = with_type_copy_reason(TypeCopyReason::CallResolution, || {
         let mut instantiated_parameters = Vec::with_capacity(function_type.parameters().len());
         for (index, parameter) in function_type.parameters().iter().enumerate() {
             let Some(parsed_parameter) = function_signature
@@ -139,7 +156,12 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
             function_type.is_variadic(),
             function_type.required_parameter_count(),
         ))
-    })
+    });
+
+    if let Some(saved) = saved_file_name {
+        ctx.set_file_name(saved);
+    }
+    instantiated
 }
 
 pub(crate) fn instantiate_function_return_type_for_call(

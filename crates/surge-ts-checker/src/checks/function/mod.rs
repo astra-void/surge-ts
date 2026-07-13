@@ -70,6 +70,7 @@ pub(crate) fn collect_function_declaration_signature(
             &function.type_parameters,
             &function.parameters,
             function.return_type.as_ref(),
+            &ctx.file_name,
         )),
         symbols,
         false,
@@ -116,7 +117,7 @@ pub(crate) fn check_function_declaration(
 
     with_type_parameter_scope(&type_parameters, ctx, |ctx| {
         let signature_info =
-            function_signature_info(&type_parameters, &parameters, return_type.as_ref());
+            function_signature_info(&type_parameters, &parameters, return_type.as_ref(), &ctx.file_name);
         let function_type = map_function_signature(
             &parameters,
             return_type.as_ref(),
@@ -207,7 +208,7 @@ pub(crate) fn check_function_declaration_body(
     }
 
     let signature_info =
-        function_signature_info(type_parameters, &parameters, return_type.as_ref());
+        function_signature_info(type_parameters, &parameters, return_type.as_ref(), &ctx.file_name);
     check_function_body_with_signature(
         name,
         parameters,

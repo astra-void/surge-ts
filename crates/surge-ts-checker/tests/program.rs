@@ -4453,6 +4453,32 @@ fn jsx_spread_attributes_cover_required_props() {
     assert_eq!(codes(&diagnostics), vec!["TS2741"]);
 }
 
+// Calling an imported generic with explicit type arguments re-resolves its
+// declared parameter/return annotations; their names live in the declaring
+// module's scope, not the caller's (react-hook-form's
+// `useForm(props?: UseFormProps<…>): UseFormReturn<…>`), so the instantiation
+// must run under the declaring file or the names report false TS2304s.
+#[test]
+fn imported_generic_call_resolves_signature_in_declaring_module_scope() {
+    let diagnostics = program(&[
+        (
+            "lib.ts",
+            "export interface Options<T> { seed: T }\n\
+             export interface Box<T> { value: T }\n\
+             export function make<T>(options?: Options<T>): Box<T> {\n\
+                 return { value: (options as Options<T>).seed };\n\
+             }\n",
+        ),
+        (
+            "main.ts",
+            "import { make } from \"./lib\";\n\
+             const box = make<{ email: string }>();\n\
+             const s: string = box.value.email;\n",
+        ),
+    ]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
 // An opaque spread (`any`, unresolved) folds the whole attributes object into
 // `any` in tsc, so both the missing-required and excess checks stand down.
 #[test]

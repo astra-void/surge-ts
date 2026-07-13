@@ -35,6 +35,13 @@ pub(crate) struct FunctionSignatureInfo {
     pub(crate) type_parameters: Vec<ParsedTypeParameter>,
     pub(crate) parameter_types: Vec<Option<ParsedType>>,
     pub(crate) return_type: Option<ParsedType>,
+    /// File the signature was declared in. Instantiation re-resolves the parsed
+    /// parameter/return annotations, whose names (an imported generic's
+    /// module-local types, e.g. react-hook-form's `UseFormProps`) are visible in
+    /// the declaring file's per-file scope but not the caller's; the
+    /// `module_scope_by_file` fallback keys on the active file name, so
+    /// instantiation runs under this one.
+    pub(crate) declaring_file: Option<String>,
 }
 
 #[derive(Debug, Default)]

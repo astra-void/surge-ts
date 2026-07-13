@@ -457,6 +457,7 @@ pub(crate) fn function_signature_info(
     type_parameters: &[ParsedTypeParameter],
     parameters: &[ParsedFunctionParameter],
     return_type: Option<&ParsedType>,
+    declaring_file: &str,
 ) -> FunctionSignatureInfo {
     FunctionSignatureInfo {
         type_parameters: type_parameters.to_vec(),
@@ -465,6 +466,7 @@ pub(crate) fn function_signature_info(
             .map(|parameter| parameter.declared_type.clone())
             .collect(),
         return_type: return_type.cloned(),
+        declaring_file: Some(declaring_file.to_string()),
     }
 }
 
