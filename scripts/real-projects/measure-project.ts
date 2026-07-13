@@ -840,11 +840,14 @@ function measuredEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function assertMeasuredOk(result: MeasuredCommandResult): void {
+function assertMeasuredOk(
+  result: MeasuredCommandResult,
+  okStatuses: readonly number[] = [0],
+): void {
   if (result.error) {
     throw new Error(`${result.command} failed: ${result.error}`);
   }
-  if (result.status !== 0) {
+  if (result.status === null || !okStatuses.includes(result.status)) {
     throw new Error(
       `${result.command} ${result.args.join(' ')} exited with ${result.status ?? 'unknown'}:\n${result.stdout}${result.stderr}`,
     );
@@ -875,7 +878,9 @@ function measureRustMode(
     cwd: workspaceRoot,
     env: measuredEnv(),
   });
-  assertMeasuredOk(result);
+  // surge uses tsc-style exit codes: 2 means diagnostics were reported, which
+  // is expected on projects with known false positives.
+  assertMeasuredOk(result, [0, 2]);
   return toMemoryModeResult(result, meta);
 }
 
