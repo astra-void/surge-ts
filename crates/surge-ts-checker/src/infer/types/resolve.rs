@@ -23,6 +23,23 @@ use crate::program::{
 };
 use crate::symbols::TypeDeclarationInfo;
 
+/// Deferring concrete-site library alias instantiations kills the eager
+/// interface-web recursion during dependency export collection, but without
+/// the intersection deferral it livelocks `resolve_conditional_type`'s
+/// `extends` assignability on unnamed (deep structural peels of deferred
+/// references never hit the pointer-identity in-progress guard). Off until
+/// assignability can compare deferred references nominally.
+const DEFER_CONCRETE_LIBRARY_ALIASES: bool = false;
+
+/// Deferring all-reference intersections (see `merge_intersection_members`)
+/// halves unnamed's wall time (69s → 39s) but raises peak RSS 1.8GB → 4.7GB,
+/// so it stays off while memory is the constraint. Its former false positives
+/// (`<form onSubmit>` vs `SubmitEventHandler`) were not the deferral's fault:
+/// they came from assignability rejecting the sentinel `Unknown` as a source
+/// (`SubmitEvent.nativeEvent` degrades — `NativeSubmitEvent` collides with the
+/// enclosing declaration), fixed in `is_assignable_to`'s leniency arm.
+const DEFER_REFERENCE_INTERSECTIONS: bool = false;
+
 pub(crate) fn resolve_parsed_type(
     parsed_type: ParsedType,
     ctx: &mut CheckerContext,
@@ -1135,6 +1152,91 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
             .join(" & ")
     });
 
+    // An intersection whose operands are all lazy/nominal references
+    // (`CheckboxProps & RefAttributes<HTMLButtonElement>`) defers its merge:
+    // peeling the operands here forces each library reference's structural
+    // expansion at *resolution* time, which is what pulls the React/DOM graph
+    // while dependency `.d.ts` export tables are being collected. The merge
+    // runs instead when a consumer peels the intersection reference. Operands
+    // that already carry structure (inline objects, primitives) keep the eager
+    // merge so non-reference intersections are unchanged.
+    if DEFER_REFERENCE_INTERSECTIONS
+        && members.len() > 1
+        && members
+            .iter()
+            .all(|ty| matches!(ty, Type::Reference(_)))
+    {
+        let display = display_name.unwrap_or_default();
+        // Identity from the operands' module-qualified reference ids, not the
+        // display form: same-named types from different modules must not
+        // collapse into one nominal intersection.
+        let id = members
+            .iter()
+            .filter_map(|ty| match ty {
+                Type::Reference(reference) => Some(reference.id.as_ref()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\u{0}&\u{0}");
+        // The operands double as the reference arguments so nominal identity
+        // (`same_reference`: id + arguments) distinguishes `A & Ref<X>` from
+        // `A & Ref<Y>` — the operand ids alone erase the instantiation.
+        return Type::Reference(surge_ts_types::TypeReference::new(
+            format!("\u{0}intersection\u{0}{id}"),
+            display,
+            members.clone(),
+            std::sync::Arc::new(LazyIntersectionMerge {
+                members,
+                dropped_unmodelled_operand,
+            }),
+        ));
+    }
+
+    merge_intersection_members_now(members, display_name, dropped_unmodelled_operand)
+}
+
+/// Resolver for a deferred all-reference intersection: the member peel + merge
+/// runs on first consumer peel instead of at resolution time.
+struct LazyIntersectionMerge {
+    members: Vec<Type>,
+    dropped_unmodelled_operand: bool,
+}
+
+impl surge_ts_types::ResolveReference for LazyIntersectionMerge {
+    fn resolve(&self) -> Type {
+        let display_name = (!self.members.is_empty()).then(|| {
+            self.members
+                .iter()
+                .map(Type::name)
+                .collect::<Vec<_>>()
+                .join(" & ")
+        });
+        merge_intersection_members_now(
+            self.members.clone(),
+            display_name,
+            self.dropped_unmodelled_operand,
+        )
+    }
+}
+
+fn merge_intersection_members_now(
+    members: Vec<Type>,
+    display_name: Option<String>,
+    dropped_unmodelled_operand: bool,
+) -> Type {
+    let open_if_unmodelled = |ty: Type| -> Type {
+        match ty {
+            Type::Object(object)
+                if dropped_unmodelled_operand && object.string_index_type.is_none() =>
+            {
+                let mut object = object;
+                object.string_index_type = Some(std::sync::Arc::new(Type::Any));
+                Type::Object(object)
+            }
+            other => other,
+        }
+    };
+
     // Peel reference operands (`StudentBulkImportRow & { … }`) so a named object
     // member contributes its properties to the merged intersection surface.
     let members: Vec<Type> = members.iter().map(Type::peeled).collect();
@@ -1478,7 +1580,16 @@ pub(crate) fn resolve_named_type(
     // collapsed to `unknown` is a placeholder (`Normalize<T>` as a function's
     // return type), and freezing a placeholder-dependent expansion into a shared
     // reference would drop the members a later `T`-substitution should have added.
-    if !concrete_instantiation
+    //
+    // Library-scoped aliases defer even at a concrete site: expanding
+    // `ComponentPropsWithoutRef<…>` eagerly opens its type-parameter scope, which
+    // turns every nested generic interface reference non-concrete and therefore
+    // eager, recursing through the React/DOM interface web (unnamed: 18GB in 45s
+    // while collecting dependency export tables). User aliases keep the eager
+    // path so their body diagnostics and primitive/union expansions are unchanged.
+    if (!concrete_instantiation
+        || (DEFER_CONCRETE_LIBRARY_ALIASES
+            && declaration_file_is_library_scoped(declaration, ctx)))
         && matches!(declaration, TypeDeclarationInfo::Alias(_))
         && let (Some(display), Some(arguments)) =
             (alias_display_name.as_ref(), reference_arguments.as_ref())
