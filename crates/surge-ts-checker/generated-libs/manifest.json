@@ -1,8 +1,8 @@
 {
-  "generatorVersion": "v0.86-copy-typescript-libs",
+  "generatorVersion": "v0.87-copy-native-typescript-libs",
   "generatedFrom": {
-    "typescriptPackageVersion": "6.0.3",
-    "sourceLibDir": "node_modules/typescript/lib"
+    "typescriptPackageVersion": "7.0.2",
+    "sourceLibDir": "node_modules/@typescript/typescript-darwin-arm64/lib"
   },
   "generatedFiles": [
     "lib.decorators.d.ts",
@@ -113,5 +113,5 @@
     "lib.webworker.importscripts.d.ts",
     "lib.webworker.iterable.d.ts"
   ],
-  "stableHash": "12f9914d91e1c9e49eb52c2ace12e61c1e5404f5e0391866cdafc6a12ef5a2c8"
+  "stableHash": "62c21d3dc2f7b6c5bf3f23b38610b2f373e58ae7478c945202b21a30aacb99ad"
 }
