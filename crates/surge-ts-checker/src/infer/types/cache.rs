@@ -153,6 +153,10 @@ impl ResolveReference for InternedInstantiation {
     fn resolve(&self) -> Type {
         (*self.resolved).clone()
     }
+
+    fn resolve_arc(&self) -> Arc<Type> {
+        self.resolved.clone()
+    }
 }
 
 /// Maximum nesting of in-flight lazy peels before a deeper one degrades to
@@ -212,15 +216,19 @@ struct LazyInstantiation {
 
 impl ResolveReference for LazyInstantiation {
     fn resolve(&self) -> Type {
+        (*self.resolve_arc()).clone()
+    }
+
+    fn resolve_arc(&self) -> Arc<Type> {
         if let Some(memoized) = self.memo.get().and_then(std::sync::Weak::upgrade) {
-            return (*memoized).clone();
+            return memoized;
         }
         // A peel of the same instantiation elsewhere may have already interned it.
         if let Some(entry) =
             lookup_instantiation(&self.snapshot, &self.decl_key, &self.resolved_arguments)
         {
             let _ = self.memo.set(Arc::downgrade(&entry.resolved));
-            return (*entry.resolved).clone();
+            return entry.resolved;
         }
 
         let guard_key = (self.decl_key.clone(), self.resolved_arguments.clone());
@@ -242,7 +250,7 @@ impl ResolveReference for LazyInstantiation {
             same_decl >= MAX_SAME_DECLARATION_PEELS || stack.iter().any(|entry| *entry == guard_key)
         });
         if blocked {
-            return Type::Unknown;
+            return Arc::new(Type::Unknown);
         }
         LAZY_PEEL_STACK.with(|stack| stack.borrow_mut().push(guard_key.clone()));
 
@@ -292,7 +300,7 @@ impl ResolveReference for LazyInstantiation {
         // degraded shape transiently instead, leaving the cache for a clean peel to
         // populate, and do not memoize it on this reference.
         if resolved.had_error {
-            return resolved.ty;
+            return Arc::new(resolved.ty);
         }
 
         // The eager named-type path tags the resolved object with its declaration
@@ -318,7 +326,7 @@ impl ResolveReference for LazyInstantiation {
             resolved_ty,
         );
         let _ = self.memo.set(Arc::downgrade(&interned));
-        (*interned).clone()
+        interned
     }
 }
 

@@ -80,10 +80,17 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
 
-    if from
-        .base_primitive()
-        .as_ref()
-        .is_some_and(|base| base == to)
+    // A `from` reference is resolved and recursed into below; computing its base
+    // primitive here would force a full structural clone of the resolved type
+    // (`base_primitive` peels references) only to almost always find it is not a
+    // primitive. The recursion re-checks the base primitive on the resolved shape,
+    // so skipping references here is behaviour-preserving and avoids the clone —
+    // this is the dominant per-peel cost on conditional/mapped-type-heavy programs.
+    if !matches!(from, Type::Reference(_))
+        && from
+            .base_primitive()
+            .as_ref()
+            .is_some_and(|base| base == to)
     {
         return true;
     }
@@ -150,7 +157,11 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     // comparing the structural expansion, so a reference stays interchangeable
     // with its expanded shape without forcing eager expansion at construction.
     if let Type::Reference(reference) = from {
-        return is_assignable_to(&reference.resolve(), to);
+        // `resolve_arc` borrows the memoized/interned expansion instead of
+        // deep-cloning it — this arm is peeled millions of times on
+        // conditional-heavy programs.
+        let resolved = reference.resolve_arc();
+        return is_assignable_to(&resolved, to);
     }
     if let Type::Reference(reference) = to {
         // Any function (or callable/constructable object) is assignable to the
@@ -162,7 +173,8 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         if base == "Function" && is_function_like(from) {
             return true;
         }
-        return is_assignable_to(from, &reference.resolve());
+        let resolved = reference.resolve_arc();
+        return is_assignable_to(from, &resolved);
     }
 
     match (from, to) {

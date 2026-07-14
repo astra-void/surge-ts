@@ -12,6 +12,18 @@ use crate::Type;
 /// `resolve` calls are cheap.
 pub trait ResolveReference: Send + Sync {
     fn resolve(&self) -> Type;
+
+    /// Like [`resolve`](Self::resolve) but yields a shared `Arc<Type>`. Resolvers
+    /// backed by a memoized/interned `Arc` (the lazy/interned instantiation
+    /// resolvers) override this to hand back the shared pointer instead of
+    /// deep-cloning the structural type. The assignability checker peels the same
+    /// reference millions of times on conditional/mapped-type-heavy programs and
+    /// only needs to *borrow* the resolved shape, so avoiding the per-peel `Type`
+    /// clone is a large win; the default keeps the old behaviour for resolvers
+    /// that own their type by value.
+    fn resolve_arc(&self) -> Arc<Type> {
+        Arc::new(self.resolve())
+    }
 }
 
 /// A lazy, nominal reference to a named type instantiation (`Box<string>`,
@@ -54,6 +66,13 @@ impl TypeReference {
     /// Computes (or returns the memoized) structural expansion of this reference.
     pub fn resolve(&self) -> Type {
         self.resolver.resolve()
+    }
+
+    /// The structural expansion as a shared `Arc<Type>`, avoiding a deep clone
+    /// when the underlying resolver is `Arc`-backed. See
+    /// [`ResolveReference::resolve_arc`].
+    pub fn resolve_arc(&self) -> Arc<Type> {
+        self.resolver.resolve_arc()
     }
 
     /// Nominal identity test: same declaration and same type arguments.
