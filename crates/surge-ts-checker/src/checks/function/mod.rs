@@ -16,10 +16,12 @@ use crate::program::record_program_timing;
 use crate::symbols::{ScopeStack, SymbolTable};
 
 mod body;
+mod body_statements;
 mod narrowing;
 mod signature;
 
 pub(crate) use body::*;
+pub(crate) use body_statements::*;
 pub(crate) use narrowing::*;
 pub(crate) use signature::*;
 pub(crate) fn collect_function_declaration_signature(

@@ -1,469 +1,14 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
-use surge_ts_checker::SourceFileInput;
-use surge_ts_config::canonicalize_if_exists_string;
-use surge_ts_syntax::{
-    ParsedExportDeclaration, ParsedStatement, ReferenceTypeDirective, TextSpan,
-    extract_reference_path_directives, extract_reference_type_directives, parse_source,
-};
+//! Private resolution helpers for [`super`]: package.json parsing, entrypoint
+//! and type-root probing, declaration/runtime candidate selection, and path
+//! classification. All state flows through arguments; no public surface.
 
-use crate::package_resolution::{
-    ResolverOptions, select_export_target, select_export_targets, select_import_targets,
-    types_versions_candidates,
-};
-
-pub struct PackageDeclarationRequest {
-    pub specifier: String,
-    pub package_name: String,
-    pub subpath: Option<String>,
-    pub importer_dir: PathBuf,
-    pub importer_file: PathBuf,
-    /// `#alias` specifier resolved through the importer's own `imports` field.
-    pub is_imports: bool,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct PackageDeclarationResolverCache {
-    package_json_cache: HashMap<PathBuf, Option<serde_json::Value>>,
-    entrypoint_cache: HashMap<PackageEntrypointCacheKey, Option<PackageEntrypointResolution>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct PackageEntrypointCacheKey {
-    importer_dir: String,
-    package_name: String,
-    subpath: Option<String>,
-    is_imports: bool,
-    importer_is_esm: bool,
-}
-
-#[derive(Debug, Clone)]
-struct PackageEntrypointResolution {
-    path: PathBuf,
-    kind: PackageEntrypointKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PackageEntrypointKind {
-    Declaration,
-    RuntimeOnly,
-}
-
-fn is_external_specifier(specifier: &str) -> bool {
-    !specifier.starts_with("./")
-        && !specifier.starts_with("../")
-        && !specifier.starts_with(".\\")
-        && !specifier.starts_with("..\\")
-}
-
-fn parse_package_specifier(specifier: &str) -> Option<(String, Option<String>)> {
-    if specifier.starts_with('@') {
-        let parts: Vec<&str> = specifier.splitn(3, '/').collect();
-        if parts.len() >= 2 {
-            let pkg_name = format!("{}/{}", parts[0], parts[1]);
-            let subpath = if parts.len() == 3 {
-                Some(parts[2].to_string())
-            } else {
-                None
-            };
-            Some((pkg_name, subpath))
-        } else {
-            None
-        }
-    } else {
-        let mut parts = specifier.splitn(2, '/');
-        if let Some(pkg_name) = parts.next() {
-            let subpath = parts.next().map(|s| s.to_string());
-            Some((pkg_name.to_string(), subpath))
-        } else {
-            None
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub fn resolve_package_declaration_entrypoints(
-    inputs: &mut Vec<SourceFileInput>,
-    sources: &mut Vec<(PathBuf, String, String)>,
-    root_dir: &Path,
-) -> HashMap<String, String> {
-    let mut cache = PackageDeclarationResolverCache::default();
-    resolve_package_declaration_entrypoints_with_cache(
-        inputs,
-        sources,
-        root_dir,
-        &ResolverOptions::default(),
-        &mut cache,
-    )
-}
-
-pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
-    inputs: &mut Vec<SourceFileInput>,
-    sources: &mut Vec<(PathBuf, String, String)>,
-    root_dir: &Path,
-    opts: &ResolverOptions,
-    cache: &mut PackageDeclarationResolverCache,
-) -> HashMap<String, String> {
-    let mut packages_to_resolve: VecDeque<PackageDeclarationRequest> = VecDeque::new();
-    let mut resolved_packages = HashMap::new();
-    let mut known_file_names: HashSet<String> = inputs
-        .iter()
-        .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
-        .collect();
-    let mut queued_specifiers: HashSet<String> = HashSet::new();
-
-    for (file_path, _, source_text) in sources.iter() {
-        let importer_dir = file_path.parent().unwrap_or(root_dir).to_path_buf();
-        extract_packages_from_source(
-            source_text,
-            &file_path.to_string_lossy(),
-            &importer_dir,
-            opts,
-            &mut packages_to_resolve,
-            &mut queued_specifiers,
-        );
-    }
-
-    let mut max_resolutions = 1000;
-
-    while let Some(req) = packages_to_resolve.pop_front() {
-        if max_resolutions == 0 {
-            break;
-        }
-        max_resolutions -= 1;
-
-        if resolved_packages.contains_key(&req.specifier) {
-            continue;
-        }
-
-        let importer_is_esm = importer_is_esm(&req.importer_file, opts, cache);
-        let cache_key = PackageEntrypointCacheKey {
-            importer_dir: canonicalize_if_exists_string(&req.importer_dir),
-            package_name: req.package_name.clone(),
-            subpath: req.subpath.clone(),
-            is_imports: req.is_imports,
-            importer_is_esm,
-        };
-
-        let resolution = if let Some(cached) = cache.entrypoint_cache.get(&cache_key) {
-            cached.clone()
-        } else {
-            let resolved = resolve_package_entrypoint(&req, opts, importer_is_esm, cache, root_dir);
-            cache.entrypoint_cache.insert(cache_key, resolved.clone());
-            resolved
-        };
-
-        let Some(resolution) = resolution else {
-            continue;
-        };
-
-        match resolution.kind {
-            PackageEntrypointKind::Declaration => {
-                let Ok(path) = resolution.path.canonicalize() else {
-                    continue;
-                };
-
-                let normalized_file_name = canonicalize_if_exists_string(&path);
-                resolved_packages.insert(req.specifier.clone(), normalized_file_name.clone());
-
-                if !known_file_names.contains(&normalized_file_name) {
-                    let read_start = std::time::Instant::now();
-                    let Ok(source_text) = std::fs::read_to_string(&path) else {
-                        continue;
-                    };
-                    crate::io_stats::record_expansion_read(source_text.len(), read_start.elapsed());
-
-                    known_file_names.insert(normalized_file_name.clone());
-                    inputs.push(SourceFileInput {
-                        file_name: normalized_file_name.clone(),
-                        source_text: source_text.clone(),
-                    });
-                    sources.push((
-                        path.clone(),
-                        normalized_file_name.clone(),
-                        source_text.clone(),
-                    ));
-
-                    let new_importer_dir = path.parent().unwrap_or(root_dir).to_path_buf();
-                    extract_packages_from_source(
-                        &source_text,
-                        &normalized_file_name,
-                        &new_importer_dir,
-                        opts,
-                        &mut packages_to_resolve,
-                        &mut queued_specifiers,
-                    );
-                }
-            }
-            PackageEntrypointKind::RuntimeOnly => {
-                if let Ok(path) = resolution.path.canonicalize() {
-                    let file_name = canonicalize_if_exists_string(&path);
-                    resolved_packages.insert(req.specifier.clone(), file_name);
-                }
-            }
-        }
-    }
-
-    resolved_packages
-}
-
-/// Outcome of resolving the project's configured type packages.
-pub(crate) struct TypePackageResolution {
-    /// Type-package names actually included, in load order. Passed to the checker
-    /// as `CheckerOptions.types` so node-specific builtins and the `@types`
-    /// ambient-global gate fire for them.
-    pub effective_type_names: Vec<String>,
-    /// Explicitly-listed `types` entries that could not be resolved. The caller
-    /// emits a TS2688 for each; wildcard-discovered packages never appear here.
-    pub missing: Vec<String>,
-}
-
-/// Resolve the project's type packages and load them as dependency declarations.
-///
-/// Mirrors TypeScript 6.0's `getAutomaticTypeDirectiveNames`:
-///
-/// * `types` absent (`None`) or `types: []` → include nothing. TypeScript 6.0
-///   removed the implicit inclusion of every visible `@types` package; automatic
-///   discovery is now opt-in via the `"*"` wildcard below.
-/// * `types` containing `"*"` → expand the wildcard to every package found under
-///   the effective type roots (`typeRoots` if set, otherwise the ancestor
-///   `node_modules/@types` chain), skipping dot-prefixed and "not needed"
-///   packages. Other literal entries are preserved; the list is deduped in order.
-/// * each resulting name resolves nearest-root-first; scoped names are mangled
-///   (`@scope/pkg` -> `scope__pkg`) only under `@types` roots, matching
-///   `getCandidateFromTypeRoot`.
-///
-/// Entrypoint resolution stays narrow: `types` / `typings` / exact
-/// `exports["."].types` / `index.d.ts`.
-pub(crate) fn resolve_type_packages(
-    inputs: &mut Vec<SourceFileInput>,
-    sources: &mut Vec<(PathBuf, String, String)>,
-    root_dir: &Path,
-    types: Option<&[String]>,
-    type_roots: &[PathBuf],
-    cache: &mut PackageDeclarationResolverCache,
-) -> TypePackageResolution {
-    let mut resolution = TypePackageResolution {
-        effective_type_names: Vec::new(),
-        missing: Vec::new(),
-    };
-
-    // `types` absent or empty: nothing is auto-included (TypeScript 6.0).
-    let Some(configured) = types else {
-        return resolution;
-    };
-    if configured.is_empty() {
-        return resolution;
-    }
-
-    let roots = effective_type_roots(root_dir, type_roots);
-
-    // Expand `"*"` entries to the packages discovered under the type roots.
-    let wildcard_matches = if configured.iter().any(|entry| entry == "*") {
-        discover_wildcard_type_names(&roots, cache)
-    } else {
-        Vec::new()
-    };
-
-    // Flatten the directive list in order, deduping by name. `explicit` entries
-    // emit TS2688 when unresolved; wildcard matches never do (they came from
-    // directories that exist).
-    let mut seen_names: HashSet<String> = HashSet::new();
-    let mut directives: Vec<(String, bool)> = Vec::new();
-    for entry in configured {
-        if entry == "*" {
-            for name in &wildcard_matches {
-                if seen_names.insert(name.clone()) {
-                    directives.push((name.clone(), false));
-                }
-            }
-        } else if seen_names.insert(entry.clone()) {
-            directives.push((entry.clone(), true));
-        }
-    }
-
-    let mut known_file_names: HashSet<String> = inputs
-        .iter()
-        .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
-        .collect();
-
-    for (name, explicit) in directives {
-        match resolve_type_directive_in_roots(&name, &roots, cache) {
-            Some(path) => {
-                load_type_package_file(&path, inputs, sources, &mut known_file_names);
-                resolution.effective_type_names.push(name);
-            }
-            None => {
-                if explicit {
-                    resolution.missing.push(name);
-                }
-            }
-        }
-    }
-
-    resolution
-}
-
-/// A `/// <reference types="..." />` site that could not be resolved to a type
-/// package. The caller emits a TS2688 located at `value_span` in `file_name`.
-pub(crate) struct MissingReferenceTypeDirective {
-    pub file_name: String,
-    pub type_name: String,
-    pub value_span: TextSpan,
-    /// Whether the referencing file is a declaration (`.d.ts`) file. tsc gates the
-    /// TS2688 from such a site behind `skipLibCheck`, like any other `.d.ts`
-    /// diagnostic.
-    pub from_declaration_file: bool,
-}
-
-/// Outcome of resolving every `/// <reference types>` directive reachable from the
-/// program.
-pub(crate) struct ReferenceTypeDirectiveResolution {
-    pub effective_type_names: Vec<String>,
-    pub missing: Vec<MissingReferenceTypeDirective>,
-}
-
-/// Resolves explicit `/// <reference types="..." />` directives against the same
-/// type roots and entrypoint logic as `compilerOptions.types`. The resolver is
-/// stateful so it can be re-run as the file set grows during import-graph and
-/// package-declaration expansion: each call scans only files not seen before and
-/// follows references recursively (a loaded type package's own directives).
-pub(crate) struct ReferenceTypeDirectiveResolver {
-    roots: Vec<PathBuf>,
-    scanned_files: HashSet<String>,
-    resolution_cache: HashMap<String, Option<PathBuf>>,
-    effective_type_names: Vec<String>,
-    seen_effective: HashSet<String>,
-    missing: Vec<MissingReferenceTypeDirective>,
-}
-
-impl ReferenceTypeDirectiveResolver {
-    pub fn new(root_dir: &Path, type_roots: &[PathBuf]) -> Self {
-        Self {
-            roots: effective_type_roots(root_dir, type_roots),
-            scanned_files: HashSet::new(),
-            resolution_cache: HashMap::new(),
-            effective_type_names: Vec::new(),
-            seen_effective: HashSet::new(),
-            missing: Vec::new(),
-        }
-    }
-
-    /// Scan every not-yet-scanned source for reference-type directives, loading
-    /// each resolved type package into `inputs`/`sources`. Loading appends files,
-    /// which are scanned in the same call, so recursive references converge here.
-    pub fn scan_and_resolve(
-        &mut self,
-        inputs: &mut Vec<SourceFileInput>,
-        sources: &mut Vec<(PathBuf, String, String)>,
-        cache: &mut PackageDeclarationResolverCache,
-    ) {
-        loop {
-            let pending: Vec<(String, String)> = sources
-                .iter()
-                .filter(|(_, file_name, _)| !self.scanned_files.contains(file_name))
-                .map(|(_, file_name, source_text)| (file_name.clone(), source_text.clone()))
-                .collect();
-
-            if pending.is_empty() {
-                break;
-            }
-
-            let mut known_file_names: HashSet<String> = inputs
-                .iter()
-                .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
-                .collect();
-
-            for (file_name, source_text) in pending {
-                self.scanned_files.insert(file_name.clone());
-
-                // `/// <reference path="..." />` pulls in a sibling declaration
-                // file relative to the referencing file. This is how a type
-                // package such as `@types/node` assembles its full surface
-                // (`index.d.ts` references `globals.d.ts`, `buffer.d.ts`, ...),
-                // where its ambient globals (`process`, `Buffer`) are declared.
-                for path_value in extract_reference_path_directives(&source_text) {
-                    load_reference_path_file(
-                        &file_name,
-                        &path_value,
-                        inputs,
-                        sources,
-                        &mut known_file_names,
-                    );
-                }
-
-                let directives = extract_reference_type_directives(&source_text);
-                if directives.is_empty() {
-                    continue;
-                }
-
-                let from_declaration_file = is_declaration_file_path_str(&file_name);
-                for directive in directives {
-                    self.resolve_directive(
-                        directive,
-                        &file_name,
-                        from_declaration_file,
-                        inputs,
-                        sources,
-                        &mut known_file_names,
-                        cache,
-                    );
-                }
-            }
-        }
-    }
-
-    fn resolve_directive(
-        &mut self,
-        directive: ReferenceTypeDirective,
-        file_name: &str,
-        from_declaration_file: bool,
-        inputs: &mut Vec<SourceFileInput>,
-        sources: &mut Vec<(PathBuf, String, String)>,
-        known_file_names: &mut HashSet<String>,
-        cache: &mut PackageDeclarationResolverCache,
-    ) {
-        let name = directive.value;
-        let resolved = match self.resolution_cache.get(&name) {
-            Some(cached) => cached.clone(),
-            None => {
-                let resolved = resolve_type_directive_in_roots(&name, &self.roots, cache);
-                self.resolution_cache.insert(name.clone(), resolved.clone());
-                resolved
-            }
-        };
-
-        match resolved {
-            Some(path) => {
-                load_type_package_file(&path, inputs, sources, known_file_names);
-                if self.seen_effective.insert(name.clone()) {
-                    self.effective_type_names.push(name);
-                }
-            }
-            None => {
-                self.missing.push(MissingReferenceTypeDirective {
-                    file_name: file_name.to_string(),
-                    type_name: name,
-                    value_span: directive.value_span,
-                    from_declaration_file,
-                });
-            }
-        }
-    }
-
-    pub fn into_resolution(self) -> ReferenceTypeDirectiveResolution {
-        ReferenceTypeDirectiveResolution {
-            effective_type_names: self.effective_type_names,
-            missing: self.missing,
-        }
-    }
-}
+use super::*;
 
 /// The effective type roots for type-directive resolution, nearest first.
 /// Mirrors `getEffectiveTypeRoots`: explicit `typeRoots` win outright; otherwise
 /// every ancestor `node_modules/@types` directory (existence checked lazily when
 /// scanning or resolving).
-fn effective_type_roots(root_dir: &Path, type_roots: &[PathBuf]) -> Vec<PathBuf> {
+pub(super) fn effective_type_roots(root_dir: &Path, type_roots: &[PathBuf]) -> Vec<PathBuf> {
     if !type_roots.is_empty() {
         return type_roots.to_vec();
     }
@@ -482,7 +27,7 @@ fn effective_type_roots(root_dir: &Path, type_roots: &[PathBuf]) -> Vec<PathBuf>
 
 /// Whether a type root uses the DefinitelyTyped `@types` mangling convention
 /// (scoped `@scope/pkg` stored on disk as `scope__pkg`).
-fn is_at_types_root(root: &Path) -> bool {
+pub(super) fn is_at_types_root(root: &Path) -> bool {
     root.ends_with(Path::new("node_modules").join("@types"))
 }
 
@@ -491,7 +36,7 @@ fn is_at_types_root(root: &Path) -> bool {
 /// packages (`package.json` with `"typings": null`). Names are the raw directory
 /// base names (the mangled form for scoped `@types` packages), matching
 /// TypeScript's `getAutomaticTypeDirectiveNames`.
-fn discover_wildcard_type_names(
+pub(super) fn discover_wildcard_type_names(
     roots: &[PathBuf],
     cache: &mut PackageDeclarationResolverCache,
 ) -> Vec<String> {
@@ -528,7 +73,7 @@ fn discover_wildcard_type_names(
 /// A "not needed" stub: `package.json` with `"typings": null`, used by
 /// DefinitelyTyped to mark packages that ship their own types. Excluded from
 /// wildcard discovery, matching TypeScript.
-fn is_not_needed_types_package(
+pub(super) fn is_not_needed_types_package(
     pkg_dir: &Path,
     cache: &mut PackageDeclarationResolverCache,
 ) -> bool {
@@ -545,7 +90,7 @@ fn is_not_needed_types_package(
 /// Resolve a type-directive name to its entrypoint, trying each root in order
 /// (nearest first) and returning the first hit. Scoped names are mangled only
 /// under `@types` roots; custom `typeRoots` use the name verbatim.
-fn resolve_type_directive_in_roots(
+pub(super) fn resolve_type_directive_in_roots(
     name: &str,
     roots: &[PathBuf],
     cache: &mut PackageDeclarationResolverCache,
@@ -569,7 +114,7 @@ fn resolve_type_directive_in_roots(
 /// resolved relative to the referencing file's directory. The literal target is
 /// tried first (the directive normally names a `.d.ts` file outright); otherwise
 /// the usual declaration-candidate extensions are attempted.
-fn load_reference_path_file(
+pub(super) fn load_reference_path_file(
     referencing_file: &str,
     path_value: &str,
     inputs: &mut Vec<SourceFileInput>,
@@ -592,7 +137,7 @@ fn load_reference_path_file(
     }
 }
 
-fn load_type_package_file(
+pub(super) fn load_type_package_file(
     path: &Path,
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
@@ -617,7 +162,7 @@ fn load_type_package_file(
     sources.push((canonical_path, normalized_file_name, source_text));
 }
 
-fn resolve_at_types_package_entrypoint(
+pub(super) fn resolve_at_types_package_entrypoint(
     pkg_dir: &Path,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PathBuf> {
@@ -650,7 +195,7 @@ fn resolve_at_types_package_entrypoint(
     resolve_declaration_candidate(&pkg_dir.join("index"))
 }
 
-fn resolve_package_entrypoint(
+pub(super) fn resolve_package_entrypoint(
     req: &PackageDeclarationRequest,
     opts: &ResolverOptions,
     importer_is_esm: bool,
@@ -706,7 +251,7 @@ fn resolve_package_entrypoint(
 
 /// Resolve a `#alias` import against the nearest enclosing `package.json` with an
 /// `imports` field. Blocked or unresolved aliases yield `None` (→ TS2307).
-fn resolve_imports_entrypoint(
+pub(super) fn resolve_imports_entrypoint(
     req: &PackageDeclarationRequest,
     opts: &ResolverOptions,
     importer_is_esm: bool,
@@ -725,7 +270,7 @@ fn resolve_imports_entrypoint(
 
 /// Resolve a bare package import through an enclosing package whose `name`
 /// matches `req.package_name` (package self-reference).
-fn resolve_self_name_entrypoint(
+pub(super) fn resolve_self_name_entrypoint(
     req: &PackageDeclarationRequest,
     opts: &ResolverOptions,
     importer_is_esm: bool,
@@ -748,7 +293,7 @@ fn resolve_self_name_entrypoint(
     resolve_first_target_in_package(&pkg_dir, &targets)
 }
 
-fn resolve_package_entrypoint_in_directory(
+pub(super) fn resolve_package_entrypoint_in_directory(
     req: &PackageDeclarationRequest,
     pkg_dir: &Path,
     opts: &ResolverOptions,
@@ -785,7 +330,7 @@ fn resolve_package_entrypoint_in_directory(
 /// Legacy (`node10`-style) entrypoint resolution for a package without a usable
 /// `exports` field: `typesVersions`, then `types`/`typings`/`module`/`main`,
 /// then conventional `index` locations.
-fn resolve_legacy_entrypoint_in_directory(
+pub(super) fn resolve_legacy_entrypoint_in_directory(
     req: &PackageDeclarationRequest,
     pkg_dir: &Path,
     json: &serde_json::Value,
@@ -880,7 +425,7 @@ fn resolve_legacy_entrypoint_in_directory(
 
 /// Bare `subpath`/`index` probing for a package directory with no usable
 /// `package.json` metadata.
-fn resolve_legacy_file_probe(
+pub(super) fn resolve_legacy_file_probe(
     req: &PackageDeclarationRequest,
     pkg_dir: &Path,
 ) -> Option<PackageEntrypointResolution> {
@@ -896,7 +441,7 @@ fn resolve_legacy_file_probe(
 
 /// The `exports`/self-name subpath key for a request: `"."` for the package root,
 /// `"./<subpath>"` otherwise.
-fn subpath_key(req: &PackageDeclarationRequest) -> String {
+pub(super) fn subpath_key(req: &PackageDeclarationRequest) -> String {
     match &req.subpath {
         Some(subpath) => format!("./{}", subpath),
         None => ".".to_string(),
@@ -906,7 +451,7 @@ fn subpath_key(req: &PackageDeclarationRequest) -> String {
 /// Package-relative base paths a root `typesVersions` mapping is applied to: the
 /// declared `types`/`typings` field (without the leading `./`) and the
 /// conventional `index.d.ts`.
-fn root_types_version_bases(json: &serde_json::Value) -> Vec<String> {
+pub(super) fn root_types_version_bases(json: &serde_json::Value) -> Vec<String> {
     let mut bases = Vec::new();
     for field in ["types", "typings"] {
         if let Some(value) = json.get(field).and_then(|t| t.as_str()) {
@@ -922,7 +467,7 @@ fn root_types_version_bases(json: &serde_json::Value) -> Vec<String> {
 /// lower-priority condition can still supply declarations. This mirrors tsc,
 /// which falls through to the next matching `exports`/`imports` condition when
 /// the selected target does not resolve to a type-providing file.
-fn resolve_first_target_in_package(
+pub(super) fn resolve_first_target_in_package(
     pkg_dir: &Path,
     targets: &[String],
 ) -> Option<PackageEntrypointResolution> {
@@ -944,7 +489,7 @@ fn resolve_first_target_in_package(
 
 /// Join an `exports`/`imports`/`typesVersions` target against the package root,
 /// rejecting paths that escape the package, then probe declaration variants.
-fn resolve_target_in_package(pkg_dir: &Path, target: &str) -> Option<PackageEntrypointResolution> {
+pub(super) fn resolve_target_in_package(pkg_dir: &Path, target: &str) -> Option<PackageEntrypointResolution> {
     let relative = target.trim_start_matches("./");
     let joined = pkg_dir.join(relative);
     if !path_is_within(pkg_dir, &joined) {
@@ -956,7 +501,7 @@ fn resolve_target_in_package(pkg_dir: &Path, target: &str) -> Option<PackageEntr
 /// Whether `candidate` stays within `base` after resolving `..` segments
 /// lexically (no filesystem access). Guards against `exports` targets escaping
 /// the package root.
-fn path_is_within(base: &Path, candidate: &Path) -> bool {
+pub(super) fn path_is_within(base: &Path, candidate: &Path) -> bool {
     use std::path::Component;
     let mut depth: i32 = 0;
     for component in candidate
@@ -980,7 +525,7 @@ fn path_is_within(base: &Path, candidate: &Path) -> bool {
 
 /// Find the nearest enclosing `package.json` walking up from `start_dir`,
 /// returning the package directory and its parsed contents.
-fn nearest_package_json(
+pub(super) fn nearest_package_json(
     start_dir: &Path,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<(PathBuf, serde_json::Value)> {
@@ -1001,7 +546,7 @@ fn nearest_package_json(
 /// Whether the importing file is treated as ESM for condition selection. Bundler
 /// always behaves as ESM; node16/nodenext consult the file extension and the
 /// nearest `package.json` `"type"`.
-fn importer_is_esm(
+pub(super) fn importer_is_esm(
     importer_file: &Path,
     opts: &ResolverOptions,
     cache: &mut PackageDeclarationResolverCache,
@@ -1026,7 +571,7 @@ fn importer_is_esm(
     }
 }
 
-fn resolve_at_types_fallback_in_directory(
+pub(super) fn resolve_at_types_fallback_in_directory(
     req: &PackageDeclarationRequest,
     current_dir: &Path,
     root_dir: &Path,
@@ -1057,7 +602,7 @@ fn resolve_at_types_fallback_in_directory(
     None
 }
 
-fn resolve_types_package_directory(
+pub(super) fn resolve_types_package_directory(
     package_dir: &Path,
     subpath: Option<&str>,
 ) -> Option<PackageEntrypointResolution> {
@@ -1076,7 +621,7 @@ fn resolve_types_package_directory(
     None
 }
 
-fn read_package_json(
+pub(super) fn read_package_json(
     pkg_json_path: &Path,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<serde_json::Value> {
@@ -1094,7 +639,7 @@ fn read_package_json(
     parsed
 }
 
-fn resolve_declaration_or_runtime_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
+pub(super) fn resolve_declaration_or_runtime_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
     if let Some(path) = resolve_declaration_candidate(path) {
         return Some(PackageEntrypointResolution {
             path,
@@ -1105,7 +650,7 @@ fn resolve_declaration_or_runtime_candidate(path: &Path) -> Option<PackageEntryp
     resolve_runtime_only_candidate(path)
 }
 
-fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
+pub(super) fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
     for candidate in runtime_javascript_candidates(path.to_path_buf()) {
         crate::io_stats::record_existence_probe();
         if candidate.exists() && candidate.is_file() {
@@ -1119,14 +664,14 @@ fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolu
     None
 }
 
-fn types_package_name(package_name: &str) -> String {
+pub(super) fn types_package_name(package_name: &str) -> String {
     package_name
         .strip_prefix('@')
         .map(|name| name.replace('/', "__"))
         .unwrap_or_else(|| package_name.to_string())
 }
 
-fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
+pub(super) fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
     if is_declaration_file_path(path) {
         crate::io_stats::record_existence_probe();
         if path.exists() && path.is_file() {
@@ -1144,7 +689,7 @@ fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
+pub(super) fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
     if is_declaration_file_path(&path) {
         return vec![path];
     }
@@ -1191,16 +736,16 @@ fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
     ]
 }
 
-fn is_declaration_file_path_str(path: &str) -> bool {
+pub(super) fn is_declaration_file_path_str(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
 }
 
-fn is_declaration_file_path(path: &Path) -> bool {
+pub(super) fn is_declaration_file_path(path: &Path) -> bool {
     is_declaration_file_path_str(&path.to_string_lossy())
 }
 
-fn is_runtime_javascript_file(path: &Path) -> bool {
+pub(super) fn is_runtime_javascript_file(path: &Path) -> bool {
     let lower = path.to_string_lossy().to_ascii_lowercase();
     lower.ends_with(".js")
         || lower.ends_with(".jsx")
@@ -1208,7 +753,7 @@ fn is_runtime_javascript_file(path: &Path) -> bool {
         || lower.ends_with(".cjs")
 }
 
-fn is_typescript_source_file(path: &Path) -> bool {
+pub(super) fn is_typescript_source_file(path: &Path) -> bool {
     if is_declaration_file_path(path) {
         return false;
     }
@@ -1219,7 +764,7 @@ fn is_typescript_source_file(path: &Path) -> bool {
         || lower.ends_with(".cts")
 }
 
-fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
+pub(super) fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
     if is_runtime_javascript_file(&path) {
         return vec![path];
     }
@@ -1236,7 +781,7 @@ fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
     Vec::new()
 }
 
-fn extract_packages_from_source(
+pub(super) fn extract_packages_from_source(
     source_text: &str,
     file_name: &str,
     importer_dir: &Path,
@@ -1283,7 +828,7 @@ fn extract_packages_from_source(
 /// Queue a module specifier for package resolution. Handles `#alias` imports and
 /// bare/scoped package specifiers; relative specifiers are ignored (handled by
 /// the import-graph expander).
-fn queue_specifier(
+pub(super) fn queue_specifier(
     specifier: &str,
     importer_dir: &Path,
     importer_file: &Path,

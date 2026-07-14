@@ -1,0 +1,464 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use surge_ts_checker::SourceFileInput;
+use surge_ts_config::canonicalize_if_exists_string;
+use surge_ts_syntax::{
+    ParsedExportDeclaration, ParsedStatement, ReferenceTypeDirective, TextSpan,
+    extract_reference_path_directives, extract_reference_type_directives, parse_source,
+};
+
+use crate::package_resolution::{
+    ResolverOptions, select_export_target, select_export_targets, select_import_targets,
+    types_versions_candidates,
+};
+
+mod helpers;
+use helpers::*;
+
+pub struct PackageDeclarationRequest {
+    pub specifier: String,
+    pub package_name: String,
+    pub subpath: Option<String>,
+    pub importer_dir: PathBuf,
+    pub importer_file: PathBuf,
+    /// `#alias` specifier resolved through the importer's own `imports` field.
+    pub is_imports: bool,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct PackageDeclarationResolverCache {
+    package_json_cache: HashMap<PathBuf, Option<serde_json::Value>>,
+    entrypoint_cache: HashMap<PackageEntrypointCacheKey, Option<PackageEntrypointResolution>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PackageEntrypointCacheKey {
+    importer_dir: String,
+    package_name: String,
+    subpath: Option<String>,
+    is_imports: bool,
+    importer_is_esm: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PackageEntrypointResolution {
+    path: PathBuf,
+    kind: PackageEntrypointKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageEntrypointKind {
+    Declaration,
+    RuntimeOnly,
+}
+
+fn is_external_specifier(specifier: &str) -> bool {
+    !specifier.starts_with("./")
+        && !specifier.starts_with("../")
+        && !specifier.starts_with(".\\")
+        && !specifier.starts_with("..\\")
+}
+
+fn parse_package_specifier(specifier: &str) -> Option<(String, Option<String>)> {
+    if specifier.starts_with('@') {
+        let parts: Vec<&str> = specifier.splitn(3, '/').collect();
+        if parts.len() >= 2 {
+            let pkg_name = format!("{}/{}", parts[0], parts[1]);
+            let subpath = if parts.len() == 3 {
+                Some(parts[2].to_string())
+            } else {
+                None
+            };
+            Some((pkg_name, subpath))
+        } else {
+            None
+        }
+    } else {
+        let mut parts = specifier.splitn(2, '/');
+        if let Some(pkg_name) = parts.next() {
+            let subpath = parts.next().map(|s| s.to_string());
+            Some((pkg_name.to_string(), subpath))
+        } else {
+            None
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn resolve_package_declaration_entrypoints(
+    inputs: &mut Vec<SourceFileInput>,
+    sources: &mut Vec<(PathBuf, String, String)>,
+    root_dir: &Path,
+) -> HashMap<String, String> {
+    let mut cache = PackageDeclarationResolverCache::default();
+    resolve_package_declaration_entrypoints_with_cache(
+        inputs,
+        sources,
+        root_dir,
+        &ResolverOptions::default(),
+        &mut cache,
+    )
+}
+
+pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
+    inputs: &mut Vec<SourceFileInput>,
+    sources: &mut Vec<(PathBuf, String, String)>,
+    root_dir: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+) -> HashMap<String, String> {
+    let mut packages_to_resolve: VecDeque<PackageDeclarationRequest> = VecDeque::new();
+    let mut resolved_packages = HashMap::new();
+    let mut known_file_names: HashSet<String> = inputs
+        .iter()
+        .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
+        .collect();
+    let mut queued_specifiers: HashSet<String> = HashSet::new();
+
+    for (file_path, _, source_text) in sources.iter() {
+        let importer_dir = file_path.parent().unwrap_or(root_dir).to_path_buf();
+        extract_packages_from_source(
+            source_text,
+            &file_path.to_string_lossy(),
+            &importer_dir,
+            opts,
+            &mut packages_to_resolve,
+            &mut queued_specifiers,
+        );
+    }
+
+    let mut max_resolutions = 1000;
+
+    while let Some(req) = packages_to_resolve.pop_front() {
+        if max_resolutions == 0 {
+            break;
+        }
+        max_resolutions -= 1;
+
+        if resolved_packages.contains_key(&req.specifier) {
+            continue;
+        }
+
+        let importer_is_esm = importer_is_esm(&req.importer_file, opts, cache);
+        let cache_key = PackageEntrypointCacheKey {
+            importer_dir: canonicalize_if_exists_string(&req.importer_dir),
+            package_name: req.package_name.clone(),
+            subpath: req.subpath.clone(),
+            is_imports: req.is_imports,
+            importer_is_esm,
+        };
+
+        let resolution = if let Some(cached) = cache.entrypoint_cache.get(&cache_key) {
+            cached.clone()
+        } else {
+            let resolved = resolve_package_entrypoint(&req, opts, importer_is_esm, cache, root_dir);
+            cache.entrypoint_cache.insert(cache_key, resolved.clone());
+            resolved
+        };
+
+        let Some(resolution) = resolution else {
+            continue;
+        };
+
+        match resolution.kind {
+            PackageEntrypointKind::Declaration => {
+                let Ok(path) = resolution.path.canonicalize() else {
+                    continue;
+                };
+
+                let normalized_file_name = canonicalize_if_exists_string(&path);
+                resolved_packages.insert(req.specifier.clone(), normalized_file_name.clone());
+
+                if !known_file_names.contains(&normalized_file_name) {
+                    let read_start = std::time::Instant::now();
+                    let Ok(source_text) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    crate::io_stats::record_expansion_read(source_text.len(), read_start.elapsed());
+
+                    known_file_names.insert(normalized_file_name.clone());
+                    inputs.push(SourceFileInput {
+                        file_name: normalized_file_name.clone(),
+                        source_text: source_text.clone(),
+                    });
+                    sources.push((
+                        path.clone(),
+                        normalized_file_name.clone(),
+                        source_text.clone(),
+                    ));
+
+                    let new_importer_dir = path.parent().unwrap_or(root_dir).to_path_buf();
+                    extract_packages_from_source(
+                        &source_text,
+                        &normalized_file_name,
+                        &new_importer_dir,
+                        opts,
+                        &mut packages_to_resolve,
+                        &mut queued_specifiers,
+                    );
+                }
+            }
+            PackageEntrypointKind::RuntimeOnly => {
+                if let Ok(path) = resolution.path.canonicalize() {
+                    let file_name = canonicalize_if_exists_string(&path);
+                    resolved_packages.insert(req.specifier.clone(), file_name);
+                }
+            }
+        }
+    }
+
+    resolved_packages
+}
+
+/// Outcome of resolving the project's configured type packages.
+pub(crate) struct TypePackageResolution {
+    /// Type-package names actually included, in load order. Passed to the checker
+    /// as `CheckerOptions.types` so node-specific builtins and the `@types`
+    /// ambient-global gate fire for them.
+    pub effective_type_names: Vec<String>,
+    /// Explicitly-listed `types` entries that could not be resolved. The caller
+    /// emits a TS2688 for each; wildcard-discovered packages never appear here.
+    pub missing: Vec<String>,
+}
+
+/// Resolve the project's type packages and load them as dependency declarations.
+///
+/// Mirrors TypeScript 6.0's `getAutomaticTypeDirectiveNames`:
+///
+/// * `types` absent (`None`) or `types: []` → include nothing. TypeScript 6.0
+///   removed the implicit inclusion of every visible `@types` package; automatic
+///   discovery is now opt-in via the `"*"` wildcard below.
+/// * `types` containing `"*"` → expand the wildcard to every package found under
+///   the effective type roots (`typeRoots` if set, otherwise the ancestor
+///   `node_modules/@types` chain), skipping dot-prefixed and "not needed"
+///   packages. Other literal entries are preserved; the list is deduped in order.
+/// * each resulting name resolves nearest-root-first; scoped names are mangled
+///   (`@scope/pkg` -> `scope__pkg`) only under `@types` roots, matching
+///   `getCandidateFromTypeRoot`.
+///
+/// Entrypoint resolution stays narrow: `types` / `typings` / exact
+/// `exports["."].types` / `index.d.ts`.
+pub(crate) fn resolve_type_packages(
+    inputs: &mut Vec<SourceFileInput>,
+    sources: &mut Vec<(PathBuf, String, String)>,
+    root_dir: &Path,
+    types: Option<&[String]>,
+    type_roots: &[PathBuf],
+    cache: &mut PackageDeclarationResolverCache,
+) -> TypePackageResolution {
+    let mut resolution = TypePackageResolution {
+        effective_type_names: Vec::new(),
+        missing: Vec::new(),
+    };
+
+    // `types` absent or empty: nothing is auto-included (TypeScript 6.0).
+    let Some(configured) = types else {
+        return resolution;
+    };
+    if configured.is_empty() {
+        return resolution;
+    }
+
+    let roots = effective_type_roots(root_dir, type_roots);
+
+    // Expand `"*"` entries to the packages discovered under the type roots.
+    let wildcard_matches = if configured.iter().any(|entry| entry == "*") {
+        discover_wildcard_type_names(&roots, cache)
+    } else {
+        Vec::new()
+    };
+
+    // Flatten the directive list in order, deduping by name. `explicit` entries
+    // emit TS2688 when unresolved; wildcard matches never do (they came from
+    // directories that exist).
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut directives: Vec<(String, bool)> = Vec::new();
+    for entry in configured {
+        if entry == "*" {
+            for name in &wildcard_matches {
+                if seen_names.insert(name.clone()) {
+                    directives.push((name.clone(), false));
+                }
+            }
+        } else if seen_names.insert(entry.clone()) {
+            directives.push((entry.clone(), true));
+        }
+    }
+
+    let mut known_file_names: HashSet<String> = inputs
+        .iter()
+        .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
+        .collect();
+
+    for (name, explicit) in directives {
+        match resolve_type_directive_in_roots(&name, &roots, cache) {
+            Some(path) => {
+                load_type_package_file(&path, inputs, sources, &mut known_file_names);
+                resolution.effective_type_names.push(name);
+            }
+            None => {
+                if explicit {
+                    resolution.missing.push(name);
+                }
+            }
+        }
+    }
+
+    resolution
+}
+
+/// A `/// <reference types="..." />` site that could not be resolved to a type
+/// package. The caller emits a TS2688 located at `value_span` in `file_name`.
+pub(crate) struct MissingReferenceTypeDirective {
+    pub file_name: String,
+    pub type_name: String,
+    pub value_span: TextSpan,
+    /// Whether the referencing file is a declaration (`.d.ts`) file. tsc gates the
+    /// TS2688 from such a site behind `skipLibCheck`, like any other `.d.ts`
+    /// diagnostic.
+    pub from_declaration_file: bool,
+}
+
+/// Outcome of resolving every `/// <reference types>` directive reachable from the
+/// program.
+pub(crate) struct ReferenceTypeDirectiveResolution {
+    pub effective_type_names: Vec<String>,
+    pub missing: Vec<MissingReferenceTypeDirective>,
+}
+
+/// Resolves explicit `/// <reference types="..." />` directives against the same
+/// type roots and entrypoint logic as `compilerOptions.types`. The resolver is
+/// stateful so it can be re-run as the file set grows during import-graph and
+/// package-declaration expansion: each call scans only files not seen before and
+/// follows references recursively (a loaded type package's own directives).
+pub(crate) struct ReferenceTypeDirectiveResolver {
+    roots: Vec<PathBuf>,
+    scanned_files: HashSet<String>,
+    resolution_cache: HashMap<String, Option<PathBuf>>,
+    effective_type_names: Vec<String>,
+    seen_effective: HashSet<String>,
+    missing: Vec<MissingReferenceTypeDirective>,
+}
+
+impl ReferenceTypeDirectiveResolver {
+    pub fn new(root_dir: &Path, type_roots: &[PathBuf]) -> Self {
+        Self {
+            roots: effective_type_roots(root_dir, type_roots),
+            scanned_files: HashSet::new(),
+            resolution_cache: HashMap::new(),
+            effective_type_names: Vec::new(),
+            seen_effective: HashSet::new(),
+            missing: Vec::new(),
+        }
+    }
+
+    /// Scan every not-yet-scanned source for reference-type directives, loading
+    /// each resolved type package into `inputs`/`sources`. Loading appends files,
+    /// which are scanned in the same call, so recursive references converge here.
+    pub fn scan_and_resolve(
+        &mut self,
+        inputs: &mut Vec<SourceFileInput>,
+        sources: &mut Vec<(PathBuf, String, String)>,
+        cache: &mut PackageDeclarationResolverCache,
+    ) {
+        loop {
+            let pending: Vec<(String, String)> = sources
+                .iter()
+                .filter(|(_, file_name, _)| !self.scanned_files.contains(file_name))
+                .map(|(_, file_name, source_text)| (file_name.clone(), source_text.clone()))
+                .collect();
+
+            if pending.is_empty() {
+                break;
+            }
+
+            let mut known_file_names: HashSet<String> = inputs
+                .iter()
+                .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
+                .collect();
+
+            for (file_name, source_text) in pending {
+                self.scanned_files.insert(file_name.clone());
+
+                // `/// <reference path="..." />` pulls in a sibling declaration
+                // file relative to the referencing file. This is how a type
+                // package such as `@types/node` assembles its full surface
+                // (`index.d.ts` references `globals.d.ts`, `buffer.d.ts`, ...),
+                // where its ambient globals (`process`, `Buffer`) are declared.
+                for path_value in extract_reference_path_directives(&source_text) {
+                    load_reference_path_file(
+                        &file_name,
+                        &path_value,
+                        inputs,
+                        sources,
+                        &mut known_file_names,
+                    );
+                }
+
+                let directives = extract_reference_type_directives(&source_text);
+                if directives.is_empty() {
+                    continue;
+                }
+
+                let from_declaration_file = is_declaration_file_path_str(&file_name);
+                for directive in directives {
+                    self.resolve_directive(
+                        directive,
+                        &file_name,
+                        from_declaration_file,
+                        inputs,
+                        sources,
+                        &mut known_file_names,
+                        cache,
+                    );
+                }
+            }
+        }
+    }
+
+    fn resolve_directive(
+        &mut self,
+        directive: ReferenceTypeDirective,
+        file_name: &str,
+        from_declaration_file: bool,
+        inputs: &mut Vec<SourceFileInput>,
+        sources: &mut Vec<(PathBuf, String, String)>,
+        known_file_names: &mut HashSet<String>,
+        cache: &mut PackageDeclarationResolverCache,
+    ) {
+        let name = directive.value;
+        let resolved = match self.resolution_cache.get(&name) {
+            Some(cached) => cached.clone(),
+            None => {
+                let resolved = resolve_type_directive_in_roots(&name, &self.roots, cache);
+                self.resolution_cache.insert(name.clone(), resolved.clone());
+                resolved
+            }
+        };
+
+        match resolved {
+            Some(path) => {
+                load_type_package_file(&path, inputs, sources, known_file_names);
+                if self.seen_effective.insert(name.clone()) {
+                    self.effective_type_names.push(name);
+                }
+            }
+            None => {
+                self.missing.push(MissingReferenceTypeDirective {
+                    file_name: file_name.to_string(),
+                    type_name: name,
+                    value_span: directive.value_span,
+                    from_declaration_file,
+                });
+            }
+        }
+    }
+
+    pub fn into_resolution(self) -> ReferenceTypeDirectiveResolution {
+        ReferenceTypeDirectiveResolution {
+            effective_type_names: self.effective_type_names,
+            missing: self.missing,
+        }
+    }
+}
+
