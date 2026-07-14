@@ -29,3 +29,5 @@ npm-debug.log*
 !tests/compat-projects/**/node_modules/
 !tests/compat-projects/**/node_modules/**
 tests/compat-projects/**/.DS_Store
+.serena/
+
