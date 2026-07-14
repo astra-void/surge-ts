@@ -92,8 +92,6 @@ struct FileCheckResult {
 pub(crate) struct ModuleAnalysis {
     local_type_declarations: Arc<TypeDeclarationTable>,
     local_symbols: SymbolTable,
-    #[allow(dead_code)]
-    local_function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     local_export_table: ModuleExportTable,
 }
 

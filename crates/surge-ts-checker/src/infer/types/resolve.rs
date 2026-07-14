@@ -404,10 +404,24 @@ pub(crate) fn resolve_conditional_type(
     }
 
     if let Some(parameter_name) = distributive_parameter {
-        let members = match &resolved_check.ty {
+        // A deferred alias instantiation can carry its union behind a lazy
+        // nominal reference; distribution must see the structural union (tsc
+        // distributes `A | B` into `F<A> | F<B>`), so peel a reference check
+        // type before matching. A non-union peel keeps the original reference
+        // as the single member, preserving its nominal fast paths in the
+        // branch assignability test.
+        let peeled_check;
+        let distribution_shape = match &resolved_check.ty {
+            Type::Reference(_) => {
+                peeled_check = resolved_check.ty.peeled();
+                &peeled_check
+            }
+            other => other,
+        };
+        let members = match distribution_shape {
             Type::Union(union) => union.types().to_vec(),
             Type::Never => Vec::new(),
-            other => vec![other.clone()],
+            _ => vec![resolved_check.ty.clone()],
         };
 
         let mut results = Vec::new();

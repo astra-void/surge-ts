@@ -1324,8 +1324,19 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
 
     // `export = <namespace>` exposes the namespace object as the module's shape;
     // surface its members (e.g. `React.createContext`) on the namespace import.
+    // The assigned value can sit behind a lazy nominal reference (an alias-typed
+    // `export =`), which the bare `Type::Object` match silently dropped — peel it
+    // so the namespace members still surface.
     if let Some(export_assignment_symbol) = &export_table.export_assignment_symbol {
-        if let Type::Object(object) = &export_assignment_symbol.ty {
+        let peeled_assignment;
+        let assignment_ty = match &export_assignment_symbol.ty {
+            Type::Reference(_) => {
+                peeled_assignment = export_assignment_symbol.ty.peeled();
+                &peeled_assignment
+            }
+            other => other,
+        };
+        if let Type::Object(object) = assignment_ty {
             for (name, property) in object.properties.iter() {
                 property_count += 1;
                 properties

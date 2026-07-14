@@ -263,13 +263,17 @@ pub(crate) fn collect_module_analyses_with_bindings(
             }
         }
         ctx.module_scope_by_file = saved_module_scope_by_file;
-        let mut local_function_signatures = HashMap::new();
+        // The per-location signature map is only needed by the global path
+        // (`collect_global_function_signatures`); module analysis consumes the
+        // signatures through `signature_env` → `local_symbols`, so this one is
+        // discarded.
+        let mut discarded_function_signatures = HashMap::new();
         let diagnostics_before_signatures = ctx.diagnostics().len();
         collect_function_signatures_from_statements(
             &parsed_file.statements,
             file_index,
             &mut signature_env,
-            &mut local_function_signatures,
+            &mut discarded_function_signatures,
             ctx,
         );
         let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
@@ -306,7 +310,6 @@ pub(crate) fn collect_module_analyses_with_bindings(
         analyses.push(Some(ModuleAnalysis {
             local_type_declarations: local_type_declarations.clone(),
             local_symbols,
-            local_function_signatures,
             local_export_table: export_table,
         }));
         ctx.type_declaration_scope = saved_type_declaration_scope;
