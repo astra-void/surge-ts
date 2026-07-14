@@ -201,19 +201,25 @@ struct LazyInstantiation {
     resolved_arguments: Vec<Type>,
     substitution: TypeParameterSubstitution,
     display: Arc<str>,
-    memo: std::sync::OnceLock<Arc<Type>>,
+    /// Weak so a back-edge reference embedded in an interned expansion cannot
+    /// keep its own container alive: memoizing the containing `Arc<Type>`
+    /// strongly forms a reference↔expansion cycle that survives even after the
+    /// program caches are cleared. The strong ref lives in
+    /// `program_instantiations`; if it is gone the resolve falls through to a
+    /// fresh peel.
+    memo: std::sync::OnceLock<std::sync::Weak<Type>>,
 }
 
 impl ResolveReference for LazyInstantiation {
     fn resolve(&self) -> Type {
-        if let Some(memoized) = self.memo.get() {
-            return (**memoized).clone();
+        if let Some(memoized) = self.memo.get().and_then(std::sync::Weak::upgrade) {
+            return (*memoized).clone();
         }
         // A peel of the same instantiation elsewhere may have already interned it.
         if let Some(entry) =
             lookup_instantiation(&self.snapshot, &self.decl_key, &self.resolved_arguments)
         {
-            let _ = self.memo.set(entry.resolved.clone());
+            let _ = self.memo.set(Arc::downgrade(&entry.resolved));
             return (*entry.resolved).clone();
         }
 
@@ -311,7 +317,7 @@ impl ResolveReference for LazyInstantiation {
             &self.resolved_arguments,
             resolved_ty,
         );
-        let _ = self.memo.set(interned.clone());
+        let _ = self.memo.set(Arc::downgrade(&interned));
         (*interned).clone()
     }
 }

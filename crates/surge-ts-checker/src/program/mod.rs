@@ -480,6 +480,7 @@ pub fn check_program_with_stats_and_jobs(
             result.stats.suppressed_rust_only_diagnostics_total;
     }
 
+    ctx.clear_program_type_caches();
     let (diagnostics, stats) = ctx.finish_with_stats();
 
     if let Some(timings) = timings.as_ref() {

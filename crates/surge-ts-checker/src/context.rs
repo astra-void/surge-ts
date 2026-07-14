@@ -356,6 +356,25 @@ impl CheckerContext {
         snapshot
     }
 
+    /// Breaks the `Arc` cycle between the shared type caches and the lazy
+    /// resolution snapshots. Cached types contain lazy `Type::Reference`s whose
+    /// resolver holds an `Arc<CheckerContext>` snapshot, and every snapshot holds
+    /// the same `Arc`-shared cache maps — so once a run has deferred a single
+    /// library reference, the caches, snapshots, and every interned expansion
+    /// keep each other alive after all contexts are dropped. Clearing the maps
+    /// at the end of a program check lets the whole graph free.
+    pub(crate) fn clear_program_type_caches(&self) {
+        if let Ok(mut cache) = self.resolved_named_types.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.program_resolved_generic_types.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.program_instantiations.lock() {
+            cache.clear();
+        }
+    }
+
     /// Whether unresolved type names should be silently treated as `unknown`
     /// rather than emitting TS2304 — true while expanding a namespace-qualified
     /// member body. See [`Self::namespace_member_resolution_depth`].

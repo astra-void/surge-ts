@@ -149,6 +149,7 @@ impl Project {
     /// (parse errors, unknown options) are captured in [`Self::config_diagnostics`]
     /// rather than returned as an error.
     pub fn load(tsconfig_path: impl AsRef<Path>) -> Self {
+        surge_ts_config::clear_canonicalize_cache();
         let loaded = load_tsconfig(TsConfigLoadOptions {
             project: tsconfig_path.as_ref().to_path_buf(),
         });

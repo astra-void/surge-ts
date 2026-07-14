@@ -14,6 +14,14 @@ thread_local! {
     static CANONICALIZE_CACHE: RefCell<HashMap<PathBuf, PathBuf>> = RefCell::new(HashMap::new());
 }
 
+/// Drops the calling thread's canonicalization memo. The cache is only valid
+/// while the filesystem is stable, and without a reset a long-lived process
+/// that loads many projects accumulates every path it ever canonicalized.
+/// Called at the start of each project load.
+pub fn clear_canonicalize_cache() {
+    CANONICALIZE_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
 pub fn resolve_project_path(project: &Path) -> (PathBuf, PathBuf) {
     let project = absolutize(project);
 
