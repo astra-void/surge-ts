@@ -68,6 +68,14 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         || matches!(from, Type::Never)
         || matches!(to, Type::Any)
         || to.is_unknown()
+        // Sentinel `Unknown` (NOT the `unknown` keyword, which is
+        // `GenuineUnknown`) marks a type surge could not model — e.g.
+        // `SubmitEvent.nativeEvent`, whose `NativeSubmitEvent` alias collides
+        // with the enclosing declaration and degrades. tsc compares the real
+        // type there, so failing on a degraded *source* turns every unmodelled
+        // corner into a false-positive cascade. The same leniency already
+        // applies to sentinel arguments in the same-generic fast path below.
+        || matches!(from, Type::Unknown)
     {
         return true;
     }
