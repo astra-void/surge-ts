@@ -28,9 +28,9 @@
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.3",
-		"@typescript/native-preview": "7.0.0-dev.20260702.3",
 		"tsx": "4.22.4",
-		"typescript": "6.0.3"
+		"typescript": "npm:typescript@7.0.2",
+		"typescript-6": "npm:typescript@6.0.3"
 	},
-	"packageManager": "pnpm@11.7.0"
+	"packageManager": "pnpm@11.13.0"
 }

@@ -156,8 +156,15 @@ const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
 const workspaceRoot = path.resolve(scriptDir, '../..');
 const packageManagerCache = process.env.npm_config_cache ?? path.join(os.tmpdir(), 'npm-cache');
-const packageManagerExecutable = process.env.npm_execpath ? process.execPath : 'pnpm';
-const packageManagerArgsPrefix = process.env.npm_execpath ? [process.env.npm_execpath] : [];
+// The oracle reference is TypeScript 7.0 (the native compiler, pinned as the
+// canonical `typescript` package). Set SURGE_ORACLE_TSC=6 to compare against
+// the legacy JS compiler (pinned as the `typescript-6` alias, kept as a
+// benchmark reference). Both emit identical
+// `file(line,col): error TSxxxx: message` lines, so the parser is shared.
+// Each package exposes a `tsc` bin and only one can own `.bin/tsc`, so both are
+// invoked through their resolved package bin path rather than `pnpm exec tsc`.
+const oracleTypeScript = process.env.SURGE_ORACLE_TSC === '6' ? 'typescript-6' : 'typescript';
+const oracleTscBinPath = path.join(workspaceRoot, 'node_modules', oracleTypeScript, 'bin', 'tsc');
 const pinnedTypeScriptVersion = readPinnedTypeScriptVersion();
 const subprocessMaxBuffer = 50 * 1024 * 1024;
 
@@ -545,12 +552,12 @@ export function compareFile(
 export function runTsc(mode: OracleMode): RunResult {
   const args =
     mode.kind === 'project'
-      ? ['exec', 'tsc', '--noEmit', '--pretty', 'false', '--project', mode.resolvedTsconfig]
-      : ['exec', 'tsc', '--noEmit', '--pretty', 'false', mode.resolvedFile];
+      ? [oracleTscBinPath, '--noEmit', '--pretty', 'false', '--project', mode.resolvedTsconfig]
+      : [oracleTscBinPath, '--noEmit', '--pretty', 'false', mode.resolvedFile];
   if (mode.ignoreConfig) {
       args.splice(args.length - 1, 0, '--ignoreConfig');
   }
-  const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, ...args], {
+  const result = spawnSync(process.execPath, args, {
     cwd: workspaceRoot,
     encoding: 'utf8',
     maxBuffer: subprocessMaxBuffer,
@@ -979,11 +986,12 @@ export function keyByFullLocation(diagnostic: NormalizedDiagnostic): string {
 }
 
 export function buildTypeScriptCommand(mode: 'project' | 'file', targetDisplay: string, ignoreConfig?: boolean): string {
+  const bin = `node node_modules/${oracleTypeScript}/bin/tsc`;
   if (mode === 'project') {
-    return `pnpm exec tsc --noEmit --pretty false --project ${targetDisplay}`;
+    return `${bin} --noEmit --pretty false --project ${targetDisplay}`;
   }
 
-  return ignoreConfig ? `pnpm exec tsc --noEmit --pretty false --ignoreConfig ${targetDisplay}` : `pnpm exec tsc --noEmit --pretty false ${targetDisplay}`;
+  return ignoreConfig ? `${bin} --noEmit --pretty false --ignoreConfig ${targetDisplay}` : `${bin} --noEmit --pretty false ${targetDisplay}`;
 }
 
 export function buildSurgeTsCommand(
@@ -1522,7 +1530,11 @@ function readPinnedTypeScriptVersion(): string {
     devDependencies?: Record<string, string>;
   };
 
-  return packageJson.devDependencies?.typescript ?? 'unknown';
+  const deps = packageJson.devDependencies ?? {};
+  const spec = deps[oracleTypeScript] ?? 'unknown';
+  // devDependency specs are pnpm aliases (`npm:typescript@7.0.2`); surface just
+  // the resolved version for display.
+  return spec.replace(/^npm:typescript@/, '');
 }
 
 function looksLikePath(value: string): boolean {

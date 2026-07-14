@@ -7,10 +7,12 @@ in the `surge-ts` facade's `package_declarations` module and is wired from
 
 ## Important: TypeScript 6.0 removed implicit `@types` inclusion
 
-The pinned oracle is **TypeScript 6.0.3**. Unlike TypeScript ≤ 5.x, it does
-**not** automatically include every visible `node_modules/@types/*` package when
-`compilerOptions.types` is absent. Verified against the oracle (and against
-`@typescript/native-preview` / tsgo 7.0, which behaves identically):
+The pinned oracle is **TypeScript 7.0.2** (the native compiler); TypeScript
+6.0.3 is retained as the `typescript-6` benchmark alias. Starting with
+TypeScript 6.0, and unchanged in 7.0, the compiler does **not** automatically
+include every visible `node_modules/@types/*` package when
+`compilerOptions.types` is absent. Verified against both the 7.0 oracle and the
+6.0.3 baseline, which behave identically:
 
 | Config | tsc 6.0.3 |
 | --- | --- |

@@ -893,7 +893,7 @@ function baselineCompilerMemory(tsconfig: string): MemoryModeResult[] {
   const results: MemoryModeResult[] = [];
   const baseArgs = ['--noEmit', '--pretty', 'false', '--project', tsconfig];
 
-  const tscEntry = path.join(workspaceRoot, 'node_modules', 'typescript', 'bin', 'tsc');
+  const tscEntry = path.join(workspaceRoot, 'node_modules', 'typescript-6', 'bin', 'tsc');
   if (existsSync(tscEntry)) {
     const result = runMeasuredCommand(process.execPath, [tscEntry, ...baseArgs], {
       cwd: workspaceRoot,
@@ -913,14 +913,7 @@ function baselineCompilerMemory(tsconfig: string): MemoryModeResult[] {
     );
   }
 
-  const tsgoEntry = path.join(
-    workspaceRoot,
-    'node_modules',
-    '@typescript',
-    'native-preview',
-    'bin',
-    'tsgo.js',
-  );
+  const tsgoEntry = path.join(workspaceRoot, 'node_modules', 'typescript', 'bin', 'tsc');
   if (existsSync(tsgoEntry)) {
     const result = runMeasuredCommand(process.execPath, [tsgoEntry, ...baseArgs], {
       cwd: workspaceRoot,

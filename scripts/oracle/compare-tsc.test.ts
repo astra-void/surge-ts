@@ -142,11 +142,11 @@ function resolves_project_and_file_inputs(): void {
 function builds_commands(): void {
   assert.equal(
     buildTypeScriptCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json'),
-    'pnpm exec tsc --noEmit --pretty false --project tests/compat-projects/generics-basic/tsconfig.json',
+    'node node_modules/typescript/bin/tsc --noEmit --pretty false --project tests/compat-projects/generics-basic/tsconfig.json',
   );
   assert.equal(
     buildTypeScriptCommand('file', 'examples/basic.ts', true),
-    'pnpm exec tsc --noEmit --pretty false --ignoreConfig examples/basic.ts',
+    'node node_modules/typescript/bin/tsc --noEmit --pretty false --ignoreConfig examples/basic.ts',
   );
   assert.match(
     buildSurgeTsCommand('project', 'tests/compat-projects/generics-basic/tsconfig.json').replace(/\\/g, '/'),

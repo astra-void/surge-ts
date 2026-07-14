@@ -4,10 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import { generateDefaultLibs } from "./generate-default-libs.ts";
+import { generateDefaultLibs, resolveTypeScriptLibDir } from "./generate-default-libs.ts";
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const typescriptLibDir = path.join(workspaceRoot, "node_modules/typescript/lib");
+const typescriptLibDir = resolveTypeScriptLibDir();
 const generatedLibDir = path.join(workspaceRoot, "crates/surge-ts-checker/generated-libs");
 
 test("generateDefaultLibs copies the local TypeScript lib files deterministically", () => {

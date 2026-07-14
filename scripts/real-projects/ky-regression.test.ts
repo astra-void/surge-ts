@@ -6,10 +6,17 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { compareProject, resolveSurgeBin } from '../oracle/compare-tsc';
+import { resolveTypeScriptLibDir } from '../lib/generate-default-libs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const kyTsconfig = path.join(repoRoot, '.local-projects', 'ky', 'tsconfig.json');
-const typescriptLib = path.join(repoRoot, 'node_modules', 'typescript', 'lib', 'lib.es5.d.ts');
+const typescriptLib = (() => {
+  try {
+    return path.join(resolveTypeScriptLibDir(), 'lib.es5.d.ts');
+  } catch {
+    return path.join(repoRoot, 'node_modules', 'typescript', 'lib', 'lib.es5.d.ts');
+  }
+})();
 
 function runSurgeJson(extraArgs: string[]): unknown {
   const result = spawnSync(

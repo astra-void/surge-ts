@@ -3,14 +3,53 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const GENERATOR_VERSION = "v0.86-copy-typescript-libs";
+const GENERATOR_VERSION = "v0.87-copy-native-typescript-libs";
 const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const TYPESCRIPT_PACKAGE_JSON = path.join(WORKSPACE_ROOT, "node_modules/typescript/package.json");
-const TYPESCRIPT_LIB_DIR = path.join(WORKSPACE_ROOT, "node_modules/typescript/lib");
 const OUTPUT_DIR = path.join(
   WORKSPACE_ROOT,
   "crates/surge-ts-checker/generated-libs",
 );
+
+// TypeScript 7.0 (the native compiler) ships the `lib.*.d.ts` files inside the
+// platform-specific binary package (@typescript/typescript-<platform>-<arch>),
+// not in `node_modules/typescript/lib` as the 6.x JS package did. Resolve the
+// installed platform package's lib directory; the workspace pins pnpm, so cover
+// both a hoisted layout and pnpm's `.pnpm` virtual store.
+export const platformLibPackage = `@typescript/typescript-${process.platform}-${process.arch}`;
+
+export function resolveTypeScriptLibDir(): string {
+  const platformPkg = platformLibPackage;
+  const pnpmDirName = platformPkg.replace("/", "+");
+  const candidates = [
+    path.join(WORKSPACE_ROOT, "node_modules", platformPkg, "lib"),
+    ...fs
+      .globSync(
+        path.join(
+          WORKSPACE_ROOT,
+          "node_modules/.pnpm",
+          `${pnpmDirName}@*`,
+          "node_modules",
+          platformPkg,
+          "lib",
+        ),
+      )
+      .sort((left, right) => right.localeCompare(left)),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "lib.es5.d.ts"))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `could not locate TypeScript 7.0 native lib directory for ${platformPkg}. ` +
+      `Install workspace dependencies (pnpm install) so the platform package is present.`,
+  );
+}
+
+const TYPESCRIPT_LIB_DIR = resolveTypeScriptLibDir();
 
 type Manifest = {
   generatorVersion: string;
@@ -52,7 +91,7 @@ export function generateDefaultLibs(): Manifest {
     generatorVersion: GENERATOR_VERSION,
     generatedFrom: {
       typescriptPackageVersion,
-      sourceLibDir: "node_modules/typescript/lib",
+      sourceLibDir: `node_modules/${platformLibPackage}/lib`,
     },
     generatedFiles: libs.map((lib) => lib.fileName),
     stableHash: stableHash(

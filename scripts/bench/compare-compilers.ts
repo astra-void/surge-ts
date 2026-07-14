@@ -20,8 +20,13 @@ import {
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
 const workspaceRoot = path.resolve(scriptDir, '../..');
-const packageManagerExecutable = process.env.npm_execpath ? process.execPath : 'pnpm';
-const packageManagerArgsPrefix = process.env.npm_execpath ? [process.env.npm_execpath] : [];
+
+// `tsc` is the legacy JS compiler (TypeScript 6.x, the `typescript-6` alias),
+// kept as the slow baseline; `tsgo` is the native compiler (TypeScript 7.0, the
+// canonical `typescript` package). Both packages expose a `tsc` bin and only one
+// can own `.bin/tsc`, so each is invoked through its resolved package bin path.
+const tsc6BinPath = path.join(workspaceRoot, 'node_modules', 'typescript-6', 'bin', 'tsc');
+const tsc7BinPath = path.join(workspaceRoot, 'node_modules', 'typescript', 'bin', 'tsc');
 
 type Tool = 'tsc' | 'tsgo' | 'tsgo-singleThreaded' | 'surge-ts';
 
@@ -169,7 +174,7 @@ function main(argv = process.argv.slice(2)): void {
          benchRes.drift['tsgo-singleThreaded'] = 'skipped';
       }
     } else if (args.includeTsgo && !tsgoAvailable) {
-       console.log(`  tsgo skipped (not installed). Use pnpm add -g @typescript/native-preview to install.`);
+       console.log(`  tsgo skipped (native TypeScript 7.0 not resolvable). Run pnpm install to restore the typescript package.`);
     }
 
     // 3. surge-ts
@@ -221,7 +226,7 @@ function resolveProjectLocally(input: string) {
 
 function checkTsgo(): boolean {
   try {
-    const res = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, 'exec', 'tsgo', '--version']);
+    const res = spawnSync(process.execPath, [tsc7BinPath, '--version']);
     return res.status === 0;
   } catch {
     return false;
@@ -237,11 +242,11 @@ function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rus
     let res;
     
     if (tool === 'tsc') {
-      res = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, 'exec', 'tsc', '--noEmit', '--pretty', 'false', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
+      res = spawnSync(process.execPath, [tsc6BinPath, '--noEmit', '--pretty', 'false', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
     } else if (tool === 'tsgo') {
-      res = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, 'exec', 'tsgo', '--noEmit', '--pretty', 'false', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
+      res = spawnSync(process.execPath, [tsc7BinPath, '--noEmit', '--pretty', 'false', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
     } else if (tool === 'tsgo-singleThreaded') {
-      res = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, 'exec', 'tsgo', '--noEmit', '--pretty', 'false', '--singleThreaded', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
+      res = spawnSync(process.execPath, [tsc7BinPath, '--noEmit', '--pretty', 'false', '--singleThreaded', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
     } else if (tool === 'surge-ts') {
       let exePath = path.join(workspaceRoot, 'target/release/surge');
       if (process.platform === 'win32') exePath += '.exe';

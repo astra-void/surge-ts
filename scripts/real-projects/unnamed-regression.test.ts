@@ -5,10 +5,17 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { compareProject } from '../oracle/compare-tsc';
+import { resolveTypeScriptLibDir } from '../lib/generate-default-libs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const unnamedTsconfig = path.resolve(repoRoot, '../../nextjs/unnamed/tsconfig.json');
-const typescriptLib = path.join(repoRoot, 'node_modules', 'typescript', 'lib', 'lib.es5.d.ts');
+const typescriptLib = (() => {
+  try {
+    return path.join(resolveTypeScriptLibDir(), 'lib.es5.d.ts');
+  } catch {
+    return path.join(repoRoot, 'node_modules', 'typescript', 'lib', 'lib.es5.d.ts');
+  }
+})();
 
 // The current false-positive watermark (2026-07-13). `unnamed` is a
 // tsc-reports-0 project, so every surge diagnostic is an over-report; this
@@ -31,6 +38,9 @@ const typescriptLib = path.join(repoRoot, 'node_modules', 'typescript', 'lib', '
 // `export { z }`) cleared the TS2305s (45 → 43), and giving JSX expressions
 // ReactElement's structural members cleared the react-hook-form render
 // cluster (43 → 34, 2026-07-13).
+//
+// Oracle migrated to TypeScript 7.0.2 (the native compiler) on 2026-07-14; the
+// watermark held at exactly 34 (tsc still reports 0), so no ratchet was needed.
 const FALSE_POSITIVE_CEILING = 34;
 
 // One comparison serves both gates: the project run takes minutes, so each

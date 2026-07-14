@@ -4,8 +4,8 @@ This directory contains the developer-facing regression benchmark (`compare-comp
 
 It is **not** a marketing benchmark. It compares the same `tsconfig.json` inputs across:
 
-1. JavaScript TypeScript compiler (`tsc`, pinned through workspace dependency)
-2. TypeScript native Go compiler (`tsgo`, optional)
+1. JavaScript TypeScript compiler (`tsc` = TypeScript 6.x, the `typescript-6` workspace alias, kept as the slow baseline)
+2. TypeScript native compiler (`tsgo` = TypeScript 7.0, the canonical `typescript` package)
 3. `surge-ts` CLI (using the release binary, not `cargo run`)
 
 ## Requirements
@@ -16,7 +16,7 @@ It is **not** a marketing benchmark. It compares the same `tsconfig.json` inputs
     cargo build --release -p surge-ts-cli
     ```
 
-2. **`tsgo` is Included When Available:** `@typescript/native-preview` does not need to be installed globally. If `tsgo` is present in the workspace, the harness will benchmark it automatically and still cleanly skip it when it is unavailable.
+2. **`tsgo` is Included When Available:** the native TypeScript 7.0 compiler ships as the workspace `typescript` package, so no global install is needed. If it is resolvable, the harness benchmarks it automatically and still cleanly skips it when it is unavailable.
 3. **TS 7-Oriented Fixtures:** Committed fixtures under `tests/compat-projects/` must not use `ignoreDeprecations` in their `compilerOptions`. If a fixture triggers a TS 6 deprecation warning, fix the fixture config instead of suppressing the diagnostic. The harness actively guards against `ignoreDeprecations` usage.
 
 ## What It Measures
