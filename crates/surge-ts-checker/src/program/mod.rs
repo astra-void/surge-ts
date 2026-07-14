@@ -391,8 +391,12 @@ pub fn check_program_with_stats_and_jobs(
         let saved_file_name = ctx.file_name.clone();
         let saved_type_declarations = std::mem::take(&mut ctx.type_declarations);
         let mut module_local_values: HashMap<Arc<str>, Arc<SymbolTable>> = HashMap::new();
+        // Declaration modules are included: a library annotation chain routinely
+        // crosses `typeof <importedValue>` (radix's
+        // `ComponentPropsWithoutRef<typeof Primitive.button>`), which resolves
+        // through this map under the declaring file's name.
         for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-            if !parsed_file.is_module || parsed_file.file_kind.is_declaration() {
+            if !parsed_file.is_module {
                 continue;
             }
             let Some(analysis) = shared_state.module_analyses[file_index].as_ref() else {
@@ -407,12 +411,28 @@ pub fn check_program_with_stats_and_jobs(
             for (name, symbol) in analysis.local_symbols.iter_shared() {
                 let _ = seed.insert_shared(name.clone(), symbol.clone());
             }
+            if parsed_file.file_kind.is_declaration() {
+                // A `typeof X` inside a declaration module targets either an
+                // imported value (the binding symbol already carries its
+                // export-table type) or an exported declaration (its typed
+                // symbol sits in the local export table, computed during
+                // binding). Reusing those Arc-shared handles covers both;
+                // running the full exportable-value collection here instead
+                // re-resolves every annotation of every dependency `.d.ts`
+                // (unnamed: 27GB peak RSS, >6min).
+                for (name, symbol) in analysis.local_export_table.symbols.iter_shared() {
+                    let _ = seed.insert_shared(name.clone(), symbol.clone());
+                }
+                module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
+                continue;
+            }
             ctx.file_name = parsed_file.file_name.clone();
             ctx.type_declarations = analysis.local_type_declarations.as_ref().clone();
             let table = crate::modules::collect_exportable_value_symbols(
                 &parsed_file.statements,
                 &analysis.local_type_declarations,
                 &seed,
+                None,
                 &ctx,
             );
             module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(table));
@@ -959,6 +979,7 @@ fn check_program_file(
             &parsed_file.statements,
             &current_type_declarations,
             &current_symbols,
+            None,
             ctx,
         );
         let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);
@@ -1066,6 +1087,7 @@ fn check_program_file(
             &parsed_file.statements,
             &current_type_declarations,
             &current_symbols,
+            None,
             ctx,
         );
         let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);

@@ -69,6 +69,7 @@ pub fn check_source_with_options(
         &parsed.statements,
         &current_type_declarations,
         &current_symbols,
+        None,
         &mut ctx,
     );
     let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);

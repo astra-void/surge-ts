@@ -254,6 +254,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
                 &parsed_file.statements,
                 local_type_declarations.as_ref(),
                 &import_seed,
+                None,
                 ctx,
             );
             for (name, symbol) in value_env.iter_shared() {

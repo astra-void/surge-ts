@@ -33,6 +33,7 @@ pub(crate) fn build_module_export_table(
         &parsed_file.statements,
         local_type_declarations,
         local_symbols,
+        Some(imported_symbols),
         ctx,
     );
 
@@ -555,6 +556,7 @@ pub(crate) fn collect_exportable_value_symbols(
     statements: &[ParsedStatement],
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
+    imported_symbols: Option<&SymbolTable>,
     ctx: &CheckerContext,
 ) -> SymbolTable {
     let mut file_kinds = HashMap::new();
@@ -567,22 +569,31 @@ pub(crate) fn collect_exportable_value_symbols(
     shadow_ctx.type_declarations = ctx.type_declarations.clone();
     // The caller's full type-resolution surface must travel into the shadow, or
     // an exported `const` whose annotation names an *imported* type (a generic
-    // arrow component's `ControllerProps<T, N>` parameter) resolves to `unknown`
-    // and every consumer loses its signature. All Arc-shared, read-only state.
-    // Library declaration files are exempt from the scope: they have no
-    // initializers to infer and their exports resolve through the declaration
-    // tables, while a live scope makes the `check_initializer` walk fully expand
-    // library type graphs for every dependency module on every binding pass
-    // (unnamed: 775MB/4.9s -> 8.5GB/66s peak RSS).
-    if !ctx.is_library_scoped_file(&ctx.file_name) {
-        shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
-    }
+    // arrow component's `ControllerProps<T, N>` parameter, radix's
+    // `Root: ForwardRefExoticComponent<CheckboxProps & …>`) resolves to
+    // `unknown` and every consumer loses its signature. All Arc-shared,
+    // read-only state. Initializer inference is gated off for library
+    // declaration files instead (below): annotations there must still resolve,
+    // but a live scope made the initializer walk fully expand library type
+    // graphs for every dependency module on every binding pass (unnamed peak
+    // RSS 8.5GB with both, 5.1GB with annotations only, 2.8GB with neither —
+    // the last silently degrades every `ComponentProps<typeof Primitive.X>`).
+    let library_file = ctx.is_library_scoped_file(&ctx.file_name);
+    shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
     shadow_ctx.ambient_global_type_declarations = ctx.ambient_global_type_declarations.clone();
     shadow_ctx.ambient_global_symbols = ctx
         .ambient_global_symbols
         .clone_with_reason(TypeCopyReason::ModuleExport);
     shadow_ctx.module_scope_by_file = ctx.module_scope_by_file.clone();
     shadow_ctx.module_local_values_by_file = ctx.module_local_values_by_file.clone();
+    // The file's import bindings back `typeof <importedValue>` in annotations
+    // (radix's `ComponentPropsWithoutRef<typeof Primitive.button>`); they are a
+    // resolution fallback only, never inserted into the exportable set.
+    if let Some(imported_symbols) = imported_symbols {
+        shadow_ctx.module_value_fallback = Some(Arc::new(
+            imported_symbols.clone_with_reason(TypeCopyReason::ModuleExport),
+        ));
+    }
 
     // The ambient globals (the lib `.d.ts` surface, ~1000 entries) are only a
     // read-only resolution backdrop here: the returned table is consulted via
@@ -604,6 +615,7 @@ pub(crate) fn collect_exportable_value_symbols(
             statement,
             &mut exportable_values,
             &mut shadow_ctx,
+            !library_file,
         );
     }
 
@@ -614,6 +626,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
     statement: &ParsedStatement,
     exportable_values: &mut SymbolTable,
     ctx: &mut CheckerContext,
+    check_initializers: bool,
 ) {
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
@@ -624,7 +637,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                 ctx,
                 VariableCheckOptions {
                     report_duplicate_let_const: false,
-                    check_initializer: true,
+                    check_initializer: check_initializers,
                 },
             );
 
@@ -638,6 +651,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                     declaration.as_ref(),
                     exportable_values,
                     ctx,
+                    check_initializers,
                 )
             }
         }
