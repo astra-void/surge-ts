@@ -114,6 +114,15 @@ pub(crate) struct ProgramCounters {
     pub(crate) module_export_borrowed_lookup_count: u64,
     pub(crate) module_export_namespace_export_object_materialization_count: u64,
     pub(crate) module_export_namespace_export_object_property_count: u64,
+    pub(crate) generic_type_cache_hit_count: u64,
+    pub(crate) generic_type_cache_miss_count: u64,
+    pub(crate) generic_type_cache_insert_count: u64,
+    pub(crate) generic_type_cache_capped_count: u64,
+    pub(crate) instantiation_intern_hit_count: u64,
+    pub(crate) instantiation_intern_insert_count: u64,
+    pub(crate) instantiation_intern_capped_count: u64,
+    pub(crate) named_type_cache_hit_count: u64,
+    pub(crate) named_type_cache_insert_count: u64,
 }
 
 static PROGRAM_COUNTERS: OnceLock<Mutex<ProgramCounters>> = OnceLock::new();

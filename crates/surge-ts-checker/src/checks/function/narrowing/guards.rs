@@ -330,7 +330,9 @@ pub(super) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
 
 /// Parses a `typeof x === "tag"` / `!==` guard, returning the operand expression,
 /// the tag string, and whether the operator is equality (vs inequality).
-pub(super) fn parse_typeof_condition(condition: &ParsedExpression) -> Option<(&ParsedExpression, &str, bool)> {
+pub(super) fn parse_typeof_condition(
+    condition: &ParsedExpression,
+) -> Option<(&ParsedExpression, &str, bool)> {
     use surge_ts_syntax::ParsedBinaryOperator;
     let ParsedExpression::Binary {
         left,
@@ -428,7 +430,11 @@ fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
 /// Narrows a union by an `x instanceof Ctor` guard. `keep_matching` keeps the
 /// members that are instances of `Ctor` (the `=== true` branch); otherwise
 /// removes them. Members whose membership is undecidable are kept either way.
-pub(super) fn narrow_union_by_instanceof(ty: &Type, ctor_name: &str, keep_matching: bool) -> Option<Type> {
+pub(super) fn narrow_union_by_instanceof(
+    ty: &Type,
+    ctor_name: &str,
+    keep_matching: bool,
+) -> Option<Type> {
     // Peel a lazy/nominal reference to its structural form first: a deferred
     // generic alias such as `MaybeAsync<T>` (= `T | Promise<T>`) reaches here as a
     // `Type::Reference`, and matching `Type::Union` directly would miss the union
@@ -457,7 +463,9 @@ pub(super) fn narrow_union_by_instanceof(ty: &Type, ctor_name: &str, keep_matchi
 /// Parses an `x instanceof Ctor` guard, returning the operand expression and the
 /// constructor identifier name. (`instanceof` has no equality polarity — the
 /// then-branch always keeps the matching members.)
-pub(super) fn parse_instanceof_condition(condition: &ParsedExpression) -> Option<(&ParsedExpression, &str)> {
+pub(super) fn parse_instanceof_condition(
+    condition: &ParsedExpression,
+) -> Option<(&ParsedExpression, &str)> {
     use surge_ts_syntax::ParsedBinaryOperator;
     let ParsedExpression::Binary {
         left,
@@ -502,7 +510,9 @@ pub(super) fn narrow_instanceof_symbol_table(
 }
 
 /// Parses an `Array.isArray(x)` guard, returning the argument expression.
-pub(super) fn parse_array_isarray_condition(condition: &ParsedExpression) -> Option<&ParsedExpression> {
+pub(super) fn parse_array_isarray_condition(
+    condition: &ParsedExpression,
+) -> Option<&ParsedExpression> {
     let ParsedExpression::PropertyCall {
         object,
         property_name,
@@ -598,7 +608,9 @@ fn is_array_buffer_view_type(member: &Type) -> bool {
 }
 
 /// Parses an `ArrayBuffer.isView(x)` guard, returning the argument expression.
-pub(super) fn parse_arraybuffer_isview_condition(condition: &ParsedExpression) -> Option<&ParsedExpression> {
+pub(super) fn parse_arraybuffer_isview_condition(
+    condition: &ParsedExpression,
+) -> Option<&ParsedExpression> {
     let ParsedExpression::PropertyCall {
         object,
         property_name,

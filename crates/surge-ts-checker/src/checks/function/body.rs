@@ -4,17 +4,12 @@ use super::*;
 
 use std::time::Instant;
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{
-    ParsedFunctionBodyStatement,
-    ParsedVariableDeclaration, ParsedVariableKind,
-};
+use surge_ts_syntax::{ParsedFunctionBodyStatement, ParsedVariableDeclaration, ParsedVariableKind};
 use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
 
 use crate::context::CheckerContext;
 use crate::context::convert_span;
-use crate::flow::{
-    FunctionFlowState, collect_future_block_scoped_declarations,
-};
+use crate::flow::{FunctionFlowState, collect_future_block_scoped_declarations};
 use crate::program::{
     record_flow_function_count, record_flow_function_skipped_count, record_flow_statement_count,
     record_function_body_check, record_program_timing,
@@ -330,7 +325,6 @@ pub(crate) fn check_function_body_statement(
         }
     }
 }
-
 
 pub(crate) fn visible_symbols(scopes: &ScopeStack) -> &SymbolTable {
     scopes.visible_symbols()

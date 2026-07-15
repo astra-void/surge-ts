@@ -66,7 +66,7 @@ mod imp {
     const PROC_PIDTASKINFO: i32 = 4;
     const RUSAGE_SELF: i32 = 0;
 
-    extern "C" {
+    unsafe extern "C" {
         fn proc_pidinfo(
             pid: i32,
             flavor: i32,

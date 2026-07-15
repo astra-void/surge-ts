@@ -71,8 +71,7 @@ pub(crate) fn resolve_type_alias(
             .structural_resolution_frames
             .iter()
             .any(|&frame| frame > index);
-        let legal_recursion =
-            alias_body_supports_recursion(&alias.body.ty) || structural_crossing;
+        let legal_recursion = alias_body_supports_recursion(&alias.body.ty) || structural_crossing;
         if legal_recursion && alias.body.type_parameters.is_empty() {
             return ResolvedType {
                 ty: make_recursive_cycle_reference(

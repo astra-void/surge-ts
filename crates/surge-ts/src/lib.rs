@@ -218,6 +218,7 @@ impl Project {
             });
             sources.push((file_path, file_name, source_text));
         }
+        surge_ts_checker::lowlevel::record_loader_rss_stage("sources_read");
         if collect {
             timings.file_discovery += file_discovery_start.elapsed();
             timings.source_read_io +=
@@ -262,6 +263,7 @@ impl Project {
             timings.default_lib_existence_probes += default_lib_io.existence_probes;
             timings.default_lib_canonicalize_syscalls += default_lib_io.canonicalize_syscalls;
         }
+        surge_ts_checker::lowlevel::record_loader_rss_stage("default_libs_loaded");
 
         let mut resolved_modules = std::collections::HashMap::new();
         let mut package_resolution_cache =
@@ -328,6 +330,7 @@ impl Project {
                 break;
             }
         }
+        surge_ts_checker::lowlevel::record_loader_rss_stage("import_graph_expanded");
 
         if collect {
             let io = io_stats::snapshot();

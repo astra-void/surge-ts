@@ -55,6 +55,18 @@ pub(crate) struct ProgramTimings {
     pub(crate) flow_narrowing: Duration,
     pub(crate) file_metrics: HashMap<String, FileTimings>,
     pub(crate) rss_stages: Vec<RssStageSample>,
+    pub(crate) cache_stats: Option<ProgramCacheStats>,
+}
+
+/// End-of-run sizes of the program-wide type caches, sampled just before the
+/// teardown in `clear_program_type_caches` so the peak retained entry counts
+/// are visible alongside the RSS stages.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProgramCacheStats {
+    pub(crate) generic_type_buckets: u64,
+    pub(crate) generic_type_entries: u64,
+    pub(crate) instantiation_buckets: u64,
+    pub(crate) instantiation_entries: u64,
 }
 
 /// One RSS reading taken at a pipeline stage boundary. `current_bytes` is the
@@ -739,6 +751,42 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         counters.module_export_namespace_export_object_property_count
     );
     eprintln!(
+        "    generic_type_cache_hit_count: {}",
+        counters.generic_type_cache_hit_count
+    );
+    eprintln!(
+        "    generic_type_cache_miss_count: {}",
+        counters.generic_type_cache_miss_count
+    );
+    eprintln!(
+        "    generic_type_cache_insert_count: {}",
+        counters.generic_type_cache_insert_count
+    );
+    eprintln!(
+        "    generic_type_cache_capped_count: {}",
+        counters.generic_type_cache_capped_count
+    );
+    eprintln!(
+        "    instantiation_intern_hit_count: {}",
+        counters.instantiation_intern_hit_count
+    );
+    eprintln!(
+        "    instantiation_intern_insert_count: {}",
+        counters.instantiation_intern_insert_count
+    );
+    eprintln!(
+        "    instantiation_intern_capped_count: {}",
+        counters.instantiation_intern_capped_count
+    );
+    eprintln!(
+        "    named_type_cache_hit_count: {}",
+        counters.named_type_cache_hit_count
+    );
+    eprintln!(
+        "    named_type_cache_insert_count: {}",
+        counters.named_type_cache_insert_count
+    );
+    eprintln!(
         "    function_type_copy_from_expression_identifier_count: {}",
         counters.function_type_copy_from_expression_identifier_count
     );
@@ -943,9 +991,40 @@ pub(crate) fn render_program_rss_stages(timings: &Arc<Mutex<ProgramTimings>>) {
             previous_current = sample.current_bytes;
         }
     }
+    if let Some(stats) = &timings.cache_stats {
+        eprintln!(
+            "  cache_stats: generic_type_buckets={} generic_type_entries={} \
+             instantiation_buckets={} instantiation_entries={}",
+            stats.generic_type_buckets,
+            stats.generic_type_entries,
+            stats.instantiation_buckets,
+            stats.instantiation_entries,
+        );
+    }
+    if super::rss_json_enabled() {
+        for sample in &timings.rss_stages {
+            eprintln!(
+                "{{\"rssStage\":\"{}\",\"rssBytes\":{},\"peakRssBytes\":{},\"elapsedMs\":{:.3}}}",
+                sample.label,
+                super::json_u64_opt(sample.current_bytes),
+                super::json_u64_opt(sample.peak_bytes),
+                sample.elapsed.as_secs_f64() * 1000.0,
+            );
+        }
+        if let Some(stats) = &timings.cache_stats {
+            eprintln!(
+                "{{\"rssCacheStats\":{{\"genericTypeBuckets\":{},\"genericTypeEntries\":{},\
+                 \"instantiationBuckets\":{},\"instantiationEntries\":{}}}}}",
+                stats.generic_type_buckets,
+                stats.generic_type_entries,
+                stats.instantiation_buckets,
+                stats.instantiation_entries,
+            );
+        }
+    }
 }
 
-fn format_bytes_opt(bytes: Option<u64>) -> String {
+pub(crate) fn format_bytes_opt(bytes: Option<u64>) -> String {
     bytes.map_or_else(|| "n/a".to_string(), format_bytes)
 }
 

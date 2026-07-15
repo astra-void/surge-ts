@@ -57,11 +57,14 @@ fn function_not_assignable_to_object_with_extra_required_member() {
 fn constructor_object_assignable_to_name_object() {
     // `typeof SomeClass` (a construct-signature object) satisfies
     // `{name: string}` via the synthesized `Function.name` member.
-    let constructor =
-        Type::Object(
-            ObjectType::new(PropertyMap::new(), None)
-                .with_construct_signature(FunctionType::new(vec![], Type::Void, false, 0)),
-        );
+    let constructor = Type::Object(
+        ObjectType::new(PropertyMap::new(), None).with_construct_signature(FunctionType::new(
+            vec![],
+            Type::Void,
+            false,
+            0,
+        )),
+    );
     assert!(is_assignable_to(&constructor, &name_target()));
 }
 

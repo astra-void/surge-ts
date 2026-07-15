@@ -265,7 +265,8 @@ pub(crate) fn collect_exports_from_statement(
 
             let prefix = format!("{}.", namespace.name);
             for (key, declaration) in local_type_declarations.iter() {
-                if key.as_str().starts_with(&prefix) && type_declarations.get(key.as_str()).is_none()
+                if key.as_str().starts_with(&prefix)
+                    && type_declarations.get(key.as_str()).is_none()
                 {
                     let _ = type_declarations.insert(
                         key.as_str(),

@@ -348,8 +348,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
     for element in &tuple_type.element_types {
         match element {
             TSTupleElement::TSNamedTupleMember(member) => {
-                if member.optional || matches!(member.element_type, TSTupleElement::TSRestType(_))
-                {
+                if member.optional || matches!(member.element_type, TSTupleElement::TSRestType(_)) {
                     return Some(ParsedType::Unknown);
                 }
                 let Some(inner) = member.element_type.as_ts_type() else {

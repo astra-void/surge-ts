@@ -489,7 +489,10 @@ pub(super) fn resolve_first_target_in_package(
 
 /// Join an `exports`/`imports`/`typesVersions` target against the package root,
 /// rejecting paths that escape the package, then probe declaration variants.
-pub(super) fn resolve_target_in_package(pkg_dir: &Path, target: &str) -> Option<PackageEntrypointResolution> {
+pub(super) fn resolve_target_in_package(
+    pkg_dir: &Path,
+    target: &str,
+) -> Option<PackageEntrypointResolution> {
     let relative = target.trim_start_matches("./");
     let joined = pkg_dir.join(relative);
     if !path_is_within(pkg_dir, &joined) {
@@ -639,7 +642,9 @@ pub(super) fn read_package_json(
     parsed
 }
 
-pub(super) fn resolve_declaration_or_runtime_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
+pub(super) fn resolve_declaration_or_runtime_candidate(
+    path: &Path,
+) -> Option<PackageEntrypointResolution> {
     if let Some(path) = resolve_declaration_candidate(path) {
         return Some(PackageEntrypointResolution {
             path,
@@ -782,6 +787,7 @@ pub(super) fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
 }
 
 pub(super) fn extract_packages_from_source(
+    parser: &mut surge_ts_syntax::ParserWorker,
     source_text: &str,
     file_name: &str,
     importer_dir: &Path,
@@ -790,7 +796,7 @@ pub(super) fn extract_packages_from_source(
     queued_specifiers: &mut HashSet<String>,
 ) {
     let importer_file = PathBuf::from(file_name);
-    let parsed = parse_source(source_text, file_name);
+    let parsed = parser.parse(source_text, file_name);
     for statement in parsed.statements {
         let specifier = match statement {
             ParsedStatement::ImportDeclaration(import) => Some(import.module_specifier),

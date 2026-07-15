@@ -95,10 +95,11 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
     }
 
     let original_file_name = ctx.file_name.clone();
+    let mut parser = surge_ts_syntax::ParserWorker::new();
     let parsed_files: Vec<crate::program::ParsedProgramFile> = default_lib_inputs
         .into_iter()
         .map(|input| {
-            let parsed = parse_source(&input.source_text, &input.file_name);
+            let parsed = parser.parse(&input.source_text, &input.file_name);
             crate::program::ParsedProgramFile {
                 file_name: parsed.file_name,
                 has_export_default: input.source_text.contains("export default"),

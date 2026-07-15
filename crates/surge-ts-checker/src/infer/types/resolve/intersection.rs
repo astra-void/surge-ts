@@ -81,7 +81,9 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     let dropped_unmodelled_operand = members.iter().any(|ty| matches!(ty, Type::Unknown));
     let open_if_unmodelled = |ty: Type| -> Type {
         match ty {
-            Type::Object(object) if dropped_unmodelled_operand && object.string_index_type.is_none() => {
+            Type::Object(object)
+                if dropped_unmodelled_operand && object.string_index_type.is_none() =>
+            {
                 let mut object = object;
                 object.string_index_type = Some(std::sync::Arc::new(Type::Any));
                 Type::Object(object)
@@ -119,9 +121,7 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     // merge so non-reference intersections are unchanged.
     if DEFER_REFERENCE_INTERSECTIONS
         && members.len() > 1
-        && members
-            .iter()
-            .all(|ty| matches!(ty, Type::Reference(_)))
+        && members.iter().all(|ty| matches!(ty, Type::Reference(_)))
     {
         let display = display_name.unwrap_or_default();
         // Identity from the operands' module-qualified reference ids, not the

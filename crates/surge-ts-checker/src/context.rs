@@ -177,6 +177,10 @@ pub(crate) struct CheckerContext {
     diagnostic_keys_len: usize,
     pub(crate) stats: CompatibilityStats,
     pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
+    /// The utility-key set this worker context started the check phase with,
+    /// captured on the first `begin_file_check` and restored at every later
+    /// file boundary. See [`Self::begin_file_check`].
+    utility_diagnostic_keys_baseline: Option<Arc<HashSet<UtilityDiagnosticKey>>>,
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
@@ -307,6 +311,7 @@ impl CheckerContext {
             diagnostic_keys_len: 0,
             stats: CompatibilityStats::default(),
             utility_diagnostic_keys: HashSet::new(),
+            utility_diagnostic_keys_baseline: None,
             symbols: SymbolTable::new(),
             type_declarations: TypeDeclarationTable::new(),
             type_declaration_scope: None,
@@ -363,6 +368,37 @@ impl CheckerContext {
     /// library reference, the caches, snapshots, and every interned expansion
     /// keep each other alive after all contexts are dropped. Clearing the maps
     /// at the end of a program check lets the whole graph free.
+    /// End-of-run sizes of the shared program type caches, sampled before
+    /// [`Self::clear_program_type_caches`] tears them down.
+    pub(crate) fn program_cache_stats(&self) -> crate::metrics::ProgramCacheStats {
+        let (generic_type_buckets, generic_type_entries) = self
+            .program_resolved_generic_types
+            .lock()
+            .map(|cache| {
+                (
+                    cache.len() as u64,
+                    cache.values().map(|bucket| bucket.len() as u64).sum(),
+                )
+            })
+            .unwrap_or_default();
+        let (instantiation_buckets, instantiation_entries) = self
+            .program_instantiations
+            .lock()
+            .map(|cache| {
+                (
+                    cache.len() as u64,
+                    cache.values().map(|bucket| bucket.len() as u64).sum(),
+                )
+            })
+            .unwrap_or_default();
+        crate::metrics::ProgramCacheStats {
+            generic_type_buckets,
+            generic_type_entries,
+            instantiation_buckets,
+            instantiation_entries,
+        }
+    }
+
     pub(crate) fn clear_program_type_caches(&self) {
         if let Ok(mut cache) = self.resolved_named_types.lock() {
             cache.clear();
@@ -468,6 +504,32 @@ impl CheckerContext {
             .copied()
             .unwrap_or(FileKind::RootSource);
         self.file_name = file_name;
+    }
+
+    /// File-region reset for a worker context that is reused across files.
+    /// Serial checking clones a fresh context per file, so each file starts
+    /// from the pre-check baseline; a parallel worker reuses one context, and
+    /// without this reset its utility keys accumulate every checked file's
+    /// entries for the worker's lifetime (and can suppress diagnostics serial
+    /// checking emits). Restoring the baseline captured at the first file makes
+    /// the reused context byte-equivalent to a fresh clone.
+    /// `resolved_named_types` must be a fresh map rather than cleared in
+    /// place: resolutions depend on the consumer file's environment, and
+    /// lazy-resolution snapshots may still hold the previous file's `Arc`.
+    pub(crate) fn begin_file_check(&mut self, file_name: String) {
+        self.set_file_name(file_name);
+        self.type_declaration_scope = None;
+        let baseline = self
+            .utility_diagnostic_keys_baseline
+            .get_or_insert_with(|| Arc::new(std::mem::take(&mut self.utility_diagnostic_keys)));
+        self.utility_diagnostic_keys = baseline.as_ref().clone();
+        self.diagnostic_keys.clear();
+        self.diagnostic_keys_len = 0;
+        debug_assert!(
+            self.diagnostics.is_empty(),
+            "begin_file_check: previous file's diagnostics were not taken"
+        );
+        self.resolved_named_types = Arc::new(Mutex::new(HashMap::new()));
     }
 
     pub(crate) fn set_symbols(&mut self, symbols: SymbolTable) {

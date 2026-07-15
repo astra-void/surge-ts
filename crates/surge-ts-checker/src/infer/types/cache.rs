@@ -47,10 +47,13 @@ pub(crate) fn get_cached_named_type_resolution(
     let cache = ctx.resolved_named_types.lock().ok()?;
 
     match cache.get(key) {
-        Some(DeclarationResolutionState::Resolved { ty, had_error }) => Some(ResolvedType {
-            ty: ty.clone(),
-            had_error: *had_error,
-        }),
+        Some(DeclarationResolutionState::Resolved { ty, had_error }) => {
+            crate::program::record_program_counter(|c| c.named_type_cache_hit_count += 1);
+            Some(ResolvedType {
+                ty: ty.clone(),
+                had_error: *had_error,
+            })
+        }
         Some(DeclarationResolutionState::Resolving) => {
             if resolving.iter().any(|current| current == key) {
                 None
@@ -80,6 +83,7 @@ pub(crate) fn cache_named_type_resolution(
     resolved: &ResolvedType,
 ) {
     if let Ok(mut cache) = ctx.resolved_named_types.lock() {
+        crate::program::record_program_counter(|c| c.named_type_cache_insert_count += 1);
         cache.insert(
             key.clone(),
             DeclarationResolutionState::Resolved {
@@ -99,19 +103,46 @@ pub(crate) fn cache_named_type_resolution(
 /// (measured on zod at the previous cap of 64).
 const GENERIC_INSTANTIATION_BUCKET_CAP: usize = 4096;
 
+/// Effective per-declaration bucket cap, overridable via
+/// `SURGE_GENERIC_CACHE_BUCKET_CAP` for cache-bound experiments and the
+/// bounded-vs-unbounded regression tests. Over-cap entries are simply not
+/// cached (re-expanded on demand), so any cap produces identical diagnostics —
+/// only time/memory change. Read once per process.
+fn generic_instantiation_bucket_cap() -> usize {
+    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("SURGE_GENERIC_CACHE_BUCKET_CAP")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(GENERIC_INSTANTIATION_BUCKET_CAP)
+    })
+}
+
 pub(crate) fn get_persistent_generic_resolution(
     ctx: &CheckerContext,
     key: &DeclarationResolutionKey,
     arguments: &[Type],
 ) -> Option<ResolvedType> {
-    let cache = ctx.program_resolved_generic_types.lock().ok()?;
-    let bucket = cache.get(key)?;
-    bucket.iter().find_map(|entry| {
-        (entry.arguments == arguments).then(|| ResolvedType {
-            ty: entry.ty.clone(),
-            had_error: entry.had_error,
-        })
-    })
+    let resolved = ctx
+        .program_resolved_generic_types
+        .lock()
+        .ok()
+        .and_then(|cache| {
+            cache.get(key)?.iter().find_map(|entry| {
+                (entry.arguments == arguments).then(|| ResolvedType {
+                    ty: entry.ty.clone(),
+                    had_error: entry.had_error,
+                })
+            })
+        });
+    crate::program::record_program_counter(|c| {
+        if resolved.is_some() {
+            c.generic_type_cache_hit_count += 1;
+        } else {
+            c.generic_type_cache_miss_count += 1;
+        }
+    });
+    resolved
 }
 
 pub(crate) fn cache_persistent_generic_resolution(
@@ -125,9 +156,11 @@ pub(crate) fn cache_persistent_generic_resolution(
         if bucket.iter().any(|entry| entry.arguments == arguments) {
             return;
         }
-        if bucket.len() >= GENERIC_INSTANTIATION_BUCKET_CAP {
+        if bucket.len() >= generic_instantiation_bucket_cap() {
+            crate::program::record_program_counter(|c| c.generic_type_cache_capped_count += 1);
             return;
         }
+        crate::program::record_program_counter(|c| c.generic_type_cache_insert_count += 1);
         bucket.push(GenericInstantiationCacheEntry {
             arguments,
             ty: resolved.ty.clone(),
@@ -409,14 +442,18 @@ pub(crate) fn intern_instantiation(
     };
     let bucket = cache.entry(key.clone()).or_default();
     if let Some(entry) = bucket.iter().find(|entry| entry.arguments == arguments) {
+        crate::program::record_program_counter(|c| c.instantiation_intern_hit_count += 1);
         return entry.resolved.clone();
     }
     let resolved = Arc::new(structural);
-    if bucket.len() < GENERIC_INSTANTIATION_BUCKET_CAP {
+    if bucket.len() < generic_instantiation_bucket_cap() {
+        crate::program::record_program_counter(|c| c.instantiation_intern_insert_count += 1);
         bucket.push(InstantiationCacheEntry {
             arguments: arguments.to_vec(),
             resolved: resolved.clone(),
         });
+    } else {
+        crate::program::record_program_counter(|c| c.instantiation_intern_capped_count += 1);
     }
     resolved
 }

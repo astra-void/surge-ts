@@ -4,7 +4,7 @@ use std::path::Path;
 use surge_ts_checker::SourceFileInput;
 use surge_ts_config::PathMapping;
 use surge_ts_config::canonicalize_if_exists_string;
-use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
+use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, ParserWorker};
 
 pub fn resolve_path_mappings(
     inputs: &[SourceFileInput],
@@ -33,8 +33,9 @@ pub fn resolve_path_mappings(
 
     let mut specifiers_to_resolve = HashSet::new();
 
+    let mut parser = ParserWorker::new();
     for input in inputs {
-        let parsed = parse_source(&input.source_text, &input.file_name);
+        let parsed = parser.parse(&input.source_text, &input.file_name);
         for statement in parsed.statements {
             match statement {
                 ParsedStatement::ImportDeclaration(import) => {

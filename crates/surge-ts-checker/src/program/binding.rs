@@ -244,7 +244,8 @@ pub(crate) fn collect_module_analyses_with_bindings(
         // re-resolved lazily by the check phase anyway.
         let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
         let mut signature_env = SymbolTable::new();
-        let mut seeded_names: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
+        let mut seeded_names: std::collections::HashSet<Arc<str>> =
+            std::collections::HashSet::new();
         if !parsed_file.file_kind.is_declaration() {
             let mut import_seed = SymbolTable::new();
             if let Some(bindings) = preliminary_module_import_bindings[file_index].as_ref() {

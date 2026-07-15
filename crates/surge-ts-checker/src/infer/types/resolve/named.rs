@@ -269,8 +269,7 @@ pub(crate) fn resolve_named_type(
     // while collecting dependency export tables). User aliases keep the eager
     // path so their body diagnostics and primitive/union expansions are unchanged.
     if (!concrete_instantiation
-        || (DEFER_CONCRETE_LIBRARY_ALIASES
-            && declaration_file_is_library_scoped(declaration, ctx)))
+        || (DEFER_CONCRETE_LIBRARY_ALIASES && declaration_file_is_library_scoped(declaration, ctx)))
         && matches!(declaration, TypeDeclarationInfo::Alias(_))
         && let (Some(display), Some(arguments)) =
             (alias_display_name.as_ref(), reference_arguments.as_ref())
@@ -367,8 +366,7 @@ pub(crate) fn resolve_named_type(
     // every sibling reference, hundreds of thousands of times per file. A degraded
     // re-entry (bounded peel, illegal cycle) sets `had_error`/emits, which the
     // remaining guards still exclude, so a thin shape is never frozen program-wide.
-    let cacheable =
-        concrete_instantiation && !body_emitted_diagnostics && !resolved.had_error;
+    let cacheable = concrete_instantiation && !body_emitted_diagnostics && !resolved.had_error;
 
     if subtree_lowest_cycle >= floor {
         if let (Some(key), Some(arguments)) = (generic_cache_key, cached_arguments) {

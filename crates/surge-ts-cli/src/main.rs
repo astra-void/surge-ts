@@ -1,3 +1,4 @@
+mod global_alloc;
 mod report;
 
 use std::io::IsTerminal;
@@ -208,14 +209,32 @@ struct Cli {
 
     #[arg(long, hide = true)]
     timings: bool,
+
+    /// Per-stage RSS profiling without the full timings/counters report.
+    #[arg(long, hide = true)]
+    rss: bool,
 }
 
 fn main() -> ExitCode {
+    // Benchmark-harness self-check: report the compiled-in global allocator and
+    // exit without checking anything. Env-var gated so the CLI surface is
+    // unchanged.
+    if std::env::var_os("SURGE_PRINT_ALLOCATOR").is_some() {
+        println!("{}", global_alloc::ACTIVE_ALLOCATOR);
+        return ExitCode::SUCCESS;
+    }
+
     let cli = Cli::parse();
 
     if cli.timings {
         unsafe {
             std::env::set_var("SURGE_TIMINGS", "1");
+        }
+    }
+
+    if cli.rss {
+        unsafe {
+            std::env::set_var("SURGE_RSS", "1");
         }
     }
 

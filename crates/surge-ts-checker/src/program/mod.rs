@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Instant;
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{ParsedStatement, parse_source};
+use surge_ts_syntax::{ParsedStatement, ParserWorker};
 use surge_ts_types::FunctionType;
 
 // Instrumentation lives in `metrics`; re-export it so existing callers that
@@ -74,6 +74,12 @@ pub struct ProgramCheckResult {
 #[derive(Debug, Clone)]
 struct ProgramCheckSharedState {
     global_type_declarations: TypeDeclarationTable,
+    /// Prebuilt global+ambient declaration table for script (non-module) files.
+    /// Built once on the main thread before the check-phase fan-out: inserting
+    /// allocates into the shared global arena, whose bump allocator is not
+    /// thread-safe, so workers must only clone this table (an index copy), never
+    /// rebuild it.
+    script_type_declarations: TypeDeclarationTable,
     global_symbols: SymbolTable,
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     module_analyses: Vec<Option<ModuleAnalysis>>,
@@ -123,8 +129,7 @@ pub(crate) fn record_eq_probe_visit(
     }
 }
 
-static SCOPE_FALLBACK_CONSULTS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static SCOPE_FALLBACK_CONSULTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) fn record_scope_fallback_consult() {
     SCOPE_FALLBACK_CONSULTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -140,9 +145,8 @@ fn eq_probe_symbol_tables_equal(a: &SymbolTable, b: &SymbolTable) -> bool {
         return false;
     }
     a.iter_shared().all(|(name, symbol_a)| {
-        b.get_shared(name).is_some_and(|symbol_b| {
-            symbol_a.kind == symbol_b.kind && symbol_a.ty == symbol_b.ty
-        })
+        b.get_shared(name)
+            .is_some_and(|symbol_b| symbol_a.kind == symbol_b.kind && symbol_a.ty == symbol_b.ty)
     })
 }
 
@@ -176,8 +180,7 @@ fn eq_probe_scopes_equal(
         (Some(a), Some(b)) => {
             Arc::ptr_eq(a, b) || {
                 let (la, lb) = (a.layers(), b.layers());
-                la.len() == lb.len()
-                    && la.iter().zip(lb).all(|(x, y)| Arc::ptr_eq(x, y))
+                la.len() == lb.len() && la.iter().zip(lb).all(|(x, y)| Arc::ptr_eq(x, y))
             }
         }
         _ => false,
@@ -204,10 +207,7 @@ fn eq_probe_declarations_equal(
     }
 }
 
-fn eq_probe_declaration_tables_equal(
-    a: &TypeDeclarationTable,
-    b: &TypeDeclarationTable,
-) -> bool {
+fn eq_probe_declaration_tables_equal(a: &TypeDeclarationTable, b: &TypeDeclarationTable) -> bool {
     a.len() == b.len()
         && a.iter().all(|(name, da)| {
             b.get(name.as_ref())
@@ -223,8 +223,7 @@ fn eq_probe_bindings_equal(a: &ModuleImportBindings, b: &ModuleImportBindings) -
     eq_probe_symbol_tables_equal(&a.symbols, &b.symbols)
         && eq_probe_layer_equal(&a.type_declarations, &b.type_declarations)
         && a.namespace_alias_layers.len() == b.namespace_alias_layers.len()
-        && a
-            .namespace_alias_layers
+        && a.namespace_alias_layers
             .iter()
             .zip(&b.namespace_alias_layers)
             .all(|(x, y)| eq_probe_layer_equal(x, y))
@@ -393,7 +392,11 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.ambient_collection += ambient_collection_start.elapsed()
     });
-    record_rss_stage(timings.as_ref(), "ambient_collection", program_start.elapsed());
+    record_rss_stage(
+        timings.as_ref(),
+        "ambient_collection",
+        program_start.elapsed(),
+    );
 
     let type_declaration_collection_start = Instant::now();
     collect_global_type_declarations(&parsed_files, &mut ctx, timings.as_ref());
@@ -412,7 +415,11 @@ pub fn check_program_with_stats_and_jobs(
         &mut ctx,
     );
     collect_global_variables(&parsed_files, &mut global_symbols, &mut ctx);
-    record_rss_stage(timings.as_ref(), "global_collection", program_start.elapsed());
+    record_rss_stage(
+        timings.as_ref(),
+        "global_collection",
+        program_start.elapsed(),
+    );
 
     // PRELIMINARY PASS: collect types and resolve imports/exports to make them available for function signature collection
     let type_collection_start = Instant::now();
@@ -455,18 +462,23 @@ pub fn check_program_with_stats_and_jobs(
         program_start.elapsed(),
     );
 
-    let local_module_export_tables = preliminary_module_analyses
-        .iter()
-        .map(|analysis| {
-            analysis
-                .as_ref()
-                .map(|analysis| analysis.local_export_table.clone())
-        })
-        .collect::<Vec<_>>();
     let module_binding_start = Instant::now();
     let export_resolution_start = Instant::now();
-    let module_export_tables =
-        resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
+    // Superseded binding rounds are reassigned (not shadowed) so each round's
+    // tables free as soon as the next round replaces them, and the preliminary
+    // structures are dropped at the `preliminary_release` boundary below —
+    // otherwise every generation stays alive through the peak-RSS check phase.
+    let mut module_export_tables = {
+        let local_module_export_tables = preliminary_module_analyses
+            .iter()
+            .map(|analysis| {
+                analysis
+                    .as_ref()
+                    .map(|analysis| analysis.local_export_table.clone())
+            })
+            .collect::<Vec<_>>();
+        resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx)
+    };
     record_program_timing(timings.as_ref(), |timings| {
         timings.preliminary_export_table_resolution += export_resolution_start.elapsed()
     });
@@ -474,18 +486,19 @@ pub fn check_program_with_stats_and_jobs(
         timings.type_declaration_collection += type_declaration_collection_start.elapsed()
     });
     let import_binding_start = Instant::now();
-    let module_import_bindings = collect_module_import_bindings(
+    let mut module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &preliminary_module_analyses,
         &module_export_tables,
         &preliminary_module_resolution_scopes,
         &mut ctx,
     );
+    drop(preliminary_module_resolution_scopes);
     record_program_timing(timings.as_ref(), |timings| {
         timings.import_binding_resolution += import_binding_start.elapsed()
     });
     let scope_build_start = Instant::now();
-    let module_resolution_scopes = build_module_resolution_scopes(
+    let mut module_resolution_scopes = build_module_resolution_scopes(
         &local_type_declarations_by_module,
         &module_import_bindings,
         timings.as_ref(),
@@ -494,7 +507,7 @@ pub fn check_program_with_stats_and_jobs(
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
     let import_binding_start = Instant::now();
-    let module_import_bindings = collect_module_import_bindings(
+    module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &preliminary_module_analyses,
         &module_export_tables,
@@ -505,7 +518,7 @@ pub fn check_program_with_stats_and_jobs(
         timings.import_binding_resolution += import_binding_start.elapsed()
     });
     let scope_build_start = Instant::now();
-    let module_resolution_scopes = build_module_resolution_scopes(
+    module_resolution_scopes = build_module_resolution_scopes(
         &local_type_declarations_by_module,
         &module_import_bindings,
         timings.as_ref(),
@@ -554,22 +567,24 @@ pub fn check_program_with_stats_and_jobs(
         &preliminary_module_import_bindings,
         &module_import_bindings,
     );
-    let local_module_export_tables = module_analyses
-        .iter()
-        .map(|analysis| {
-            analysis
-                .as_ref()
-                .map(|analysis| analysis.local_export_table.clone())
-        })
-        .collect::<Vec<_>>();
+    drop(preliminary_module_analyses);
     let export_resolution_start = Instant::now();
-    let module_export_tables =
-        resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx);
+    module_export_tables = {
+        let local_module_export_tables = module_analyses
+            .iter()
+            .map(|analysis| {
+                analysis
+                    .as_ref()
+                    .map(|analysis| analysis.local_export_table.clone())
+            })
+            .collect::<Vec<_>>();
+        resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx)
+    };
     record_program_timing(timings.as_ref(), |timings| {
         timings.final_export_table_resolution += export_resolution_start.elapsed()
     });
     let import_binding_start = Instant::now();
-    let module_import_bindings = collect_module_import_bindings(
+    module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &module_analyses,
         &module_export_tables,
@@ -580,11 +595,12 @@ pub fn check_program_with_stats_and_jobs(
         timings.import_binding_resolution += import_binding_start.elapsed()
     });
     let scope_build_start = Instant::now();
-    let module_resolution_scopes = build_module_resolution_scopes(
+    module_resolution_scopes = build_module_resolution_scopes(
         &local_type_declarations_by_module,
         &module_import_bindings,
         timings.as_ref(),
     );
+    drop(local_type_declarations_by_module);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
@@ -594,22 +610,44 @@ pub fn check_program_with_stats_and_jobs(
     ));
     ctx.jsx_intrinsic_elements_declarer =
         locate_jsx_intrinsic_elements_declarer(&parsed_files, &module_export_tables);
+    // The resolved (re-export-expanded) export tables were only consumed by
+    // import binding and the JSX locator; the check phase reads the analyses'
+    // local export tables through `shared_state`.
+    drop(module_export_tables);
     sync_global_this_symbol(&mut ctx);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
     });
     record_rss_stage(timings.as_ref(), "module_binding", program_start.elapsed());
+    let script_type_declarations = {
+        let mut table = clone_type_declaration_table(
+            &global_type_declarations,
+            timings.as_ref(),
+            TableCloneKind::General,
+        );
+        for (name, declaration) in ctx.ambient_global_type_declarations.iter() {
+            let _ = table.insert(name.clone(), declaration.clone());
+        }
+        table
+    };
+    let merged_module_import_bindings =
+        merge_module_import_bindings(&module_import_bindings, &preliminary_module_import_bindings);
+    drop(module_import_bindings);
+    drop(preliminary_module_import_bindings);
     let shared_state = ProgramCheckSharedState {
         global_type_declarations,
+        script_type_declarations,
         global_symbols,
         function_signatures,
         module_analyses,
-        module_import_bindings: merge_module_import_bindings(
-            &module_import_bindings,
-            &preliminary_module_import_bindings,
-        ),
+        module_import_bindings: merged_module_import_bindings,
         module_resolution_scopes,
     };
+    record_rss_stage(
+        timings.as_ref(),
+        "preliminary_release",
+        program_start.elapsed(),
+    );
 
     // Per-file value tables for cross-module `typeof`. When a consumer resolves an
     // imported type alias whose body contains `typeof <localValue>`, the value is
@@ -659,7 +697,8 @@ pub fn check_program_with_stats_and_jobs(
                 for (name, symbol) in analysis.local_export_table.symbols.iter_shared() {
                     let _ = seed.insert_shared(name.clone(), symbol.clone());
                 }
-                module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
+                module_local_values
+                    .insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
                 continue;
             }
             ctx.file_name = parsed_file.file_name.clone();
@@ -696,12 +735,22 @@ pub fn check_program_with_stats_and_jobs(
                 parsed_file.statements = Vec::new();
             }
         }
+        record_rss_stage(
+            timings.as_ref(),
+            "declaration_ast_release",
+            program_start.elapsed(),
+        );
     }
 
     let worker_count = resolve_worker_count(jobs, &parsed_files);
     let file_results = if worker_count <= 1 {
         check_program_files_serial(&parsed_files, &shared_state, &ctx, timings.clone())
     } else {
+        // From here on, workers only read arena-backed tables. Freezing makes a
+        // late allocation — a data race on the non-thread-safe bump allocator —
+        // fail loudly instead of corrupting memory. Serial checking is exempt:
+        // single-threaded allocation is sound.
+        freeze_worker_reachable_arenas(&shared_state, &ctx);
         check_program_files_parallel(
             &parsed_files,
             &shared_state,
@@ -710,6 +759,8 @@ pub fn check_program_with_stats_and_jobs(
             timings.clone(),
         )
     };
+
+    record_rss_stage(timings.as_ref(), "check_phase", program_start.elapsed());
 
     let mut deduper = DiagnosticDeduper::with_existing(&ctx.diagnostics);
     for result in file_results {
@@ -721,11 +772,21 @@ pub fn check_program_with_stats_and_jobs(
             result.stats.suppressed_rust_only_diagnostics_total;
     }
 
+    if timings.is_some() {
+        let cache_stats = ctx.program_cache_stats();
+        record_program_timing(timings.as_ref(), |timings| {
+            timings.cache_stats = Some(cache_stats)
+        });
+    }
     ctx.clear_program_type_caches();
     let (diagnostics, stats) = ctx.finish_with_stats();
+    record_rss_stage(timings.as_ref(), "finish", program_start.elapsed());
 
     if let Some(timings) = timings.as_ref() {
-        render_program_timings(timings);
+        render_program_rss_stages(timings);
+        if timings_enabled {
+            render_program_timings(timings);
+        }
     }
 
     ProgramCheckResult { diagnostics, stats }
@@ -764,9 +825,10 @@ fn parse_program_files(
 ) -> Vec<ParsedProgramFile> {
     let worker_count = resolve_parse_worker_count(jobs, &files);
     if worker_count <= 1 {
+        let mut parser = ParserWorker::new();
         return files
             .iter()
-            .map(|input| parse_program_file(input, timings))
+            .map(|input| parse_program_file(&mut parser, input, timings))
             .collect();
     }
 
@@ -781,6 +843,8 @@ fn parse_program_files(
         for _ in 0..worker_count {
             let timings = timings_owned.clone();
             handles.push(scope.spawn(move || {
+                // One arena per parse thread; never shared across threads.
+                let mut parser = ParserWorker::new();
                 let mut worker_results = Vec::new();
                 loop {
                     let file_index = next_index.fetch_add(1, Ordering::Relaxed);
@@ -789,7 +853,7 @@ fn parse_program_files(
                     }
                     worker_results.push((
                         file_index,
-                        parse_program_file(&files[file_index], timings.as_ref()),
+                        parse_program_file(&mut parser, &files[file_index], timings.as_ref()),
                     ));
                 }
                 worker_results
@@ -807,6 +871,7 @@ fn parse_program_files(
 }
 
 fn parse_program_file(
+    parser: &mut ParserWorker,
     input: &SourceFileInput,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> ParsedProgramFile {
@@ -816,7 +881,7 @@ fn parse_program_file(
     }
 
     let parse_start = Instant::now();
-    let parsed = parse_source(&input.source_text, &input.file_name);
+    let parsed = parser.parse(&input.source_text, &input.file_name);
     let parse_duration = parse_start.elapsed();
     let file_name = parsed.file_name;
     let file_kind = classify_file_kind(&file_name);
@@ -987,6 +1052,41 @@ fn resolve_worker_count(jobs: usize, parsed_files: &[ParsedProgramFile]) -> usiz
     requested.max(1).min(file_count)
 }
 
+/// Freeze every arena directly reachable by check-phase workers (through
+/// `shared_state` or the cloned worker contexts) so that any allocation after
+/// the fan-out panics deterministically. Clones of a table share the arena, so
+/// freezing one handle freezes every clone. See [`CheckerArena::freeze`].
+fn freeze_worker_reachable_arenas(shared_state: &ProgramCheckSharedState, ctx: &CheckerContext) {
+    shared_state
+        .global_type_declarations
+        .arena_handle()
+        .freeze();
+    shared_state
+        .script_type_declarations
+        .arena_handle()
+        .freeze();
+    ctx.type_declarations.arena_handle().freeze();
+    ctx.ambient_global_type_declarations.arena_handle().freeze();
+    for analysis in shared_state.module_analyses.iter().flatten() {
+        analysis.local_type_declarations.arena_handle().freeze();
+        analysis
+            .local_export_table
+            .type_declarations
+            .arena_handle()
+            .freeze();
+    }
+    for bindings in shared_state.module_import_bindings.iter().flatten() {
+        for layer in bindings.scope_layers() {
+            layer.arena_handle().freeze();
+        }
+    }
+    for scope in shared_state.module_resolution_scopes.iter().flatten() {
+        for layer in scope.layers() {
+            layer.arena_handle().freeze();
+        }
+    }
+}
+
 fn check_program_files_parallel(
     parsed_files: &[ParsedProgramFile],
     shared_state: &ProgramCheckSharedState,
@@ -1146,9 +1246,7 @@ fn check_program_file(
     ctx: &mut CheckerContext,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> FileCheckResult {
-    ctx.set_file_name(parsed_file.file_name.clone());
-    ctx.type_declaration_scope = None;
-    ctx.resolved_named_types = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+    ctx.begin_file_check(parsed_file.file_name.clone());
 
     if ctx.options.skip_lib_check && parsed_file.file_kind.is_declaration() {
         return FileCheckResult {
@@ -1302,15 +1400,14 @@ fn check_program_file(
             timings.per_file_statement_checking += statement_check_start.elapsed()
         });
     } else {
-        let mut script_td = clone_type_declaration_table(
-            &shared_state.global_type_declarations,
+        // Clone the prebuilt global+ambient table (index copy only). Inserting
+        // here would allocate into the shared global arena from a worker thread,
+        // which the arena's freeze assertion forbids.
+        ctx.type_declarations = clone_type_declaration_table(
+            &shared_state.script_type_declarations,
             timings,
             TableCloneKind::General,
         );
-        for (name, declaration) in ctx.ambient_global_type_declarations.iter() {
-            let _ = script_td.insert(name.clone(), declaration.clone());
-        }
-        ctx.type_declarations = script_td;
         ctx.type_declaration_scope = None;
 
         let mut script_sym = shared_state

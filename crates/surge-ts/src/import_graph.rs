@@ -7,7 +7,7 @@ use surge_ts_config::PathMapping;
 use surge_ts_config::{
     canonicalize_if_exists, canonicalize_if_exists_string, normalize_path_string,
 };
-use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, parse_source};
+use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, ParserWorker};
 
 pub fn expand_project_inputs(
     inputs: &mut Vec<SourceFileInput>,
@@ -23,6 +23,7 @@ pub fn expand_project_inputs(
     let mut added = 0usize;
     let mut index = 0usize;
     let mut probe_cache: HashMap<String, bool> = HashMap::new();
+    let mut parser = ParserWorker::new();
 
     while index < sources.len() {
         let (file_path, file_name, source_text) = {
@@ -31,7 +32,7 @@ pub fn expand_project_inputs(
         };
         index += 1;
 
-        let parsed = parse_source(&source_text, &file_name);
+        let parsed = parser.parse(&source_text, &file_name);
         for statement in parsed.statements {
             let Some(module_specifier) = module_specifier_from_statement(&statement) else {
                 continue;

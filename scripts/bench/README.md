@@ -123,3 +123,39 @@ pnpm run bench:test
 - JSON, SVG, and HTML labels include the Rust job count when one is recorded so mixed serial/parallel runs are not ambiguous.
 - Compare wall-clock timings alongside the diagnostic drift status.
 - This is not yet a claim of full compiler parity. See `REAL_PROJECT_COMPAT.md` for current compatibility limitations.
+
+## Allocator Benchmark (`allocator-bench.ts`)
+
+Compares the `surge` binary built with each supported global allocator:
+`system` (default), `mimalloc`, `jemalloc`, `snmalloc`. Allocator selection is a
+cargo feature of `surge-ts-cli` only (library crates never set a global
+allocator); enabling more than one feature is a compile error.
+
+```bash
+pnpm run bench:allocators                       # build all 4 variants, run the full matrix
+pnpm run bench:allocators -- --allocators system,mimalloc --iterations 5
+pnpm run bench:allocators -- --scenario large --skipBuild   # reuse .bench/allocators/bin
+```
+
+What it does:
+
+1. Builds each variant (`cargo build --release -p surge-ts-cli [--features <alloc>]`)
+   and copies the binary to `.bench/allocators/bin/surge-<alloc>`.
+2. Verifies each binary self-reports its allocator (`SURGE_PRINT_ALLOCATOR=1 surge`).
+3. Runs a scenario matrix: small single-file cold run, medium project at
+   `--jobs 1` and `--jobs auto` (`.local-projects/ky` when present, otherwise a
+   generated synthetic fixture), large project at both job levels
+   (`.local-projects/zod` or `trpc` when present), and a repeated-execution
+   series to observe run-to-run peak-RSS stability.
+4. Measures wall time and peak RSS per run with the same tested `/usr/bin/time`
+   wrapper as `scripts/real-projects/measure-project.ts` (`-l` bytes on macOS,
+   `-v` KiB on Linux; `unavailable` elsewhere). Final RSS of a short-lived
+   process is not externally observable and is always reported `unavailable`.
+5. Writes per-run records and per-scenario medians/worst peaks to
+   `.bench/allocators/results.json` and `summary.md`.
+
+Interpretation rules: compare median wall time and median/worst peak RSS over
+at least 5 post-warmup runs, with `--jobs 1` and parallel results kept
+separate. Do not change the default allocator without a repeatable ≥5% median
+time win (no material RSS regression) or ≥10% peak-RSS win (no material time
+regression) on real projects.

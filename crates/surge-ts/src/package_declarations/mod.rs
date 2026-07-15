@@ -4,7 +4,7 @@ use surge_ts_checker::SourceFileInput;
 use surge_ts_config::canonicalize_if_exists_string;
 use surge_ts_syntax::{
     ParsedExportDeclaration, ParsedStatement, ReferenceTypeDirective, TextSpan,
-    extract_reference_path_directives, extract_reference_type_directives, parse_source,
+    extract_reference_path_directives, extract_reference_type_directives,
 };
 
 use crate::package_resolution::{
@@ -114,10 +114,12 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
         .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
         .collect();
     let mut queued_specifiers: HashSet<String> = HashSet::new();
+    let mut parser = surge_ts_syntax::ParserWorker::new();
 
     for (file_path, _, source_text) in sources.iter() {
         let importer_dir = file_path.parent().unwrap_or(root_dir).to_path_buf();
         extract_packages_from_source(
+            &mut parser,
             source_text,
             &file_path.to_string_lossy(),
             &importer_dir,
@@ -189,6 +191,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
 
                     let new_importer_dir = path.parent().unwrap_or(root_dir).to_path_buf();
                     extract_packages_from_source(
+                        &mut parser,
                         &source_text,
                         &normalized_file_name,
                         &new_importer_dir,
@@ -461,4 +464,3 @@ impl ReferenceTypeDirectiveResolver {
         }
     }
 }
-

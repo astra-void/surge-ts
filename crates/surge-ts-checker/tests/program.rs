@@ -4498,7 +4498,10 @@ fn jsx_opaque_spread_suppresses_presence_checks() {
 #[test]
 fn namespace_import_reexport_exposes_member_types() {
     let diagnostics = program(&[
-        ("external.ts", "export interface Payload { value: string }\n"),
+        (
+            "external.ts",
+            "export interface Payload { value: string }\n",
+        ),
         (
             "barrel.ts",
             "import * as z from \"./external\";\nexport { z };\n",
@@ -5647,4 +5650,147 @@ fn generic_function_import_export_parser_safe() {
     ]);
 
     assert!(diagnostics.is_empty());
+}
+
+/// Regression coverage for the parallel check phase over script (non-module)
+/// files. Every worker builds its per-file declaration table from the prebuilt
+/// shared global+ambient table; rebuilding it inside workers previously
+/// bump-allocated into the shared arena concurrently. With the arena freeze in
+/// place, any reintroduced worker-side allocation panics deterministically,
+/// so this test failing (or panicking) flags the race instead of silent UB.
+#[test]
+fn parallel_script_files_match_serial_diagnostics() {
+    use surge_ts_checker::check_program_with_stats_and_jobs;
+
+    let files: Vec<SourceFileInput> = (0..8)
+        .map(|i| SourceFileInput {
+            file_name: format!("script_{i}.ts"),
+            source_text: format!(
+                "const good_{i}: number = {i};\nconst bad_{i}: string = {i};\nfunction helper_{i}(x: number): number {{ return x + good_{i}; }}\nhelper_{i}(bad_{i});\n"
+            ),
+        })
+        .collect();
+
+    let serial = check_program_with_stats_and_jobs(files.clone(), CheckerOptions::default(), 1);
+    let parallel = check_program_with_stats_and_jobs(files, CheckerOptions::default(), 8);
+
+    assert!(
+        !serial.diagnostics.is_empty(),
+        "expected the script fixtures to produce diagnostics"
+    );
+    let render = |diags: &[surge_ts_diagnostics::Diagnostic]| {
+        let mut rendered: Vec<String> = diags
+            .iter()
+            .map(|d| format!("{} {} {}", d.file_name, d.code, d.message))
+            .collect();
+        rendered.sort();
+        rendered
+    };
+    assert_eq!(render(&serial.diagnostics), render(&parallel.diagnostics));
+}
+
+/// One fixture module per index: a generic interface exercised at several
+/// instantiations, one deliberate TS2322, and a cross-file import chain so the
+/// module binding/import paths (whose preliminary structures are dropped at
+/// `preliminary_release`) are all live.
+fn region_fixture_files(count: usize) -> Vec<SourceFileInput> {
+    (0..count)
+        .map(|i| {
+            let import = if i == 0 {
+                String::new()
+            } else {
+                format!("import {{ ok_{p} }} from \"./mod_{p}\";\n", p = i - 1)
+            };
+            let use_import = if i == 0 {
+                String::new()
+            } else {
+                format!("export const chained_{i}: string = ok_{p}.value;\n", p = i - 1)
+            };
+            SourceFileInput {
+                file_name: format!("mod_{i}.ts"),
+                source_text: format!(
+                    "{import}export interface RegionBox_{i}<T> {{ value: T; }}\n\
+                     export type RegionPair_{i}<T> = {{ first: T; second: RegionBox_{i}<T> }};\n\
+                     export const ok_{i}: RegionBox_{i}<string> = {{ value: \"ok\" }};\n\
+                     export const bad_{i}: RegionBox_{i}<number> = {{ value: \"oops\" }};\n\
+                     export function use_{i}(input: RegionPair_{i}<boolean>): boolean {{ return input.first; }}\n\
+                     {use_import}"
+                ),
+            }
+        })
+        .collect()
+}
+
+fn rendered_sorted(diags: &[surge_ts_diagnostics::Diagnostic]) -> Vec<String> {
+    let mut rendered: Vec<String> = diags
+        .iter()
+        .map(|d| format!("{} {} {:?} {}", d.file_name, d.code, d.span, d.message))
+        .collect();
+    rendered.sort();
+    rendered
+}
+
+/// Region regression: a parallel worker context is reused across many files
+/// (error files interleaved with clean ones), and `begin_file_check` resets the
+/// file region between them. Any leak of one file's dedup keys or caches into
+/// the next would make parallel output diverge from serial (which clones a
+/// fresh context per file).
+#[test]
+fn parallel_worker_reuse_across_many_module_files_matches_serial() {
+    use surge_ts_checker::check_program_with_stats_and_jobs;
+
+    let files = region_fixture_files(24);
+    let serial = check_program_with_stats_and_jobs(files.clone(), CheckerOptions::default(), 1);
+    let parallel = check_program_with_stats_and_jobs(files, CheckerOptions::default(), 4);
+
+    assert!(
+        serial.diagnostics.len() >= 24,
+        "expected one TS2322 per fixture file, got {}",
+        serial.diagnostics.len()
+    );
+    assert_eq!(
+        rendered_sorted(&serial.diagnostics),
+        rendered_sorted(&parallel.diagnostics)
+    );
+}
+
+/// The expected diagnostic surface of `region_fixture_files(6)`, asserted
+/// identically by the default-cap and bounded-cap tests below: the generic
+/// instantiation caches are recomputable memos, so any bucket cap must produce
+/// byte-identical diagnostics (only time/memory may change).
+fn assert_region_fixture_diagnostics(diags: &[surge_ts_diagnostics::Diagnostic]) {
+    let ts2322: Vec<&surge_ts_diagnostics::Diagnostic> = diags
+        .iter()
+        .filter(|d| d.code.to_string() == "TS2322")
+        .collect();
+    assert_eq!(
+        ts2322.len(),
+        6,
+        "expected exactly one TS2322 per fixture file: {:?}",
+        rendered_sorted(diags)
+    );
+    for (i, diagnostic) in ts2322.iter().enumerate() {
+        assert_eq!(diagnostic.file_name, format!("mod_{i}.ts"));
+    }
+}
+
+#[test]
+fn generic_cache_default_cap_expected_diagnostics() {
+    let result = check_program(region_fixture_files(6));
+    assert_region_fixture_diagnostics(&result);
+}
+
+/// Same fixture and same golden expectation as the default-cap test, but with
+/// the per-declaration cache bucket cap forced to 1 (over-cap instantiations
+/// recompute instead of caching). Also checks a second in-process run for
+/// determinism under the bound. nextest runs each test in its own process, so
+/// the env override cannot leak into other tests.
+#[test]
+fn generic_cache_bounded_cap_expected_diagnostics() {
+    // Safety: set before any checker thread is spawned in this test process.
+    unsafe { std::env::set_var("SURGE_GENERIC_CACHE_BUCKET_CAP", "1") };
+    let first = check_program(region_fixture_files(6));
+    assert_region_fixture_diagnostics(&first);
+    let second = check_program(region_fixture_files(6));
+    assert_eq!(rendered_sorted(&first), rendered_sorted(&second));
 }

@@ -21,8 +21,7 @@ use crate::context::convert_span;
 use crate::flow::{
     AssignmentState, FlowCheck, FunctionFlowState, analyze_function_body_flow,
     apply_variable_declaration_state, check_assignment_target_flow, check_expression_flow,
-    check_obvious_truthiness_condition,
-    mark_assignment_state, merge_branch_deltas,
+    check_obvious_truthiness_condition, mark_assignment_state, merge_branch_deltas,
 };
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};

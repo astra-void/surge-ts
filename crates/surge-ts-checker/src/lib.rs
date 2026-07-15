@@ -57,6 +57,7 @@ pub mod lowlevel {
         default_full_lib_seed_for_target, load_default_lib_inputs,
         load_generated_default_lib_inputs, resolve_physical_default_libs,
     };
+    pub use crate::metrics::record_loader_rss_stage;
 }
 
 #[cfg(test)]

@@ -508,7 +508,14 @@ fn infer_through_generic_reference(
         match handle.get() {
             TypeDeclarationInfo::Interface(info) => info.body.clone(),
             TypeDeclarationInfo::Alias(info) => {
-                infer_through_generic_alias(info, named_type, argument_type, substitution, ctx, depth);
+                infer_through_generic_alias(
+                    info,
+                    named_type,
+                    argument_type,
+                    substitution,
+                    ctx,
+                    depth,
+                );
                 return;
             }
         }
@@ -578,9 +585,15 @@ fn infer_through_generic_alias(
         body = conditional.true_type.as_ref();
     }
 
-    let substituted =
-        crate::infer::substitute_parsed_type_parameters_deep(body, &parameter_map);
-    collect_inferred_type_argument(&substituted, argument_type, substitution, true, ctx, depth + 1);
+    let substituted = crate::infer::substitute_parsed_type_parameters_deep(body, &parameter_map);
+    collect_inferred_type_argument(
+        &substituted,
+        argument_type,
+        substitution,
+        true,
+        ctx,
+        depth + 1,
+    );
 }
 
 /// Substitutes bare named references in a parsed type using `map`, recursing into

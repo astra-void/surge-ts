@@ -98,6 +98,7 @@ pub fn build_project_compatibility_report(
     let mut diagnostics_by_file_kind = HashMap::<String, usize>::new();
     let mut ambient_external_modules_set = std::collections::HashSet::new();
 
+    let mut parser = surge_ts_syntax::ParserWorker::new();
     for (_, file_name, source_text) in sources {
         match classify_file_kind(file_name) {
             FileKindLabel::RootSource => loaded_source_files += 1,
@@ -111,7 +112,7 @@ pub fn build_project_compatibility_report(
         {
             declaration_files_loaded += 1;
         }
-        let parsed = surge_ts_syntax::parse_source(source_text, file_name);
+        let parsed = parser.parse(source_text, file_name);
         for statement in parsed.statements {
             match statement {
                 surge_ts_syntax::ParsedStatement::ImportDeclaration(import) => {

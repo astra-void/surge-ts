@@ -40,7 +40,7 @@ pub use self::reference_directives::{
 };
 use self::spans::text_span_from_oxc_span;
 use self::types::{parse_type_alias_declaration, parse_type_annotation};
-pub use entry::parse_source;
+pub use entry::{ParserWorker, parse_source};
 
 fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
     if let Some(module_declaration) = statement.as_module_declaration() {
@@ -370,7 +370,9 @@ fn parse_array_pattern_declarations(
     declarations
 }
 
-pub(crate) fn parse_ts_module_declaration(module: &TSModuleDeclaration<'_>) -> Vec<ParsedStatement> {
+pub(crate) fn parse_ts_module_declaration(
+    module: &TSModuleDeclaration<'_>,
+) -> Vec<ParsedStatement> {
     use oxc_span::GetSpan;
     let module_specifier = match &module.id {
         TSModuleDeclarationName::StringLiteral(literal) => literal.value.to_string(),

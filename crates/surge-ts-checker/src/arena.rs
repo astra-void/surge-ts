@@ -1,6 +1,7 @@
 use std::hash::Hasher;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use oxc_allocator::Allocator;
 use surge_ts_types::{FunctionType, ObjectType, PropertyMap, Type};
@@ -12,12 +13,20 @@ use crate::program::{
 
 /// Program-local bump allocator for checker-owned immutable data.
 ///
-/// Safety model:
-/// - One arena instance is owned per checker run and cloned into worker
-///   contexts when the checker needs to fan out read-only work.
-/// - Allocation only happens while declaration payloads are being lowered.
+/// Safety model — these invariants are what justify the `unsafe impl
+/// Send/Sync` below, since the underlying `oxc_allocator::Allocator` is a
+/// non-thread-safe bump allocator whose `alloc(&self)` mutates a cursor
+/// through interior mutability:
+/// - All allocation happens on the thread that created the arena (the
+///   single-threaded binding/collection phases). Debug builds assert this on
+///   every allocation.
+/// - Before the check phase fans out to worker threads, every arena reachable
+///   by workers is [`freeze`](Self::freeze)d; allocation after freeze panics
+///   deterministically instead of racing. Worker contexts therefore only ever
+///   *read* arena memory, which is safe to share: bump memory is append-only
+///   and payloads are write-once at insert.
 /// - Arena-backed values are stored as raw handles in checker tables, so those
-///   tables can be cloned without copying payloads.
+///   tables can be cloned without copying payloads or allocating.
 /// - The arena is never reset while any handle is still reachable.
 #[derive(Clone)]
 pub(crate) struct CheckerArena {
@@ -26,6 +35,9 @@ pub(crate) struct CheckerArena {
 
 struct CheckerArenaInner {
     allocator: Allocator,
+    frozen: AtomicBool,
+    #[cfg(debug_assertions)]
+    owner: std::thread::ThreadId,
 }
 
 unsafe impl Send for CheckerArenaInner {}
@@ -36,6 +48,9 @@ impl CheckerArena {
         Self {
             allocator: Arc::new(CheckerArenaInner {
                 allocator: Allocator::default(),
+                frozen: AtomicBool::new(false),
+                #[cfg(debug_assertions)]
+                owner: std::thread::current().id(),
             }),
         }
     }
@@ -44,13 +59,38 @@ impl CheckerArena {
         Arc::ptr_eq(&self.allocator, &other.allocator)
     }
 
+    /// Permanently disable allocation through every clone of this arena handle.
+    /// Called before the check phase fans out to worker threads: existing
+    /// payloads stay valid and readable, but a late allocation — which would
+    /// race on the non-thread-safe bump cursor — panics instead.
+    pub(crate) fn freeze(&self) {
+        self.allocator.frozen.store(true, Ordering::Release);
+    }
+
+    fn assert_allocatable(&self) {
+        assert!(
+            !self.allocator.frozen.load(Ordering::Relaxed),
+            "CheckerArena: allocation after freeze; arenas shared with check-phase \
+             workers are read-only once the parallel fan-out starts"
+        );
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            std::thread::current().id(),
+            self.allocator.owner,
+            "CheckerArena: allocation from a thread other than the creating thread; \
+             the bump allocator is not thread-safe"
+        );
+    }
+
     pub(crate) fn alloc_str(&self, value: &str) -> &str {
+        self.assert_allocatable();
         record_checker_arena_alloc_count();
         record_arena_declaration_key_alloc_count();
         self.allocator.allocator.alloc_str(value)
     }
 
     pub(crate) fn alloc_type_declaration_payload<T>(&self, value: T) -> &T {
+        self.assert_allocatable();
         record_checker_arena_alloc_count();
         record_arena_type_declaration_payload_alloc_count();
         let value = self.allocator.allocator.alloc(MaybeUninit::new(value));
@@ -158,3 +198,72 @@ impl std::borrow::Borrow<str> for ArenaStr {
 // The string points into the arena and is only read after insertion.
 unsafe impl Send for ArenaStr {}
 unsafe impl Sync for ArenaStr {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocation_works_during_construction() {
+        let arena = CheckerArena::new();
+        let s = arena.alloc_str("hello");
+        assert_eq!(s, "hello");
+        let payload = arena.alloc_type_declaration_payload(vec![1u32, 2, 3]);
+        assert_eq!(payload, &[1, 2, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "allocation after freeze")]
+    fn allocation_after_freeze_panics() {
+        let arena = CheckerArena::new();
+        let _ = arena.alloc_str("before freeze");
+        arena.freeze();
+        let _ = arena.alloc_str("after freeze");
+    }
+
+    #[test]
+    #[should_panic(expected = "allocation after freeze")]
+    fn freeze_applies_to_every_clone() {
+        let arena = CheckerArena::new();
+        let clone = arena.clone();
+        arena.freeze();
+        let _ = clone.alloc_str("after freeze via clone");
+    }
+
+    #[test]
+    fn frozen_arena_payloads_readable_from_many_threads() {
+        let arena = CheckerArena::new();
+        let strings: Vec<ArenaStr> = (0..64)
+            .map(|i| ArenaStr::new(&format!("payload-{i}"), &arena))
+            .collect();
+        arena.freeze();
+
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let arena = arena.clone();
+                let strings = &strings;
+                scope.spawn(move || {
+                    let _keeps_alive = arena;
+                    for (i, s) in strings.iter().enumerate() {
+                        assert_eq!(s.as_str(), format!("payload-{i}"));
+                    }
+                });
+            }
+        });
+    }
+
+    // Only debug builds carry the creating-thread assertion.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn cross_thread_allocation_panics_in_debug_builds() {
+        let arena = CheckerArena::new();
+        let result = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _ = arena.alloc_str("allocated off the creating thread");
+                })
+                .join()
+        });
+        assert!(result.is_err(), "expected cross-thread allocation to panic");
+    }
+}
