@@ -341,8 +341,13 @@ pub fn check_program_with_stats_and_jobs(
     inject_generated_default_lib_inputs(&mut files, options.no_lib);
 
     let timings_enabled = std::env::var_os("SURGE_TIMINGS").is_some();
+    // RSS stage sampling piggybacks on the timings carrier so `SURGE_RSS=1`
+    // alone profiles memory without the full counter/timing report.
+    let instrumentation_enabled = timings_enabled || std::env::var_os("SURGE_RSS").is_some();
     set_counters_enabled(timings_enabled);
-    let timings = timings_enabled.then(|| Arc::new(Mutex::new(ProgramTimings::default())));
+    let timings = instrumentation_enabled.then(|| Arc::new(Mutex::new(ProgramTimings::default())));
+    let program_start = Instant::now();
+    record_rss_stage(timings.as_ref(), "start", program_start.elapsed());
     reset_program_counters();
     crate::paths::clear_canonicalize_cache();
     crate::modules::clear_relative_module_cache();
@@ -354,6 +359,7 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.parsing += parse_start.elapsed()
     });
+    record_rss_stage(timings.as_ref(), "parsing", program_start.elapsed());
     let module_file_index_by_identity = parsed_files
         .iter()
         .enumerate()
@@ -387,6 +393,7 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.ambient_collection += ambient_collection_start.elapsed()
     });
+    record_rss_stage(timings.as_ref(), "ambient_collection", program_start.elapsed());
 
     let type_declaration_collection_start = Instant::now();
     collect_global_type_declarations(&parsed_files, &mut ctx, timings.as_ref());
@@ -405,6 +412,7 @@ pub fn check_program_with_stats_and_jobs(
         &mut ctx,
     );
     collect_global_variables(&parsed_files, &mut global_symbols, &mut ctx);
+    record_rss_stage(timings.as_ref(), "global_collection", program_start.elapsed());
 
     // PRELIMINARY PASS: collect types and resolve imports/exports to make them available for function signature collection
     let type_collection_start = Instant::now();
@@ -441,6 +449,11 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_analysis_collection += type_collection_start.elapsed()
     });
+    record_rss_stage(
+        timings.as_ref(),
+        "preliminary_module_analysis",
+        program_start.elapsed(),
+    );
 
     let local_module_export_tables = preliminary_module_analyses
         .iter()
@@ -529,6 +542,11 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.type_declaration_collection += type_declaration_collection_start.elapsed()
     });
+    record_rss_stage(
+        timings.as_ref(),
+        "final_module_analysis",
+        program_start.elapsed(),
+    );
     report_eq_probe(
         &parsed_files,
         &preliminary_module_analyses,
@@ -580,6 +598,7 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
     });
+    record_rss_stage(timings.as_ref(), "module_binding", program_start.elapsed());
     let shared_state = ProgramCheckSharedState {
         global_type_declarations,
         global_symbols,
@@ -658,6 +677,11 @@ pub fn check_program_with_stats_and_jobs(
         ctx.type_declarations = saved_type_declarations;
         ctx.set_module_local_values_by_file(module_local_values);
     }
+    record_rss_stage(
+        timings.as_ref(),
+        "module_local_values",
+        program_start.elapsed(),
+    );
 
     // All cross-file program state now lives in `shared_state`; the per-file check
     // phase receives only the current file plus `shared_state`, never the file
