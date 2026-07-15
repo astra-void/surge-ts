@@ -372,8 +372,7 @@ should inspect `crates/surge-ts-checker/Cargo.toml`,
 `crates/surge-ts-checker/src/symbols/type_declarations.rs`,
 `crates/surge-ts-checker/src/program.rs`,
 `crates/surge-ts-checker/ARENA_ID_PLAN.md`,
-`REAL_PROJECT_COMPAT.md`,
-`crates/surge-ts-checker/REAL_PROJECT_COMPAT.md`, and
+`REAL_PROJECT_COMPAT.md`, and
 `.bench/auth-kit-measurement.md` to verify the landing surface. The arena-backed
 slice now covers declaration keys plus declaration payloads, and payload
 cloning is no longer part of table cloning, even though direct payload clone
