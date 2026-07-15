@@ -7,6 +7,7 @@ use std::time::Duration;
 use surge_ts_types::{snapshot_function_type_counters, snapshot_union_type_counters};
 
 use super::counters::snapshot_program_counters;
+use super::rss::{current_rss_bytes, peak_rss_bytes};
 
 #[derive(Debug, Default)]
 pub(crate) struct ProgramTimings {
@@ -53,6 +54,19 @@ pub(crate) struct ProgramTimings {
     pub(crate) type_inference: Duration,
     pub(crate) flow_narrowing: Duration,
     pub(crate) file_metrics: HashMap<String, FileTimings>,
+    pub(crate) rss_stages: Vec<RssStageSample>,
+}
+
+/// One RSS reading taken at a pipeline stage boundary. `current_bytes` is the
+/// resident set right after the stage completed; `peak_bytes` is the process
+/// high-water mark at the same moment, so a spike inside the stage shows up
+/// even when it is released before the boundary.
+#[derive(Debug, Clone)]
+pub(crate) struct RssStageSample {
+    pub(crate) label: &'static str,
+    pub(crate) current_bytes: Option<u64>,
+    pub(crate) peak_bytes: Option<u64>,
+    pub(crate) elapsed: Duration,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -75,6 +89,26 @@ pub(crate) fn record_program_timing(
 
     if let Ok(mut guard) = timings.lock() {
         update(&mut guard);
+    }
+}
+
+pub(crate) fn record_rss_stage(
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+    label: &'static str,
+    elapsed: Duration,
+) {
+    let Some(timings) = timings else {
+        return;
+    };
+
+    let sample = RssStageSample {
+        label,
+        current_bytes: current_rss_bytes(),
+        peak_bytes: peak_rss_bytes(),
+        elapsed,
+    };
+    if let Ok(mut guard) = timings.lock() {
+        guard.rss_stages.push(sample);
     }
 }
 
@@ -864,6 +898,65 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    union_type_copy_unattributed_count: {}",
         union_type_counters.union_type_copy_unattributed_count
     );
+}
+
+/// Rendered BEFORE the `Timings:` block: the measurement harness parses stderr
+/// line-by-line and attributes any `key: value` line after a section header to
+/// that section, so this block must not appear inside `Timings:`/`counters:`.
+pub(crate) fn render_program_rss_stages(timings: &Arc<Mutex<ProgramTimings>>) {
+    let Ok(timings) = timings.lock() else {
+        return;
+    };
+    if timings.rss_stages.is_empty() {
+        return;
+    }
+
+    eprintln!("RSS stages:");
+    let label_width = timings
+        .rss_stages
+        .iter()
+        .map(|sample| sample.label.len())
+        .max()
+        .unwrap_or(0);
+    let mut previous_current: Option<u64> = None;
+    for sample in &timings.rss_stages {
+        let delta = match (previous_current, sample.current_bytes) {
+            (Some(previous), Some(current)) => {
+                let signed = current as i64 - previous as i64;
+                format!(
+                    "{}{}",
+                    if signed < 0 { "-" } else { "+" },
+                    format_bytes(signed.unsigned_abs())
+                )
+            }
+            _ => "n/a".to_string(),
+        };
+        eprintln!(
+            "  {:<label_width$}  rss={:>10}  delta={:>10}  peak={:>10}  t={:>9}",
+            sample.label,
+            format_bytes_opt(sample.current_bytes),
+            delta,
+            format_bytes_opt(sample.peak_bytes),
+            format_duration(sample.elapsed),
+        );
+        if sample.current_bytes.is_some() {
+            previous_current = sample.current_bytes;
+        }
+    }
+}
+
+fn format_bytes_opt(bytes: Option<u64>) -> String {
+    bytes.map_or_else(|| "n/a".to_string(), format_bytes)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const MIB: f64 = 1024.0 * 1024.0;
+    let mib = bytes as f64 / MIB;
+    if mib >= 1024.0 {
+        format!("{:.2}GB", mib / 1024.0)
+    } else {
+        format!("{mib:.1}MB")
+    }
 }
 
 fn format_duration(duration: Duration) -> String {

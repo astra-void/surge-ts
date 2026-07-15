@@ -95,6 +95,218 @@ pub(crate) struct ModuleAnalysis {
     local_export_table: ModuleExportTable,
 }
 
+// --- Temporary SURGE_EQ_STATS probe: measures how many files' preliminary and
+// final module analyses are already output-equal (the ceiling for any
+// equality-based final-round skip) and how much preliminary time they carry.
+// Remove once the skip decision is recorded.
+
+pub(crate) fn eq_probe_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_EQ_STATS").is_some())
+}
+
+static EQ_PROBE_VISITS: std::sync::OnceLock<
+    Mutex<HashMap<usize, Vec<(std::time::Duration, u64)>>>,
+> = std::sync::OnceLock::new();
+
+pub(crate) fn record_eq_probe_visit(
+    file_index: usize,
+    elapsed: std::time::Duration,
+    signature_scope_consults: u64,
+) {
+    let store = EQ_PROBE_VISITS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut visits) = store.lock() {
+        visits
+            .entry(file_index)
+            .or_default()
+            .push((elapsed, signature_scope_consults));
+    }
+}
+
+static SCOPE_FALLBACK_CONSULTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn record_scope_fallback_consult() {
+    SCOPE_FALLBACK_CONSULTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn scope_fallback_consult_count() -> u64 {
+    SCOPE_FALLBACK_CONSULTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn eq_probe_symbol_tables_equal(a: &SymbolTable, b: &SymbolTable) -> bool {
+    let count_a = a.iter_shared().count();
+    if count_a != b.iter_shared().count() {
+        return false;
+    }
+    a.iter_shared().all(|(name, symbol_a)| {
+        b.get_shared(name).is_some_and(|symbol_b| {
+            symbol_a.kind == symbol_b.kind && symbol_a.ty == symbol_b.ty
+        })
+    })
+}
+
+fn eq_probe_analyses_equal(a: &ModuleAnalysis, b: &ModuleAnalysis) -> bool {
+    let table_a = &a.local_export_table;
+    let table_b = &b.local_export_table;
+    eq_probe_symbol_tables_equal(&a.local_symbols, &b.local_symbols)
+        && eq_probe_symbol_tables_equal(&table_a.symbols, &table_b.symbols)
+        && match (&table_a.default_symbol, &table_b.default_symbol) {
+            (None, None) => true,
+            (Some(sa), Some(sb)) => sa.ty == sb.ty,
+            _ => false,
+        }
+        && match (
+            &table_a.export_assignment_symbol,
+            &table_b.export_assignment_symbol,
+        ) {
+            (None, None) => true,
+            (Some(sa), Some(sb)) => sa.ty == sb.ty,
+            _ => false,
+        }
+        && table_a.type_declarations.len() == table_b.type_declarations.len()
+}
+
+fn eq_probe_scopes_equal(
+    a: &Option<Arc<TypeDeclarationScope>>,
+    b: &Option<Arc<TypeDeclarationScope>>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            Arc::ptr_eq(a, b) || {
+                let (la, lb) = (a.layers(), b.layers());
+                la.len() == lb.len()
+                    && la.iter().zip(lb).all(|(x, y)| Arc::ptr_eq(x, y))
+            }
+        }
+        _ => false,
+    }
+}
+
+fn eq_probe_declarations_equal(
+    a: &crate::symbols::TypeDeclarationInfo,
+    b: &crate::symbols::TypeDeclarationInfo,
+) -> bool {
+    use crate::symbols::TypeDeclarationInfo;
+    match (a, b) {
+        (TypeDeclarationInfo::Alias(a), TypeDeclarationInfo::Alias(b)) => {
+            a.name == b.name
+                && Arc::ptr_eq(&a.body, &b.body)
+                && eq_probe_scopes_equal(&a.resolution_scope, &b.resolution_scope)
+        }
+        (TypeDeclarationInfo::Interface(a), TypeDeclarationInfo::Interface(b)) => {
+            a.name == b.name
+                && Arc::ptr_eq(&a.body, &b.body)
+                && eq_probe_scopes_equal(&a.resolution_scope, &b.resolution_scope)
+        }
+        _ => false,
+    }
+}
+
+fn eq_probe_declaration_tables_equal(
+    a: &TypeDeclarationTable,
+    b: &TypeDeclarationTable,
+) -> bool {
+    a.len() == b.len()
+        && a.iter().all(|(name, da)| {
+            b.get(name.as_ref())
+                .is_some_and(|db| eq_probe_declarations_equal(da, db))
+        })
+}
+
+fn eq_probe_layer_equal(a: &Arc<TypeDeclarationTable>, b: &Arc<TypeDeclarationTable>) -> bool {
+    Arc::ptr_eq(a, b) || eq_probe_declaration_tables_equal(a, b)
+}
+
+fn eq_probe_bindings_equal(a: &ModuleImportBindings, b: &ModuleImportBindings) -> bool {
+    eq_probe_symbol_tables_equal(&a.symbols, &b.symbols)
+        && eq_probe_layer_equal(&a.type_declarations, &b.type_declarations)
+        && a.namespace_alias_layers.len() == b.namespace_alias_layers.len()
+        && a
+            .namespace_alias_layers
+            .iter()
+            .zip(&b.namespace_alias_layers)
+            .all(|(x, y)| eq_probe_layer_equal(x, y))
+}
+
+fn report_eq_probe(
+    parsed_files: &[ParsedProgramFile],
+    preliminary: &[Option<ModuleAnalysis>],
+    final_analyses: &[Option<ModuleAnalysis>],
+    preliminary_bindings: &[Option<ModuleImportBindings>],
+    final_bindings: &[Option<ModuleImportBindings>],
+) {
+    if !eq_probe_enabled() {
+        return;
+    }
+    let visits_by_file = EQ_PROBE_VISITS
+        .get()
+        .and_then(|store| store.lock().ok().map(|d| d.clone()))
+        .unwrap_or_default();
+    let mut analyzed = 0usize;
+    let mut equal = 0usize;
+    let mut predicted = 0usize;
+    let mut unsound = 0usize;
+    let mut prelim_total = std::time::Duration::ZERO;
+    let mut prelim_equal = std::time::Duration::ZERO;
+    let mut final_total = std::time::Duration::ZERO;
+    let mut final_equal = std::time::Duration::ZERO;
+    let mut final_predicted = std::time::Duration::ZERO;
+    for (index, (p, f)) in preliminary.iter().zip(final_analyses.iter()).enumerate() {
+        let (Some(p), Some(f)) = (p, f) else { continue };
+        analyzed += 1;
+        let visits = visits_by_file.get(&index);
+        let (prelim_time, prelim_consults) =
+            visits.and_then(|v| v.first().copied()).unwrap_or_default();
+        let (final_time, _) = visits.and_then(|v| v.get(1).copied()).unwrap_or_default();
+        prelim_total += prelim_time;
+        final_total += final_time;
+        let bindings_equal = match (&preliminary_bindings[index], &final_bindings[index]) {
+            (Some(a), Some(b)) => eq_probe_bindings_equal(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        let output_equal = eq_probe_analyses_equal(p, f);
+        let is_predicted = bindings_equal && prelim_consults == 0;
+        if output_equal {
+            equal += 1;
+            prelim_equal += prelim_time;
+            final_equal += final_time;
+        }
+        if is_predicted {
+            predicted += 1;
+            final_predicted += final_time;
+            if !output_equal {
+                unsound += 1;
+                eprintln!(
+                    "[eq-stats] UNSOUND predicted-equal but output differs: {}",
+                    parsed_files[index].file_name
+                );
+            }
+        }
+    }
+    eprintln!(
+        "[eq-stats] analyzed={analyzed} output_equal={equal} ({:.1}%) \
+         prelim_time_equal={:.2}s/{:.2}s ({:.1}%) final_time_equal={:.2}s/{:.2}s ({:.1}%)",
+        100.0 * equal as f64 / analyzed.max(1) as f64,
+        prelim_equal.as_secs_f64(),
+        prelim_total.as_secs_f64(),
+        100.0 * prelim_equal.as_secs_f64() / prelim_total.as_secs_f64().max(f64::EPSILON),
+        final_equal.as_secs_f64(),
+        final_total.as_secs_f64(),
+        100.0 * final_equal.as_secs_f64() / final_total.as_secs_f64().max(f64::EPSILON),
+    );
+    eprintln!(
+        "[eq-stats] predicted_skip={predicted} ({:.1}%) unsound={unsound} \
+         final_time_predicted={:.2}s/{:.2}s ({:.1}%)",
+        100.0 * predicted as f64 / analyzed.max(1) as f64,
+        final_predicted.as_secs_f64(),
+        final_total.as_secs_f64(),
+        100.0 * final_predicted.as_secs_f64() / final_total.as_secs_f64().max(f64::EPSILON),
+    );
+}
+
 pub fn check_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
     check_program_with_options(files, CheckerOptions::default())
 }
@@ -317,6 +529,13 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.type_declaration_collection += type_declaration_collection_start.elapsed()
     });
+    report_eq_probe(
+        &parsed_files,
+        &preliminary_module_analyses,
+        &module_analyses,
+        &preliminary_module_import_bindings,
+        &module_import_bindings,
+    );
     let local_module_export_tables = module_analyses
         .iter()
         .map(|analysis| {

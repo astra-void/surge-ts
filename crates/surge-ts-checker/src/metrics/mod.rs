@@ -5,6 +5,7 @@
 //! interleaved. Re-exported from `program` for `crate::program::record_*` callers.
 
 mod counters;
+mod rss;
 mod timings;
 
 pub(crate) use counters::*;

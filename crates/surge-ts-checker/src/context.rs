@@ -596,6 +596,7 @@ impl CheckerContext {
         // imported clusters (ky's `Options`/`Hooks`/`NormalizedOptions` across the
         // circular `options.ts`/`hooks.ts` imports), whose resolution order would
         // otherwise leave a member degraded to `unknown`.
+        crate::program::record_scope_fallback_consult();
         if let Some(scope) = self.module_scope_by_file.get(self.file_name.as_str()) {
             if let Some(handle) = scope.get_handle(name) {
                 crate::program::record_type_declaration_lookup(2);
@@ -628,6 +629,7 @@ impl CheckerContext {
         &self,
         file_name: &str,
     ) -> Option<Arc<TypeDeclarationScope>> {
+        crate::program::record_scope_fallback_consult();
         self.module_scope_by_file.get(file_name).cloned()
     }
 

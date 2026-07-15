@@ -525,6 +525,10 @@ impl TypeDeclarationScope {
     pub(crate) fn layer_count(&self) -> usize {
         self.layers.len()
     }
+
+    pub(crate) fn layers(&self) -> &[Arc<TypeDeclarationTable>] {
+        &self.layers
+    }
 }
 
 #[derive(Debug, Clone, Default)]

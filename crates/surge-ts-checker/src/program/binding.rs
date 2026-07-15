@@ -188,6 +188,8 @@ pub(crate) fn collect_module_analyses_with_bindings(
             continue;
         }
 
+        let eq_probe_start = super::eq_probe_enabled().then(Instant::now);
+
         record_program_counter(|c| {
             c.module_analysis_total_calls += 1;
             c.module_analysis_unique_files += 1;
@@ -269,6 +271,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
         // discarded.
         let mut discarded_function_signatures = HashMap::new();
         let diagnostics_before_signatures = ctx.diagnostics().len();
+        let consults_before_signatures = super::scope_fallback_consult_count();
         collect_function_signatures_from_statements(
             &parsed_file.statements,
             file_index,
@@ -276,6 +279,8 @@ pub(crate) fn collect_module_analyses_with_bindings(
             &mut discarded_function_signatures,
             ctx,
         );
+        let signature_scope_consults =
+            super::scope_fallback_consult_count() - consults_before_signatures;
         let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
         let mut local_symbols = SymbolTable::new();
         for (name, symbol) in signature_env.iter_shared() {
@@ -313,6 +318,9 @@ pub(crate) fn collect_module_analyses_with_bindings(
             local_export_table: export_table,
         }));
         ctx.type_declaration_scope = saved_type_declaration_scope;
+        if let Some(start) = eq_probe_start {
+            super::record_eq_probe_visit(file_index, start.elapsed(), signature_scope_consults);
+        }
     }
 
     analyses
