@@ -3,9 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use surge_ts_checker::SourceFileInput;
+use surge_ts_checker::lowlevel::resolution_candidates::{
+    mapped_target_candidates, relative_import_candidates,
+};
 use surge_ts_config::PathMapping;
 use surge_ts_config::{
     canonicalize_if_exists, canonicalize_if_exists_string, normalize_path_string,
+    select_path_mapping_targets,
 };
 use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, ParserWorker};
 
@@ -13,6 +17,7 @@ pub fn expand_project_inputs(
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
     root_dir: &Path,
+    base_url: Option<&Path>,
     paths: &[PathMapping],
 ) -> usize {
     let mut known_files = HashSet::new();
@@ -41,7 +46,13 @@ pub fn expand_project_inputs(
             let candidate = if is_relative_specifier(&module_specifier) {
                 resolve_relative_candidate(&file_path, &module_specifier, &mut probe_cache)
             } else {
-                resolve_paths_alias_candidate(&module_specifier, paths, root_dir, &mut probe_cache)
+                resolve_paths_alias_candidate(
+                    &module_specifier,
+                    paths,
+                    base_url,
+                    root_dir,
+                    &mut probe_cache,
+                )
             };
 
             let Some(candidate) = candidate else {
@@ -108,38 +119,7 @@ fn resolve_relative_candidate(
     let normalized_specifier = normalize_path_string(specifier);
     let joined = normalize_path_string(&importer_dir.join(&normalized_specifier).to_string_lossy());
 
-    let candidate_paths = match relative_specifier_kind(&normalized_specifier) {
-        RelativeSpecifierKind::ExplicitTs => vec![joined],
-        RelativeSpecifierKind::ExplicitJs => {
-            let mut candidates = vec![joined.clone()];
-            candidates.extend(relative_resolution_candidates_with_js_substitution(
-                &strip_extension(&joined),
-                &[".ts", ".tsx"],
-                &[".d.ts"],
-            ));
-            candidates
-        }
-        RelativeSpecifierKind::ExplicitMjs => {
-            let mut candidates = vec![joined.clone()];
-            candidates.extend(relative_resolution_candidates_with_js_substitution(
-                &strip_extension(&joined),
-                &[".mts"],
-                &[".d.mts"],
-            ));
-            candidates
-        }
-        RelativeSpecifierKind::ExplicitCjs => {
-            let mut candidates = vec![joined.clone()];
-            candidates.extend(relative_resolution_candidates_with_js_substitution(
-                &strip_extension(&joined),
-                &[".cts"],
-                &[".d.cts"],
-            ));
-            candidates
-        }
-        RelativeSpecifierKind::Extensionless => relative_resolution_candidates(&joined),
-        RelativeSpecifierKind::Unsupported => return None,
-    };
+    let candidate_paths = relative_import_candidates(&joined, &normalized_specifier)?;
 
     for candidate in candidate_paths {
         let candidate = PathBuf::from(candidate);
@@ -160,81 +140,50 @@ fn resolve_relative_candidate(
 fn resolve_paths_alias_candidate(
     specifier: &str,
     paths: &[PathMapping],
+    base_url: Option<&Path>,
     root_dir: &Path,
     probe_cache: &mut HashMap<String, bool>,
 ) -> Option<PathBuf> {
-    for mapping in paths {
-        let is_wildcard = mapping.pattern.contains('*');
-        if mapping.pattern.matches('*').count() > 1 {
-            continue;
-        }
+    // `paths` substitutions and the bare-import fallback resolve against
+    // `baseUrl` when set, else the config directory (tsc ≥4.4 allows `paths`
+    // without `baseUrl`).
+    let mapping_base = base_url.unwrap_or(root_dir);
 
-        let matched_text = if is_wildcard {
-            let parts: Vec<&str> = mapping.pattern.split('*').collect();
-            if parts.len() != 2 {
-                continue;
-            }
-
-            let prefix = parts[0];
-            let suffix = parts[1];
-            if specifier.starts_with(prefix)
-                && specifier.ends_with(suffix)
-                && specifier.len() >= prefix.len() + suffix.len()
-            {
-                let start = prefix.len();
-                let end = specifier.len() - suffix.len();
-                Some(&specifier[start..end])
-            } else {
-                None
-            }
-        } else if specifier == mapping.pattern {
-            Some("")
-        } else {
-            None
-        };
-
-        let Some(matched_text) = matched_text else {
-            continue;
-        };
-
-        for substitution in &mapping.substitutions {
-            if substitution.matches('*').count() > 1 {
-                continue;
-            }
-
-            let target_path = if is_wildcard {
-                substitution.replace('*', matched_text)
-            } else {
-                substitution.clone()
-            };
-
-            if !is_explicit_relative_target(&target_path) {
-                continue;
-            }
-
-            let joined = normalize_path_string(&root_dir.join(&target_path).to_string_lossy());
-            let candidate_paths = if joined.contains('.') {
-                // Preserve the existing candidate policy for explicit relative targets.
-                relative_resolution_candidates(&joined)
-            } else {
-                relative_resolution_candidates(&joined)
-            };
-
-            for candidate in candidate_paths {
-                let candidate = PathBuf::from(candidate);
-                if !candidate_is_existing_file(&candidate, probe_cache) {
-                    continue;
-                }
-
-                if is_dependency_javascript_source_file(&candidate)
-                    || !is_loadable_graph_file(&candidate)
-                {
-                    continue;
-                }
-
+    if let Some(targets) = select_path_mapping_targets(specifier, paths) {
+        for target in targets {
+            let joined = normalize_path_string(&mapping_base.join(&target).to_string_lossy());
+            if let Some(candidate) = probe_loadable_candidates(&joined, probe_cache) {
                 return Some(candidate);
             }
         }
+        return None;
+    }
+
+    // No pattern matched: tsc falls back to resolving the bare specifier
+    // directly against `baseUrl`.
+    if let Some(base_url) = base_url {
+        let joined = normalize_path_string(&base_url.join(specifier).to_string_lossy());
+        return probe_loadable_candidates(&joined, probe_cache);
+    }
+
+    None
+}
+
+fn probe_loadable_candidates(
+    target: &str,
+    probe_cache: &mut HashMap<String, bool>,
+) -> Option<PathBuf> {
+    for candidate in mapped_target_candidates(target) {
+        let candidate = PathBuf::from(candidate);
+        if !candidate_is_existing_file(&candidate, probe_cache) {
+            continue;
+        }
+
+        if is_dependency_javascript_source_file(&candidate) || !is_loadable_graph_file(&candidate) {
+            continue;
+        }
+
+        return Some(candidate);
     }
 
     None
@@ -288,111 +237,4 @@ fn is_relative_specifier(specifier: &str) -> bool {
         || specifier.starts_with("../")
         || specifier.starts_with(".\\")
         || specifier.starts_with("..\\")
-}
-
-fn is_explicit_relative_target(target: &str) -> bool {
-    target.starts_with("./")
-        || target.starts_with("../")
-        || target.starts_with(".\\")
-        || target.starts_with("..\\")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RelativeSpecifierKind {
-    ExplicitTs,
-    ExplicitJs,
-    ExplicitMjs,
-    ExplicitCjs,
-    Extensionless,
-    Unsupported,
-}
-
-fn relative_specifier_kind(specifier: &str) -> RelativeSpecifierKind {
-    let last_segment = specifier.rsplit('/').next().unwrap_or(specifier);
-
-    if last_segment == "." || last_segment == ".." {
-        return RelativeSpecifierKind::Extensionless;
-    }
-
-    if last_segment.ends_with(".tsx")
-        || last_segment.ends_with(".jsx")
-        || last_segment.ends_with(".mts")
-        || last_segment.ends_with(".cts")
-        || last_segment.ends_with(".d.ts")
-        || last_segment.ends_with(".d.mts")
-        || last_segment.ends_with(".d.cts")
-        || last_segment.ends_with(".json")
-    {
-        return RelativeSpecifierKind::Unsupported;
-    }
-
-    if last_segment.ends_with(".ts") {
-        return RelativeSpecifierKind::ExplicitTs;
-    }
-
-    if last_segment.ends_with(".js") {
-        return RelativeSpecifierKind::ExplicitJs;
-    }
-
-    if last_segment.ends_with(".mjs") {
-        return RelativeSpecifierKind::ExplicitMjs;
-    }
-
-    if last_segment.ends_with(".cjs") {
-        return RelativeSpecifierKind::ExplicitCjs;
-    }
-
-    RelativeSpecifierKind::Extensionless
-}
-
-fn relative_resolution_candidates(base: &str) -> Vec<String> {
-    vec![
-        base.to_string(),
-        format!("{base}.ts"),
-        format!("{base}.tsx"),
-        format!("{base}.d.ts"),
-        format!("{base}.mts"),
-        format!("{base}.cts"),
-        format!("{base}.d.mts"),
-        format!("{base}.d.cts"),
-        format!("{base}/index.ts"),
-        format!("{base}/index.tsx"),
-        format!("{base}/index.d.ts"),
-        format!("{base}/index.mts"),
-        format!("{base}/index.cts"),
-        format!("{base}/index.d.mts"),
-        format!("{base}/index.d.cts"),
-    ]
-}
-
-fn relative_resolution_candidates_with_js_substitution(
-    base: &str,
-    source_extensions: &[&str],
-    declaration_extensions: &[&str],
-) -> Vec<String> {
-    let mut candidates = Vec::new();
-
-    for extension in source_extensions {
-        candidates.push(format!("{base}{extension}"));
-    }
-    for extension in declaration_extensions {
-        candidates.push(format!("{base}{extension}"));
-    }
-
-    candidates.push(format!("{base}/index.ts"));
-    candidates.push(format!("{base}/index.tsx"));
-    candidates.push(format!("{base}/index.d.ts"));
-    candidates.push(format!("{base}/index.mts"));
-    candidates.push(format!("{base}/index.cts"));
-    candidates.push(format!("{base}/index.d.mts"));
-    candidates.push(format!("{base}/index.d.cts"));
-
-    candidates
-}
-
-fn strip_extension(path: &str) -> String {
-    match path.rsplit_once('.') {
-        Some((head, _)) => head.to_string(),
-        None => path.to_string(),
-    }
 }

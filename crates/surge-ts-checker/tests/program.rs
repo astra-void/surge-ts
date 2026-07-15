@@ -51,6 +51,364 @@ fn native_program(files: &[(&str, &str)]) -> Vec<surge_ts_diagnostics::Diagnosti
     program_with_options(files, options)
 }
 
+fn dependency_program(
+    declaration_file: &str,
+    declaration_source: &str,
+    consumer_source: &str,
+) -> Vec<surge_ts_diagnostics::Diagnostic> {
+    let mut options = CheckerOptions::default();
+    options
+        .resolved_modules
+        .insert("dep".to_string(), declaration_file.to_string());
+    program_with_options(
+        &[
+            (declaration_file, declaration_source),
+            ("src/index.ts", consumer_source),
+        ],
+        options,
+    )
+}
+
+#[test]
+fn dependency_dts_export_generic_alias_lazy() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "type Box<T> = { value: T }; declare const item: Box<string>; export { item };",
+        "import { item } from 'dep'; const value: string = item.value;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_export_interface_lazy() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "interface Item { value: string } declare const item: Item; export { item };",
+        "import { item } from 'dep'; const value: string = item.value;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_export_conditional_lazy() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "type Select<T> = T extends string ? { text: T } : { count: number }; declare const item: Select<string>; export { item };",
+        "import { item } from 'dep'; const value: string = item.text;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_export_mapped_lazy() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "type Copy<T> = { [K in keyof T]: T[K] }; declare const item: Copy<{ value: string }>; export { item };",
+        "import { item } from 'dep'; const value: string = item.value;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_export_indexed_access_lazy() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "interface Item { value: string } declare const item: Item['value']; export { item };",
+        "import { item } from 'dep'; const value: string = item;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_export_reference_intersection_lazy() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "interface Left { left: string } interface Right { right: number } declare const item: Left & Right; export { item };",
+        "import { item } from 'dep'; const left: string = item.left; const right: number = item.right;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_export_typeof_imported_value_lazy() {
+    let mut options = CheckerOptions::default();
+    options
+        .resolved_modules
+        .insert("dep".to_string(), "node_modules/dep/index.d.ts".to_string());
+    let diagnostics = program_with_options(
+        &[
+            (
+                "node_modules/dep/primitive.d.ts",
+                "declare const primitive: { value: string }; export { primitive };",
+            ),
+            (
+                "node_modules/dep/index.d.ts",
+                "import { primitive } from './primitive'; declare const item: typeof primitive; export { item };",
+            ),
+            (
+                "src/index.ts",
+                "import { item } from 'dep'; const value: string = item.value;",
+            ),
+        ],
+        options,
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_reexport_chain_lazy() {
+    let mut options = CheckerOptions::default();
+    options
+        .resolved_modules
+        .insert("dep".to_string(), "node_modules/dep/index.d.ts".to_string());
+    let diagnostics = program_with_options(
+        &[
+            (
+                "node_modules/dep/base.d.ts",
+                "interface Item { value: string } declare const item: Item; export { item };",
+            ),
+            (
+                "node_modules/dep/middle.d.ts",
+                "export { item } from './base';",
+            ),
+            (
+                "node_modules/dep/index.d.ts",
+                "export { item } from './middle';",
+            ),
+            (
+                "src/index.ts",
+                "import { item } from 'dep'; const value: string = item.value;",
+            ),
+        ],
+        options,
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_export_star_lazy() {
+    let mut options = CheckerOptions::default();
+    options
+        .resolved_modules
+        .insert("dep".to_string(), "node_modules/dep/index.d.ts".to_string());
+    let diagnostics = program_with_options(
+        &[
+            (
+                "node_modules/dep/base.d.ts",
+                "interface Item { value: string } declare const item: Item; export { item };",
+            ),
+            ("node_modules/dep/index.d.ts", "export * from './base';"),
+            (
+                "src/index.ts",
+                "import { item } from 'dep'; const value: string = item.value;",
+            ),
+        ],
+        options,
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_degraded_resolution_not_cached() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "type Broken<T> = Missing<T>; declare const first: Broken<string>; declare const second: Broken<number>; export { first, second };",
+        "import { first, second } from 'dep'; first.anything; second.anything;",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+}
+
+#[test]
+fn dependency_dts_property_access_forces_once() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "type Item = { value: string }; declare const item: Item; export { item };",
+        "import { item } from 'dep'; const a: string = item.value; const b: string = item.value;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_assignability_forces_once() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "type Item = { value: string }; declare const item: Item; export { item };",
+        "import { item } from 'dep'; const a: { value: string } = item; const b: { value: string } = item;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_display_does_not_force() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "type Box<T> = { value: T }; declare const item: Box<string>; export { item };",
+        "import { item } from 'dep'; void item;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_module_dedup_does_not_force() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "type Large<T> = { a: T; b: T; c: T; d: T; e: T; f: T }; declare const first: Large<string>; declare const second: Large<string>; export { first, second };",
+        "import { first, second } from 'dep'; void first; void second;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn d_mts_lazy_surface() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.mts",
+        "type Item = { value: string }; declare const item: Item; export { item };",
+        "import { item } from 'dep'; const value: string = item.value;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn d_cts_lazy_surface() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.cts",
+        "type Item = { value: string }; declare const item: Item; export { item };",
+        "import { item } from 'dep'; const value: string = item.value;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_same_type_many_importers() {
+    let mut files = vec![SourceFileInput {
+        file_name: "node_modules/dep/base.d.ts".to_string(),
+        source_text:
+            "export interface Shared { value: string; a: number; b: number; c: number; d: number }"
+                .to_string(),
+    }];
+    let mut consumer = String::new();
+    let mut options = CheckerOptions::default();
+    for index in 0..100 {
+        let file_name = format!("node_modules/dep/module-{index}.d.ts");
+        files.push(SourceFileInput {
+            file_name: file_name.clone(),
+            source_text: format!(
+                "import {{ Shared }} from './base'; declare const value{index}: Shared; export {{ value{index} }};"
+            ),
+        });
+        let specifier = format!("dep/module-{index}");
+        options
+            .resolved_modules
+            .insert(specifier.clone(), file_name);
+        consumer.push_str(&format!(
+            "import {{ value{index} }} from '{specifier}'; const result{index}: string = value{index}.value;\n"
+        ));
+    }
+    files.push(SourceFileInput {
+        file_name: "src/index.ts".to_string(),
+        source_text: consumer,
+    });
+
+    let diagnostics = check_program_with_options(files, options);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_function_parameter_materializes_for_call() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "export interface Input { value: string } export declare function consume(input: Input): void;",
+        "import { consume } from 'dep'; consume({ value: 1 });",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn dependency_dts_function_return_materializes_for_inspection() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "export interface Output { value: string } export declare function create(): Output;",
+        "import { create } from 'dep'; const value: string = create().value;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_generic_function_keeps_call_site_substitution() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "export declare function identity<T extends { value: string } = { value: string }>(input: T): T;",
+        "import { identity } from 'dep'; const value: string = identity({ value: 'ok' }).value;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_structural_generic_signature_keeps_call_site_substitution() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "export declare function transform<T extends string>(input: { value: T }): { output: T };",
+        "import { transform } from 'dep'; const output: 'ok' = transform({ value: 'ok' }).output; transform({ value: 1 });",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn d_mts_function_signature_materializes_for_call() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.mts",
+        "export declare function consume(input: { value: string }): void;",
+        "import { consume } from 'dep'; consume({ value: 1 });",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn d_cts_function_signature_materializes_for_call() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.cts",
+        "export declare function consume(input: { value: string }): void;",
+        "import { consume } from 'dep'; consume({ value: 1 });",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn dependency_dts_function_reexport_keeps_lazy_signature() {
+    let mut options = CheckerOptions::default();
+    options
+        .resolved_modules
+        .insert("dep".to_string(), "node_modules/dep/index.d.ts".to_string());
+    let diagnostics = program_with_options(
+        &[
+            (
+                "node_modules/dep/base.d.ts",
+                "export interface Output { value: string } export declare function create(): Output;",
+            ),
+            (
+                "node_modules/dep/index.d.ts",
+                "export { create } from './base';",
+            ),
+            (
+                "src/index.ts",
+                "import { create } from 'dep'; const value: string = create().value;",
+            ),
+        ],
+        options,
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn dependency_dts_function_signature_display_does_not_change_semantics() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "export type Large<T> = { a: T; b: T; c: T; d: T }; export declare function create(input: Large<string>): Large<string>;",
+        "import { create } from 'dep'; void create;",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
 #[test]
 fn program_empty_files_valid() {
     assert!(check_program(Vec::new()).is_empty());
@@ -170,6 +528,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
             no_implicit_returns: false,
@@ -581,6 +940,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
@@ -601,6 +961,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
@@ -1083,6 +1444,7 @@ fn program_order_parser_before_type_prepass() {
         CheckerOptions {
             diagnostic_profile: DiagnosticProfile::Native,
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
@@ -1674,6 +2036,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
@@ -1703,6 +2066,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
@@ -1729,6 +2093,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,
@@ -3396,6 +3761,7 @@ fn ambient_module_resolves_before_package_stub_with_stub_external_modules() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
             ..Default::default()
         },
@@ -3430,6 +3796,7 @@ fn ambient_module_missing_export_ts2305_not_ts2307_with_stub_external_modules() 
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
             ..Default::default()
         },
@@ -3477,6 +3844,7 @@ fn ambient_module_unknown_specifier_stub_external_modules_suppresses_ts2307() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
             ..Default::default()
         },
@@ -3544,6 +3912,7 @@ fn ambient_module_default_import_missing_module_stub_external_suppresses_ts2307(
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
             ..Default::default()
         },
@@ -3646,6 +4015,7 @@ fn ambient_module_namespace_import_unknown_module_stub_external_suppresses_ts230
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
             ..Default::default()
         },
@@ -3830,6 +4200,7 @@ fn ambient_module_re_export_unknown_source_stub_external_modules_behavior() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
             ..Default::default()
         },
@@ -5588,6 +5959,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: Default::default(),
+            resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
             no_implicit_returns: false,

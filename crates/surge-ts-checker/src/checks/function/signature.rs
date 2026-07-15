@@ -409,6 +409,131 @@ pub(crate) fn map_function_signature(
     )
 }
 
+pub(crate) fn map_lazy_dependency_function_signature(
+    function: &surge_ts_syntax::ParsedFunctionDeclaration,
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    report_duplicate_type_parameters(&function.type_parameters, ctx);
+    crate::program::record_program_counter(|c| {
+        c.lazy_signature_create_count += 1;
+        c.lazy_signature_generic_annotation_create_count += function
+            .type_parameters
+            .iter()
+            .map(|parameter| {
+                u64::from(parameter.constraint.is_some())
+                    + u64::from(parameter.default_type.is_some())
+            })
+            .sum::<u64>();
+    });
+
+    let pushed_type_parameter_scope = !function.type_parameters.is_empty();
+    if pushed_type_parameter_scope {
+        ctx.push_type_parameter_scope(&function.type_parameters, None);
+    }
+    let signature_environment =
+        crate::infer::LazySignatureEnvironment::new(&function.type_parameters);
+    let type_parameter_substitution = build_type_parameter_substitution(&function.type_parameters);
+
+    let declaration_start = function.name_span.map_or(0, |span| span.start);
+    let parameter_types = function
+        .parameters
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| {
+            let Some(annotation) = parameter.declared_type.clone() else {
+                return Type::Any;
+            };
+            if !defer_dependency_signature_annotation(&annotation) {
+                return map_parsed_type_with_substitution(
+                    annotation,
+                    ctx,
+                    &type_parameter_substitution,
+                );
+            }
+            let is_this = parameter_identifier_name(parameter) == Some("this");
+            crate::infer::make_lazy_signature_annotation_reference(
+                ctx,
+                &function.name,
+                declaration_start,
+                if is_this {
+                    crate::infer::LazySignatureComponent::ThisParameter
+                } else {
+                    crate::infer::LazySignatureComponent::Parameter(index)
+                },
+                annotation,
+                signature_environment.clone(),
+            )
+        })
+        .collect();
+    let return_type = function
+        .return_type
+        .clone()
+        .map_or(Type::Unknown, |annotation| {
+            if !defer_dependency_signature_annotation(&annotation) {
+                return map_parsed_type_with_substitution(
+                    annotation,
+                    ctx,
+                    &type_parameter_substitution,
+                );
+            }
+            crate::infer::make_lazy_signature_annotation_reference(
+                ctx,
+                &function.name,
+                declaration_start,
+                crate::infer::LazySignatureComponent::Return,
+                annotation,
+                signature_environment,
+            )
+        });
+
+    if pushed_type_parameter_scope {
+        ctx.pop_type_parameter_scope();
+    }
+
+    alloc_function_type(
+        parameter_types,
+        return_type,
+        function
+            .parameters
+            .last()
+            .is_some_and(|parameter| parameter.rest),
+        required_parameter_count(&function.parameters),
+    )
+}
+
+fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {
+    match annotation {
+        ParsedType::Object(_)
+        | ParsedType::Tuple(_)
+        | ParsedType::Union(_)
+        | ParsedType::Intersection(_)
+        | ParsedType::Function(_)
+        | ParsedType::TypeOf(_)
+        | ParsedType::KeyOf(_)
+        | ParsedType::IndexedAccess(_)
+        | ParsedType::Mapped(_)
+        | ParsedType::Conditional(_)
+        | ParsedType::TemplateLiteral(_) => true,
+        ParsedType::Array(element) => defer_dependency_signature_annotation(element),
+        ParsedType::String
+        | ParsedType::Number
+        | ParsedType::Boolean
+        | ParsedType::BigInt
+        | ParsedType::Symbol
+        | ParsedType::Undefined
+        | ParsedType::Void
+        | ParsedType::Any
+        | ParsedType::Unknown
+        | ParsedType::UnknownKeyword
+        | ParsedType::Never
+        | ParsedType::StringLiteral(_)
+        | ParsedType::NumberLiteral(_)
+        | ParsedType::BooleanLiteral(_)
+        | ParsedType::Named(_)
+        | ParsedType::Infer(_) => false,
+    }
+}
+
 pub(crate) fn required_parameter_count(parameters: &[ParsedFunctionParameter]) -> usize {
     let mut required = parameters.len();
 
@@ -498,6 +623,9 @@ pub(crate) fn register_function_signature(
         symbols.get(&name),
         Some(existing) if matches!(existing.kind, SymbolKind::Function)
     );
+    if symbol_exists && !replace_existing {
+        crate::program::record_program_counter(|c| c.overload_group_create_count += 1);
+    }
 
     // TS2393 ("Duplicate function implementation") fires only when *this*
     // declaration has a body and another implementation was already registered.

@@ -7,7 +7,9 @@ use std::time::Duration;
 use surge_ts_types::{snapshot_function_type_counters, snapshot_union_type_counters};
 
 use super::counters::snapshot_program_counters;
-use super::rss::{current_rss_bytes, peak_rss_bytes};
+use super::rss::{
+    current_footprint_bytes, current_rss_bytes, peak_footprint_bytes, peak_rss_bytes,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct ProgramTimings {
@@ -72,12 +74,16 @@ pub(crate) struct ProgramCacheStats {
 /// One RSS reading taken at a pipeline stage boundary. `current_bytes` is the
 /// resident set right after the stage completed; `peak_bytes` is the process
 /// high-water mark at the same moment, so a spike inside the stage shows up
-/// even when it is released before the boundary.
+/// even when it is released before the boundary. The footprint pair mirrors
+/// them using macOS `phys_footprint`, which keeps counting compressed/swapped
+/// pages that RSS drops under memory pressure.
 #[derive(Debug, Clone)]
 pub(crate) struct RssStageSample {
     pub(crate) label: &'static str,
     pub(crate) current_bytes: Option<u64>,
     pub(crate) peak_bytes: Option<u64>,
+    pub(crate) footprint_bytes: Option<u64>,
+    pub(crate) peak_footprint_bytes: Option<u64>,
     pub(crate) elapsed: Duration,
 }
 
@@ -117,6 +123,8 @@ pub(crate) fn record_rss_stage(
         label,
         current_bytes: current_rss_bytes(),
         peak_bytes: peak_rss_bytes(),
+        footprint_bytes: current_footprint_bytes(),
+        peak_footprint_bytes: peak_footprint_bytes(),
         elapsed,
     };
     if let Ok(mut guard) = timings.lock() {
@@ -445,6 +453,30 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     eprintln!(
         "    module_analysis_duplicate_calls: {}",
         counters.module_analysis_duplicate_calls
+    );
+    eprintln!(
+        "    module_type_dedup_hit_count: {}",
+        counters.module_type_dedup_hit_count
+    );
+    eprintln!(
+        "    module_type_dedup_insert_count: {}",
+        counters.module_type_dedup_insert_count
+    );
+    eprintln!(
+        "    module_type_dedup_nominal_match_count: {}",
+        counters.module_type_dedup_nominal_match_count
+    );
+    eprintln!(
+        "    module_type_dedup_structural_comparison_count: {}",
+        counters.module_type_dedup_structural_comparison_count
+    );
+    eprintln!(
+        "    module_type_dedup_structural_nodes_visited_count: {}",
+        counters.module_type_dedup_structural_nodes_visited_count
+    );
+    eprintln!(
+        "    module_type_dedup_forced_lazy_peel_count: {}",
+        counters.module_type_dedup_forced_lazy_peel_count
     );
     eprintln!(
         "    type_declaration_table_clone_count: {}",
@@ -787,6 +819,171 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         counters.named_type_cache_insert_count
     );
     eprintln!(
+        "    lazy_reference_create_count: {}",
+        counters.lazy_reference_create_count
+    );
+    eprintln!(
+        "    lazy_reference_peel_count: {}",
+        counters.lazy_reference_peel_count
+    );
+    eprintln!(
+        "    lazy_reference_clean_expansion_count: {}",
+        counters.lazy_reference_clean_expansion_count
+    );
+    eprintln!(
+        "    lazy_reference_memo_hit_count: {}",
+        counters.lazy_reference_memo_hit_count
+    );
+    eprintln!(
+        "    lazy_reference_interner_hit_count: {}",
+        counters.lazy_reference_interner_hit_count
+    );
+    eprintln!(
+        "    lazy_reference_blocked_count: {}",
+        counters.lazy_reference_blocked_count
+    );
+    eprintln!(
+        "    lazy_reference_degraded_expansion_count: {}",
+        counters.lazy_reference_degraded_expansion_count
+    );
+    eprintln!(
+        "    generic_instantiation_count: {}",
+        counters.generic_instantiation_count
+    );
+    eprintln!(
+        "    lazy_intersection_create_count: {}",
+        counters.lazy_intersection_create_count
+    );
+    eprintln!(
+        "    lazy_intersection_peel_count: {}",
+        counters.lazy_intersection_peel_count
+    );
+    eprintln!(
+        "    lazy_annotation_reference_create_count: {}",
+        counters.lazy_annotation_reference_create_count
+    );
+    eprintln!(
+        "    function_signatures_indexed_count: {}",
+        counters.function_signatures_indexed_count
+    );
+    eprintln!(
+        "    lazy_signature_create_count: {}",
+        counters.lazy_signature_create_count
+    );
+    eprintln!(
+        "    lazy_signature_parameter_annotation_create_count: {}",
+        counters.lazy_signature_parameter_annotation_create_count
+    );
+    eprintln!(
+        "    lazy_signature_return_annotation_create_count: {}",
+        counters.lazy_signature_return_annotation_create_count
+    );
+    eprintln!(
+        "    lazy_signature_generic_annotation_create_count: {}",
+        counters.lazy_signature_generic_annotation_create_count
+    );
+    eprintln!(
+        "    lazy_signature_materialization_count: {}",
+        counters.lazy_signature_materialization_count
+    );
+    eprintln!(
+        "    signature_materialization_cache_hit_count: {}",
+        counters.signature_materialization_cache_hit_count
+    );
+    eprintln!(
+        "    signature_materialization_cache_miss_count: {}",
+        counters.signature_materialization_cache_miss_count
+    );
+    eprintln!(
+        "    clean_signature_expansion_count: {}",
+        counters.clean_signature_expansion_count
+    );
+    eprintln!(
+        "    degraded_signature_expansion_count: {}",
+        counters.degraded_signature_expansion_count
+    );
+    eprintln!(
+        "    unique_degraded_signature_expansion_count: {}",
+        counters.unique_degraded_signature_expansion_count
+    );
+    eprintln!(
+        "    repeated_degraded_signature_expansion_count: {}",
+        counters.repeated_degraded_signature_expansion_count
+    );
+    eprintln!(
+        "    max_degraded_signature_expansion_repeats: {}",
+        counters.max_degraded_signature_expansion_repeats
+    );
+    eprintln!(
+        "    overload_group_create_count: {}",
+        counters.overload_group_create_count
+    );
+    eprintln!(
+        "    signature_structural_clone_count: {}",
+        counters.signature_structural_clone_count
+    );
+    eprintln!(
+        "    lazy_signature_annotation_handle_size_bytes: {}",
+        counters.lazy_signature_annotation_handle_size_bytes
+    );
+    eprintln!(
+        "    lazy_signature_environment_handle_size_bytes: {}",
+        counters.lazy_signature_environment_handle_size_bytes
+    );
+    eprintln!(
+        "    lazy_signature_parameter_slot_size_bytes: {}",
+        counters.lazy_signature_parameter_slot_size_bytes
+    );
+    eprintln!(
+        "    lazy_signature_estimated_shallow_retained_bytes: {}",
+        counters.lazy_signature_estimated_shallow_retained_bytes
+    );
+    eprintln!(
+        "    lazy_signature_environment_create_count: {}",
+        counters.lazy_signature_environment_create_count
+    );
+    eprintln!(
+        "    lazy_signature_environment_reference_count: {}",
+        counters.lazy_signature_environment_reference_count
+    );
+    const PEEL_REASONS: [&str; 29] = [
+        "signature_parameter",
+        "signature_return",
+        "signature_this_parameter",
+        "signature_type_predicate",
+        "generic_constraint",
+        "generic_default",
+        "call_signature",
+        "construct_signature",
+        "interface_method",
+        "class_method",
+        "class_constructor",
+        "function_type_annotation",
+        "module_export_collection",
+        "overload_resolution",
+        "call_resolution",
+        "construct_resolution",
+        "assignability",
+        "contextual_typing",
+        "generic_inference",
+        "property_lookup",
+        "indexed_access",
+        "conditional_type",
+        "mapped_type",
+        "intersection_merge",
+        "union_normalization",
+        "apparent_type",
+        "diagnostic_display",
+        "module_dedup",
+        "other",
+    ];
+    for (reason, count) in PEEL_REASONS
+        .iter()
+        .zip(counters.lazy_reference_peel_reason_counts)
+    {
+        eprintln!("    lazy_reference_peel_reason_{reason}_count: {count}");
+    }
+    eprintln!(
         "    function_type_copy_from_expression_identifier_count: {}",
         counters.function_type_copy_from_expression_identifier_count
     );
@@ -816,6 +1013,27 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    function_type_payload_alloc_count: {}",
         function_type_counters.function_type_payload_alloc_count
     );
+    const FUNCTION_PAYLOAD_REASONS: [&str; 13] = [
+        "other",
+        "expression_inference",
+        "call_resolution",
+        "property_call_resolution",
+        "function_body_setup",
+        "return_checking",
+        "expected_type",
+        "symbol_table",
+        "module_export",
+        "scope_or_context",
+        "substitution_unchanged",
+        "substitution_changed",
+        "diagnostic_formatting",
+    ];
+    for (reason, count) in FUNCTION_PAYLOAD_REASONS
+        .iter()
+        .zip(function_type_counters.function_type_payload_alloc_by_reason)
+    {
+        eprintln!("    function_type_payload_alloc_{reason}_count: {count}");
+    }
     eprintln!(
         "    function_type_payload_deep_clone_count: {}",
         function_type_counters.function_type_payload_deep_clone_count
@@ -980,11 +1198,13 @@ pub(crate) fn render_program_rss_stages(timings: &Arc<Mutex<ProgramTimings>>) {
             _ => "n/a".to_string(),
         };
         eprintln!(
-            "  {:<label_width$}  rss={:>10}  delta={:>10}  peak={:>10}  t={:>9}",
+            "  {:<label_width$}  rss={:>10}  delta={:>10}  peak={:>10}  fp={:>10}  fp_peak={:>10}  t={:>9}",
             sample.label,
             format_bytes_opt(sample.current_bytes),
             delta,
             format_bytes_opt(sample.peak_bytes),
+            format_bytes_opt(sample.footprint_bytes),
+            format_bytes_opt(sample.peak_footprint_bytes),
             format_duration(sample.elapsed),
         );
         if sample.current_bytes.is_some() {
@@ -1004,10 +1224,13 @@ pub(crate) fn render_program_rss_stages(timings: &Arc<Mutex<ProgramTimings>>) {
     if super::rss_json_enabled() {
         for sample in &timings.rss_stages {
             eprintln!(
-                "{{\"rssStage\":\"{}\",\"rssBytes\":{},\"peakRssBytes\":{},\"elapsedMs\":{:.3}}}",
+                "{{\"rssStage\":\"{}\",\"rssBytes\":{},\"peakRssBytes\":{},\
+                 \"footprintBytes\":{},\"peakFootprintBytes\":{},\"elapsedMs\":{:.3}}}",
                 sample.label,
                 super::json_u64_opt(sample.current_bytes),
                 super::json_u64_opt(sample.peak_bytes),
+                super::json_u64_opt(sample.footprint_bytes),
+                super::json_u64_opt(sample.peak_footprint_bytes),
                 sample.elapsed.as_secs_f64() * 1000.0,
             );
         }

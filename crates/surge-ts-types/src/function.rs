@@ -5,6 +5,7 @@ use crate::Type;
 use crate::clone_reason::{TypeCopyReason, current_type_copy_reason};
 
 static FUNCTION_TYPE_PAYLOAD_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
+static FUNCTION_TYPE_PAYLOAD_ALLOC_BY_REASON: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
 static FUNCTION_TYPE_PAYLOAD_DEEP_CLONE_COUNT: AtomicU64 = AtomicU64::new(0);
 static FUNCTION_TYPE_HANDLE_COPY_COUNT: AtomicU64 = AtomicU64::new(0);
 static FUNCTION_TYPE_CLONE_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -25,6 +26,7 @@ static FUNCTION_TYPE_COPY_UNATTRIBUTED_COUNT: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct FunctionTypeCounters {
     pub function_type_payload_alloc_count: u64,
+    pub function_type_payload_alloc_by_reason: [u64; 13],
     pub function_type_payload_deep_clone_count: u64,
     pub function_type_handle_copy_count: u64,
     pub function_type_clone_count: u64,
@@ -134,6 +136,9 @@ pub fn snapshot_function_type_counters() -> FunctionTypeCounters {
     FunctionTypeCounters {
         function_type_payload_alloc_count: FUNCTION_TYPE_PAYLOAD_ALLOC_COUNT
             .load(Ordering::Relaxed),
+        function_type_payload_alloc_by_reason: std::array::from_fn(|index| {
+            FUNCTION_TYPE_PAYLOAD_ALLOC_BY_REASON[index].load(Ordering::Relaxed)
+        }),
         function_type_payload_deep_clone_count: FUNCTION_TYPE_PAYLOAD_DEEP_CLONE_COUNT
             .load(Ordering::Relaxed),
         function_type_handle_copy_count: FUNCTION_TYPE_HANDLE_COPY_COUNT.load(Ordering::Relaxed),
@@ -169,6 +174,26 @@ pub fn snapshot_function_type_counters() -> FunctionTypeCounters {
 
 pub(crate) fn record_function_type_payload_alloc_count() {
     FUNCTION_TYPE_PAYLOAD_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+    FUNCTION_TYPE_PAYLOAD_ALLOC_BY_REASON[type_copy_reason_index(current_type_copy_reason())]
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+fn type_copy_reason_index(reason: TypeCopyReason) -> usize {
+    match reason {
+        TypeCopyReason::Other => 0,
+        TypeCopyReason::ExpressionInference => 1,
+        TypeCopyReason::CallResolution => 2,
+        TypeCopyReason::PropertyCallResolution => 3,
+        TypeCopyReason::FunctionBodySetup => 4,
+        TypeCopyReason::ReturnChecking => 5,
+        TypeCopyReason::ExpectedType => 6,
+        TypeCopyReason::SymbolTable => 7,
+        TypeCopyReason::ModuleExport => 8,
+        TypeCopyReason::ScopeOrContext => 9,
+        TypeCopyReason::SubstitutionUnchanged => 10,
+        TypeCopyReason::SubstitutionChanged => 11,
+        TypeCopyReason::DiagnosticFormatting => 12,
+    }
 }
 
 pub(crate) fn record_function_type_payload_deep_clone_count() {

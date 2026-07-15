@@ -66,6 +66,15 @@ pub struct CheckerOptions {
     pub no_unused_parameters: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: std::collections::HashMap<String, String>,
+    /// Importer-scoped module resolutions: canonical importer file name →
+    /// specifier → resolved file. Consulted before [`Self::resolved_modules`]
+    /// so two importers can resolve the same bare specifier to different files
+    /// (nested `node_modules`, package `#imports` scopes, self-name imports).
+    /// `resolved_modules` stays as the project-wide fallback: `paths`/`baseUrl`
+    /// mappings are importer-independent, and older callers only populate the
+    /// flat map.
+    pub resolved_modules_by_importer:
+        std::collections::HashMap<String, std::collections::HashMap<String, String>>,
     /// Effective type-package names included in the program. When the project's
     /// `compilerOptions.types` used the `"*"` wildcard, the literal `"*"` is kept
     /// in this list as a sentinel (see [`Self::types_uses_wildcard`]); it never
@@ -96,6 +105,22 @@ impl CheckerOptions {
         self.resolved_modules
             .contains_key(Self::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL)
     }
+
+    /// Resolve `specifier` from `importer_file`, preferring the importer-scoped
+    /// map. Falls back to the project-wide map so paths/baseUrl mappings and
+    /// flat-map callers keep working.
+    pub(crate) fn resolved_module_for(
+        &self,
+        importer_file: &str,
+        specifier: &str,
+    ) -> Option<&String> {
+        if let Some(per_importer) = self.resolved_modules_by_importer.get(importer_file) {
+            if let Some(resolved) = per_importer.get(specifier) {
+                return Some(resolved);
+            }
+        }
+        self.resolved_modules.get(specifier)
+    }
 }
 
 impl Default for CheckerOptions {
@@ -110,6 +135,7 @@ impl Default for CheckerOptions {
             no_unused_parameters: false,
             stub_external_modules: false,
             resolved_modules: std::collections::HashMap::new(),
+            resolved_modules_by_importer: std::collections::HashMap::new(),
             types: Vec::new(),
             no_lib: false,
             skip_lib_check: false,
@@ -176,10 +202,15 @@ pub(crate) struct CheckerContext {
     )>,
     diagnostic_keys_len: usize,
     pub(crate) stats: CompatibilityStats,
+    /// File-region overlay of `push_utility_diagnostic_once` keys: entries
+    /// recorded since the last `begin_file_check`. Keys inherited from before
+    /// the check phase live in the shared baseline below, so the per-file
+    /// reset is an O(overlay) clear instead of a full-set clone.
     pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
-    /// The utility-key set this worker context started the check phase with,
-    /// captured on the first `begin_file_check` and restored at every later
-    /// file boundary. See [`Self::begin_file_check`].
+    /// The utility-key set this worker context entered the check phase with,
+    /// captured (not cloned) on the first `begin_file_check`. Suppression
+    /// consults baseline then overlay, which is exactly the pre-region
+    /// semantics where both lived in one set. See [`Self::begin_file_check`].
     utility_diagnostic_keys_baseline: Option<Arc<HashSet<UtilityDiagnosticKey>>>,
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
@@ -506,23 +537,36 @@ impl CheckerContext {
         self.file_name = file_name;
     }
 
+    /// Retained-capacity bound for the per-file utility-key overlay. A typical
+    /// file records at most a handful of keys; one pathological file must not
+    /// pin a huge table on the worker for the rest of the run.
+    const UTILITY_KEY_OVERLAY_RETAINED_CAPACITY: usize = 1024;
+
     /// File-region reset for a worker context that is reused across files.
     /// Serial checking clones a fresh context per file, so each file starts
-    /// from the pre-check baseline; a parallel worker reuses one context, and
+    /// from the pre-check key set; a parallel worker reuses one context, and
     /// without this reset its utility keys accumulate every checked file's
     /// entries for the worker's lifetime (and can suppress diagnostics serial
-    /// checking emits). Restoring the baseline captured at the first file makes
-    /// the reused context byte-equivalent to a fresh clone.
+    /// checking emits). The first call moves the inherited keys into the
+    /// shared baseline; later calls clear only the per-file overlay, so the
+    /// reused context behaves byte-identically to a fresh clone without
+    /// cloning the key set per file.
     /// `resolved_named_types` must be a fresh map rather than cleared in
     /// place: resolutions depend on the consumer file's environment, and
     /// lazy-resolution snapshots may still hold the previous file's `Arc`.
     pub(crate) fn begin_file_check(&mut self, file_name: String) {
         self.set_file_name(file_name);
         self.type_declaration_scope = None;
-        let baseline = self
-            .utility_diagnostic_keys_baseline
-            .get_or_insert_with(|| Arc::new(std::mem::take(&mut self.utility_diagnostic_keys)));
-        self.utility_diagnostic_keys = baseline.as_ref().clone();
+        if self.utility_diagnostic_keys_baseline.is_none() {
+            self.utility_diagnostic_keys_baseline =
+                Some(Arc::new(std::mem::take(&mut self.utility_diagnostic_keys)));
+        } else if self.utility_diagnostic_keys.capacity()
+            > Self::UTILITY_KEY_OVERLAY_RETAINED_CAPACITY
+        {
+            self.utility_diagnostic_keys = HashSet::new();
+        } else {
+            self.utility_diagnostic_keys.clear();
+        }
         self.diagnostic_keys.clear();
         self.diagnostic_keys_len = 0;
         debug_assert!(
@@ -530,6 +574,14 @@ impl CheckerContext {
             "begin_file_check: previous file's diagnostics were not taken"
         );
         self.resolved_named_types = Arc::new(Mutex::new(HashMap::new()));
+    }
+
+    /// Empties both the overlay and the baseline — the equivalent of clearing
+    /// the whole pre-region key set. Used by the per-file signature-collection
+    /// context, which intentionally re-reports keys recorded elsewhere.
+    pub(crate) fn reset_utility_diagnostic_keys(&mut self) {
+        self.utility_diagnostic_keys.clear();
+        self.utility_diagnostic_keys_baseline = None;
     }
 
     pub(crate) fn set_symbols(&mut self, symbols: SymbolTable) {
@@ -763,6 +815,13 @@ impl CheckerContext {
             message: diagnostic.message.clone(),
         };
 
+        if self
+            .utility_diagnostic_keys_baseline
+            .as_ref()
+            .is_some_and(|baseline| baseline.contains(&key))
+        {
+            return;
+        }
         if self.utility_diagnostic_keys.insert(key) {
             self.push(diagnostic);
         }

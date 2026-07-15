@@ -793,7 +793,7 @@ pub(super) fn extract_packages_from_source(
     importer_dir: &Path,
     opts: &ResolverOptions,
     packages_to_resolve: &mut VecDeque<PackageDeclarationRequest>,
-    queued_specifiers: &mut HashSet<String>,
+    queued_specifiers: &mut HashSet<(String, String)>,
 ) {
     let importer_file = PathBuf::from(file_name);
     let parsed = parser.parse(source_text, file_name);
@@ -833,16 +833,22 @@ pub(super) fn extract_packages_from_source(
 
 /// Queue a module specifier for package resolution. Handles `#alias` imports and
 /// bare/scoped package specifiers; relative specifiers are ignored (handled by
-/// the import-graph expander).
+/// the import-graph expander). Deduplication is per (importer file, specifier):
+/// the same specifier resolves independently from each importer so nested
+/// `node_modules` and `#imports` scopes stay isolated.
 pub(super) fn queue_specifier(
     specifier: &str,
     importer_dir: &Path,
     importer_file: &Path,
     opts: &ResolverOptions,
     packages_to_resolve: &mut VecDeque<PackageDeclarationRequest>,
-    queued_specifiers: &mut HashSet<String>,
+    queued_specifiers: &mut HashSet<(String, String)>,
 ) {
-    if queued_specifiers.contains(specifier) {
+    let queue_key = (
+        canonicalize_if_exists_string(importer_file),
+        specifier.to_string(),
+    );
+    if queued_specifiers.contains(&queue_key) {
         return;
     }
 
@@ -851,7 +857,7 @@ pub(super) fn queue_specifier(
         if rest.is_empty() || !opts.resolve_imports {
             return;
         }
-        queued_specifiers.insert(specifier.to_string());
+        queued_specifiers.insert(queue_key);
         packages_to_resolve.push_back(PackageDeclarationRequest {
             specifier: specifier.to_string(),
             package_name: specifier.to_string(),
@@ -868,7 +874,7 @@ pub(super) fn queue_specifier(
     }
 
     if let Some((package_name, subpath)) = parse_package_specifier(specifier) {
-        queued_specifiers.insert(specifier.to_string());
+        queued_specifiers.insert(queue_key);
         packages_to_resolve.push_back(PackageDeclarationRequest {
             specifier: specifier.to_string(),
             package_name,

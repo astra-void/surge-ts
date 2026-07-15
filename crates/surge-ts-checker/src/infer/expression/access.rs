@@ -160,45 +160,48 @@ pub(crate) fn infer_property_access(
         }
     };
 
-    let result = match &object_type {
-        Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
-        Type::Union(union_type) => {
-            let mut result_types = vec![];
-            for ty in union_type.types() {
-                if *ty == Type::Undefined {
-                    result_types.push(ty.clone());
-                    continue;
-                }
-                match ty.get_property_access_type(property_name) {
-                    Some(ty) => result_types.push(ty),
-                    None if no_lib_array_member(ty, ctx) => result_types.push(Type::Any),
-                    None => {
-                        return InferredExpression::MissingProperty {
-                            property_name: property_name.to_string(),
-                            object_type: ty.clone(),
-                            span: *property_span,
-                        };
+    let result = crate::program::with_dts_expansion_reason(
+        crate::program::DtsExpansionReason::PropertyLookup,
+        || match &object_type {
+            Type::Any => InferredExpression::Known(Type::Any),
+            Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
+            Type::Union(union_type) => {
+                let mut result_types = vec![];
+                for ty in union_type.types() {
+                    if *ty == Type::Undefined {
+                        result_types.push(ty.clone());
+                        continue;
+                    }
+                    match ty.get_property_access_type(property_name) {
+                        Some(ty) => result_types.push(ty),
+                        None if no_lib_array_member(ty, ctx) => result_types.push(Type::Any),
+                        None => {
+                            return InferredExpression::MissingProperty {
+                                property_name: property_name.to_string(),
+                                object_type: ty.clone(),
+                                span: *property_span,
+                            };
+                        }
                     }
                 }
+                InferredExpression::Known(surge_ts_types::union_type(result_types))
             }
-            InferredExpression::Known(surge_ts_types::union_type(result_types))
-        }
-        _ => object_type
-            .get_property_access_type(property_name)
-            .map(InferredExpression::Known)
-            .unwrap_or_else(|| {
-                if no_lib_array_member(&object_type, ctx) {
-                    InferredExpression::Known(Type::Any)
-                } else {
-                    InferredExpression::MissingProperty {
-                        property_name: property_name.to_string(),
-                        object_type: object_type.clone(),
-                        span: *property_span,
+            _ => object_type
+                .get_property_access_type(property_name)
+                .map(InferredExpression::Known)
+                .unwrap_or_else(|| {
+                    if no_lib_array_member(&object_type, ctx) {
+                        InferredExpression::Known(Type::Any)
+                    } else {
+                        InferredExpression::MissingProperty {
+                            property_name: property_name.to_string(),
+                            object_type: object_type.clone(),
+                            span: *property_span,
+                        }
                     }
-                }
-            }),
-    };
+                }),
+        },
+    );
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.property_access_checking += property_access_start.elapsed()
     });

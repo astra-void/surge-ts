@@ -175,6 +175,7 @@ fn run_smoke_shard(shard: usize) {
 fn smoke_checker_options(no_implicit_any: bool, use_native_profile: bool) -> CheckerOptions {
     CheckerOptions {
         resolved_modules: Default::default(),
+        resolved_modules_by_importer: Default::default(),
         stub_external_modules: false,
         no_implicit_any,
         no_lib: false,

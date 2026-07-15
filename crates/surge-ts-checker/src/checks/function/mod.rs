@@ -28,6 +28,7 @@ pub(crate) fn collect_function_declaration_signature(
     function: &ParsedFunctionDeclaration,
     symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
+    allow_lazy_dependency_signature: bool,
 ) -> FunctionType {
     let temp_symbols = std::mem::take(symbols);
     ctx.set_symbols(temp_symbols);
@@ -48,14 +49,22 @@ pub(crate) fn collect_function_declaration_signature(
     // its pre-pass signature is left as-is. The empty-scope case is also skipped: a
     // pushed empty scope makes `type_parameter_scopes` non-empty and flips the
     // `concrete_instantiation` short-circuit.
+    crate::program::record_program_counter(|c| c.function_signatures_indexed_count += 1);
     let map_signature = |ctx: &mut CheckerContext| {
-        map_function_signature(
-            &function.parameters,
-            function.return_type.as_ref(),
-            &function.type_parameters,
-            None,
-            ctx,
-        )
+        if ctx.current_file_kind == crate::context::FileKind::DependencyDeclaration
+            && allow_lazy_dependency_signature
+            && std::env::var_os("SURGE_EAGER_DEPENDENCY_SIGNATURES").is_none()
+        {
+            map_lazy_dependency_function_signature(function, ctx)
+        } else {
+            map_function_signature(
+                &function.parameters,
+                function.return_type.as_ref(),
+                &function.type_parameters,
+                None,
+                ctx,
+            )
+        }
     };
     let function_type = if function.is_declare && !function.type_parameters.is_empty() {
         with_type_parameter_scope(&function.type_parameters, ctx, map_signature)

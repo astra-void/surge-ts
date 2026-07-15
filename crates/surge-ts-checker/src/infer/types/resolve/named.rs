@@ -4,13 +4,18 @@ use surge_ts_syntax::ParsedNamedType;
 
 use crate::symbols::TypeDeclarationInfo;
 
-/// Deferring concrete-site library alias instantiations kills the eager
-/// interface-web recursion during dependency export collection, but without
-/// the intersection deferral it livelocks `resolve_conditional_type`'s
-/// `extends` assignability on unnamed (deep structural peels of deferred
-/// references never hit the pointer-identity in-progress guard). Off until
-/// assignability can compare deferred references nominally.
-const DEFER_CONCRETE_LIBRARY_ALIASES: bool = false;
+/// Concrete aliases declared by dependencies stay declaration-backed until a
+/// semantic consumer needs their structure. This is the critical half of the
+/// dependency-surface invariant: eagerly resolving
+/// `ComponentPropsWithoutRef<...>` while indexing another declaration's export
+/// surface pulls the React/DOM graph into every importing module.
+///
+/// The escape hatch exists only for before/after profiling and regression
+/// isolation; production behavior is lazy.
+fn defer_concrete_library_aliases() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_EAGER_DEPENDENCY_ALIASES").as_deref() != Ok("1"))
+}
 
 pub(crate) fn resolve_named_type(
     named_type: ParsedNamedType,
@@ -147,6 +152,7 @@ pub(crate) fn resolve_named_type(
     let library_scoped = declaration_file_is_library_scoped(declaration, ctx);
     let library_cache_key = library_scoped.then(|| type_declaration_resolution_key(declaration));
     let decl_key = type_declaration_resolution_key(declaration);
+    crate::program::record_generic_instantiation(&decl_key);
     let reference_id = format!("{}\u{0}{}", decl_key.file_name, decl_key.name);
     // Resolve the type arguments once. The result is reused for the library cache
     // key, the nominal reference identity, AND — via `pre_resolved` below — the
@@ -269,7 +275,8 @@ pub(crate) fn resolve_named_type(
     // while collecting dependency export tables). User aliases keep the eager
     // path so their body diagnostics and primitive/union expansions are unchanged.
     if (!concrete_instantiation
-        || (DEFER_CONCRETE_LIBRARY_ALIASES && declaration_file_is_library_scoped(declaration, ctx)))
+        || (defer_concrete_library_aliases()
+            && declaration_file_is_library_scoped(declaration, ctx)))
         && matches!(declaration, TypeDeclarationInfo::Alias(_))
         && let (Some(display), Some(arguments)) =
             (alias_display_name.as_ref(), reference_arguments.as_ref())
@@ -355,6 +362,17 @@ pub(crate) fn resolve_named_type(
     let subtree_lowest_cycle = ctx.lowest_cycle_target_index;
     ctx.lowest_cycle_target_index = saved_lowest_cycle.min(subtree_lowest_cycle);
 
+    if resolved.had_error {
+        crate::program::record_degraded_resolution();
+        if degraded_resolution_trace_enabled() {
+            eprintln!(
+                "{{\"degradedResolution\":\"{}\",\"file\":\"{}\"}}",
+                declaration.declared_name(),
+                ctx.file_name
+            );
+        }
+    }
+
     let body_emitted_diagnostics = ctx.diagnostics().len() != diagnostics_before_body
         || ctx.utility_diagnostic_keys.len() != utility_keys_before_body;
     // A concrete instantiation that resolved cleanly is interned even when its body
@@ -382,6 +400,13 @@ pub(crate) fn resolve_named_type(
         cacheable,
         ctx,
     )
+}
+
+/// Opt-in (`SURGE_TRACE_TYPE_EXPANSION=1`) trace of degraded (`had_error`)
+/// top-level named resolutions: which declaration degraded, in which file.
+fn degraded_resolution_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_TRACE_TYPE_EXPANSION").is_some())
 }
 
 /// Wraps a successfully-resolved generic *object* instantiation in a

@@ -77,7 +77,10 @@ pub(crate) fn resolve_mapped_type(
 
     let homomorphic_source = keyof_operand.and_then(|operand| {
         let resolved = resolve_parsed_type(operand, ctx, resolving, substitution);
-        match resolved.ty.peeled() {
+        match crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::MappedType,
+            || resolved.ty.peeled(),
+        ) {
             Type::Object(object) => Some(object),
             _ => None,
         }

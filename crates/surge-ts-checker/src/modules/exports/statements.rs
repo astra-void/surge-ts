@@ -132,6 +132,7 @@ pub(crate) fn collect_exports_from_statement(
                                 function,
                                 &mut signature_symbols,
                                 ctx,
+                                false,
                             );
                         if let Some(value_type) =
                             promise_value_type(&function.return_type, resolution_scope, ctx)

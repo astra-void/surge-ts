@@ -80,7 +80,7 @@ pub(crate) fn try_resolve_module_export_table(
     file_name: &str,
 ) -> Option<(ModuleExportTable, Option<usize>)> {
     let resolution_start = Instant::now();
-    if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
+    if let Some(resolved_file_name) = ctx.options.resolved_module_for(file_name, module_specifier) {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some(resolved_index) = ctx
             .module_file_index_by_identity

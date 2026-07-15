@@ -266,6 +266,10 @@ impl Project {
         surge_ts_checker::lowlevel::record_loader_rss_stage("default_libs_loaded");
 
         let mut resolved_modules = std::collections::HashMap::new();
+        let mut resolved_modules_by_importer: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, String>,
+        > = std::collections::HashMap::new();
         let mut package_resolution_cache =
             package_declarations::PackageDeclarationResolverCache::default();
 
@@ -305,8 +309,17 @@ impl Project {
             if collect {
                 timings.package_declaration_discovery += package_start.elapsed();
             }
-            for (specifier, resolved_file) in package_modules {
-                resolved_modules.insert(specifier, resolved_file);
+            // Package resolutions are importer-scoped; the flat map keeps the
+            // first (BFS-order) resolution per specifier as the project-wide
+            // fallback for importer-agnostic consumers.
+            for (importer, specifier, resolved_file) in package_modules {
+                resolved_modules
+                    .entry(specifier.clone())
+                    .or_insert_with(|| resolved_file.clone());
+                resolved_modules_by_importer
+                    .entry(importer)
+                    .or_default()
+                    .insert(specifier, resolved_file);
             }
 
             let import_graph_start = Instant::now();
@@ -314,6 +327,7 @@ impl Project {
                 &mut inputs,
                 &mut sources,
                 &loaded.root_dir,
+                loaded.compiler_options.base_url.as_deref(),
                 &loaded.compiler_options.paths,
             );
             if collect {
@@ -416,6 +430,7 @@ impl Project {
             skip_lib_check: loaded.compiler_options.skip_lib_check,
             stub_external_modules: options.stub_external_modules,
             resolved_modules,
+            resolved_modules_by_importer,
             types: checker_types,
             jsx_automatic_runtime: matches!(
                 loaded.compiler_options.jsx,

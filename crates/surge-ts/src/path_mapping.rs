@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use surge_ts_checker::SourceFileInput;
+use surge_ts_checker::lowlevel::resolution_candidates::mapped_target_candidates;
 use surge_ts_config::PathMapping;
-use surge_ts_config::canonicalize_if_exists_string;
+use surge_ts_config::{canonicalize_if_exists_string, select_path_mapping_targets};
 use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, ParserWorker};
 
 pub fn resolve_path_mappings(
@@ -89,7 +90,7 @@ fn try_resolve_base_url(
 ) -> Option<String> {
     let joined = base_url.join(specifier);
     let normalized = canonicalize_if_exists_string(&joined);
-    for candidate in path_resolution_candidates(&normalized) {
+    for candidate in mapped_target_candidates(&normalized) {
         if let Some(original_name) = loaded_files.get(&candidate) {
             return Some(original_name.clone());
         }
@@ -110,133 +111,22 @@ fn try_resolve_path_mapping(
     mapping_base: &Path,
     loaded_files: &HashMap<String, String>,
 ) -> Option<String> {
-    for mapping in paths {
-        let is_wildcard = mapping.pattern.contains('*');
+    let targets = select_path_mapping_targets(specifier, paths)?;
 
-        // For now, only exact or single-star patterns are supported
-        if mapping.pattern.matches('*').count() > 1 {
-            continue;
-        }
+    for target in targets {
+        // `paths` substitutions are relative to `baseUrl` (or the config
+        // directory when `baseUrl` is unset).
+        let joined = mapping_base.join(&target);
+        let normalized = canonicalize_if_exists_string(&joined);
 
-        let matched_text = if is_wildcard {
-            let parts: Vec<&str> = mapping.pattern.split('*').collect();
-            if parts.len() != 2 {
-                continue;
-            }
-            let prefix = parts[0];
-            let suffix = parts[1];
-
-            if specifier.starts_with(prefix)
-                && specifier.ends_with(suffix)
-                && specifier.len() >= prefix.len() + suffix.len()
-            {
-                let start = prefix.len();
-                let end = specifier.len() - suffix.len();
-                Some(&specifier[start..end])
-            } else {
-                None
-            }
-        } else {
-            if specifier == mapping.pattern {
-                Some("")
-            } else {
-                None
-            }
-        };
-
-        if let Some(matched_text) = matched_text {
-            for substitution in &mapping.substitutions {
-                if substitution.matches('*').count() > 1 {
-                    continue;
-                }
-
-                let target_path = if is_wildcard {
-                    substitution.replace('*', matched_text)
-                } else {
-                    substitution.clone()
-                };
-
-                // `paths` substitutions are relative to `baseUrl` (or the config
-                // directory when `baseUrl` is unset).
-                let joined = mapping_base.join(&target_path);
-
-                // Normalize path to use forward slashes
-                let normalized = canonicalize_if_exists_string(&joined);
-
-                let candidates = path_resolution_candidates(&normalized);
-
-                for candidate in candidates {
-                    if let Some(original_name) = loaded_files.get(&candidate) {
-                        return Some(original_name.clone());
-                    }
-                }
+        for candidate in mapped_target_candidates(&normalized) {
+            if let Some(original_name) = loaded_files.get(&candidate) {
+                return Some(original_name.clone());
             }
         }
     }
 
     None
-}
-
-fn path_resolution_candidates(base: &str) -> Vec<String> {
-    let lower = base.to_ascii_lowercase();
-
-    if lower.ends_with(".js") {
-        let stem = strip_extension(base);
-        return vec![
-            format!("{stem}.ts"),
-            format!("{stem}.tsx"),
-            format!("{stem}.mts"),
-            format!("{stem}.cts"),
-            format!("{stem}.d.ts"),
-            format!("{stem}.d.mts"),
-            format!("{stem}.d.cts"),
-        ];
-    }
-
-    if lower.ends_with(".mjs") {
-        let stem = strip_extension(base);
-        return vec![format!("{stem}.mts"), format!("{stem}.d.mts")];
-    }
-
-    if lower.ends_with(".cjs") {
-        let stem = strip_extension(base);
-        return vec![format!("{stem}.cts"), format!("{stem}.d.cts")];
-    }
-
-    if lower.ends_with(".ts")
-        || lower.ends_with(".tsx")
-        || lower.ends_with(".mts")
-        || lower.ends_with(".cts")
-        || lower.ends_with(".d.ts")
-        || lower.ends_with(".d.mts")
-        || lower.ends_with(".d.cts")
-    {
-        return vec![base.to_string()];
-    }
-
-    vec![
-        format!("{base}.ts"),
-        format!("{base}.tsx"),
-        format!("{base}.mts"),
-        format!("{base}.cts"),
-        format!("{base}.d.ts"),
-        format!("{base}.d.mts"),
-        format!("{base}.d.cts"),
-        format!("{base}/index.ts"),
-        format!("{base}/index.tsx"),
-        format!("{base}/index.mts"),
-        format!("{base}/index.cts"),
-        format!("{base}/index.d.ts"),
-        format!("{base}/index.d.mts"),
-        format!("{base}/index.d.cts"),
-    ]
-}
-
-fn strip_extension(path: &str) -> String {
-    match path.rsplit_once('.') {
-        Some((head, _)) => head.to_string(),
-        None => path.to_string(),
-    }
 }
 
 #[cfg(test)]

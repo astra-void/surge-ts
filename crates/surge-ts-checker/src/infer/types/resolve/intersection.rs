@@ -4,14 +4,16 @@ use surge_ts_types::{ObjectType, PropertyMap};
 
 use crate::arena::alloc_object_type;
 
-/// Deferring all-reference intersections (see `merge_intersection_members`)
-/// halves unnamed's wall time (69s → 39s) but raises peak RSS 1.8GB → 4.7GB,
-/// so it stays off while memory is the constraint. Its former false positives
-/// (`<form onSubmit>` vs `SubmitEventHandler`) were not the deferral's fault:
-/// they came from assignability rejecting the sentinel `Unknown` as a source
-/// (`SubmitEvent.nativeEvent` degrades — `NativeSubmitEvent` collides with the
-/// enclosing declaration), fixed in `is_assignable_to`'s leniency arm.
-const DEFER_REFERENCE_INTERSECTIONS: bool = false;
+/// Reference-only intersections remain nominal during declaration indexing.
+/// Without this companion to dependency-alias deferral, constructing
+/// `ComponentProps<...> & RefAttributes<...>` immediately peels both deferred
+/// operands and recreates the eager expansion the references were meant to
+/// avoid. The escape hatch is for paired before/after profiling only.
+fn defer_reference_intersections() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED
+        .get_or_init(|| std::env::var("SURGE_EAGER_REFERENCE_INTERSECTIONS").as_deref() != Ok("1"))
+}
 
 /// Resolves an intersection `A & B`. Object-like operands are merged into a
 /// single object exposing every member's property surface, which lets the
@@ -119,10 +121,11 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     // runs instead when a consumer peels the intersection reference. Operands
     // that already carry structure (inline objects, primitives) keep the eager
     // merge so non-reference intersections are unchanged.
-    if DEFER_REFERENCE_INTERSECTIONS
+    if defer_reference_intersections()
         && members.len() > 1
         && members.iter().all(|ty| matches!(ty, Type::Reference(_)))
     {
+        crate::program::record_program_counter(|c| c.lazy_intersection_create_count += 1);
         let display = display_name.unwrap_or_default();
         // Identity from the operands' module-qualified reference ids, not the
         // display form: same-named types from different modules must not
@@ -145,6 +148,7 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
             std::sync::Arc::new(LazyIntersectionMerge {
                 members,
                 dropped_unmodelled_operand,
+                memo: std::sync::OnceLock::new(),
             }),
         ));
     }
@@ -157,22 +161,37 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
 struct LazyIntersectionMerge {
     members: Vec<Type>,
     dropped_unmodelled_operand: bool,
+    memo: std::sync::OnceLock<std::sync::Arc<Type>>,
 }
 
 impl surge_ts_types::ResolveReference for LazyIntersectionMerge {
     fn resolve(&self) -> Type {
-        let display_name = (!self.members.is_empty()).then(|| {
-            self.members
-                .iter()
-                .map(Type::name)
-                .collect::<Vec<_>>()
-                .join(" & ")
-        });
-        merge_intersection_members_now(
-            self.members.clone(),
-            display_name,
-            self.dropped_unmodelled_operand,
-        )
+        (*self.resolve_arc()).clone()
+    }
+
+    fn resolve_arc(&self) -> std::sync::Arc<Type> {
+        self.memo
+            .get_or_init(|| {
+                crate::program::record_program_counter(|c| c.lazy_intersection_peel_count += 1);
+                let display_name = (!self.members.is_empty()).then(|| {
+                    self.members
+                        .iter()
+                        .map(Type::name)
+                        .collect::<Vec<_>>()
+                        .join(" & ")
+                });
+                std::sync::Arc::new(crate::program::with_dts_expansion_reason(
+                    crate::program::DtsExpansionReason::IntersectionMerge,
+                    || {
+                        merge_intersection_members_now(
+                            self.members.clone(),
+                            display_name,
+                            self.dropped_unmodelled_operand,
+                        )
+                    },
+                ))
+            })
+            .clone()
     }
 }
 

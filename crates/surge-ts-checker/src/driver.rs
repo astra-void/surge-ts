@@ -281,6 +281,7 @@ fn lower_global_augmentation_values(
                 .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
                 .unwrap_or(surge_ts_types::Type::Unknown);
             if ctx.ambient_global_symbols.get(&var.name).is_none() {
+                crate::program::record_augmentation_value_insertion();
                 ctx.ambient_global_symbols.insert(
                     var.name.clone(),
                     crate::symbols::SymbolInfo {
@@ -318,6 +319,7 @@ fn lower_global_augmentation_values(
         };
 
         if ctx.ambient_global_symbols.get(&name).is_none() {
+            crate::program::record_augmentation_value_insertion();
             ctx.ambient_global_symbols.insert(
                 name,
                 crate::symbols::SymbolInfo {
@@ -977,7 +979,10 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
 }
 
 fn is_runtime_js_only_module(module_specifier: &str, ctx: &CheckerContext) -> bool {
-    let Some(resolved_path) = ctx.options.resolved_modules.get(module_specifier) else {
+    let Some(resolved_path) = ctx
+        .options
+        .resolved_module_for(&ctx.file_name, module_specifier)
+    else {
         return false;
     };
 

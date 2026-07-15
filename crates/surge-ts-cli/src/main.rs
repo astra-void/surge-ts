@@ -405,6 +405,7 @@ fn run_single_file_mode(
             skip_lib_check: false,
             stub_external_modules,
             resolved_modules: std::collections::HashMap::new(),
+            resolved_modules_by_importer: std::collections::HashMap::new(),
             types: Vec::new(),
             jsx_automatic_runtime: false,
             diagnostic_profile,

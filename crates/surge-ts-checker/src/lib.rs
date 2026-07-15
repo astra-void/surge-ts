@@ -58,6 +58,17 @@ pub mod lowlevel {
         load_generated_default_lib_inputs, resolve_physical_default_libs,
     };
     pub use crate::metrics::record_loader_rss_stage;
+
+    /// Centralized relative-path candidate generation shared by the loader's
+    /// import-graph/`paths` resolution and the checker's module binding, so the
+    /// extension-substitution matrix cannot drift between layers.
+    pub mod resolution_candidates {
+        pub use crate::modules::candidates::{
+            RelativeSpecifierShape, classify_relative_specifier, directory_index_candidates,
+            extensionless_candidates, mapped_target_candidates, relative_import_candidates,
+            strip_extension,
+        };
+    }
 }
 
 #[cfg(test)]

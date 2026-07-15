@@ -6,7 +6,10 @@ use surge_ts_types::is_assignable_to;
 use super::emit_type_only_as_value_diagnostic;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use crate::context::{CheckerContext, convert_span};
-use crate::program::{record_assignability_check, record_program_timing};
+use crate::program::{
+    DtsExpansionReason, record_assignability_check, record_program_timing,
+    with_dts_expansion_reason,
+};
 use crate::symbols::{SymbolKind, SymbolTable};
 
 pub(crate) fn check_assignment(assignment: ParsedAssignment, ctx: &mut CheckerContext) {
@@ -57,7 +60,9 @@ pub(crate) fn check_assignment_with_symbols(
             if inferred_value_type != surge_ts_types::Type::Unknown
                 && !type_contains_unknown(&target.ty)
                 && !type_contains_unknown(&inferred_value_type)
-                && !is_assignable_to(&inferred_value_type, &target.ty)
+                && !with_dts_expansion_reason(DtsExpansionReason::Assignability, || {
+                    is_assignable_to(&inferred_value_type, &target.ty)
+                })
             {
                 let inferred_type_name = inferred_value_type.name();
                 let target_type_name = target.ty.name();

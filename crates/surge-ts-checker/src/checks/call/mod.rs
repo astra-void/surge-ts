@@ -14,7 +14,9 @@ use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_
 use crate::checks::expr::{evaluate_expression, source_display_name};
 use crate::context::CheckerContext;
 use crate::infer::InferredExpression;
-use crate::program::{record_call_resolution, record_program_timing};
+use crate::program::{
+    DtsExpansionReason, record_call_resolution, record_program_timing, with_dts_expansion_reason,
+};
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 
@@ -80,7 +82,8 @@ pub(crate) fn check_call_like(
 
     // A callee typed by a named declaration (`declare var Number: NumberConstructor`)
     // is a nominal reference; peel it so its call/construct signature is visible.
-    let callee_ty = symbol.ty.peeled();
+    let callee_ty =
+        with_dts_expansion_reason(DtsExpansionReason::CallResolution, || symbol.ty.peeled());
     if callee_ty.is_unknown() {
         return None;
     }

@@ -3,10 +3,11 @@ mod types;
 
 pub(crate) use expression::{infer_expression, tuple_index_value};
 pub(crate) use types::{
-    TypeParameterSubstitution, map_parsed_type, map_parsed_type_with_substitution,
-    report_duplicate_type_parameters, string_literal_union_keys,
-    substitute_parsed_type_parameters_deep, validate_local_type_declaration,
-    with_type_declaration_scope,
+    LazySignatureComponent, LazySignatureEnvironment, TypeParameterSubstitution,
+    make_lazy_declaration_annotation_reference, make_lazy_signature_annotation_reference,
+    map_parsed_type, map_parsed_type_with_substitution, report_duplicate_type_parameters,
+    string_literal_union_keys, substitute_parsed_type_parameters_deep,
+    validate_local_type_declaration, with_type_declaration_scope,
 };
 
 use surge_ts_syntax::TextSpan;

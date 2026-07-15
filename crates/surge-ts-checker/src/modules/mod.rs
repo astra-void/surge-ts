@@ -9,6 +9,7 @@ use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
 
 use crate::symbols::{SymbolInfo, SymbolTable, TypeDeclarationTable};
 
+pub(crate) mod candidates;
 mod diagnostics;
 mod exports;
 mod imports;
@@ -431,8 +432,46 @@ mod tests {
 
         assert!(resolve_relative_module("src/index.ts", "./user.tsx", &files).is_none());
         assert!(resolve_relative_module("src/index.ts", "./user.js", &files).is_some());
-        assert!(resolve_relative_module("src/index.ts", "./user.jsx", &files).is_none());
+        // tsc substitutes `.jsx` like `.js` (`tryAddingExtensions` default case),
+        // so `./user.jsx` resolves to the loaded `user.tsx` source.
+        assert!(resolve_relative_module("src/index.ts", "./user.jsx", &files).is_some());
         assert!(resolve_relative_module("src/index.ts", "./user.json", &files).is_none());
         assert!(resolve_relative_module("src/index.ts", "./user.d.ts", &files).is_none());
+    }
+
+    #[test]
+    fn module_resolver_explicit_js_never_resolves_directory_index() {
+        let files = program(&[
+            ("src/index.ts", "export {}"),
+            ("src/user/index.ts", "export {}"),
+        ]);
+        // `./user.js` is a file-shaped runtime path: extension substitution may
+        // replace the extension, but must never fall back to `user/index.ts`.
+        assert!(resolve_relative_module("src/index.ts", "./user.js", &files).is_none());
+        assert!(resolve_relative_module("src/index.ts", "./user.mjs", &files).is_none());
+        assert!(resolve_relative_module("src/index.ts", "./user.cjs", &files).is_none());
+        // The extensionless form still resolves through the directory index.
+        assert!(resolve_relative_module("src/index.ts", "./user", &files).is_some());
+    }
+
+    #[test]
+    fn module_resolver_js_flavor_substitution_matrix() {
+        let files = program(&[
+            ("src/index.ts", "export {}"),
+            ("src/m.mts", "export {}"),
+            ("src/c.cts", "export {}"),
+            ("src/plain.ts", "export {}"),
+        ]);
+        // `.mjs` → `.mts`, `.cjs` → `.cts`.
+        assert!(resolve_relative_module("src/index.ts", "./m.mjs", &files).is_some());
+        assert!(resolve_relative_module("src/index.ts", "./c.cjs", &files).is_some());
+        // `.js` never crosses into the m/c flavors, and vice versa.
+        assert!(resolve_relative_module("src/index.ts", "./m.js", &files).is_none());
+        assert!(resolve_relative_module("src/index.ts", "./c.js", &files).is_none());
+        assert!(resolve_relative_module("src/index.ts", "./plain.mjs", &files).is_none());
+        assert!(resolve_relative_module("src/index.ts", "./plain.cjs", &files).is_none());
+        // Extensionless specifiers never probe the m/c flavors.
+        assert!(resolve_relative_module("src/index.ts", "./m", &files).is_none());
+        assert!(resolve_relative_module("src/index.ts", "./c", &files).is_none());
     }
 }

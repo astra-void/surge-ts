@@ -67,7 +67,7 @@ pub(super) fn promise_value_type(
     if let Some(resolution_scope) = resolution_scope {
         ctx.type_declaration_scope = Some(resolution_scope.clone());
     }
-    let ty = crate::infer::map_parsed_type(value_type.clone(), ctx).peeled();
+    let ty = crate::infer::map_parsed_type(value_type.clone(), ctx);
     ctx.type_declaration_scope = saved_scope;
     if let Some(saved_type_declarations) = saved_type_declarations {
         ctx.type_declarations = saved_type_declarations;

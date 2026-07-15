@@ -5,10 +5,13 @@
 //! interleaved. Re-exported from `program` for `crate::program::record_*` callers.
 
 mod counters;
-mod rss;
+mod dts_expansion;
+pub(crate) mod rss;
 mod timings;
 
 pub(crate) use counters::*;
+pub(crate) use dts_expansion::*;
+pub(crate) use rss::{current_footprint_bytes, peak_footprint_bytes};
 pub(crate) use timings::*;
 
 /// RSS probe for loader-side phases (config load, source read, import-graph
@@ -22,16 +25,23 @@ pub fn record_loader_rss_stage(label: &str) {
     }
     let current = rss::current_rss_bytes();
     let peak = rss::peak_rss_bytes();
+    let footprint = rss::current_footprint_bytes();
+    let peak_footprint = rss::peak_footprint_bytes();
     eprintln!(
-        "RSS loader stage: {label} rss={} peak={}",
+        "RSS loader stage: {label} rss={} peak={} fp={} fp_peak={}",
         timings::format_bytes_opt(current),
         timings::format_bytes_opt(peak),
+        timings::format_bytes_opt(footprint),
+        timings::format_bytes_opt(peak_footprint),
     );
     if rss_json_enabled() {
         eprintln!(
-            "{{\"rssLoaderStage\":\"{label}\",\"rssBytes\":{},\"peakRssBytes\":{}}}",
+            "{{\"rssLoaderStage\":\"{label}\",\"rssBytes\":{},\"peakRssBytes\":{},\
+             \"footprintBytes\":{},\"peakFootprintBytes\":{}}}",
             json_u64_opt(current),
             json_u64_opt(peak),
+            json_u64_opt(footprint),
+            json_u64_opt(peak_footprint),
         );
     }
 }

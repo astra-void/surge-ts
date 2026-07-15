@@ -81,6 +81,15 @@ pub(crate) fn instantiate_function_type<'a>(
         .all(|(_, candidate)| candidate.is_unknown())
     {
         record_generic_call_inference_failed();
+        if is_declaration_backed_lazy_signature(function_type) {
+            return instantiate_function_type_with_substitution(
+                function_type,
+                function_signature,
+                &substitution,
+                false,
+                ctx,
+            );
+        }
         return Cow::Borrowed(function_type);
     }
 
@@ -92,6 +101,20 @@ pub(crate) fn instantiate_function_type<'a>(
         true,
         ctx,
     )
+}
+
+fn is_declaration_backed_lazy_signature(function_type: &FunctionType) -> bool {
+    function_type
+        .parameters()
+        .iter()
+        .chain(std::iter::once(function_type.return_type()))
+        .any(|ty| {
+            matches!(
+                ty,
+                Type::Reference(reference)
+                    if reference.id.contains("\0signature-annotation\0")
+            )
+        })
 }
 
 pub(crate) fn instantiate_function_type_with_substitution<'a>(

@@ -26,7 +26,6 @@ Reviewers should inspect these files together:
 - `crates/surge-ts-checker/src/symbols/values.rs`
 - `crates/surge-ts-checker/src/symbols/type_declarations.rs`
 - `crates/surge-ts-checker/src/program/` (split into `mod.rs`, `binding.rs`, `statements.rs`, `globals.rs`, `ambient.rs`)
-- `crates/surge-ts-checker/REAL_PROJECT_COMPAT.md`
 - `REAL_PROJECT_COMPAT.md`
 - `.bench/auth-kit-measurement.md`
 

@@ -48,8 +48,15 @@ v1.2.5 memoizes relative module resolution per run: `resolve_relative_module` ca
 - `export * from` follows a pinned conflict policy: local explicit exports win, and the first star export wins when multiple star exports provide the same name.
 - Unresolved star re-exports are intentionally kept from cascading extra consumer diagnostics.
 - Bare directory specifiers like `.` and `..` can resolve to already loaded `index.*` files in the same directory graph.
-- Relative resolution checks the already-loaded graph in this order: exact target, `.ts`, `.tsx`, `.d.ts`, `.mts`, `.cts`, `.d.mts`, `.d.cts`, then the `index.*` variants in the same order.
-- Explicit `.js` / `.jsx` substitution stays narrow and only uses the oracle-proven source/declaration substitutions for already-loaded files.
+- Relative resolution checks the already-loaded graph using the centralized
+  candidate matrix in `modules/candidates.rs` (see
+  `crates/surge-ts/MODULE_RESOLUTION.md`): extensionless specifiers probe the
+  exact target, `.ts`, `.tsx`, `.d.ts`, then `index.ts`/`index.tsx`/`index.d.ts`;
+  the `.mts`/`.cts` flavors are reachable only through explicit `.mjs`/`.cjs`
+  specifiers, matching tsc.
+- Explicit `.js`/`.jsx` specifiers substitute `.ts`/`.tsx`/`.d.ts` in place;
+  `.mjs` → `.mts`/`.d.mts`; `.cjs` → `.cts`/`.d.cts`. A specifier with an
+  explicit runtime extension never falls back to a directory-index lookup.
 
 ## Non-relative imports and package stubs
 

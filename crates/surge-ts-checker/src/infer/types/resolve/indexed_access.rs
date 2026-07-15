@@ -127,7 +127,10 @@ pub(super) fn resolve_indexed_access_type(
     // Peel a nominal reference receiver (`User["id"]`) to its structural object so
     // the index lookup below reads its properties instead of failing to match.
     let resolved_object = ResolvedType {
-        ty: resolved_object.ty.peeled(),
+        ty: crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::IndexedAccess,
+            || resolved_object.ty.peeled(),
+        ),
         had_error: resolved_object.had_error,
     };
 

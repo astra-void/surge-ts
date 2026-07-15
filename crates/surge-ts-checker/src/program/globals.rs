@@ -75,6 +75,10 @@ pub(crate) fn collect_function_signatures_from_statements(
     function_signatures: &mut HashMap<FunctionDeclarationLocation, FunctionType>,
     ctx: &mut CheckerContext,
 ) {
+    let mut declaration_counts = HashMap::<String, usize>::new();
+    for statement in statements {
+        count_function_declarations(statement, &mut declaration_counts);
+    }
     for (statement_index, statement) in statements.iter().enumerate() {
         collect_function_signature_from_statement(
             statement,
@@ -83,7 +87,32 @@ pub(crate) fn collect_function_signatures_from_statements(
             symbols,
             function_signatures,
             ctx,
+            &declaration_counts,
         );
+    }
+}
+
+fn count_function_declarations(
+    statement: &ParsedStatement,
+    declaration_counts: &mut HashMap<String, usize>,
+) {
+    match statement {
+        ParsedStatement::FunctionDeclaration(function) => {
+            *declaration_counts.entry(function.name.clone()).or_default() += 1;
+        }
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                count_function_declarations(declaration, declaration_counts)
+            }
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Function(function),
+                ..
+            } => {
+                *declaration_counts.entry(function.name.clone()).or_default() += 1;
+            }
+            _ => {}
+        },
+        _ => {}
     }
 }
 
@@ -94,11 +123,16 @@ pub(crate) fn collect_function_signature_from_statement(
     symbols: &mut SymbolTable,
     function_signatures: &mut HashMap<FunctionDeclarationLocation, FunctionType>,
     ctx: &mut CheckerContext,
+    declaration_counts: &HashMap<String, usize>,
 ) {
     match statement {
         ParsedStatement::FunctionDeclaration(function) => {
-            let function_type =
-                check_function::collect_function_declaration_signature(function, symbols, ctx);
+            let function_type = check_function::collect_function_declaration_signature(
+                function,
+                symbols,
+                ctx,
+                declaration_counts.get(&function.name) == Some(&1),
+            );
             function_signatures.insert(
                 FunctionDeclarationLocation {
                     file_index,
@@ -127,14 +161,19 @@ pub(crate) fn collect_function_signature_from_statement(
                     symbols,
                     function_signatures,
                     ctx,
+                    declaration_counts,
                 )
             }
             ParsedExportDeclaration::Default {
                 declaration: ParsedDefaultExportDeclaration::Function(function),
                 ..
             } => {
-                let function_type =
-                    check_function::collect_function_declaration_signature(function, symbols, ctx);
+                let function_type = check_function::collect_function_declaration_signature(
+                    function,
+                    symbols,
+                    ctx,
+                    declaration_counts.get(&function.name) == Some(&1),
+                );
                 function_signatures.insert(
                     FunctionDeclarationLocation {
                         file_index,

@@ -111,21 +111,22 @@ pub(crate) fn eq_probe_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_EQ_STATS").is_some())
 }
 
-static EQ_PROBE_VISITS: std::sync::OnceLock<
-    Mutex<HashMap<usize, Vec<(std::time::Duration, u64)>>>,
-> = std::sync::OnceLock::new();
+/// Per-round, per-file counter samples taken around one module's analysis.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct EqProbeVisit {
+    pub(crate) elapsed: std::time::Duration,
+    pub(crate) signature_scope_consults: u64,
+    pub(crate) degraded_resolutions: u64,
+    pub(crate) augmentation_insertions_after: u64,
+}
 
-pub(crate) fn record_eq_probe_visit(
-    file_index: usize,
-    elapsed: std::time::Duration,
-    signature_scope_consults: u64,
-) {
+static EQ_PROBE_VISITS: std::sync::OnceLock<Mutex<HashMap<usize, Vec<EqProbeVisit>>>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn record_eq_probe_visit(file_index: usize, visit: EqProbeVisit) {
     let store = EQ_PROBE_VISITS.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut visits) = store.lock() {
-        visits
-            .entry(file_index)
-            .or_default()
-            .push((elapsed, signature_scope_consults));
+        visits.entry(file_index).or_default().push(visit);
     }
 }
 
@@ -139,6 +140,40 @@ pub(crate) fn scope_fallback_consult_count() -> u64 {
     SCOPE_FALLBACK_CONSULTS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Degraded (`had_error`, uninternable) named-type resolutions. A file whose
+/// preliminary analysis observed one may resolve differently in the final round
+/// (a clean interned entry can exist by then), so the equality predictor must
+/// exclude it.
+static DEGRADED_RESOLUTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn record_degraded_resolution() {
+    DEGRADED_RESOLUTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn degraded_resolution_count() -> u64 {
+    DEGRADED_RESOLUTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// First-wins `declare global` value insertions (`lower_global_augmentation_values`).
+/// They mutate `ctx.ambient_global_symbols` *during* the analysis loop, so a file
+/// analyzed before the inserting file saw fewer globals in the preliminary round
+/// than it will in the final round.
+static AUGMENTATION_VALUE_INSERTIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn record_augmentation_value_insertion() {
+    AUGMENTATION_VALUE_INSERTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn augmentation_value_insertion_count() -> u64 {
+    AUGMENTATION_VALUE_INSERTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn eq_probe_verbose() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_EQ_STATS_VERBOSE").is_some())
+}
+
 fn eq_probe_symbol_tables_equal(a: &SymbolTable, b: &SymbolTable) -> bool {
     let count_a = a.iter_shared().count();
     if count_a != b.iter_shared().count() {
@@ -148,6 +183,82 @@ fn eq_probe_symbol_tables_equal(a: &SymbolTable, b: &SymbolTable) -> bool {
         b.get_shared(name)
             .is_some_and(|symbol_b| symbol_a.kind == symbol_b.kind && symbol_a.ty == symbol_b.ty)
     })
+}
+
+fn eq_probe_explain_symbol_tables(label: &str, a: &SymbolTable, b: &SymbolTable) {
+    let count_a = a.iter_shared().count();
+    let count_b = b.iter_shared().count();
+    if count_a != count_b {
+        eprintln!("[eq-stats]   {label}: entry count {count_a} vs {count_b}");
+        let names_a: HashSet<&str> = a.iter_shared().map(|(n, _)| n.as_ref()).collect();
+        let names_b: HashSet<&str> = b.iter_shared().map(|(n, _)| n.as_ref()).collect();
+        for only_a in names_a.difference(&names_b) {
+            eprintln!("[eq-stats]     only-prelim: {only_a}");
+        }
+        for only_b in names_b.difference(&names_a) {
+            eprintln!("[eq-stats]     only-final: {only_b}");
+        }
+        return;
+    }
+    for (name, symbol_a) in a.iter_shared() {
+        match b.get_shared(name) {
+            None => eprintln!("[eq-stats]   {label}: '{name}' missing in final"),
+            Some(symbol_b) => {
+                if symbol_a.kind != symbol_b.kind {
+                    eprintln!(
+                        "[eq-stats]   {label}: '{name}' kind {:?} vs {:?}",
+                        symbol_a.kind, symbol_b.kind
+                    );
+                } else if symbol_a.ty != symbol_b.ty {
+                    eprintln!(
+                        "[eq-stats]   {label}: '{name}' type '{}' vs '{}'",
+                        symbol_a.ty.name(),
+                        symbol_b.ty.name()
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn eq_probe_explain_analyses(file_name: &str, a: &ModuleAnalysis, b: &ModuleAnalysis) {
+    eprintln!("[eq-stats]  explain {file_name}:");
+    eq_probe_explain_symbol_tables("local_symbols", &a.local_symbols, &b.local_symbols);
+    eq_probe_explain_symbol_tables(
+        "export_symbols",
+        &a.local_export_table.symbols,
+        &b.local_export_table.symbols,
+    );
+    let table_a = &a.local_export_table;
+    let table_b = &b.local_export_table;
+    match (&table_a.default_symbol, &table_b.default_symbol) {
+        (Some(sa), Some(sb)) if sa.ty != sb.ty => eprintln!(
+            "[eq-stats]   default_symbol: '{}' vs '{}'",
+            sa.ty.name(),
+            sb.ty.name()
+        ),
+        (Some(_), None) | (None, Some(_)) => eprintln!("[eq-stats]   default_symbol presence"),
+        _ => {}
+    }
+    match (
+        &table_a.export_assignment_symbol,
+        &table_b.export_assignment_symbol,
+    ) {
+        (Some(sa), Some(sb)) if sa.ty != sb.ty => eprintln!(
+            "[eq-stats]   export_assignment: '{}' vs '{}'",
+            sa.ty.name(),
+            sb.ty.name()
+        ),
+        (Some(_), None) | (None, Some(_)) => eprintln!("[eq-stats]   export_assignment presence"),
+        _ => {}
+    }
+    if table_a.type_declarations.len() != table_b.type_declarations.len() {
+        eprintln!(
+            "[eq-stats]   export type_declarations: {} vs {}",
+            table_a.type_declarations.len(),
+            table_b.type_declarations.len()
+        );
+    }
 }
 
 fn eq_probe_analyses_equal(a: &ModuleAnalysis, b: &ModuleAnalysis) -> bool {
@@ -235,6 +346,7 @@ fn report_eq_probe(
     final_analyses: &[Option<ModuleAnalysis>],
     preliminary_bindings: &[Option<ModuleImportBindings>],
     final_bindings: &[Option<ModuleImportBindings>],
+    augmentation_insertions_before_final: u64,
 ) {
     if !eq_probe_enabled() {
         return;
@@ -247,6 +359,10 @@ fn report_eq_probe(
     let mut equal = 0usize;
     let mut predicted = 0usize;
     let mut unsound = 0usize;
+    let mut excluded_consults = 0usize;
+    let mut excluded_degraded = 0usize;
+    let mut excluded_augmentation = 0usize;
+    let mut excluded_bindings = 0usize;
     let mut prelim_total = std::time::Duration::ZERO;
     let mut prelim_equal = std::time::Duration::ZERO;
     let mut final_total = std::time::Duration::ZERO;
@@ -256,9 +372,10 @@ fn report_eq_probe(
         let (Some(p), Some(f)) = (p, f) else { continue };
         analyzed += 1;
         let visits = visits_by_file.get(&index);
-        let (prelim_time, prelim_consults) =
-            visits.and_then(|v| v.first().copied()).unwrap_or_default();
-        let (final_time, _) = visits.and_then(|v| v.get(1).copied()).unwrap_or_default();
+        let prelim_visit = visits.and_then(|v| v.first().copied()).unwrap_or_default();
+        let final_visit = visits.and_then(|v| v.get(1).copied()).unwrap_or_default();
+        let prelim_time = prelim_visit.elapsed;
+        let final_time = final_visit.elapsed;
         prelim_total += prelim_time;
         final_total += final_time;
         let bindings_equal = match (&preliminary_bindings[index], &final_bindings[index]) {
@@ -267,7 +384,20 @@ fn report_eq_probe(
             _ => false,
         };
         let output_equal = eq_probe_analyses_equal(p, f);
-        let is_predicted = bindings_equal && prelim_consults == 0;
+        if !bindings_equal {
+            excluded_bindings += 1;
+        } else if prelim_visit.signature_scope_consults != 0 {
+            excluded_consults += 1;
+        } else if prelim_visit.degraded_resolutions != 0 {
+            excluded_degraded += 1;
+        } else if prelim_visit.augmentation_insertions_after != augmentation_insertions_before_final
+        {
+            excluded_augmentation += 1;
+        }
+        let is_predicted = bindings_equal
+            && prelim_visit.signature_scope_consults == 0
+            && prelim_visit.degraded_resolutions == 0
+            && prelim_visit.augmentation_insertions_after == augmentation_insertions_before_final;
         if output_equal {
             equal += 1;
             prelim_equal += prelim_time;
@@ -282,9 +412,16 @@ fn report_eq_probe(
                     "[eq-stats] UNSOUND predicted-equal but output differs: {}",
                     parsed_files[index].file_name
                 );
+                if eq_probe_verbose() {
+                    eq_probe_explain_analyses(&parsed_files[index].file_name, p, f);
+                }
             }
         }
     }
+    eprintln!(
+        "[eq-stats] excluded: bindings={excluded_bindings} consults={excluded_consults} \
+         degraded={excluded_degraded} augmentation={excluded_augmentation}"
+    );
     eprintln!(
         "[eq-stats] analyzed={analyzed} output_equal={equal} ({:.1}%) \
          prelim_time_equal={:.2}s/{:.2}s ({:.1}%) final_time_equal={:.2}s/{:.2}s ({:.1}%)",
@@ -348,6 +485,7 @@ pub fn check_program_with_stats_and_jobs(
     let program_start = Instant::now();
     record_rss_stage(timings.as_ref(), "start", program_start.elapsed());
     reset_program_counters();
+    reset_dts_expansion_trace();
     crate::paths::clear_canonicalize_cache();
     crate::modules::clear_relative_module_cache();
     crate::modules::clear_star_export_unresolved_cache();
@@ -526,6 +664,25 @@ pub fn check_program_with_stats_and_jobs(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
+    // The preliminary analyses and the round-1 resolved export tables are dead
+    // from here on (their last reads are the round-2 import bindings above);
+    // both are re-derived from the final analyses below. Releasing them before
+    // the final analysis round matters because that round re-materializes every
+    // module's retained type surface, and holding two complete generations of
+    // it simultaneously is the module-analysis RSS peak on dependency-heavy
+    // projects. The `SURGE_EQ_STATS` probe keeps the preliminary analyses alive
+    // to compare the two generations.
+    let early_release_enabled =
+        std::env::var("SURGE_PRELIM_EARLY_RELEASE").as_deref() != Ok("0") && !eq_probe_enabled();
+    let preliminary_module_analyses = if early_release_enabled {
+        drop(preliminary_module_analyses);
+        Vec::new()
+    } else {
+        preliminary_module_analyses
+    };
+    if early_release_enabled {
+        module_export_tables = Vec::new();
+    }
     // The per-file scope fallback (`module_scope_by_file`, consulted when a
     // declaration's pre-attached `resolution_scope` is incomplete) must be
     // available DURING the final module-analysis round, not just in the check
@@ -541,6 +698,7 @@ pub fn check_program_with_stats_and_jobs(
         &parsed_files,
         &module_resolution_scopes,
     ));
+    let augmentation_insertions_before_final = augmentation_value_insertion_count();
     let type_collection_start = Instant::now();
     let module_analyses = collect_module_analyses_with_bindings(
         &parsed_files,
@@ -566,6 +724,7 @@ pub fn check_program_with_stats_and_jobs(
         &module_analyses,
         &preliminary_module_import_bindings,
         &module_import_bindings,
+        augmentation_insertions_before_final,
     );
     drop(preliminary_module_analyses);
     let export_resolution_start = Instant::now();
@@ -781,6 +940,7 @@ pub fn check_program_with_stats_and_jobs(
     ctx.clear_program_type_caches();
     let (diagnostics, stats) = ctx.finish_with_stats();
     record_rss_stage(timings.as_ref(), "finish", program_start.elapsed());
+    render_dts_expansion_summary();
 
     if let Some(timings) = timings.as_ref() {
         render_program_rss_stages(timings);
@@ -939,7 +1099,14 @@ fn classify_file_kind(file_name: &str) -> FileKind {
             return FileKind::PhysicalDefaultLib;
         }
 
-        if file_name.contains("/node_modules/") || file_name.contains("/node_modules/.pnpm/") {
+        // Package exports, `typesVersions`, type conditions, `@types`, and
+        // re-export chains all converge on a physical declaration path before
+        // this classification. Only installed-package declarations get the
+        // aggressive declaration-backed policy; path-mapped declarations and
+        // project-reference outputs outside dependency roots stay
+        // `RootDeclaration` and retain user-authored checking semantics.
+        let normalized = file_name.replace('\\', "/");
+        if normalized.contains("/node_modules/") {
             return FileKind::DependencyDeclaration;
         }
 
@@ -963,6 +1130,48 @@ fn is_generated_declaration_file_name(file_name: &str) -> bool {
         || lower.ends_with(".generated.d.ts")
         || lower.ends_with(".generated.d.mts")
         || lower.ends_with(".generated.d.cts")
+}
+
+#[cfg(test)]
+mod file_kind_tests {
+    use super::{FileKind, classify_file_kind};
+
+    #[test]
+    fn dependency_declaration_extensions_are_classified_lazily() {
+        for file_name in [
+            "/repo/node_modules/pkg/index.d.ts",
+            "/repo/node_modules/pkg/index.d.mts",
+            "/repo/node_modules/pkg/index.d.cts",
+            r"C:\repo\node_modules\@types\pkg\index.d.ts",
+            "/repo/node_modules/.pnpm/pkg@1/node_modules/pkg/index.d.ts",
+        ] {
+            assert_eq!(
+                classify_file_kind(file_name),
+                FileKind::DependencyDeclaration,
+                "{file_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_and_generated_declarations_keep_distinct_policies() {
+        assert_eq!(
+            classify_file_kind("/repo/types/path-mapped.d.ts"),
+            FileKind::RootDeclaration
+        );
+        assert_eq!(
+            classify_file_kind("/repo/project-reference/dist/index.d.ts"),
+            FileKind::RootDeclaration
+        );
+        assert_eq!(
+            classify_file_kind("/repo/.generated/router.d.ts"),
+            FileKind::GeneratedDeclaration
+        );
+        assert_eq!(
+            classify_file_kind("/repo/node_modules/pkg/index.ts"),
+            FileKind::RootSource
+        );
+    }
 }
 
 fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
@@ -1347,7 +1556,7 @@ fn check_program_file(
 
         let mut signature_ctx = ctx.clone();
         signature_ctx.diagnostics.clear();
-        signature_ctx.utility_diagnostic_keys.clear();
+        signature_ctx.reset_utility_diagnostic_keys();
         signature_ctx.resolved_named_types =
             std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
         // Seed from `validation_symbols` rather than `merged_symbols`: it carries

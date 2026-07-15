@@ -76,7 +76,10 @@ pub(crate) fn resolve_conditional_type(
         let peeled_check;
         let distribution_shape = match &resolved_check.ty {
             Type::Reference(_) => {
-                peeled_check = resolved_check.ty.peeled();
+                peeled_check = crate::program::with_dts_expansion_reason(
+                    crate::program::DtsExpansionReason::ConditionalType,
+                    || resolved_check.ty.peeled(),
+                );
                 &peeled_check
             }
             other => other,
@@ -233,7 +236,10 @@ fn bind_infer_captures(
         // `JSXElementConstructor<infer P>` (a union of function/constructor
         // signatures once the alias below is expanded).
         ParsedType::Function(pattern) => {
-            let peeled = check.peeled();
+            let peeled = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::ConditionalType,
+                || check.peeled(),
+            );
             if let Some(check_function) = callable_signature(&peeled) {
                 let check_parameters = check_function.parameters();
                 let pattern_parameters = pattern
@@ -361,7 +367,12 @@ fn try_function_infer_match(
     ctx: &CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
 ) -> Option<TypeParameterSubstitution> {
-    if callable_signature(&check.peeled()).is_none() {
+    if callable_signature(&crate::program::with_dts_expansion_reason(
+        crate::program::DtsExpansionReason::ConditionalType,
+        || check.peeled(),
+    ))
+    .is_none()
+    {
         return None;
     }
 

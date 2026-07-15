@@ -241,7 +241,6 @@ pub(crate) fn resolve_interface_declaration(
     // tsc still flags missing-member access, so it must stay closed there.
     let in_declaration_file = is_declaration_file_name(&ctx.file_name);
     let mut base_is_open = false;
-
     for base in extends {
         let resolved_base = resolve_named_type(base.clone(), ctx, resolving, substitution);
         had_error |= resolved_base.had_error;

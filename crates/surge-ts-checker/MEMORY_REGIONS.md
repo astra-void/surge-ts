@@ -111,6 +111,84 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
    render-time re-reads would change observable behavior on files modified
    mid-run.
 
+## Dependency declaration expansion policy
+
+Installed-package `.d.ts`, `.d.mts`, and `.d.cts` files are classified as
+`DependencyDeclaration` after module resolution has selected a physical path.
+Their exported variable annotations, named aliases/interfaces, and
+reference-only intersections remain declaration-backed references during
+module analysis. A real semantic consumer may force structure for property or
+call lookup, assignability, indexed/conditional/mapped evaluation, JSX, spread,
+or destructuring. Discovery, import/re-export propagation, export-name
+enumeration, display, cache keys, and export dedup do not force structure.
+
+User declarations outside dependency roots, including path-mapped declarations
+and project-reference outputs, stay `RootDeclaration` and use the conservative
+user-authored checking policy. Generated declarations and physical default
+libraries remain separately classified.
+
+Set `SURGE_TRACE_DTS_EXPANSION=1` to emit physical-footprint high-water JSON and
+an end-of-run summary of object creation, declaration expansions, reference
+peels, generic instantiations, retained export-table nodes, and peel reasons.
+The trace is opt-in because exact per-declaration aggregation is intentionally
+more expensive than normal checking. `SURGE_EAGER_DEPENDENCY_ANNOTATIONS=1`,
+`SURGE_EAGER_DEPENDENCY_ALIASES=1`, and
+`SURGE_EAGER_REFERENCE_INTERSECTIONS=1` are profiling escape hatches for paired
+comparisons, not production modes.
+
+## Measured results (2026-07-15, macOS, system allocator, jobs=1)
+
+Diagnostics were byte-identical before/after on all six reference projects
+(auth-kit, ky, ofetch, trpc, unnamed, zod) at `--jobs 1`; `SURGE_TIMINGS`
+counter diffs on trpc showed every shared work counter within 2%, i.e. the
+region changes are work-neutral. Peak RSS (`/usr/bin/time -l`):
+
+| project | before | after | note |
+| --- | --- | --- | --- |
+| zod | 823MB | 775MB | stable profile; pre-check steady state −43MB |
+| trpc | 1.94GB | 1.83GB | high run-to-run variance, see below |
+| auth-kit | 166MB | 155MB | |
+| ofetch | 88MB | 84MB | |
+| ky | 66MB | 65MB | |
+| unnamed | 3.6GB | 3.6–5.1GB | inside its measured noise band |
+
+Caveat: trpc and unnamed peak inside the module-analysis passes, whose
+transient working set is resolution-order dependent (the same nondeterminism
+behind the trpc 2019/2020 diagnostic wobble). Identical binaries measured
+1.10–3.94GB (trpc) and 3.6–7.4GB (unnamed) across runs, so single-run peaks on
+those projects are not meaningful; interleaved multi-run distributions and the
+`SURGE_TIMINGS` counters are the evaluation tools.
+
+End-of-run cache sizes on trpc (jobs=1): named-type cache 1.48M hits / 246k
+inserts; generic-type cache 257k hits / 237k misses / 43k inserts;
+instantiation interner 185k hits / 213k inserts; zero capped buckets at the
+default 4096 cap.
+
+## Evaluated and deliberately not implemented
+
+- A `WorkerScratch` struct of reusable per-function containers: flow state
+  (`FunctionFlowState`), resolution stacks, and flattening buffers are already
+  function-local or unwind-scoped with explicit depth caps, so a pooled scratch
+  would add plumbing without changing retention; the file boundary
+  (`begin_file_check`) was the missing region reset and is implemented instead.
+- Reusing the `resolved_named_types` map in place across files: entries depend
+  on the consumer file's environment and lazy-resolution snapshots may still
+  hold the previous file's `Arc`, so the per-file map swap is required for
+  correctness; the per-file allocation is one `Arc<Mutex<HashMap>>`.
+- Clearing `lazy_resolution_snapshot` per file: every `LazyInstantiation`
+  created from the snapshot pins it anyway, so a per-file reset would create
+  more snapshots, not fewer.
+- Borrowed statement checking (removing the per-statement clone in
+  `check_program_file_statements`): a large cross-cutting refactor of the check
+  paths, deferred; it is churn, not retention.
+- Typed-ID stores and string/path interning beyond the existing
+  arena/`Arc<str>` sharing: not started in this pass per the staged plan — the
+  next candidate is sharing `TypeDeclarationInfo` payloads as handles (see
+  ARENA_ID_PLAN.md "Next Slice").
+- CLI source-text double retention (`inputs` + `sources`): documented above;
+  changing `SourceFileInput.source_text` breaks the public API and render-time
+  re-reads change observable behavior; left as the next loader-side lever.
+
 ## Remaining retention sources (largest first)
 
 - `shared_state` module analyses/bindings/scopes for the whole check phase —

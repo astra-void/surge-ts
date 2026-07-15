@@ -149,6 +149,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolved_modules: std::collections::HashMap::new(),
+            resolved_modules_by_importer: std::collections::HashMap::new(),
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,

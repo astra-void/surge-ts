@@ -86,7 +86,10 @@ pub(crate) fn try_resolve_module(
     Option<usize>,
 )> {
     let resolution_start = Instant::now();
-    if let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) {
+    if let Some(resolved_file_name) = ctx
+        .options
+        .resolved_module_for(&ctx.file_name, module_specifier)
+    {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some(resolved_index) = ctx
             .module_file_index_by_identity
@@ -219,8 +222,8 @@ pub(crate) fn resolve_import_declaration(
             }
             if ctx
                 .options
-                .resolved_modules
-                .contains_key(&import.module_specifier)
+                .resolved_module_for(&ctx.file_name, &import.module_specifier)
+                .is_some()
             {
                 return;
             }

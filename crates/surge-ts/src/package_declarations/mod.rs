@@ -84,12 +84,22 @@ fn parse_package_specifier(specifier: &str) -> Option<(String, Option<String>)> 
     }
 }
 
+/// Package-declaration resolutions in BFS resolution order:
+/// `(canonical importer file, specifier, canonical resolved file)`.
+///
+/// The same bare specifier may resolve differently from different importers
+/// (nested `node_modules`, `#imports` scopes, self-name imports), so results
+/// are keyed by importer rather than flattened to `specifier → file`. The
+/// ordered `Vec` keeps the project-wide first-resolution fallback map
+/// deterministic when the caller merges.
+pub(crate) type PackageResolutions = Vec<(String, String, String)>;
+
 #[allow(dead_code)]
 pub fn resolve_package_declaration_entrypoints(
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
     root_dir: &Path,
-) -> HashMap<String, String> {
+) -> PackageResolutions {
     let mut cache = PackageDeclarationResolverCache::default();
     resolve_package_declaration_entrypoints_with_cache(
         inputs,
@@ -106,14 +116,15 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
     root_dir: &Path,
     opts: &ResolverOptions,
     cache: &mut PackageDeclarationResolverCache,
-) -> HashMap<String, String> {
+) -> PackageResolutions {
     let mut packages_to_resolve: VecDeque<PackageDeclarationRequest> = VecDeque::new();
-    let mut resolved_packages = HashMap::new();
+    let mut resolutions: PackageResolutions = Vec::new();
+    let mut resolved_packages: HashSet<(String, String)> = HashSet::new();
     let mut known_file_names: HashSet<String> = inputs
         .iter()
         .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
         .collect();
-    let mut queued_specifiers: HashSet<String> = HashSet::new();
+    let mut queued_specifiers: HashSet<(String, String)> = HashSet::new();
     let mut parser = surge_ts_syntax::ParserWorker::new();
 
     for (file_path, _, source_text) in sources.iter() {
@@ -129,15 +140,11 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
         );
     }
 
-    let mut max_resolutions = 1000;
-
+    // The queue is finite: every (importer file, specifier) pair is enqueued at
+    // most once, and newly loaded files enqueue only their own pairs.
     while let Some(req) = packages_to_resolve.pop_front() {
-        if max_resolutions == 0 {
-            break;
-        }
-        max_resolutions -= 1;
-
-        if resolved_packages.contains_key(&req.specifier) {
+        let importer_key = canonicalize_if_exists_string(&req.importer_file);
+        if resolved_packages.contains(&(importer_key.clone(), req.specifier.clone())) {
             continue;
         }
 
@@ -169,7 +176,12 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                 };
 
                 let normalized_file_name = canonicalize_if_exists_string(&path);
-                resolved_packages.insert(req.specifier.clone(), normalized_file_name.clone());
+                resolved_packages.insert((importer_key.clone(), req.specifier.clone()));
+                resolutions.push((
+                    importer_key.clone(),
+                    req.specifier.clone(),
+                    normalized_file_name.clone(),
+                ));
 
                 if !known_file_names.contains(&normalized_file_name) {
                     let read_start = std::time::Instant::now();
@@ -204,13 +216,14 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
             PackageEntrypointKind::RuntimeOnly => {
                 if let Ok(path) = resolution.path.canonicalize() {
                     let file_name = canonicalize_if_exists_string(&path);
-                    resolved_packages.insert(req.specifier.clone(), file_name);
+                    resolved_packages.insert((importer_key.clone(), req.specifier.clone()));
+                    resolutions.push((importer_key, req.specifier.clone(), file_name));
                 }
             }
         }
     }
 
-    resolved_packages
+    resolutions
 }
 
 /// Outcome of resolving the project's configured type packages.

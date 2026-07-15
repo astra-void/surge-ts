@@ -359,6 +359,16 @@ pub(crate) fn collect_ambient_modules(
 
             let collect_start = Instant::now();
             collect_type_declarations(&module.statements, ctx);
+            record_type_declaration_table_clone(
+                timings,
+                ctx.type_declarations.len(),
+                TableCloneKind::General,
+            );
+            let current_type_declarations_scope =
+                Arc::new(TypeDeclarationScope::new(vec![Arc::new(
+                    ctx.type_declarations.clone(),
+                )]));
+            ctx.type_declaration_scope = Some(current_type_declarations_scope.clone());
             let mut local_function_signatures = HashMap::new();
             let mut current_symbols = std::mem::take(&mut ctx.symbols);
             collect_function_signatures_from_statements(
@@ -435,15 +445,6 @@ pub(crate) fn collect_ambient_modules(
             temp_file.statements = module.statements.clone();
             let current_type_declarations = std::mem::take(&mut ctx.type_declarations);
             let current_symbols = std::mem::take(&mut ctx.symbols);
-            record_type_declaration_table_clone(
-                timings,
-                current_type_declarations.len(),
-                TableCloneKind::General,
-            );
-            let current_type_declarations_scope =
-                Arc::new(TypeDeclarationScope::new(vec![Arc::new(
-                    current_type_declarations.clone(),
-                )]));
             let raw_export_table = build_module_export_table(
                 &temp_file,
                 &current_type_declarations,

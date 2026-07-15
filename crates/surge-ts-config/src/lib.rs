@@ -3,6 +3,7 @@
 mod diagnostics;
 mod extends;
 mod files;
+mod mapping;
 mod model;
 mod normalize;
 mod options;
@@ -10,6 +11,7 @@ mod parse;
 mod paths;
 
 pub use diagnostics::*;
+pub use mapping::select_path_mapping_targets;
 pub use model::*;
 pub use options::*;
 pub use parse::load_tsconfig;

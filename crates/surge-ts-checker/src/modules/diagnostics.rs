@@ -275,7 +275,10 @@ pub(crate) fn module_has_explicit_default_export(
         return true;
     }
 
-    let Some(resolved_file_name) = ctx.options.resolved_modules.get(module_specifier) else {
+    let Some(resolved_file_name) = ctx
+        .options
+        .resolved_module_for(&ctx.file_name, module_specifier)
+    else {
         return false;
     };
 
