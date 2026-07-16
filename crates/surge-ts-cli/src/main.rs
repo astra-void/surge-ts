@@ -973,10 +973,13 @@ fn render_single_file_diagnostics_json(
     max_diagnostics: Option<usize>,
 ) -> Value {
     let limit = max_diagnostics.unwrap_or(usize::MAX);
+    let line_index = surge_ts_diagnostics::LineIndex::new(source_text);
     let diagnostics = diagnostics
         .iter()
         .take(limit)
-        .map(|diagnostic| build_single_file_diagnostic_json(file_path, diagnostic, source_text))
+        .map(|diagnostic| {
+            build_single_file_diagnostic_json(file_path, diagnostic, source_text, &line_index)
+        })
         .collect::<Vec<_>>();
 
     let mut root = Map::new();
@@ -989,6 +992,7 @@ fn build_single_file_diagnostic_json(
     file_path: &std::path::Path,
     diagnostic: &surge_ts_diagnostics::Diagnostic,
     source_text: &str,
+    line_index: &surge_ts_diagnostics::LineIndex,
 ) -> Value {
     let mut item = Map::new();
     item.insert(
@@ -1014,7 +1018,7 @@ fn build_single_file_diagnostic_json(
         span_json.insert("end".to_string(), Value::from(span.end as u64));
         item.insert("span".to_string(), Value::Object(span_json));
 
-        let (line, column) = line_col_from_offset(source_text, span.start);
+        let (line, column) = line_index.line_col(source_text, span.start);
         item.insert("line".to_string(), Value::from(line as u64));
         item.insert("column".to_string(), Value::from(column as u64));
     }
@@ -1070,9 +1074,12 @@ fn render_diagnostics_with_spans(
         return String::new();
     }
 
+    let line_index = surge_ts_diagnostics::LineIndex::new(source_text);
     diagnostics
         .iter()
-        .map(|diagnostic| render_diagnostic_with_spans(file_path, diagnostic, source_text))
+        .map(|diagnostic| {
+            render_diagnostic_with_spans(file_path, diagnostic, source_text, &line_index)
+        })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -1081,11 +1088,12 @@ fn render_diagnostic_with_spans(
     file_path: &std::path::Path,
     diagnostic: &surge_ts_diagnostics::Diagnostic,
     source_text: &str,
+    line_index: &surge_ts_diagnostics::LineIndex,
 ) -> String {
     let mut header = format!("{} {}", diagnostic.code, file_path.display());
 
     if let Some(span) = diagnostic.span {
-        let (line, column) = line_col_from_offset(source_text, span.start);
+        let (line, column) = line_index.line_col(source_text, span.start);
         header.push_str(&format!(
             " start={} end={} line={} column={}",
             span.start, span.end, line, column
@@ -1094,28 +1102,10 @@ fn render_diagnostic_with_spans(
         header.push_str(" (no span)");
     }
 
-    format!("{header}\n{}", diagnostic.render(source_text))
-}
-
-fn line_col_from_offset(source_text: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1usize;
-    let mut column = 1usize;
-    let target = offset.min(source_text.len());
-
-    for (byte_index, ch) in source_text.char_indices() {
-        if byte_index >= target {
-            break;
-        }
-
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    (line, column)
+    format!(
+        "{header}\n{}",
+        diagnostic.render_with_line_index(source_text, line_index)
+    )
 }
 
 fn build_compiler_options_json(

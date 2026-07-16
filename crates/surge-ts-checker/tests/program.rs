@@ -4344,6 +4344,28 @@ fn ambient_generic_function_constrained_indexed_access_no_ts2536() {
 }
 
 #[test]
+fn ambient_overload_lowering_preserves_contextual_source_order() {
+    let diagnostics = program(&[
+        (
+            "src/index.ts",
+            "on(\"click\", (event) => { const value: number = event; });",
+        ),
+        (
+            "types/dom.d.ts",
+            "interface EventMap { click: number; }\n\
+             declare function on<K extends keyof EventMap>(type: K, listener: (event: EventMap[K]) => void): void;\n\
+             declare function on(type: string, listener: (() => void) | object): void;",
+        ),
+    ]);
+
+    assert!(
+        diagnostics.is_empty(),
+        "the generic ambient overload must contextually type the callback: {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
 fn ambient_global_typeof_global_this_intersection_resolves_to_left() {
     // `declare const w: Win & typeof globalThis` (the lib shape of `window`/`self`)
     // resolves `typeof globalThis` before the global object symbol is installed.
@@ -6165,4 +6187,37 @@ fn generic_cache_bounded_cap_expected_diagnostics() {
     assert_region_fixture_diagnostics(&first);
     let second = check_program(region_fixture_files(6));
     assert_eq!(rendered_sorted(&first), rendered_sorted(&second));
+}
+
+/// Nested distributive conditionals multiply union widths (20^5 = 3.2M branch
+/// resolutions here). The per-root expansion budget must degrade the runaway
+/// alias to `unknown` instead of hanging or exhausting memory; without it this
+/// test does not terminate in any reasonable time.
+#[test]
+fn nested_distributive_conditional_blowup_degrades_instead_of_hanging() {
+    let mut source = String::new();
+    let members = (1..=20)
+        .map(|index| index.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    source.push_str(&format!("type U = {members};\n"));
+    source.push_str(
+        "type Cross<A, B, C, D, E> = A extends any\n\
+         ? B extends any\n\
+         ? C extends any\n\
+         ? D extends any\n\
+         ? E extends any\n\
+         ? [A, B, C, D, E]\n\
+         : never : never : never : never : never;\n\
+         type Boom = Cross<U, U, U, U, U>;\n\
+         export const marker: number = 1;\n",
+    );
+
+    let diagnostics = check_source(&source, "blowup.ts");
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("marker")),
+        "budget degradation must not produce diagnostics on unrelated code: {diagnostics:?}"
+    );
 }

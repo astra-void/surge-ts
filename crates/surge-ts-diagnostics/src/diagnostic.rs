@@ -94,7 +94,23 @@ impl Diagnostic {
 
     pub fn render(&self, source_text: &str) -> String {
         match self.span {
-            Some(span) => render_with_span(self, source_text, span),
+            Some(span) => {
+                render_with_span(self, source_text, &crate::LineIndex::new(source_text), span)
+            }
+            None => self.to_string(),
+        }
+    }
+
+    /// Like [`render`](Self::render), but reuses a caller-built [`crate::LineIndex`] so
+    /// rendering many diagnostics against one source does not rescan the file
+    /// per diagnostic.
+    pub fn render_with_line_index(
+        &self,
+        source_text: &str,
+        line_index: &crate::LineIndex,
+    ) -> String {
+        match self.span {
+            Some(span) => render_with_span(self, source_text, line_index, span),
             None => self.to_string(),
         }
     }

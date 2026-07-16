@@ -21,8 +21,8 @@ pub(crate) use resolve::*;
 pub(crate) use utility::*;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TypeParameterSubstitution {
-    values: BTreeMap<String, Type>,
-    placeholders: HashSet<String>,
+    values: Option<Arc<BTreeMap<String, Type>>>,
+    placeholders: Option<Arc<HashSet<String>>>,
 }
 
 impl TypeParameterSubstitution {
@@ -37,11 +37,16 @@ impl TypeParameterSubstitution {
     }
 
     pub(crate) fn set(&mut self, name: String, ty: Type, placeholder: bool) {
-        self.values.insert(name.clone(), ty);
+        Arc::make_mut(self.values.get_or_insert_with(|| Arc::new(BTreeMap::new())))
+            .insert(name.clone(), ty);
         if placeholder {
-            self.placeholders.insert(name);
-        } else {
-            self.placeholders.remove(&name);
+            Arc::make_mut(
+                self.placeholders
+                    .get_or_insert_with(|| Arc::new(HashSet::new())),
+            )
+            .insert(name);
+        } else if let Some(placeholders) = self.placeholders.as_mut() {
+            Arc::make_mut(placeholders).remove(&name);
         }
     }
 
@@ -54,15 +59,17 @@ impl TypeParameterSubstitution {
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&Type> {
-        self.values.get(name)
+        self.values.as_deref()?.get(name)
     }
 
     pub(crate) fn is_placeholder(&self, name: &str) -> bool {
-        self.placeholders.contains(name)
+        self.placeholders
+            .as_deref()
+            .is_some_and(|placeholders| placeholders.contains(name))
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &Type)> {
-        self.values.iter()
+        self.values.iter().flat_map(|values| values.iter())
     }
 
     pub(crate) fn extend(&mut self, other: Self) {
@@ -70,6 +77,15 @@ impl TypeParameterSubstitution {
             values,
             placeholders,
         } = other;
+        let Some(values) = values else {
+            return;
+        };
+        let values = Arc::try_unwrap(values).unwrap_or_else(|values| (*values).clone());
+        let placeholders = placeholders
+            .map(|placeholders| {
+                Arc::try_unwrap(placeholders).unwrap_or_else(|placeholders| (*placeholders).clone())
+            })
+            .unwrap_or_default();
 
         for (name, ty) in values {
             if placeholders.contains(&name) {
@@ -197,6 +213,9 @@ pub(crate) fn validate_local_type_declaration(
                         ctx,
                         &mut resolving,
                         &substitution,
+                        None,
+                        None,
+                        None,
                     );
                     ctx.pop_type_parameter_scope();
                 })

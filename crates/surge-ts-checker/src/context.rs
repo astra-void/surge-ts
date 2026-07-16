@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 use surge_ts_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
 use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan as SyntaxTextSpan};
-use surge_ts_types::Type;
+use surge_ts_types::{FunctionType, ProgramTypeStore, Type, current_program_type_store};
 
 use crate::program::ProgramTimings;
 use crate::symbols::{
@@ -17,7 +19,7 @@ pub enum DiagnosticProfile {
     Native,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileKind {
     RootSource,
     RootDeclaration,
@@ -28,6 +30,225 @@ pub enum FileKind {
     /// through the real ambient-global pipeline, but its own diagnostics are
     /// suppressed like any other trusted upstream library file.
     PhysicalDefaultLib,
+}
+
+static NEXT_DECLARATION_ENVIRONMENT_OWNER: AtomicU32 = AtomicU32::new(1);
+static NEXT_SUBSTITUTION_STORE_OWNER: AtomicU32 = AtomicU32::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct DeclarationEnvironmentId(u64);
+
+impl DeclarationEnvironmentId {
+    fn new(owner: u32, index: u32) -> Self {
+        Self((u64::from(owner) << 32) | u64::from(index))
+    }
+
+    fn owner(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+
+    fn index(self) -> usize {
+        (self.0 as u32).saturating_sub(1) as usize
+    }
+
+    fn canonicalization_discriminator(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DeclarationEnvironmentKey {
+    file_name: String,
+    file_kind: FileKind,
+    type_declaration_scope: usize,
+    resolved_named_types: usize,
+    module_scope_generation: usize,
+    module_values_generation: usize,
+    resolution_generation: u64,
+}
+
+#[derive(Debug, Clone)]
+struct DeclarationEnvironmentData {
+    file_name: String,
+    current_file_kind: FileKind,
+    options: Arc<CheckerOptions>,
+    symbols: SymbolTable,
+    type_declarations: TypeDeclarationTable,
+    type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
+    program_type_store: Arc<ProgramTypeStore>,
+    substitution_store: Arc<SubstitutionStore>,
+    resolved_named_types: Arc<Mutex<HashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
+    program_resolved_generic_types:
+        Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>>>,
+    program_instantiations:
+        Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<InstantiationCacheEntry>>>>,
+    physical_interface_instantiations: Arc<Mutex<HashMap<InterfaceInstantiationKey, Arc<Type>>>>,
+    physical_interface_declaration_templates:
+        Arc<Mutex<HashMap<StableInterfaceDeclarationId, Arc<InterfaceDeclarationTemplate>>>>,
+    physical_interface_method_instantiations:
+        Arc<Mutex<HashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
+    physical_interface_overload_instantiations:
+        Arc<Mutex<HashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
+    ambient_modules: Arc<HashMap<String, ModuleExportTable>>,
+    module_augmentations: Arc<HashMap<String, ModuleExportTable>>,
+    ambient_global_symbols: SymbolTable,
+    ambient_global_type_declarations: Arc<TypeDeclarationTable>,
+    module_file_index_by_identity: Arc<HashMap<Arc<str>, usize>>,
+    module_scope_by_file: Arc<HashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
+    module_local_values_by_file: Arc<HashMap<Arc<str>, Arc<SymbolTable>>>,
+    jsx_intrinsic_elements_declarer: Option<(Arc<TypeDeclarationTable>, String)>,
+    type_parameter_scopes: Vec<HashMap<String, Type>>,
+    type_parameter_constraint_scopes: Vec<HashMap<String, ParsedType>>,
+    timings: Option<Arc<Mutex<ProgramTimings>>>,
+    file_kinds: Arc<HashMap<String, FileKind>>,
+    module_value_fallback: Option<Arc<SymbolTable>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct DeclarationEnvironmentStore {
+    owner: u32,
+    next_index: AtomicU32,
+    requests: AtomicU64,
+    hits: AtomicU64,
+    entries: Mutex<DeclarationEnvironmentEntries>,
+}
+
+#[derive(Debug, Default)]
+struct DeclarationEnvironmentEntries {
+    by_key: HashMap<DeclarationEnvironmentKey, DeclarationEnvironmentId>,
+    by_id: Vec<Arc<DeclarationEnvironmentData>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DeclarationEnvironmentHandle {
+    id: DeclarationEnvironmentId,
+    store: Weak<DeclarationEnvironmentStore>,
+}
+
+impl DeclarationEnvironmentStore {
+    fn new() -> Arc<Self> {
+        let owner = NEXT_DECLARATION_ENVIRONMENT_OWNER.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(owner, 0, "declaration-environment owner space exhausted");
+        Arc::new(Self {
+            owner,
+            next_index: AtomicU32::new(1),
+            requests: AtomicU64::new(0),
+            hits: AtomicU64::new(0),
+            entries: Mutex::new(DeclarationEnvironmentEntries::default()),
+        })
+    }
+
+    fn intern(self: &Arc<Self>, ctx: &CheckerContext) -> DeclarationEnvironmentHandle {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        let key = DeclarationEnvironmentKey {
+            file_name: ctx.file_name.clone(),
+            file_kind: ctx.current_file_kind,
+            type_declaration_scope: ctx
+                .type_declaration_scope
+                .as_ref()
+                .map_or(0, |scope| Arc::as_ptr(scope) as usize),
+            resolved_named_types: Arc::as_ptr(&ctx.resolved_named_types) as usize,
+            module_scope_generation: Arc::as_ptr(&ctx.module_scope_by_file) as usize,
+            module_values_generation: Arc::as_ptr(&ctx.module_local_values_by_file) as usize,
+            resolution_generation: ctx.declaration_environment_generation,
+        };
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(id) = entries.by_key.get(&key) {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return DeclarationEnvironmentHandle {
+                id: *id,
+                store: Arc::downgrade(self),
+            };
+        }
+        let id = DeclarationEnvironmentId::new(
+            self.owner,
+            self.next_index.fetch_add(1, Ordering::Relaxed),
+        );
+        let data = Arc::new(DeclarationEnvironmentData::capture(ctx));
+        debug_assert_eq!(id.index(), entries.by_id.len());
+        entries.by_key.insert(key, id);
+        entries.by_id.push(data);
+        DeclarationEnvironmentHandle {
+            id,
+            store: Arc::downgrade(self),
+        }
+    }
+
+    pub(crate) fn stats(&self) -> (u64, u64, u64) {
+        (
+            self.requests.load(Ordering::Relaxed),
+            self.hits.load(Ordering::Relaxed),
+            self.entries
+                .lock()
+                .map(|entries| entries.by_id.len() as u64)
+                .unwrap_or_default(),
+        )
+    }
+}
+
+impl DeclarationEnvironmentHandle {
+    pub(crate) fn checker_context(&self) -> Option<CheckerContext> {
+        let store = self.store.upgrade()?;
+        if self.id.owner() != store.owner {
+            return None;
+        }
+        let data = store
+            .entries
+            .lock()
+            .ok()?
+            .by_id
+            .get(self.id.index())
+            .cloned()?;
+        Some(CheckerContext::from_declaration_environment(&data, store))
+    }
+
+    pub(crate) fn canonicalization_discriminator(&self) -> u64 {
+        self.id.canonicalization_discriminator()
+    }
+}
+
+impl DeclarationEnvironmentData {
+    fn capture(ctx: &CheckerContext) -> Self {
+        Self {
+            file_name: ctx.file_name.clone(),
+            current_file_kind: ctx.current_file_kind,
+            options: ctx.options.clone(),
+            symbols: ctx.symbols.clone(),
+            type_declarations: ctx.type_declarations.clone(),
+            type_declaration_scope: ctx.type_declaration_scope.clone(),
+            program_type_store: ctx.program_type_store.clone(),
+            substitution_store: ctx.substitution_store.clone(),
+            resolved_named_types: ctx.resolved_named_types.clone(),
+            program_resolved_generic_types: ctx.program_resolved_generic_types.clone(),
+            program_instantiations: ctx.program_instantiations.clone(),
+            physical_interface_instantiations: ctx.physical_interface_instantiations.clone(),
+            physical_interface_declaration_templates: ctx
+                .physical_interface_declaration_templates
+                .clone(),
+            physical_interface_method_instantiations: ctx
+                .physical_interface_method_instantiations
+                .clone(),
+            physical_interface_overload_instantiations: ctx
+                .physical_interface_overload_instantiations
+                .clone(),
+            ambient_modules: ctx.ambient_modules.clone(),
+            module_augmentations: ctx.module_augmentations.clone(),
+            ambient_global_symbols: ctx.ambient_global_symbols.clone(),
+            ambient_global_type_declarations: ctx.ambient_global_type_declarations.clone(),
+            module_file_index_by_identity: ctx.module_file_index_by_identity.clone(),
+            module_scope_by_file: ctx.module_scope_by_file.clone(),
+            module_local_values_by_file: ctx.module_local_values_by_file.clone(),
+            jsx_intrinsic_elements_declarer: ctx.jsx_intrinsic_elements_declarer.clone(),
+            type_parameter_scopes: ctx.type_parameter_scopes.clone(),
+            type_parameter_constraint_scopes: ctx.type_parameter_constraint_scopes.clone(),
+            timings: ctx.timings.clone(),
+            file_kinds: ctx.file_kinds.clone(),
+            module_value_fallback: ctx.module_value_fallback.clone(),
+        }
+    }
 }
 
 impl FileKind {
@@ -182,11 +403,225 @@ pub(crate) struct InstantiationCacheEntry {
     pub(crate) resolved: std::sync::Arc<Type>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct StableInterfaceDeclarationFragmentId {
+    pub(crate) canonical_file: Arc<str>,
+    pub(crate) declaration_start: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct StableInterfaceDeclarationId {
+    pub(crate) canonical_file: Arc<str>,
+    pub(crate) declaration_start: u32,
+    pub(crate) declaration_name: Arc<str>,
+    pub(crate) merged_fragments: Arc<[StableInterfaceDeclarationFragmentId]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum CanonicalTypeIdentity {
+    String,
+    Number,
+    Boolean,
+    BigInt,
+    Symbol,
+    Undefined,
+    Void,
+    Any,
+    Never,
+    StringLiteral(Arc<str>),
+    NumberLiteral(Arc<str>),
+    BooleanLiteral(bool),
+    Array(Box<Self>),
+    Tuple(Arc<[Self]>),
+    Reference {
+        declaration: Arc<str>,
+        arguments: Arc<[Self]>,
+    },
+    NamedObject(Arc<str>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct SubstitutionId(u64);
+
+impl SubstitutionId {
+    fn new(owner: u32, index: u32) -> Self {
+        Self((u64::from(owner) << 32) | u64::from(index))
+    }
+}
+
+#[derive(Debug)]
+struct SubstitutionEntry {
+    declaration: StableInterfaceDeclarationId,
+    arguments: Arc<[CanonicalTypeIdentity]>,
+    id: SubstitutionId,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct SubstitutionStoreStats {
+    pub(crate) requests: u64,
+    pub(crate) hits: u64,
+    pub(crate) unique: u64,
+    pub(crate) input_arguments: u64,
+    pub(crate) stored_arguments: u64,
+    pub(crate) argument_storage_avoided: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct SubstitutionStore {
+    owner: u32,
+    next_index: AtomicU32,
+    requests: AtomicU64,
+    hits: AtomicU64,
+    input_arguments: AtomicU64,
+    stored_arguments: AtomicU64,
+    argument_storage_avoided: AtomicU64,
+    entries: Mutex<HashMap<u64, Vec<SubstitutionEntry>>>,
+}
+
+impl SubstitutionStore {
+    fn new() -> Arc<Self> {
+        let owner = NEXT_SUBSTITUTION_STORE_OWNER.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(owner, 0, "substitution-store owner space exhausted");
+        Arc::new(Self {
+            owner,
+            next_index: AtomicU32::new(1),
+            requests: AtomicU64::new(0),
+            hits: AtomicU64::new(0),
+            input_arguments: AtomicU64::new(0),
+            stored_arguments: AtomicU64::new(0),
+            argument_storage_avoided: AtomicU64::new(0),
+            entries: Mutex::new(HashMap::new()),
+        })
+    }
+
+    pub(crate) fn intern(
+        &self,
+        declaration: StableInterfaceDeclarationId,
+        arguments: Vec<CanonicalTypeIdentity>,
+    ) -> SubstitutionId {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.input_arguments
+            .fetch_add(arguments.len() as u64, Ordering::Relaxed);
+        let argument_count = arguments.len() as u64;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        declaration.hash(&mut hasher);
+        arguments.hash(&mut hasher);
+        let key = hasher.finish();
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let bucket = entries.entry(key).or_default();
+        for entry in bucket.iter() {
+            if entry.declaration == declaration && entry.arguments.as_ref() == arguments.as_slice()
+            {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                self.argument_storage_avoided
+                    .fetch_add(argument_count, Ordering::Relaxed);
+                return entry.id;
+            }
+        }
+        let id = SubstitutionId::new(self.owner, self.next_index.fetch_add(1, Ordering::Relaxed));
+        self.stored_arguments
+            .fetch_add(argument_count, Ordering::Relaxed);
+        bucket.push(SubstitutionEntry {
+            declaration,
+            arguments: Arc::from(arguments),
+            id,
+        });
+        id
+    }
+
+    pub(crate) fn stats(&self) -> SubstitutionStoreStats {
+        SubstitutionStoreStats {
+            requests: self.requests.load(Ordering::Relaxed),
+            hits: self.hits.load(Ordering::Relaxed),
+            unique: self
+                .entries
+                .lock()
+                .map(|entries| entries.values().map(Vec::len).sum::<usize>() as u64)
+                .unwrap_or_default(),
+            input_arguments: self.input_arguments.load(Ordering::Relaxed),
+            stored_arguments: self.stored_arguments.load(Ordering::Relaxed),
+            argument_storage_avoided: self.argument_storage_avoided.load(Ordering::Relaxed),
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.clear();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct InterfaceEnvironmentIdentity {
+    pub(crate) no_lib: bool,
+    pub(crate) skip_lib_check: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct InterfaceInstantiationKey {
+    pub(crate) declaration: StableInterfaceDeclarationId,
+    pub(crate) substitution: SubstitutionId,
+    pub(crate) environment: InterfaceEnvironmentIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum InterfaceMemberDeclarationKind {
+    Property,
+    Method,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct StableInterfaceMemberDeclarationId {
+    pub(crate) containing_interface: StableInterfaceDeclarationId,
+    pub(crate) canonical_file: Arc<str>,
+    pub(crate) declaration_start: u32,
+    pub(crate) declaration_kind: InterfaceMemberDeclarationKind,
+    pub(crate) declared_name: Arc<str>,
+    pub(crate) overload_index: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InterfaceMemberDeclarationTemplate {
+    pub(crate) declaration: StableInterfaceMemberDeclarationId,
+    pub(crate) overload_group: Option<u32>,
+    pub(crate) overload_position: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InterfaceMethodOverloadGroupTemplate {
+    pub(crate) ordered_members: Arc<[StableInterfaceMemberDeclarationId]>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InterfaceDeclarationTemplate {
+    pub(crate) members: Arc<[InterfaceMemberDeclarationTemplate]>,
+    pub(crate) method_groups: Arc<[InterfaceMethodOverloadGroupTemplate]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct InterfaceMemberInstantiationKey {
+    pub(crate) member: StableInterfaceMemberDeclarationId,
+    pub(crate) substitution: SubstitutionId,
+    pub(crate) environment: InterfaceEnvironmentIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct InterfaceOverloadInstantiationKey {
+    pub(crate) containing_interface: StableInterfaceDeclarationId,
+    pub(crate) ordered_members: Arc<[StableInterfaceMemberDeclarationId]>,
+    pub(crate) prefix_len: u32,
+    pub(crate) substitution: SubstitutionId,
+    pub(crate) environment: InterfaceEnvironmentIdentity,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
     pub(crate) current_file_kind: FileKind,
-    pub(crate) options: CheckerOptions,
+    pub(crate) options: Arc<CheckerOptions>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     // Dedup index for `push`, mirroring the keys of `diagnostics`. `push` rejected
     // duplicates by scanning the whole `diagnostics` vec (re-rendering every code
@@ -215,6 +650,10 @@ pub(crate) struct CheckerContext {
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
+    pub(crate) program_type_store: Arc<ProgramTypeStore>,
+    pub(crate) substitution_store: Arc<SubstitutionStore>,
+    pub(crate) declaration_environment_store: Arc<DeclarationEnvironmentStore>,
+    declaration_environment_generation: u64,
     pub(crate) resolved_named_types:
         Arc<Mutex<HashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
     /// Program-scoped cache for context-free *generic* library/dependency
@@ -236,6 +675,18 @@ pub(crate) struct CheckerContext {
     /// via `Arc` across all `CheckerContext` clones and jobs.
     pub(crate) program_instantiations:
         Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<InstantiationCacheEntry>>>>,
+    /// Completed, clean physical-default-lib interface expansions keyed without
+    /// structural `Type` equality. Unlike `program_instantiations`, this index is
+    /// eligible inside an enclosing generic scope when every actual argument has
+    /// a stable nominal/literal identity.
+    pub(crate) physical_interface_instantiations:
+        Arc<Mutex<HashMap<InterfaceInstantiationKey, Arc<Type>>>>,
+    pub(crate) physical_interface_declaration_templates:
+        Arc<Mutex<HashMap<StableInterfaceDeclarationId, Arc<InterfaceDeclarationTemplate>>>>,
+    pub(crate) physical_interface_method_instantiations:
+        Arc<Mutex<HashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
+    pub(crate) physical_interface_overload_instantiations:
+        Arc<Mutex<HashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
     pub(crate) ambient_modules: Arc<std::collections::HashMap<String, ModuleExportTable>>,
     /// Module augmentations (`declare module "x"` in a file that is itself a
     /// module). Unlike ambient module declarations, these only merge into an
@@ -306,13 +757,6 @@ pub(crate) struct CheckerContext {
     /// `resolve_interface`/`resolve_type_alias` for the duration of their body
     /// resolution.
     pub(crate) structural_resolution_frames: Vec<usize>,
-    /// Shared, immutable snapshot of this context used to resolve a lazy library
-    /// [`Type::Reference`] body on demand (see the lazy instantiation resolver in
-    /// `infer::types`). Captured once, lazily, when the first library reference is
-    /// deferred; the `Arc`-shared caches/ambient surface stay live through it, so a
-    /// peel memoizes into the same program-wide interner. Cleared of diagnostics —
-    /// a lazy peel emits none.
-    lazy_resolution_snapshot: Option<Arc<CheckerContext>>,
     file_kinds: Arc<HashMap<String, FileKind>>,
     /// All module-scope value bindings of the file currently being checked,
     /// inferred up front. Consulted only when a bare identifier misses the
@@ -328,6 +772,7 @@ impl CheckerContext {
         options: CheckerOptions,
         file_kinds: HashMap<String, FileKind>,
     ) -> Self {
+        let options = Arc::new(options);
         let current_file_kind = file_kinds
             .get(&file_name)
             .copied()
@@ -346,9 +791,17 @@ impl CheckerContext {
             symbols: SymbolTable::new(),
             type_declarations: TypeDeclarationTable::new(),
             type_declaration_scope: None,
+            program_type_store: current_program_type_store().unwrap_or_else(ProgramTypeStore::new),
+            substitution_store: SubstitutionStore::new(),
+            declaration_environment_store: DeclarationEnvironmentStore::new(),
+            declaration_environment_generation: 0,
             resolved_named_types: Arc::new(Mutex::new(HashMap::new())),
             program_resolved_generic_types: Arc::new(Mutex::new(HashMap::new())),
             program_instantiations: Arc::new(Mutex::new(HashMap::new())),
+            physical_interface_instantiations: Arc::new(Mutex::new(HashMap::new())),
+            physical_interface_declaration_templates: Arc::new(Mutex::new(HashMap::new())),
+            physical_interface_method_instantiations: Arc::new(Mutex::new(HashMap::new())),
+            physical_interface_overload_instantiations: Arc::new(Mutex::new(HashMap::new())),
             ambient_modules: Arc::new(std::collections::HashMap::new()),
             module_augmentations: Arc::new(std::collections::HashMap::new()),
             ambient_global_symbols: SymbolTable::new(),
@@ -364,7 +817,6 @@ impl CheckerContext {
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
-            lazy_resolution_snapshot: None,
             file_kinds: Arc::new(file_kinds),
             module_value_fallback: None,
         }
@@ -374,31 +826,64 @@ impl CheckerContext {
         self.lowest_cycle_target_index = self.lowest_cycle_target_index.min(target_index);
     }
 
-    /// Returns the shared snapshot used to resolve a deferred library reference
-    /// body, capturing it on first use. The snapshot keeps the `Arc`-shared caches
-    /// and ambient surface (so a peel interns into the same program-wide store) but
-    /// drops the per-file diagnostic state and its own snapshot back-pointer.
-    pub(crate) fn lazy_resolution_snapshot(&mut self) -> Arc<CheckerContext> {
-        if let Some(snapshot) = &self.lazy_resolution_snapshot {
-            return snapshot.clone();
-        }
-        let mut snapshot = self.clone();
-        snapshot.diagnostics = Vec::new();
-        snapshot.diagnostic_keys = HashSet::new();
-        snapshot.diagnostic_keys_len = 0;
-        snapshot.lazy_resolution_snapshot = None;
-        let snapshot = Arc::new(snapshot);
-        self.lazy_resolution_snapshot = Some(snapshot.clone());
-        snapshot
+    pub(crate) fn declaration_environment(&self) -> DeclarationEnvironmentHandle {
+        self.declaration_environment_store.intern(self)
     }
 
-    /// Breaks the `Arc` cycle between the shared type caches and the lazy
-    /// resolution snapshots. Cached types contain lazy `Type::Reference`s whose
-    /// resolver holds an `Arc<CheckerContext>` snapshot, and every snapshot holds
-    /// the same `Arc`-shared cache maps — so once a run has deferred a single
-    /// library reference, the caches, snapshots, and every interned expansion
-    /// keep each other alive after all contexts are dropped. Clearing the maps
-    /// at the end of a program check lets the whole graph free.
+    fn from_declaration_environment(
+        data: &DeclarationEnvironmentData,
+        declaration_environment_store: Arc<DeclarationEnvironmentStore>,
+    ) -> Self {
+        Self {
+            file_name: data.file_name.clone(),
+            current_file_kind: data.current_file_kind,
+            options: data.options.clone(),
+            diagnostics: Vec::new(),
+            diagnostic_keys: HashSet::new(),
+            diagnostic_keys_len: 0,
+            stats: CompatibilityStats::default(),
+            utility_diagnostic_keys: HashSet::new(),
+            utility_diagnostic_keys_baseline: None,
+            symbols: data.symbols.clone(),
+            type_declarations: data.type_declarations.clone(),
+            type_declaration_scope: data.type_declaration_scope.clone(),
+            program_type_store: data.program_type_store.clone(),
+            substitution_store: data.substitution_store.clone(),
+            declaration_environment_store,
+            declaration_environment_generation: 0,
+            resolved_named_types: data.resolved_named_types.clone(),
+            program_resolved_generic_types: data.program_resolved_generic_types.clone(),
+            program_instantiations: data.program_instantiations.clone(),
+            physical_interface_instantiations: data.physical_interface_instantiations.clone(),
+            physical_interface_declaration_templates: data
+                .physical_interface_declaration_templates
+                .clone(),
+            physical_interface_method_instantiations: data
+                .physical_interface_method_instantiations
+                .clone(),
+            physical_interface_overload_instantiations: data
+                .physical_interface_overload_instantiations
+                .clone(),
+            ambient_modules: data.ambient_modules.clone(),
+            module_augmentations: data.module_augmentations.clone(),
+            ambient_global_symbols: data.ambient_global_symbols.clone(),
+            ambient_global_type_declarations: data.ambient_global_type_declarations.clone(),
+            module_file_index_by_identity: data.module_file_index_by_identity.clone(),
+            module_scope_by_file: data.module_scope_by_file.clone(),
+            module_local_values_by_file: data.module_local_values_by_file.clone(),
+            jsx_intrinsic_elements_declarer: data.jsx_intrinsic_elements_declarer.clone(),
+            type_parameter_scopes: data.type_parameter_scopes.clone(),
+            type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
+            timings: data.timings.clone(),
+            namespace_member_resolution_depth: 0,
+            namespace_member_prefix_stack: Vec::new(),
+            lowest_cycle_target_index: usize::MAX,
+            structural_resolution_frames: Vec::new(),
+            file_kinds: data.file_kinds.clone(),
+            module_value_fallback: data.module_value_fallback.clone(),
+        }
+    }
+
     /// End-of-run sizes of the shared program type caches, sampled before
     /// [`Self::clear_program_type_caches`] tears them down.
     pub(crate) fn program_cache_stats(&self) -> crate::metrics::ProgramCacheStats {
@@ -422,11 +907,17 @@ impl CheckerContext {
                 )
             })
             .unwrap_or_default();
+        let physical_interface_entries = self
+            .physical_interface_instantiations
+            .lock()
+            .map(|cache| cache.len() as u64)
+            .unwrap_or_default();
         crate::metrics::ProgramCacheStats {
             generic_type_buckets,
             generic_type_entries,
             instantiation_buckets,
             instantiation_entries,
+            physical_interface_entries,
         }
     }
 
@@ -439,6 +930,23 @@ impl CheckerContext {
         }
         if let Ok(mut cache) = self.program_instantiations.lock() {
             cache.clear();
+        }
+        if let Ok(mut cache) = self.physical_interface_instantiations.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.physical_interface_declaration_templates.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.physical_interface_method_instantiations.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.physical_interface_overload_instantiations.lock() {
+            cache.clear();
+        }
+        self.substitution_store.clear();
+        if let Ok(mut environments) = self.declaration_environment_store.entries.lock() {
+            environments.by_key.clear();
+            environments.by_id.clear();
         }
     }
 
@@ -529,6 +1037,10 @@ impl CheckerContext {
     }
 
     pub(crate) fn set_file_name(&mut self, file_name: String) {
+        if self.file_name != file_name {
+            self.declaration_environment_generation =
+                self.declaration_environment_generation.wrapping_add(1);
+        }
         self.current_file_kind = self
             .file_kinds
             .get(&file_name)
@@ -551,9 +1063,9 @@ impl CheckerContext {
     /// shared baseline; later calls clear only the per-file overlay, so the
     /// reused context behaves byte-identically to a fresh clone without
     /// cloning the key set per file.
-    /// `resolved_named_types` must be a fresh map rather than cleared in
-    /// place: resolutions depend on the consumer file's environment, and
-    /// lazy-resolution snapshots may still hold the previous file's `Arc`.
+    /// `resolved_named_types` must be a fresh map rather than cleared in place:
+    /// resolutions depend on the consumer file's environment, and retained
+    /// declaration environments may still refer to the previous file's map.
     pub(crate) fn begin_file_check(&mut self, file_name: String) {
         self.set_file_name(file_name);
         self.type_declaration_scope = None;
@@ -586,6 +1098,8 @@ impl CheckerContext {
 
     pub(crate) fn set_symbols(&mut self, symbols: SymbolTable) {
         self.symbols = symbols;
+        self.declaration_environment_generation =
+            self.declaration_environment_generation.wrapping_add(1);
     }
 
     /// Whether `file_name` is a trusted upstream library/dependency declaration
@@ -727,6 +1241,8 @@ impl CheckerContext {
         module_file_index_by_identity: HashMap<Arc<str>, usize>,
     ) {
         self.module_file_index_by_identity = Arc::new(module_file_index_by_identity);
+        self.declaration_environment_generation =
+            self.declaration_environment_generation.wrapping_add(1);
     }
 
     pub(crate) fn set_module_scope_by_file(
@@ -734,6 +1250,8 @@ impl CheckerContext {
         module_scope_by_file: HashMap<Arc<str>, Arc<TypeDeclarationScope>>,
     ) {
         self.module_scope_by_file = Arc::new(module_scope_by_file);
+        self.declaration_environment_generation =
+            self.declaration_environment_generation.wrapping_add(1);
     }
 
     /// The resolution scope of the module that declared `file_name`, used as a
@@ -752,6 +1270,8 @@ impl CheckerContext {
         module_local_values_by_file: HashMap<Arc<str>, Arc<SymbolTable>>,
     ) {
         self.module_local_values_by_file = Arc::new(module_local_values_by_file);
+        self.declaration_environment_generation =
+            self.declaration_environment_generation.wrapping_add(1);
     }
 
     /// The local value symbols of the module that declared `file_name`, used to

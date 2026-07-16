@@ -36,9 +36,74 @@ thread_local! {
     /// reused for a stale entry.
     static OBJECT_ASSIGNABILITY_IN_PROGRESS: std::cell::RefCell<std::collections::HashSet<(usize, usize)>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
+
+    /// Completed-result memo for the current outermost `is_assignable_to` query,
+    /// keyed on stable `Arc` identities of both sides. The in-progress set above
+    /// only catches cycles; on acyclic DAG-shaped types (the same sub-pair
+    /// reached from many sibling properties or union arms) every path re-ran the
+    /// full comparison, which is exponential in nesting depth. Cleared with the
+    /// in-progress set when the outermost call returns, so a freed `Arc` pointer
+    /// can never alias a stale entry.
+    static ASSIGNABILITY_RELATION_CACHE: std::cell::RefCell<std::collections::HashMap<(RelationKey, RelationKey), bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Bumped whenever a comparison is answered by assumption (depth-cap or
+    /// in-progress coinductive `true`) rather than by inspection. A result whose
+    /// subtree consumed an assumption is only valid under that assumption, so it
+    /// must not be memoized as definitive — mirroring tsc's `Ternary.Maybe`
+    /// handling in its relation cache.
+    static ASSIGNABILITY_ASSUMPTION_EVENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 const MAX_ASSIGNABILITY_DEPTH: u32 = 200;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RelationKey {
+    tag: u8,
+    parts: [usize; 5],
+}
+
+/// Stable identity for memoizing a comparison side. Every field that can change
+/// the assignability verdict must contribute (properties, string index, call and
+/// construct signatures, `alias_id` for the nominal fast path); types without a
+/// shared-`Arc` identity return `None` and are simply not memoized.
+fn relation_key(ty: &Type) -> Option<RelationKey> {
+    match ty {
+        Type::Object(object) => Some(RelationKey {
+            tag: 1,
+            parts: [
+                Arc::as_ptr(&object.properties) as usize,
+                object
+                    .string_index_type
+                    .as_ref()
+                    .map_or(0, |index| Arc::as_ptr(index) as usize),
+                object
+                    .call_signature()
+                    .map_or(0, |signature| signature.payload_address()),
+                object
+                    .construct_signature()
+                    .map_or(0, |signature| signature.payload_address()),
+                object
+                    .alias_id
+                    .as_ref()
+                    .map_or(0, |id| id.as_ref().as_ptr() as usize),
+            ],
+        }),
+        Type::Union(union) => Some(RelationKey {
+            tag: 2,
+            parts: [union.payload_address(), 0, 0, 0, 0],
+        }),
+        Type::Function(function) => Some(RelationKey {
+            tag: 3,
+            parts: [function.payload_address(), 0, 0, 0, 0],
+        }),
+        _ => None,
+    }
+}
+
+fn record_assignability_assumption() {
+    ASSIGNABILITY_ASSUMPTION_EVENTS.with(|events| events.set(events.get() + 1));
+}
 
 pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     struct DepthGuard;
@@ -49,6 +114,7 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
                 depth.set(next);
                 if next == 0 {
                     OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().clear());
+                    ASSIGNABILITY_RELATION_CACHE.with(|cache| cache.borrow_mut().clear());
                 }
             });
         }
@@ -60,6 +126,7 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     });
     let _guard = DepthGuard;
     if depth > MAX_ASSIGNABILITY_DEPTH {
+        record_assignability_assumption();
         return true;
     }
 
@@ -95,6 +162,33 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
 
+    let cache_key = match (relation_key(from), relation_key(to)) {
+        (Some(from_key), Some(to_key)) => {
+            let pair = (from_key, to_key);
+            if let Some(result) =
+                ASSIGNABILITY_RELATION_CACHE.with(|cache| cache.borrow().get(&pair).copied())
+            {
+                return result;
+            }
+            Some(pair)
+        }
+        _ => None,
+    };
+    let assumptions_before = ASSIGNABILITY_ASSUMPTION_EVENTS.with(std::cell::Cell::get);
+
+    let result = assignability_arms(from, to);
+
+    if let Some(pair) = cache_key
+        && ASSIGNABILITY_ASSUMPTION_EVENTS.with(std::cell::Cell::get) == assumptions_before
+    {
+        ASSIGNABILITY_RELATION_CACHE.with(|cache| {
+            cache.borrow_mut().insert(pair, result);
+        });
+    }
+    result
+}
+
+fn assignability_arms(from: &Type, to: &Type) -> bool {
     // Nominal identity: two objects resolved from the same non-generic named
     // declaration are the same type, even if one expanded to a structurally
     // different shape (a deeply cyclic library type can resolve to different
@@ -392,6 +486,7 @@ fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to
     );
     let newly_inserted = OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().insert(key));
     if !newly_inserted {
+        record_assignability_assumption();
         return true;
     }
 

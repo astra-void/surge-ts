@@ -90,9 +90,16 @@ pub(crate) fn resolve_conditional_type(
             _ => vec![resolved_check.ty.clone()],
         };
 
+        let _expansion_scope = TypeExpansionScope::enter();
         let mut results = Vec::new();
         let mut had_error = false;
         for member in members {
+            if !try_consume_type_expansion_step() {
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: false,
+                };
+            }
             // Same "cannot decide" degrade as the non-distributive path below: a
             // member that collapsed to the `unknown` sentinel (a value type surge
             // could not model, e.g. `ComponentProps<typeof UnmodelledValue>`) must

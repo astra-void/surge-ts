@@ -141,7 +141,11 @@ pub(crate) fn collect_ambient_globals(
             }
         }
 
-        for (loc, fun_ty) in local_function_signatures {
+        let mut ordered_function_signatures =
+            local_function_signatures.into_iter().collect::<Vec<_>>();
+        ordered_function_signatures
+            .sort_by_key(|(location, _)| (location.file_index, location.statement_index));
+        for (loc, fun_ty) in ordered_function_signatures {
             let name = match &parsed_file.statements[loc.statement_index] {
                 ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
                 ParsedStatement::ExportDeclaration(export) => match export.as_ref() {

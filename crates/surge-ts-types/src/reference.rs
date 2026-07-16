@@ -13,6 +13,18 @@ use crate::Type;
 pub trait ResolveReference: Send + Sync {
     fn resolve(&self) -> Type;
 
+    fn retains_resolution_context(&self) -> bool {
+        false
+    }
+
+    fn supports_program_canonicalization(&self) -> bool {
+        true
+    }
+
+    fn program_canonicalization_discriminator(&self) -> u64 {
+        0
+    }
+
     /// Like [`resolve`](Self::resolve) but yields a shared `Arc<Type>`. Resolvers
     /// backed by a memoized/interned `Arc` (the lazy/interned instantiation
     /// resolvers) override this to hand back the shared pointer instead of
@@ -73,6 +85,22 @@ impl TypeReference {
     /// [`ResolveReference::resolve_arc`].
     pub fn resolve_arc(&self) -> Arc<Type> {
         self.resolver.resolve_arc()
+    }
+
+    pub fn retains_resolution_context(&self) -> bool {
+        self.resolver.retains_resolution_context()
+    }
+
+    pub fn supports_program_canonicalization(&self) -> bool {
+        self.resolver.supports_program_canonicalization()
+    }
+
+    pub fn program_canonicalization_discriminator(&self) -> u64 {
+        self.resolver.program_canonicalization_discriminator()
+    }
+
+    pub fn resolver_address(&self) -> usize {
+        Arc::as_ptr(&self.resolver) as *const () as usize
     }
 
     /// Nominal identity test: same declaration and same type arguments.

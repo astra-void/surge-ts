@@ -198,6 +198,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
     parsed_files: &[ParsedProgramFile],
     local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
     preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
+    lower_global_augmentation_values: bool,
     ctx: &mut CheckerContext,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<Option<ModuleAnalysis>> {
@@ -336,7 +337,9 @@ pub(crate) fn collect_module_analyses_with_bindings(
         // augmentation types were merged globally before binding, so a value such
         // as `var Buffer: BufferConstructor` sees the fully-merged interface while
         // `var x: ImportedType` still resolves through the module's imports.
-        lower_global_augmentation_values_from_statements(&parsed_file.statements, ctx);
+        if lower_global_augmentation_values {
+            lower_global_augmentation_values_from_statements(&parsed_file.statements, ctx);
+        }
 
         let imported_symbols = preliminary_module_import_bindings[file_index]
             .as_ref()

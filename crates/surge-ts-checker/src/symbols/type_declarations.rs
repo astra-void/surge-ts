@@ -94,6 +94,14 @@ pub(crate) struct InterfaceBody {
     pub(crate) string_index_type: Option<ParsedType>,
     pub(crate) call_signature: Option<ParsedFunctionType>,
     pub(crate) construct_signatures: Vec<ParsedFunctionType>,
+    pub(crate) declaration_fragments: Vec<InterfaceDeclarationFragmentId>,
+    pub(crate) member_fragments: Vec<InterfaceDeclarationFragmentId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct InterfaceDeclarationFragmentId {
+    pub(crate) file_name: String,
+    pub(crate) declaration_start: usize,
 }
 
 impl Clone for InterfaceBody {
@@ -106,6 +114,8 @@ impl Clone for InterfaceBody {
             string_index_type: self.string_index_type.clone(),
             call_signature: self.call_signature.clone(),
             construct_signatures: self.construct_signatures.clone(),
+            declaration_fragments: self.declaration_fragments.clone(),
+            member_fragments: self.member_fragments.clone(),
         }
     }
 }
@@ -136,6 +146,11 @@ impl InterfaceInfo {
         construct_signatures: Vec<ParsedFunctionType>,
         resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ) -> Self {
+        let declaration_fragment = InterfaceDeclarationFragmentId {
+            file_name: file_name.clone(),
+            declaration_start: name_span.map_or(0, |span| span.start),
+        };
+        let member_fragments = vec![declaration_fragment.clone(); members.len()];
         Self {
             name,
             declared_name: None,
@@ -149,6 +164,8 @@ impl InterfaceInfo {
                 string_index_type,
                 call_signature,
                 construct_signatures,
+                declaration_fragments: vec![declaration_fragment],
+                member_fragments,
             }),
         }
     }
@@ -216,11 +233,18 @@ pub(crate) fn merge_interface_infos(
         .collect();
 
     let mut members = existing.body.members.clone();
-    for member in &incoming.body.members {
+    let mut member_fragments = existing.body.member_fragments.clone();
+    for (member, fragment) in incoming
+        .body
+        .members
+        .iter()
+        .zip(incoming.body.member_fragments.iter())
+    {
         if !is_method(member) && existing_property_names.contains(member.name.as_str()) {
             continue;
         }
         members.push(member.clone());
+        member_fragments.push(fragment.clone());
     }
     let mut extends = existing.body.extends.clone();
     extends.extend(incoming.body.extends.iter().cloned());
@@ -229,7 +253,7 @@ pub(crate) fn merge_interface_infos(
     } else {
         existing.body.type_parameters.clone()
     };
-    InterfaceInfo::new(
+    let mut merged_info = InterfaceInfo::new(
         existing.name.clone(),
         existing.file_name.clone(),
         existing.name_span,
@@ -255,7 +279,16 @@ pub(crate) fn merge_interface_infos(
             .resolution_scope
             .clone()
             .or_else(|| incoming.resolution_scope.clone()),
-    )
+    );
+    Arc::make_mut(&mut merged_info.body).declaration_fragments = existing
+        .body
+        .declaration_fragments
+        .iter()
+        .chain(incoming.body.declaration_fragments.iter())
+        .cloned()
+        .collect();
+    Arc::make_mut(&mut merged_info.body).member_fragments = member_fragments;
+    merged_info
 }
 
 /// Insert `incoming` into `table`, merging into an existing interface of the same
@@ -428,7 +461,12 @@ fn fold_interface_declaration(
     is_method: &impl Fn(&ParsedInterfaceMember) -> bool,
 ) {
     let body = Arc::make_mut(&mut accumulator.body);
-    for member in &incoming.body.members {
+    for (member, fragment) in incoming
+        .body
+        .members
+        .iter()
+        .zip(incoming.body.member_fragments.iter())
+    {
         if !is_method(member) {
             if seen.contains(member.name.as_str()) {
                 continue;
@@ -436,6 +474,7 @@ fn fold_interface_declaration(
             seen.insert(member.name.clone());
         }
         body.members.push(member.clone());
+        body.member_fragments.push(fragment.clone());
     }
     body.extends.extend(incoming.body.extends.iter().cloned());
     if body.type_parameters.is_empty() {
@@ -449,6 +488,8 @@ fn fold_interface_declaration(
     }
     body.construct_signatures
         .extend(incoming.body.construct_signatures.iter().cloned());
+    body.declaration_fragments
+        .extend(incoming.body.declaration_fragments.iter().cloned());
     if accumulator.resolution_scope.is_none() {
         accumulator.resolution_scope = incoming.resolution_scope.clone();
     }

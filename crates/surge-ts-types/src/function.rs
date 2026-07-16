@@ -1,11 +1,15 @@
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::Type;
 use crate::clone_reason::{TypeCopyReason, current_type_copy_reason};
+use crate::store::{canonical_function_store_enabled, current_program_type_store};
+use crate::{FunctionTypeId, Type, TypeListId};
 
 static FUNCTION_TYPE_PAYLOAD_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 static FUNCTION_TYPE_PAYLOAD_ALLOC_BY_REASON: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
+static FUNCTION_TYPE_PAYLOAD_ALLOC_BY_EXPANSION_REASON: [AtomicU64; 42] =
+    [const { AtomicU64::new(0) }; 42];
 static FUNCTION_TYPE_PAYLOAD_DEEP_CLONE_COUNT: AtomicU64 = AtomicU64::new(0);
 static FUNCTION_TYPE_HANDLE_COPY_COUNT: AtomicU64 = AtomicU64::new(0);
 static FUNCTION_TYPE_CLONE_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -22,6 +26,20 @@ static FUNCTION_TYPE_COPY_FROM_SUBSTITUTION_UNCHANGED_COUNT: AtomicU64 = AtomicU
 static FUNCTION_TYPE_COPY_FROM_SUBSTITUTION_CHANGED_COUNT: AtomicU64 = AtomicU64::new(0);
 static FUNCTION_TYPE_COPY_FROM_DIAGNOSTIC_FORMATTING_COUNT: AtomicU64 = AtomicU64::new(0);
 static FUNCTION_TYPE_COPY_UNATTRIBUTED_COUNT: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    static CURRENT_FUNCTION_TYPE_EXPANSION_REASON: Cell<usize> = const { Cell::new(41) };
+}
+
+pub fn replace_function_type_expansion_reason(reason: usize) -> usize {
+    CURRENT_FUNCTION_TYPE_EXPANSION_REASON.replace(reason)
+}
+
+pub fn snapshot_function_type_payload_alloc_by_expansion_reason() -> [u64; 42] {
+    std::array::from_fn(|index| {
+        FUNCTION_TYPE_PAYLOAD_ALLOC_BY_EXPANSION_REASON[index].load(Ordering::Relaxed)
+    })
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct FunctionTypeCounters {
@@ -47,7 +65,8 @@ pub struct FunctionTypeCounters {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FunctionTypePayload {
-    pub parameters: Vec<Type>,
+    pub parameters: Arc<[Type]>,
+    pub(crate) parameter_list_id: Option<TypeListId>,
     pub return_type: Type,
     pub is_variadic: bool,
     pub required_parameter_count: usize,
@@ -58,6 +77,7 @@ impl Clone for FunctionTypePayload {
         record_function_type_payload_deep_clone_count();
         Self {
             parameters: self.parameters.clone(),
+            parameter_list_id: self.parameter_list_id,
             return_type: self.return_type.clone(),
             is_variadic: self.is_variadic,
             required_parameter_count: self.required_parameter_count,
@@ -65,26 +85,70 @@ impl Clone for FunctionTypePayload {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct FunctionType {
-    payload: Arc<FunctionTypePayload>,
+    pub(crate) payload: Arc<FunctionTypePayload>,
+    id: Option<FunctionTypeId>,
 }
 
 impl FunctionType {
+    pub(crate) fn from_canonical_parts(
+        payload: Arc<FunctionTypePayload>,
+        id: FunctionTypeId,
+    ) -> Self {
+        Self {
+            payload,
+            id: Some(id),
+        }
+    }
+
     pub fn new(
         parameters: Vec<Type>,
         return_type: Type,
         is_variadic: bool,
         required_parameter_count: usize,
     ) -> Self {
-        record_function_type_payload_alloc_count();
-        Self {
-            payload: Arc::new(FunctionTypePayload {
+        if canonical_function_store_enabled()
+            && let Some(store) = current_program_type_store()
+        {
+            match store.intern_function(
                 parameters,
                 return_type,
                 is_variadic,
                 required_parameter_count,
+            ) {
+                Ok((payload, id)) => {
+                    return Self {
+                        payload,
+                        id: Some(id),
+                    };
+                }
+                Err((parameters, return_type)) => {
+                    store.record_function_fallback();
+                    record_function_type_payload_alloc_count();
+                    return Self {
+                        payload: Arc::new(FunctionTypePayload {
+                            parameters: parameters.into(),
+                            parameter_list_id: None,
+                            return_type,
+                            is_variadic,
+                            required_parameter_count,
+                        }),
+                        id: None,
+                    };
+                }
+            }
+        }
+        record_function_type_payload_alloc_count();
+        Self {
+            payload: Arc::new(FunctionTypePayload {
+                parameters: parameters.into(),
+                parameter_list_id: None,
+                return_type,
+                is_variadic,
+                required_parameter_count,
             }),
+            id: None,
         }
     }
 
@@ -108,6 +172,22 @@ impl FunctionType {
         self.payload.required_parameter_count
     }
 
+    pub fn id(&self) -> Option<FunctionTypeId> {
+        self.id
+    }
+
+    pub fn parameter_list_id(&self) -> Option<TypeListId> {
+        self.payload.parameter_list_id
+    }
+
+    pub fn payload_address(&self) -> usize {
+        Arc::as_ptr(&self.payload) as usize
+    }
+
+    pub fn parameter_list_address(&self) -> usize {
+        self.payload.parameters.as_ptr() as usize
+    }
+
     pub fn name(&self) -> String {
         let mut parameters = self.parameters().iter().map(Type::name).collect::<Vec<_>>();
 
@@ -121,6 +201,14 @@ impl FunctionType {
     }
 }
 
+impl PartialEq for FunctionType {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.payload, &other.payload) || self.payload == other.payload
+    }
+}
+
+impl Eq for FunctionType {}
+
 impl Clone for FunctionType {
     fn clone(&self) -> Self {
         record_function_type_handle_copy_count();
@@ -128,6 +216,7 @@ impl Clone for FunctionType {
         record_function_type_clone_count();
         Self {
             payload: self.payload.clone(),
+            id: self.id,
         }
     }
 }
@@ -175,6 +264,9 @@ pub fn snapshot_function_type_counters() -> FunctionTypeCounters {
 pub(crate) fn record_function_type_payload_alloc_count() {
     FUNCTION_TYPE_PAYLOAD_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
     FUNCTION_TYPE_PAYLOAD_ALLOC_BY_REASON[type_copy_reason_index(current_type_copy_reason())]
+        .fetch_add(1, Ordering::Relaxed);
+    let expansion_reason = CURRENT_FUNCTION_TYPE_EXPANSION_REASON.get();
+    FUNCTION_TYPE_PAYLOAD_ALLOC_BY_EXPANSION_REASON[expansion_reason]
         .fetch_add(1, Ordering::Relaxed);
 }
 

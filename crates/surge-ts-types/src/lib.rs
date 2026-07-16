@@ -5,6 +5,7 @@ mod clone_reason;
 mod function;
 mod object;
 mod reference;
+mod store;
 mod ty;
 mod union;
 
@@ -13,6 +14,7 @@ pub use clone_reason::{TypeCopyReason, with_type_copy_reason};
 pub use function::*;
 pub use object::*;
 pub use reference::*;
+pub use store::*;
 pub use ty::*;
 pub use union::*;
 

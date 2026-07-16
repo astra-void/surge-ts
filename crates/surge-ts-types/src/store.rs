@@ -1,0 +1,832 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
+
+use crate::function::record_function_type_payload_alloc_count;
+use crate::union::record_union_type_payload_alloc_count;
+use crate::{FunctionType, FunctionTypePayload, PropertyMap, Type, UnionTypePayload};
+
+static NEXT_STORE_OWNER: AtomicU32 = AtomicU32::new(1);
+const STORE_SHARDS: usize = 64;
+
+macro_rules! store_id {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name(u64);
+
+        impl $name {
+            fn new(owner: u32, index: u32) -> Self {
+                Self((u64::from(owner) << 32) | u64::from(index))
+            }
+
+            pub fn belongs_to(self, store: &ProgramTypeStore) -> bool {
+                (self.0 >> 32) as u32 == store.owner
+            }
+        }
+    };
+}
+
+store_id!(TypeListId);
+store_id!(FunctionTypeId);
+store_id!(UnionTypeId);
+store_id!(PropertyMapId);
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramTypeStoreStats {
+    pub parameter_list_requests: u64,
+    pub parameter_list_hits: u64,
+    pub parameter_list_misses: u64,
+    pub parameter_list_input_elements: u64,
+    pub parameter_list_stored_elements: u64,
+    pub parameter_list_elements_avoided: u64,
+    pub function_requests: u64,
+    pub function_hits: u64,
+    pub function_misses: u64,
+    pub function_fallbacks: u64,
+    pub overload_merge_requests: u64,
+    pub overload_merge_hits: u64,
+    pub overload_merge_misses: u64,
+    pub union_requests: u64,
+    pub union_hits: u64,
+    pub union_misses: u64,
+    pub union_member_elements_avoided: u64,
+    pub property_map_requests: u64,
+    pub property_map_hits: u64,
+    pub property_map_misses: u64,
+    pub property_entries_avoided: u64,
+    pub interner_lock_contentions: u64,
+}
+
+#[derive(Debug)]
+struct ListEntry {
+    id: TypeListId,
+    value: Arc<[Type]>,
+}
+
+#[derive(Debug)]
+struct FunctionEntry {
+    id: FunctionTypeId,
+    value: Arc<FunctionTypePayload>,
+}
+
+#[derive(Debug)]
+struct UnionEntry {
+    id: UnionTypeId,
+    value: Arc<UnionTypePayload>,
+}
+
+#[derive(Debug)]
+struct PropertyMapEntry {
+    id: PropertyMapId,
+    value: Arc<PropertyMap>,
+}
+
+#[derive(Debug, Default)]
+struct StoreCounters {
+    parameter_list_requests: AtomicU64,
+    parameter_list_hits: AtomicU64,
+    parameter_list_misses: AtomicU64,
+    parameter_list_input_elements: AtomicU64,
+    parameter_list_stored_elements: AtomicU64,
+    parameter_list_elements_avoided: AtomicU64,
+    function_requests: AtomicU64,
+    function_hits: AtomicU64,
+    function_misses: AtomicU64,
+    function_fallbacks: AtomicU64,
+    overload_merge_requests: AtomicU64,
+    overload_merge_hits: AtomicU64,
+    overload_merge_misses: AtomicU64,
+    union_requests: AtomicU64,
+    union_hits: AtomicU64,
+    union_misses: AtomicU64,
+    union_member_elements_avoided: AtomicU64,
+    property_map_requests: AtomicU64,
+    property_map_hits: AtomicU64,
+    property_map_misses: AtomicU64,
+    property_entries_avoided: AtomicU64,
+    interner_lock_contentions: AtomicU64,
+}
+
+#[derive(Debug)]
+pub struct ProgramTypeStore {
+    owner: u32,
+    next_type_list: AtomicU32,
+    next_function: AtomicU32,
+    next_union: AtomicU32,
+    next_property_map: AtomicU32,
+    parameter_lists: [Mutex<HashMap<u64, Vec<ListEntry>>>; STORE_SHARDS],
+    functions: [Mutex<HashMap<u64, Vec<FunctionEntry>>>; STORE_SHARDS],
+    overload_merges: [Mutex<
+        HashMap<(FunctionTypeId, FunctionTypeId), (FunctionTypeId, Weak<FunctionTypePayload>)>,
+    >; STORE_SHARDS],
+    unions: [Mutex<HashMap<u64, Vec<UnionEntry>>>; STORE_SHARDS],
+    property_maps: [Mutex<HashMap<u64, Vec<PropertyMapEntry>>>; STORE_SHARDS],
+    counters: StoreCounters,
+}
+
+impl ProgramTypeStore {
+    pub fn new() -> Arc<Self> {
+        let owner = NEXT_STORE_OWNER.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(owner, 0, "program type-store owner space exhausted");
+        Arc::new(Self {
+            owner,
+            next_type_list: AtomicU32::new(1),
+            next_function: AtomicU32::new(1),
+            next_union: AtomicU32::new(1),
+            next_property_map: AtomicU32::new(1),
+            parameter_lists: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+            functions: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+            overload_merges: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+            unions: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+            property_maps: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+            counters: StoreCounters::default(),
+        })
+    }
+
+    pub(crate) fn intern_function(
+        &self,
+        parameters: Vec<Type>,
+        return_type: Type,
+        is_variadic: bool,
+        required_parameter_count: usize,
+    ) -> Result<(Arc<FunctionTypePayload>, FunctionTypeId), (Vec<Type>, Type)> {
+        self.counters
+            .function_requests
+            .fetch_add(1, Ordering::Relaxed);
+        let mut budget = FingerprintBudget::default();
+        let Some(parameter_hash) = fingerprint_types(&parameters, &mut budget) else {
+            return Err((parameters, return_type));
+        };
+        let Some(return_hash) = fingerprint_type(&return_type, &mut budget) else {
+            return Err((parameters, return_type));
+        };
+        let (parameters, parameter_list_id) =
+            self.intern_parameter_list(parameters, parameter_hash);
+        let key = hash_key(&(
+            parameter_hash,
+            return_hash,
+            is_variadic,
+            required_parameter_count,
+        ));
+        let mut functions = self.lock_shard(&self.functions[shard_index(key)]);
+        let bucket = functions.entry(key).or_default();
+        for entry in bucket.iter() {
+            let existing = &entry.value;
+            if canonical_type_lists_equal(existing.parameters.as_ref(), parameters.as_ref())
+                && canonical_types_equal(&existing.return_type, &return_type)
+                && existing.is_variadic == is_variadic
+                && existing.required_parameter_count == required_parameter_count
+            {
+                self.counters.function_hits.fetch_add(1, Ordering::Relaxed);
+                return Ok((existing.clone(), entry.id));
+            }
+        }
+
+        let id = FunctionTypeId::new(
+            self.owner,
+            self.next_function.fetch_add(1, Ordering::Relaxed),
+        );
+        let payload = Arc::new(FunctionTypePayload {
+            parameters,
+            parameter_list_id: Some(parameter_list_id),
+            return_type,
+            is_variadic,
+            required_parameter_count,
+        });
+        record_function_type_payload_alloc_count();
+        bucket.push(FunctionEntry {
+            id,
+            value: payload.clone(),
+        });
+        self.counters
+            .function_misses
+            .fetch_add(1, Ordering::Relaxed);
+        Ok((payload, id))
+    }
+
+    pub(crate) fn record_function_fallback(&self) {
+        self.counters
+            .function_fallbacks
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn lookup_overload_merge(
+        &self,
+        left: FunctionTypeId,
+        right: FunctionTypeId,
+    ) -> Option<FunctionType> {
+        self.counters
+            .overload_merge_requests
+            .fetch_add(1, Ordering::Relaxed);
+        let key = (left, right);
+        let hash = hash_key(&key);
+        let mut merges = self.lock_shard(&self.overload_merges[shard_index(hash)]);
+        let Some((id, payload)) = merges.get(&key) else {
+            self.counters
+                .overload_merge_misses
+                .fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
+        let id = *id;
+        let Some(payload) = payload.upgrade() else {
+            merges.remove(&key);
+            self.counters
+                .overload_merge_misses
+                .fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
+        self.counters
+            .overload_merge_hits
+            .fetch_add(1, Ordering::Relaxed);
+        Some(FunctionType::from_canonical_parts(payload, id))
+    }
+
+    pub fn record_overload_merge(
+        &self,
+        left: FunctionTypeId,
+        right: FunctionTypeId,
+        merged: FunctionType,
+    ) -> FunctionType {
+        let Some(id) = merged.id() else {
+            return merged;
+        };
+        let key = (left, right);
+        let hash = hash_key(&key);
+        let mut merges = self.lock_shard(&self.overload_merges[shard_index(hash)]);
+        if let Some((existing_id, existing)) = merges.get(&key)
+            && let Some(payload) = existing.upgrade()
+        {
+            return FunctionType::from_canonical_parts(payload, *existing_id);
+        }
+        merges.insert(key, (id, Arc::downgrade(&merged.payload)));
+        merged
+    }
+
+    fn intern_parameter_list(&self, parameters: Vec<Type>, key: u64) -> (Arc<[Type]>, TypeListId) {
+        self.counters
+            .parameter_list_requests
+            .fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .parameter_list_input_elements
+            .fetch_add(parameters.len() as u64, Ordering::Relaxed);
+        let mut lists = self.lock_shard(&self.parameter_lists[shard_index(key)]);
+        let bucket = lists.entry(key).or_default();
+        for entry in bucket.iter() {
+            let existing = &entry.value;
+            if canonical_type_lists_equal(existing.as_ref(), parameters.as_slice()) {
+                self.counters
+                    .parameter_list_hits
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .parameter_list_elements_avoided
+                    .fetch_add(parameters.len() as u64, Ordering::Relaxed);
+                return (existing.clone(), entry.id);
+            }
+        }
+
+        let id = TypeListId::new(
+            self.owner,
+            self.next_type_list.fetch_add(1, Ordering::Relaxed),
+        );
+        let value: Arc<[Type]> = parameters.into();
+        bucket.push(ListEntry {
+            id,
+            value: value.clone(),
+        });
+        self.counters
+            .parameter_list_misses
+            .fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .parameter_list_stored_elements
+            .fetch_add(value.len() as u64, Ordering::Relaxed);
+        (value, id)
+    }
+
+    pub(crate) fn intern_union(
+        &self,
+        types: Vec<Type>,
+    ) -> Result<(Arc<UnionTypePayload>, UnionTypeId), Vec<Type>> {
+        self.counters.union_requests.fetch_add(1, Ordering::Relaxed);
+        let mut budget = FingerprintBudget::default();
+        let Some(key) = fingerprint_types(&types, &mut budget) else {
+            return Err(types);
+        };
+        let mut unions = self.lock_shard(&self.unions[shard_index(key)]);
+        let bucket = unions.entry(key).or_default();
+        for entry in bucket.iter() {
+            let existing = &entry.value;
+            if canonical_type_lists_equal(existing.types.as_ref(), types.as_slice()) {
+                self.counters.union_hits.fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .union_member_elements_avoided
+                    .fetch_add(types.len() as u64, Ordering::Relaxed);
+                return Ok((existing.clone(), entry.id));
+            }
+        }
+
+        let id = UnionTypeId::new(self.owner, self.next_union.fetch_add(1, Ordering::Relaxed));
+        let payload = Arc::new(UnionTypePayload {
+            types: types.into(),
+            list_id: None,
+        });
+        record_union_type_payload_alloc_count();
+        bucket.push(UnionEntry {
+            id,
+            value: payload.clone(),
+        });
+        self.counters.union_misses.fetch_add(1, Ordering::Relaxed);
+        Ok((payload, id))
+    }
+
+    pub(crate) fn intern_property_map(
+        &self,
+        properties: PropertyMap,
+    ) -> Result<(Arc<PropertyMap>, PropertyMapId), PropertyMap> {
+        self.counters
+            .property_map_requests
+            .fetch_add(1, Ordering::Relaxed);
+        let mut budget = FingerprintBudget::default();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        properties.len().hash(&mut hasher);
+        for (name, property) in &properties {
+            name.hash(&mut hasher);
+            property.optional.hash(&mut hasher);
+            let Some(fingerprint) = fingerprint_property_type(&property.ty, &mut budget) else {
+                return Err(properties);
+            };
+            fingerprint.hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        let mut maps = self.lock_shard(&self.property_maps[shard_index(key)]);
+        let bucket = maps.entry(key).or_default();
+        for entry in bucket.iter() {
+            let existing = &entry.value;
+            if ordered_property_maps_equal(&existing, &properties) {
+                self.counters
+                    .property_map_hits
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .property_entries_avoided
+                    .fetch_add(properties.len() as u64, Ordering::Relaxed);
+                return Ok((existing.clone(), entry.id));
+            }
+        }
+
+        let id = PropertyMapId::new(
+            self.owner,
+            self.next_property_map.fetch_add(1, Ordering::Relaxed),
+        );
+        let value = Arc::new(properties);
+        bucket.push(PropertyMapEntry {
+            id,
+            value: value.clone(),
+        });
+        self.counters
+            .property_map_misses
+            .fetch_add(1, Ordering::Relaxed);
+        Ok((value, id))
+    }
+
+    pub fn stats(&self) -> ProgramTypeStoreStats {
+        let c = &self.counters;
+        ProgramTypeStoreStats {
+            parameter_list_requests: c.parameter_list_requests.load(Ordering::Relaxed),
+            parameter_list_hits: c.parameter_list_hits.load(Ordering::Relaxed),
+            parameter_list_misses: c.parameter_list_misses.load(Ordering::Relaxed),
+            parameter_list_input_elements: c.parameter_list_input_elements.load(Ordering::Relaxed),
+            parameter_list_stored_elements: c
+                .parameter_list_stored_elements
+                .load(Ordering::Relaxed),
+            parameter_list_elements_avoided: c
+                .parameter_list_elements_avoided
+                .load(Ordering::Relaxed),
+            function_requests: c.function_requests.load(Ordering::Relaxed),
+            function_hits: c.function_hits.load(Ordering::Relaxed),
+            function_misses: c.function_misses.load(Ordering::Relaxed),
+            function_fallbacks: c.function_fallbacks.load(Ordering::Relaxed),
+            overload_merge_requests: c.overload_merge_requests.load(Ordering::Relaxed),
+            overload_merge_hits: c.overload_merge_hits.load(Ordering::Relaxed),
+            overload_merge_misses: c.overload_merge_misses.load(Ordering::Relaxed),
+            union_requests: c.union_requests.load(Ordering::Relaxed),
+            union_hits: c.union_hits.load(Ordering::Relaxed),
+            union_misses: c.union_misses.load(Ordering::Relaxed),
+            union_member_elements_avoided: c.union_member_elements_avoided.load(Ordering::Relaxed),
+            property_map_requests: c.property_map_requests.load(Ordering::Relaxed),
+            property_map_hits: c.property_map_hits.load(Ordering::Relaxed),
+            property_map_misses: c.property_map_misses.load(Ordering::Relaxed),
+            property_entries_avoided: c.property_entries_avoided.load(Ordering::Relaxed),
+            interner_lock_contentions: c.interner_lock_contentions.load(Ordering::Relaxed),
+        }
+    }
+
+    fn lock_shard<'a, T>(&self, shard: &'a Mutex<T>) -> MutexGuard<'a, T> {
+        match shard.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => {
+                self.counters
+                    .interner_lock_contentions
+                    .fetch_add(1, Ordering::Relaxed);
+                shard.lock().unwrap_or_else(|error| error.into_inner())
+            }
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        }
+    }
+
+    pub fn clear(&self) {
+        for shard in &self.overload_merges {
+            self.lock_shard(shard).clear();
+        }
+        for shard in &self.functions {
+            self.lock_shard(shard).clear();
+        }
+        for shard in &self.parameter_lists {
+            self.lock_shard(shard).clear();
+        }
+        for shard in &self.unions {
+            self.lock_shard(shard).clear();
+        }
+        for shard in &self.property_maps {
+            self.lock_shard(shard).clear();
+        }
+    }
+}
+
+fn ordered_property_maps_equal(left: &PropertyMap, right: &PropertyMap) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right.iter()).all(
+            |((left_name, left_property), (right_name, right_property))| {
+                left_name == right_name && left_property == right_property
+            },
+        )
+}
+
+#[derive(Debug)]
+struct FingerprintBudget {
+    remaining: usize,
+    depth: usize,
+}
+
+impl Default for FingerprintBudget {
+    fn default() -> Self {
+        Self {
+            remaining: 128,
+            depth: 0,
+        }
+    }
+}
+
+fn fingerprint_types(types: &[Type], budget: &mut FingerprintBudget) -> Option<u64> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    types.len().hash(&mut hasher);
+    for ty in types {
+        fingerprint_type(ty, budget)?.hash(&mut hasher);
+    }
+    Some(hasher.finish())
+}
+
+fn fingerprint_type(ty: &Type, budget: &mut FingerprintBudget) -> Option<u64> {
+    if budget.remaining == 0 || budget.depth >= 16 {
+        return None;
+    }
+    budget.remaining -= 1;
+    budget.depth += 1;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(ty).hash(&mut hasher);
+    match ty {
+        Type::Unknown => return None,
+        Type::StringLiteral(value) => value.hash(&mut hasher),
+        Type::NumberLiteral(value) => value.value.hash(&mut hasher),
+        Type::BooleanLiteral(value) => value.hash(&mut hasher),
+        Type::Function(function) => function.payload_address().hash(&mut hasher),
+        Type::Object(object) => {
+            Arc::as_ptr(&object.properties).hash(&mut hasher);
+            match object.string_index_type.as_deref() {
+                Some(index) => fingerprint_type(index, budget)?.hash(&mut hasher),
+                None => 0u8.hash(&mut hasher),
+            }
+            object
+                .call_signature()
+                .map(FunctionType::payload_address)
+                .hash(&mut hasher);
+            object
+                .construct_signature()
+                .map(FunctionType::payload_address)
+                .hash(&mut hasher);
+        }
+        Type::Array(element) => fingerprint_type(element, budget)?.hash(&mut hasher),
+        Type::Tuple(elements) => fingerprint_types(elements, budget)?.hash(&mut hasher),
+        Type::Union(union) => fingerprint_types(union.types(), budget)?.hash(&mut hasher),
+        Type::Reference(reference) => {
+            if reference.retains_resolution_context()
+                || !reference.supports_program_canonicalization()
+            {
+                return None;
+            }
+            reference.id.hash(&mut hasher);
+            reference
+                .program_canonicalization_discriminator()
+                .hash(&mut hasher);
+            fingerprint_types(&reference.arguments, budget)?.hash(&mut hasher);
+        }
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::Undefined
+        | Type::Void
+        | Type::Any
+        | Type::GenuineUnknown
+        | Type::Never => {}
+    }
+    budget.depth -= 1;
+    Some(hasher.finish())
+}
+
+fn canonical_type_lists_equal(left: &[Type], right: &[Type]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| canonical_types_equal(left, right))
+}
+
+fn canonical_types_equal(left: &Type, right: &Type) -> bool {
+    match (left, right) {
+        (Type::Reference(left), Type::Reference(right)) => {
+            left.id == right.id
+                && left.program_canonicalization_discriminator()
+                    == right.program_canonicalization_discriminator()
+                && canonical_type_lists_equal(&left.arguments, &right.arguments)
+        }
+        (Type::Array(left), Type::Array(right)) => canonical_types_equal(left, right),
+        (Type::Tuple(left), Type::Tuple(right)) => canonical_type_lists_equal(left, right),
+        (Type::Union(left), Type::Union(right)) => {
+            canonical_type_lists_equal(left.types(), right.types())
+        }
+        (Type::Function(left), Type::Function(right)) => {
+            left.payload_address() == right.payload_address()
+        }
+        (Type::Object(left), Type::Object(right)) => {
+            Arc::ptr_eq(&left.properties, &right.properties)
+                && match (
+                    left.string_index_type.as_deref(),
+                    right.string_index_type.as_deref(),
+                ) {
+                    (Some(left), Some(right)) => canonical_types_equal(left, right),
+                    (None, None) => true,
+                    _ => false,
+                }
+                && left
+                    .call_signature()
+                    .map(|function| function.payload_address())
+                    == right
+                        .call_signature()
+                        .map(|function| function.payload_address())
+                && left
+                    .construct_signature()
+                    .map(|function| function.payload_address())
+                    == right
+                        .construct_signature()
+                        .map(|function| function.payload_address())
+        }
+        _ => left == right,
+    }
+}
+
+fn fingerprint_property_type(ty: &Type, budget: &mut FingerprintBudget) -> Option<u64> {
+    if matches!(
+        ty,
+        Type::Unknown | Type::Function(_) | Type::Object(_) | Type::Reference(_)
+    ) {
+        return None;
+    }
+    if budget.remaining == 0 || budget.depth >= 16 {
+        return None;
+    }
+    budget.remaining -= 1;
+    budget.depth += 1;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(ty).hash(&mut hasher);
+    match ty {
+        Type::StringLiteral(value) => value.hash(&mut hasher),
+        Type::NumberLiteral(value) => value.value.hash(&mut hasher),
+        Type::BooleanLiteral(value) => value.hash(&mut hasher),
+        Type::Array(element) => fingerprint_property_type(element, budget)?.hash(&mut hasher),
+        Type::Tuple(elements) => {
+            for element in elements {
+                fingerprint_property_type(element, budget)?.hash(&mut hasher);
+            }
+        }
+        Type::Union(union) => {
+            for member in union.types() {
+                fingerprint_property_type(member, budget)?.hash(&mut hasher);
+            }
+        }
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::Undefined
+        | Type::Void
+        | Type::Any
+        | Type::GenuineUnknown
+        | Type::Never => {}
+        Type::Unknown | Type::Function(_) | Type::Object(_) | Type::Reference(_) => unreachable!(),
+    }
+    budget.depth -= 1;
+    Some(hasher.finish())
+}
+
+fn hash_key(value: &impl Hash) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn shard_index(key: u64) -> usize {
+    key as usize & (STORE_SHARDS - 1)
+}
+
+thread_local! {
+    static ACTIVE_TYPE_STORE: RefCell<Option<Arc<ProgramTypeStore>>> = const { RefCell::new(None) };
+}
+
+pub fn with_program_type_store<R>(store: Arc<ProgramTypeStore>, f: impl FnOnce() -> R) -> R {
+    let previous = ACTIVE_TYPE_STORE.with(|active| active.replace(Some(store)));
+    struct Restore(Option<Arc<ProgramTypeStore>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ACTIVE_TYPE_STORE.with(|active| {
+                active.replace(self.0.take());
+            });
+        }
+    }
+    let _restore = Restore(previous);
+    f()
+}
+
+pub fn current_program_type_store() -> Option<Arc<ProgramTypeStore>> {
+    ACTIVE_TYPE_STORE.with(|active| active.borrow().clone())
+}
+
+pub(crate) fn canonical_store_enabled() -> bool {
+    std::env::var_os("SURGE_DISABLE_CANONICAL_TYPE_STORE").is_none()
+}
+
+pub(crate) fn canonical_function_store_enabled() -> bool {
+    canonical_store_enabled()
+        && std::env::var_os("SURGE_DISABLE_CANONICAL_FUNCTION_STORE").is_none()
+}
+
+pub(crate) fn canonical_union_store_enabled() -> bool {
+    canonical_store_enabled() && std::env::var_os("SURGE_DISABLE_CANONICAL_UNION_STORE").is_none()
+}
+
+pub(crate) fn canonical_property_map_store_enabled() -> bool {
+    canonical_store_enabled()
+        && std::env::var_os("SURGE_DISABLE_CANONICAL_PROPERTY_MAP_STORE").is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        FunctionType, ObjectProperty, ObjectType, ResolveReference, TypeReference, UnionType,
+    };
+
+    struct EnvironmentResolver(u64);
+
+    impl ResolveReference for EnvironmentResolver {
+        fn resolve(&self) -> Type {
+            Type::String
+        }
+
+        fn program_canonicalization_discriminator(&self) -> u64 {
+            self.0
+        }
+    }
+
+    fn environment_reference(discriminator: u64) -> Type {
+        Type::Reference(TypeReference::new(
+            "types.ts\0Value",
+            "Value",
+            Vec::new(),
+            Arc::new(EnvironmentResolver(discriminator)),
+        ))
+    }
+
+    #[test]
+    fn function_payloads_and_parameter_lists_are_program_local() {
+        let first_store = ProgramTypeStore::new();
+        let (first, second) = with_program_type_store(first_store.clone(), || {
+            (
+                FunctionType::new(vec![Type::String], Type::Number, false, 1),
+                FunctionType::new(vec![Type::String], Type::Number, false, 1),
+            )
+        });
+        assert_eq!(first.id(), second.id());
+        assert_eq!(first.parameter_list_id(), second.parameter_list_id());
+        assert!(Arc::ptr_eq(&first.payload, &second.payload));
+
+        let other = with_program_type_store(ProgramTypeStore::new(), || {
+            FunctionType::new(vec![Type::String], Type::Number, false, 1)
+        });
+        assert_ne!(first.id(), other.id());
+        assert!(!Arc::ptr_eq(&first.payload, &other.payload));
+    }
+
+    #[test]
+    fn unknown_and_context_dependent_values_use_the_fallback_path() {
+        let store = ProgramTypeStore::new();
+        let (first, second) = with_program_type_store(store.clone(), || {
+            (
+                FunctionType::new(vec![Type::Unknown], Type::Number, false, 1),
+                FunctionType::new(vec![Type::Unknown], Type::Number, false, 1),
+            )
+        });
+        assert!(first.id().is_none());
+        assert!(second.id().is_none());
+        assert_eq!(store.stats().function_fallbacks, 2);
+    }
+
+    #[test]
+    fn reference_environment_is_part_of_function_canonicalization() {
+        with_program_type_store(ProgramTypeStore::new(), || {
+            let first = FunctionType::new(vec![environment_reference(1)], Type::Number, false, 1);
+            let same_environment =
+                FunctionType::new(vec![environment_reference(1)], Type::Number, false, 1);
+            let different_environment =
+                FunctionType::new(vec![environment_reference(2)], Type::Number, false, 1);
+
+            assert_eq!(first.id(), same_environment.id());
+            assert_ne!(first.id(), different_environment.id());
+        });
+    }
+
+    #[test]
+    fn overload_merge_pairs_reuse_canonical_payloads() {
+        let store = ProgramTypeStore::new();
+        with_program_type_store(store.clone(), || {
+            let left = FunctionType::new(vec![Type::String], Type::String, false, 1);
+            let right = FunctionType::new(vec![Type::Number], Type::Number, false, 1);
+            let left_id = left.id().unwrap();
+            let right_id = right.id().unwrap();
+            assert!(store.lookup_overload_merge(left_id, right_id).is_none());
+
+            let merged = FunctionType::new(vec![Type::Any], Type::String, false, 1);
+            let merged_id = merged.id();
+            let _merged = store.record_overload_merge(left_id, right_id, merged);
+            assert_eq!(
+                store
+                    .lookup_overload_merge(left_id, right_id)
+                    .and_then(|function| function.id()),
+                merged_id
+            );
+        });
+
+        let stats = store.stats();
+        assert_eq!(stats.overload_merge_requests, 2);
+        assert_eq!(stats.overload_merge_hits, 1);
+        assert_eq!(stats.overload_merge_misses, 1);
+    }
+
+    #[test]
+    fn canonical_store_releases_payloads_on_cleanup() {
+        let store = ProgramTypeStore::new();
+        let weak = with_program_type_store(store.clone(), || {
+            let function = FunctionType::new(vec![Type::String], Type::Number, false, 1);
+            Arc::downgrade(&function.payload)
+        });
+
+        assert!(weak.upgrade().is_some());
+        store.clear();
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn unions_and_property_maps_preserve_order_while_sharing_payloads() {
+        let store = ProgramTypeStore::new();
+        with_program_type_store(store.clone(), || {
+            let first = UnionType::new(vec![Type::String, Type::Number]);
+            let second = UnionType::new(vec![Type::String, Type::Number]);
+            assert_eq!(first.id(), second.id());
+
+            let mut first_properties = PropertyMap::new();
+            first_properties.insert("a".into(), ObjectProperty::required(Type::String));
+            first_properties.insert("b".into(), ObjectProperty::required(Type::Number));
+            let mut second_properties = PropertyMap::new();
+            second_properties.insert("a".into(), ObjectProperty::required(Type::String));
+            second_properties.insert("b".into(), ObjectProperty::required(Type::Number));
+            let first_object = ObjectType::new(first_properties, None);
+            let second_object = ObjectType::new(second_properties, None);
+            assert!(Arc::ptr_eq(
+                &first_object.properties,
+                &second_object.properties
+            ));
+        });
+    }
+}

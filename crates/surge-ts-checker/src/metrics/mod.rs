@@ -8,11 +8,13 @@ mod counters;
 mod dts_expansion;
 pub(crate) mod rss;
 mod timings;
+mod type_graph_census;
 
 pub(crate) use counters::*;
 pub(crate) use dts_expansion::*;
 pub(crate) use rss::{current_footprint_bytes, peak_footprint_bytes};
 pub(crate) use timings::*;
+pub(crate) use type_graph_census::*;
 
 /// RSS probe for loader-side phases (config load, source read, import-graph
 /// expansion) that run before `check_program` and therefore have no timings

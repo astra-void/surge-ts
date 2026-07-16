@@ -9,7 +9,9 @@
 //! messages the checker produces. Oracle comparison consumes the JSON output and
 //! is unaffected by anything here.
 
-use crate::Diagnostic;
+use std::collections::{HashMap, HashSet};
+
+use crate::{Diagnostic, LineIndex};
 
 const CYAN: &str = "\x1b[96m";
 const YELLOW: &str = "\x1b[93m";
@@ -53,26 +55,46 @@ pub fn render_diagnostics_tsc(items: &[TscRenderItem<'_>], options: TscRenderOpt
         return String::new();
     }
 
+    let locations = locate_all(items);
     if options.pretty {
-        render_pretty(items, options.color)
+        render_pretty(items, &locations, options.color)
     } else {
-        render_plain(items)
+        render_plain(items, &locations)
     }
 }
 
-fn render_plain(items: &[TscRenderItem<'_>]) -> String {
+/// Locate every item up front, sharing one [`LineIndex`] per distinct source
+/// text (keyed by slice identity), so rendering never rescans a file from byte
+/// 0 per diagnostic.
+fn locate_all<'a>(items: &[TscRenderItem<'a>]) -> Vec<Option<Location<'a>>> {
+    let mut indices: HashMap<(usize, usize), LineIndex> = HashMap::new();
+    items
+        .iter()
+        .map(|item| {
+            let source = item.source_text;
+            if item.diagnostic.span.is_none() || source.is_empty() {
+                return None;
+            }
+            let index = indices
+                .entry((source.as_ptr() as usize, source.len()))
+                .or_insert_with(|| LineIndex::new(source));
+            locate(item, index)
+        })
+        .collect()
+}
+
+fn render_plain(items: &[TscRenderItem<'_>], locations: &[Option<Location<'_>>]) -> String {
     let mut out = String::new();
-    for item in items {
-        out.push_str(&plain_header(item));
+    for (item, location) in items.iter().zip(locations) {
+        out.push_str(&plain_header(item, location.as_ref()));
         out.push('\n');
     }
     out
 }
 
-fn plain_header(item: &TscRenderItem<'_>) -> String {
+fn plain_header(item: &TscRenderItem<'_>, location: Option<&Location<'_>>) -> String {
     let code = item.diagnostic.code.to_string();
-    let location = locate(item);
-    let prefix = match (item.label.is_empty(), &location) {
+    let prefix = match (item.label.is_empty(), location) {
         (false, Some(loc)) => format!("{}({},{}): ", item.label, loc.line, loc.column),
         (false, None) => format!("{}: ", item.label),
         (true, _) => String::new(),
@@ -80,14 +102,17 @@ fn plain_header(item: &TscRenderItem<'_>) -> String {
     format!("{prefix}error {code}: {}", item.diagnostic.message)
 }
 
-fn render_pretty(items: &[TscRenderItem<'_>], color: bool) -> String {
+fn render_pretty(
+    items: &[TscRenderItem<'_>],
+    locations: &[Option<Location<'_>>],
+    color: bool,
+) -> String {
     let mut out = String::new();
-    for item in items {
-        let location = locate(item);
+    for (item, location) in items.iter().zip(locations) {
         out.push_str(&pretty_header(item, location.as_ref(), color));
         out.push('\n');
 
-        if let Some(loc) = &location {
+        if let Some(loc) = location {
             out.push('\n');
             out.push_str(&pretty_source_line(loc, color));
             out.push('\n');
@@ -98,7 +123,7 @@ fn render_pretty(items: &[TscRenderItem<'_>], color: bool) -> String {
     }
 
     out.push('\n');
-    out.push_str(&footer(items, color));
+    out.push_str(&footer(items, locations, color));
     out
 }
 
@@ -144,21 +169,23 @@ fn pretty_squiggle_line(loc: &Location<'_>, color: bool) -> String {
     }
 }
 
-fn footer(items: &[TscRenderItem<'_>], color: bool) -> String {
+fn footer(items: &[TscRenderItem<'_>], locations: &[Option<Location<'_>>], color: bool) -> String {
     let count = items.len();
 
     let located: Vec<(&str, usize)> = items
         .iter()
-        .filter_map(|item| locate(item).map(|loc| (item.label, loc.line)))
+        .zip(locations)
+        .filter_map(|(item, location)| location.as_ref().map(|loc| (item.label, loc.line)))
         .collect();
 
     let first_ref = located
         .first()
         .map(|(label, line)| reference(label, *line, color));
 
+    let mut seen_labels = HashSet::new();
     let mut distinct_files: Vec<(&str, usize)> = Vec::new();
     for (label, line) in &located {
-        if !distinct_files.iter().any(|(seen, _)| seen == label) {
+        if seen_labels.insert(*label) {
             distinct_files.push((*label, *line));
         }
     }
@@ -183,23 +210,18 @@ fn footer(items: &[TscRenderItem<'_>], color: bool) -> String {
         "Found {count} errors in {} files.\n\n",
         distinct_files.len()
     );
-    out.push_str(&error_table(items, &distinct_files, color));
+    out.push_str(&error_table(&located, &distinct_files, color));
     out
 }
 
-fn error_table(
-    items: &[TscRenderItem<'_>],
-    distinct_files: &[(&str, usize)],
-    color: bool,
-) -> String {
+fn error_table(located: &[(&str, usize)], distinct_files: &[(&str, usize)], color: bool) -> String {
+    let mut counts_by_label: HashMap<&str, usize> = HashMap::new();
+    for (label, _) in located {
+        *counts_by_label.entry(label).or_default() += 1;
+    }
     let counts: Vec<usize> = distinct_files
         .iter()
-        .map(|(label, _)| {
-            items
-                .iter()
-                .filter(|item| item.label == *label && locate(item).is_some())
-                .count()
-        })
+        .map(|(label, _)| counts_by_label.get(label).copied().unwrap_or(0))
         .collect();
 
     let max_count = counts.iter().copied().max().unwrap_or(0);
@@ -235,15 +257,15 @@ fn digit_count(value: usize) -> usize {
         .unwrap_or(1)
 }
 
-fn locate<'a>(item: &TscRenderItem<'a>) -> Option<Location<'a>> {
+fn locate<'a>(item: &TscRenderItem<'a>, index: &LineIndex) -> Option<Location<'a>> {
     let span = item.diagnostic.span?;
     let source = item.source_text;
     if source.is_empty() {
         return None;
     }
 
-    let (line, column) = line_col_from_offset(source, span.start);
-    let (line_start, line_end) = line_bounds(source, span.start);
+    let (line, column) = index.line_col(source, span.start);
+    let (line_start, line_end) = index.line_bounds(source, span.start);
     let source_line = &source[line_start..line_end];
 
     let squiggle_start = span.start.min(source.len());
@@ -262,50 +284,6 @@ fn locate<'a>(item: &TscRenderItem<'a>) -> Option<Location<'a>> {
 /// single space; both keep the squiggle (which uses 1 column per tab) aligned.
 fn display_line(source_line: &str) -> String {
     source_line.trim_end().replace('\t', " ")
-}
-
-fn line_col_from_offset(source_text: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1usize;
-    let mut column = 1usize;
-    let target = offset.min(source_text.len());
-
-    for (byte_index, ch) in source_text.char_indices() {
-        if byte_index >= target {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    (line, column)
-}
-
-fn line_bounds(source_text: &str, offset: usize) -> (usize, usize) {
-    let target = offset.min(source_text.len());
-    let mut line_start = 0usize;
-    let mut line_end = source_text.len();
-
-    for (byte_index, ch) in source_text.char_indices() {
-        if byte_index >= target {
-            break;
-        }
-        if ch == '\n' {
-            line_start = byte_index + ch.len_utf8();
-        }
-    }
-
-    for (byte_index, ch) in source_text[line_start..].char_indices() {
-        if ch == '\n' {
-            line_end = line_start + byte_index;
-            break;
-        }
-    }
-
-    (line_start, line_end)
 }
 
 #[cfg(test)]

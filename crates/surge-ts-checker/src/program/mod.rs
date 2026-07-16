@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{ParsedStatement, ParserWorker};
-use surge_ts_types::FunctionType;
+use surge_ts_types::{FunctionType, ProgramTypeStore, with_program_type_store};
 
 // Instrumentation lives in `metrics`; re-export it so existing callers that
 // reference `crate::program::record_*` / `ProgramTimings` keep resolving and so
@@ -466,6 +466,18 @@ pub fn check_program_with_stats_and_jobs(
     options: CheckerOptions,
     jobs: usize,
 ) -> ProgramCheckResult {
+    let store = ProgramTypeStore::new();
+    with_program_type_store(store.clone(), || {
+        check_program_with_stats_and_jobs_inner(files, options, jobs, store)
+    })
+}
+
+fn check_program_with_stats_and_jobs_inner(
+    files: Vec<SourceFileInput>,
+    options: CheckerOptions,
+    jobs: usize,
+    store: Arc<ProgramTypeStore>,
+) -> ProgramCheckResult {
     if files.is_empty() {
         return ProgramCheckResult {
             diagnostics: Vec::new(),
@@ -475,6 +487,10 @@ pub fn check_program_with_stats_and_jobs(
 
     let mut files = files;
     inject_generated_default_lib_inputs(&mut files, options.no_lib);
+    let source_text_bytes = files
+        .iter()
+        .map(|file| file.source_text.len() as u64)
+        .sum::<u64>();
 
     let timings_enabled = std::env::var_os("SURGE_TIMINGS").is_some();
     // RSS stage sampling piggybacks on the timings carrier so `SURGE_RSS=1`
@@ -493,6 +509,16 @@ pub fn check_program_with_stats_and_jobs(
 
     let parse_start = Instant::now();
     let mut parsed_files = parse_program_files(files, jobs, timings.as_ref());
+    let ast_nodes = parsed_files
+        .iter()
+        .map(|file| file.statements.len() as u64)
+        .sum::<u64>();
+    let mut census_external = CensusExternalRetention {
+        ast_nodes,
+        ast_estimated_bytes: ast_nodes * std::mem::size_of::<ParsedStatement>() as u64,
+        source_text_bytes,
+        ..CensusExternalRetention::default()
+    };
     record_program_timing(timings.as_ref(), |timings| {
         timings.parsing += parse_start.elapsed()
     });
@@ -518,6 +544,7 @@ pub fn check_program_with_stats_and_jobs(
     let mut ctx = CheckerContext::new(first_file_name, options, file_kinds);
     ctx.timings = timings.clone();
     ctx.set_module_file_index_by_identity(module_file_index_by_identity);
+    emit_type_graph_census("after_loading_parsing", Some(&ctx), &store, census_external);
 
     let mut global_symbols = SymbolTable::new();
     let mut function_signatures = HashMap::new();
@@ -588,6 +615,7 @@ pub fn check_program_with_stats_and_jobs(
         &parsed_files,
         &local_type_declarations_by_module,
         &preliminary_module_import_bindings,
+        false,
         &mut ctx,
         timings.as_ref(),
     );
@@ -598,6 +626,18 @@ pub fn check_program_with_stats_and_jobs(
         timings.as_ref(),
         "preliminary_module_analysis",
         program_start.elapsed(),
+    );
+    census_external.module_analysis_entries = preliminary_module_analyses
+        .iter()
+        .filter(|analysis| analysis.is_some())
+        .count() as u64;
+    census_external.module_analysis_estimated_bytes =
+        census_external.module_analysis_entries * std::mem::size_of::<ModuleAnalysis>() as u64;
+    emit_type_graph_census(
+        "after_preliminary_analysis",
+        Some(&ctx),
+        &store,
+        census_external,
     );
 
     let module_binding_start = Instant::now();
@@ -681,7 +721,7 @@ pub fn check_program_with_stats_and_jobs(
         preliminary_module_analyses
     };
     if early_release_enabled {
-        module_export_tables = Vec::new();
+        drop(std::mem::take(&mut module_export_tables));
     }
     // The per-file scope fallback (`module_scope_by_file`, consulted when a
     // declaration's pre-attached `resolution_scope` is incomplete) must be
@@ -704,6 +744,7 @@ pub fn check_program_with_stats_and_jobs(
         &parsed_files,
         &local_type_declarations_by_module,
         &module_import_bindings,
+        true,
         &mut ctx,
         timings.as_ref(),
     );
@@ -717,6 +758,22 @@ pub fn check_program_with_stats_and_jobs(
         timings.as_ref(),
         "final_module_analysis",
         program_start.elapsed(),
+    );
+    census_external.module_analysis_entries = module_analyses
+        .iter()
+        .filter(|analysis| analysis.is_some())
+        .count() as u64;
+    census_external.module_analysis_estimated_bytes =
+        census_external.module_analysis_entries * std::mem::size_of::<ModuleAnalysis>() as u64;
+    census_external.symbol_entries = global_symbols.iter().count() as u64;
+    census_external.symbol_estimated_bytes = census_external.symbol_entries
+        * (std::mem::size_of::<Arc<str>>()
+            + std::mem::size_of::<crate::symbols::SymbolInfoHandle>()) as u64;
+    emit_type_graph_census(
+        "after_final_module_analysis",
+        Some(&ctx),
+        &store,
+        census_external,
     );
     report_eq_probe(
         &parsed_files,
@@ -937,7 +994,13 @@ pub fn check_program_with_stats_and_jobs(
             timings.cache_stats = Some(cache_stats)
         });
     }
+    let declaration_environment_stats = ctx.declaration_environment_store.stats();
+    let substitution_store_stats = ctx.substitution_store.stats();
+    emit_type_graph_census("before_cache_cleanup", Some(&ctx), &store, census_external);
     ctx.clear_program_type_caches();
+    store.clear();
+    emit_type_graph_census("after_cache_cleanup", Some(&ctx), &store, census_external);
+    emit_type_graph_census("before_process_exit", Some(&ctx), &store, census_external);
     let (diagnostics, stats) = ctx.finish_with_stats();
     record_rss_stage(timings.as_ref(), "finish", program_start.elapsed());
     render_dts_expansion_summary();
@@ -945,6 +1008,11 @@ pub fn check_program_with_stats_and_jobs(
     if let Some(timings) = timings.as_ref() {
         render_program_rss_stages(timings);
         if timings_enabled {
+            render_program_type_store_stats(
+                &store,
+                declaration_environment_stats,
+                substitution_store_stats,
+            );
             render_program_timings(timings);
         }
     }
@@ -1226,6 +1294,14 @@ fn check_program_files_serial(
             timings.as_ref(),
         );
         results.push(result);
+        if let Some(label) = census_check_milestone(file_index + 1, parsed_files.len()) {
+            emit_type_graph_census(
+                label,
+                Some(&local_ctx),
+                &local_ctx.program_type_store,
+                CensusExternalRetention::default(),
+            );
+        }
     }
 
     results
@@ -1308,9 +1384,11 @@ fn check_program_files_parallel(
     }
 
     let next_index = AtomicUsize::new(0);
+    let completed = AtomicUsize::new(0);
 
     let results = thread::scope(|scope| {
         let next_index = &next_index;
+        let completed = &completed;
         let mut handles = Vec::with_capacity(worker_count);
 
         for _ in 0..worker_count {
@@ -1321,21 +1399,35 @@ fn check_program_files_parallel(
             local_ctx.stats = CompatibilityStats::default();
 
             handles.push(scope.spawn(move || {
-                let mut worker_results = Vec::new();
-                loop {
-                    let file_index = next_index.fetch_add(1, Ordering::Relaxed);
-                    if file_index >= parsed_files.len() {
-                        break;
+                let type_store = local_ctx.program_type_store.clone();
+                with_program_type_store(type_store, || {
+                    let mut worker_results = Vec::new();
+                    loop {
+                        let file_index = next_index.fetch_add(1, Ordering::Relaxed);
+                        if file_index >= parsed_files.len() {
+                            break;
+                        }
+                        worker_results.push(check_program_file(
+                            file_index,
+                            &parsed_files[file_index],
+                            shared_state,
+                            &mut local_ctx,
+                            timings.as_ref(),
+                        ));
+                        let completed_count = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                        if let Some(label) =
+                            census_check_milestone(completed_count, parsed_files.len())
+                        {
+                            emit_type_graph_census(
+                                label,
+                                Some(&local_ctx),
+                                &local_ctx.program_type_store,
+                                CensusExternalRetention::default(),
+                            );
+                        }
                     }
-                    worker_results.push(check_program_file(
-                        file_index,
-                        &parsed_files[file_index],
-                        shared_state,
-                        &mut local_ctx,
-                        timings.as_ref(),
-                    ));
-                }
-                worker_results
+                    worker_results
+                })
             }));
         }
 
@@ -1353,6 +1445,24 @@ fn check_program_files_parallel(
     let mut flattened = results.into_iter().flatten().collect::<Vec<_>>();
     flattened.sort_by_key(|result| result.file_index);
     flattened
+}
+
+fn census_check_milestone(completed: usize, total: usize) -> Option<&'static str> {
+    if !type_graph_census_enabled() || total == 0 {
+        return None;
+    }
+    let quarter = total.div_ceil(4);
+    let half = total.div_ceil(2);
+    let three_quarters = (total * 3).div_ceil(4);
+    if completed == quarter {
+        Some("after_checking_25_percent")
+    } else if completed == half {
+        Some("after_checking_50_percent")
+    } else if completed == three_quarters {
+        Some("after_checking_75_percent")
+    } else {
+        None
+    }
 }
 
 type DiagnosticDedupKey = (

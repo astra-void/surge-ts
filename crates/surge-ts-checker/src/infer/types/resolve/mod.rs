@@ -27,6 +27,55 @@ use surge_ts_types::{NumberLiteralType, Type, TypeCopyReason, union_type, with_t
 
 use crate::context::{CheckerContext, DeclarationResolutionKey, convert_span};
 
+thread_local! {
+    static TYPE_EXPANSION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static TYPE_EXPANSION_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Per-root ceiling on distributive-conditional members and mapped-type keys
+/// processed, the checker's analogue of tsc's TS2589 instantiation limit.
+/// Nested distribution multiplies (|A|·|B|·… per nesting level) and inline
+/// branch ASTs never re-enter a named-declaration frame, so the `resolving`
+/// cycle stack cannot see the blowup; this budget is what bounds it. Well-formed
+/// code stays orders of magnitude below the limit (a 10k-key mapped type
+/// consumes 10k steps).
+const TYPE_EXPANSION_STEP_LIMIT: u64 = 500_000;
+
+/// Marks a conditional/mapped expansion on the stack. The step counter resets
+/// when the outermost scope begins, so the budget covers one entire (possibly
+/// multiplicative) expansion tree while independent sibling expansions each get
+/// a fresh budget.
+pub(crate) struct TypeExpansionScope;
+
+impl TypeExpansionScope {
+    pub(crate) fn enter() -> Self {
+        TYPE_EXPANSION_DEPTH.with(|depth| {
+            if depth.get() == 0 {
+                TYPE_EXPANSION_STEPS.with(|steps| steps.set(0));
+            }
+            depth.set(depth.get() + 1);
+        });
+        Self
+    }
+}
+
+impl Drop for TypeExpansionScope {
+    fn drop(&mut self) {
+        TYPE_EXPANSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+/// Returns false once the current expansion tree has exhausted its budget; the
+/// caller degrades to `Type::Unknown` (the checker's "cannot model" sentinel,
+/// which assignability treats leniently) instead of expanding further.
+pub(crate) fn try_consume_type_expansion_step() -> bool {
+    TYPE_EXPANSION_STEPS.with(|steps| {
+        let next = steps.get().saturating_add(1);
+        steps.set(next);
+        next <= TYPE_EXPANSION_STEP_LIMIT
+    })
+}
+
 pub(crate) fn resolve_parsed_type(
     parsed_type: ParsedType,
     ctx: &mut CheckerContext,

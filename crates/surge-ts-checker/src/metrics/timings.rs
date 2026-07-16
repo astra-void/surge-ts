@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use surge_ts_types::{snapshot_function_type_counters, snapshot_union_type_counters};
+use surge_ts_types::{
+    snapshot_function_type_counters, snapshot_function_type_payload_alloc_by_expansion_reason,
+    snapshot_union_type_counters,
+};
 
 use super::counters::snapshot_program_counters;
 use super::rss::{
@@ -69,6 +72,7 @@ pub(crate) struct ProgramCacheStats {
     pub(crate) generic_type_entries: u64,
     pub(crate) instantiation_buckets: u64,
     pub(crate) instantiation_entries: u64,
+    pub(crate) physical_interface_entries: u64,
 }
 
 /// One RSS reading taken at a pipeline stage boundary. `current_bytes` is the
@@ -850,6 +854,294 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    generic_instantiation_count: {}",
         counters.generic_instantiation_count
     );
+    for (name, count) in [
+        (
+            "interface_resolution_attempt_count",
+            counters.interface_resolution_attempt_count,
+        ),
+        (
+            "interface_resolution_success_count",
+            counters.interface_resolution_success_count,
+        ),
+        (
+            "interface_resolution_degraded_count",
+            counters.interface_resolution_degraded_count,
+        ),
+        (
+            "unique_stable_interface_declaration_count",
+            counters.unique_stable_interface_declaration_count,
+        ),
+        (
+            "unique_interface_instantiation_tuple_count",
+            counters.unique_interface_instantiation_tuple_count,
+        ),
+        (
+            "duplicate_clean_interface_instantiation_count",
+            counters.duplicate_clean_interface_instantiation_count,
+        ),
+        (
+            "duplicate_degraded_interface_instantiation_count",
+            counters.duplicate_degraded_interface_instantiation_count,
+        ),
+        (
+            "interface_own_property_map_alloc_count",
+            counters.interface_own_property_map_alloc_count,
+        ),
+        (
+            "interface_method_signature_group_alloc_count",
+            counters.interface_method_signature_group_alloc_count,
+        ),
+        (
+            "interface_call_signature_array_alloc_count",
+            counters.interface_call_signature_array_alloc_count,
+        ),
+        (
+            "interface_construct_signature_array_alloc_count",
+            counters.interface_construct_signature_array_alloc_count,
+        ),
+        (
+            "interface_index_signature_alloc_count",
+            counters.interface_index_signature_alloc_count,
+        ),
+        (
+            "inherited_member_merge_attempt_count",
+            counters.inherited_member_merge_attempt_count,
+        ),
+        (
+            "inherited_member_merge_cache_hit_count",
+            counters.inherited_member_merge_cache_hit_count,
+        ),
+        (
+            "overload_array_alloc_count",
+            counters.overload_array_alloc_count,
+        ),
+        (
+            "physical_interface_cache_hit_count",
+            counters.physical_interface_cache_hit_count,
+        ),
+        (
+            "physical_interface_cache_miss_count",
+            counters.physical_interface_cache_miss_count,
+        ),
+        (
+            "physical_interface_cache_insert_count",
+            counters.physical_interface_cache_insert_count,
+        ),
+        (
+            "physical_interface_cache_racing_insert_count",
+            counters.physical_interface_cache_racing_insert_count,
+        ),
+        (
+            "physical_interface_cache_skip_disabled_count",
+            counters.physical_interface_cache_skip_disabled_count,
+        ),
+        (
+            "physical_interface_cache_skip_unstable_declaration_count",
+            counters.physical_interface_cache_skip_unstable_declaration_count,
+        ),
+        (
+            "physical_interface_cache_skip_unresolved_argument_count",
+            counters.physical_interface_cache_skip_unresolved_argument_count,
+        ),
+        (
+            "physical_interface_cache_skip_unsupported_argument_count",
+            counters.physical_interface_cache_skip_unsupported_argument_count,
+        ),
+        (
+            "physical_interface_cache_reject_had_error_count",
+            counters.physical_interface_cache_reject_had_error_count,
+        ),
+        (
+            "physical_interface_cache_reject_diagnostics_count",
+            counters.physical_interface_cache_reject_diagnostics_count,
+        ),
+        (
+            "physical_interface_cache_reject_degradation_count",
+            counters.physical_interface_cache_reject_degradation_count,
+        ),
+        (
+            "physical_interface_cache_reject_unknown_count",
+            counters.physical_interface_cache_reject_unknown_count,
+        ),
+        (
+            "physical_interface_cache_reject_context_count",
+            counters.physical_interface_cache_reject_context_count,
+        ),
+        (
+            "physical_interface_cache_reject_traversal_count",
+            counters.physical_interface_cache_reject_traversal_count,
+        ),
+        (
+            "physical_interface_cache_key_bytes",
+            counters.physical_interface_cache_key_bytes,
+        ),
+        (
+            "physical_interface_cache_value_shallow_bytes",
+            counters.physical_interface_cache_value_shallow_bytes,
+        ),
+        (
+            "interface_member_declaration_visit_count",
+            counters.interface_member_declaration_visit_count,
+        ),
+        (
+            "unique_interface_member_declaration_count",
+            counters.unique_interface_member_declaration_count,
+        ),
+        (
+            "interface_method_mapping_attempt_count",
+            counters.interface_method_mapping_attempt_count,
+        ),
+        (
+            "unique_interface_method_instantiation_count",
+            counters.unique_interface_method_instantiation_count,
+        ),
+        (
+            "duplicate_clean_interface_method_mapping_count",
+            counters.duplicate_clean_interface_method_mapping_count,
+        ),
+        (
+            "duplicate_degraded_interface_method_mapping_count",
+            counters.duplicate_degraded_interface_method_mapping_count,
+        ),
+        (
+            "interface_overload_group_construction_attempt_count",
+            counters.interface_overload_group_construction_attempt_count,
+        ),
+        (
+            "unique_interface_overload_declaration_set_count",
+            counters.unique_interface_overload_declaration_set_count,
+        ),
+        (
+            "unique_interface_overload_instantiation_count",
+            counters.unique_interface_overload_instantiation_count,
+        ),
+        (
+            "duplicate_interface_overload_construction_count",
+            counters.duplicate_interface_overload_construction_count,
+        ),
+        (
+            "clean_reusable_interface_member_count",
+            counters.clean_reusable_interface_member_count,
+        ),
+        (
+            "non_reusable_interface_member_count",
+            counters.non_reusable_interface_member_count,
+        ),
+        (
+            "context_retaining_interface_member_count",
+            counters.context_retaining_interface_member_count,
+        ),
+        (
+            "unknown_containing_interface_member_count",
+            counters.unknown_containing_interface_member_count,
+        ),
+        (
+            "interface_template_build_attempt_count",
+            counters.interface_template_build_attempt_count,
+        ),
+        (
+            "interface_template_insert_count",
+            counters.interface_template_insert_count,
+        ),
+        (
+            "interface_template_hit_count",
+            counters.interface_template_hit_count,
+        ),
+        (
+            "interface_template_member_visit_avoided_count",
+            counters.interface_template_member_visit_avoided_count,
+        ),
+        (
+            "interface_template_retained_bytes",
+            counters.interface_template_retained_bytes,
+        ),
+        (
+            "interface_method_cache_hit_count",
+            counters.interface_method_cache_hit_count,
+        ),
+        (
+            "interface_method_cache_miss_count",
+            counters.interface_method_cache_miss_count,
+        ),
+        (
+            "interface_method_cache_insert_count",
+            counters.interface_method_cache_insert_count,
+        ),
+        (
+            "interface_method_cache_reject_had_error_count",
+            counters.interface_method_cache_reject_had_error_count,
+        ),
+        (
+            "interface_method_cache_reject_diagnostics_count",
+            counters.interface_method_cache_reject_diagnostics_count,
+        ),
+        (
+            "interface_method_cache_reject_degradation_count",
+            counters.interface_method_cache_reject_degradation_count,
+        ),
+        (
+            "interface_method_cache_reject_unknown_count",
+            counters.interface_method_cache_reject_unknown_count,
+        ),
+        (
+            "interface_method_cache_reject_context_count",
+            counters.interface_method_cache_reject_context_count,
+        ),
+        (
+            "interface_method_cache_reject_contextual_typing_count",
+            counters.interface_method_cache_reject_contextual_typing_count,
+        ),
+        (
+            "interface_method_cache_reject_traversal_count",
+            counters.interface_method_cache_reject_traversal_count,
+        ),
+        (
+            "interface_method_cache_key_bytes",
+            counters.interface_method_cache_key_bytes,
+        ),
+        (
+            "interface_method_cache_value_shallow_bytes",
+            counters.interface_method_cache_value_shallow_bytes,
+        ),
+        (
+            "interface_method_function_payload_avoided_count",
+            counters.interface_method_function_payload_avoided_count,
+        ),
+        (
+            "interface_overload_cache_hit_count",
+            counters.interface_overload_cache_hit_count,
+        ),
+        (
+            "interface_overload_cache_miss_count",
+            counters.interface_overload_cache_miss_count,
+        ),
+        (
+            "interface_overload_cache_insert_count",
+            counters.interface_overload_cache_insert_count,
+        ),
+        (
+            "interface_overload_cache_reject_count",
+            counters.interface_overload_cache_reject_count,
+        ),
+        (
+            "interface_overload_cache_key_bytes",
+            counters.interface_overload_cache_key_bytes,
+        ),
+        (
+            "interface_overload_cache_value_shallow_bytes",
+            counters.interface_overload_cache_value_shallow_bytes,
+        ),
+        (
+            "interface_overload_array_avoided_count",
+            counters.interface_overload_array_avoided_count,
+        ),
+        (
+            "interface_overload_function_payload_avoided_count",
+            counters.interface_overload_function_payload_avoided_count,
+        ),
+    ] {
+        eprintln!("    {name}: {count}");
+    }
     eprintln!(
         "    lazy_intersection_create_count: {}",
         counters.lazy_intersection_create_count
@@ -946,7 +1238,7 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    lazy_signature_environment_reference_count: {}",
         counters.lazy_signature_environment_reference_count
     );
-    const PEEL_REASONS: [&str; 29] = [
+    const PEEL_REASONS: [&str; 42] = [
         "signature_parameter",
         "signature_return",
         "signature_this_parameter",
@@ -955,7 +1247,7 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "generic_default",
         "call_signature",
         "construct_signature",
-        "interface_method",
+        "interface_method_mapping",
         "class_method",
         "class_constructor",
         "function_type_annotation",
@@ -975,6 +1267,19 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "apparent_type",
         "diagnostic_display",
         "module_dedup",
+        "interface_resolution",
+        "interface_own_property_mapping",
+        "interface_call_signature_mapping",
+        "interface_construct_signature_mapping",
+        "interface_index_signature_mapping",
+        "interface_heritage_resolution",
+        "inherited_property_merge",
+        "inherited_method_merge",
+        "overload_array_merge",
+        "default_lib_interface_instantiation",
+        "dependency_interface_instantiation",
+        "generic_substitution",
+        "parsed_type_mapping",
         "other",
     ];
     for (reason, count) in PEEL_REASONS
@@ -1033,6 +1338,15 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         .zip(function_type_counters.function_type_payload_alloc_by_reason)
     {
         eprintln!("    function_type_payload_alloc_{reason}_count: {count}");
+    }
+    let function_allocs_by_expansion_reason =
+        snapshot_function_type_payload_alloc_by_expansion_reason();
+    for reason in super::DtsExpansionReason::ALL {
+        eprintln!(
+            "    dts_function_type_payload_alloc_{}_count: {}",
+            reason.label(),
+            function_allocs_by_expansion_reason[reason as usize]
+        );
     }
     eprintln!(
         "    function_type_payload_deep_clone_count: {}",
@@ -1214,11 +1528,12 @@ pub(crate) fn render_program_rss_stages(timings: &Arc<Mutex<ProgramTimings>>) {
     if let Some(stats) = &timings.cache_stats {
         eprintln!(
             "  cache_stats: generic_type_buckets={} generic_type_entries={} \
-             instantiation_buckets={} instantiation_entries={}",
+             instantiation_buckets={} instantiation_entries={} physical_interface_entries={}",
             stats.generic_type_buckets,
             stats.generic_type_entries,
             stats.instantiation_buckets,
             stats.instantiation_entries,
+            stats.physical_interface_entries,
         );
     }
     if super::rss_json_enabled() {
@@ -1237,11 +1552,13 @@ pub(crate) fn render_program_rss_stages(timings: &Arc<Mutex<ProgramTimings>>) {
         if let Some(stats) = &timings.cache_stats {
             eprintln!(
                 "{{\"rssCacheStats\":{{\"genericTypeBuckets\":{},\"genericTypeEntries\":{},\
-                 \"instantiationBuckets\":{},\"instantiationEntries\":{}}}}}",
+                 \"instantiationBuckets\":{},\"instantiationEntries\":{},\
+                 \"physicalInterfaceEntries\":{}}}}}",
                 stats.generic_type_buckets,
                 stats.generic_type_entries,
                 stats.instantiation_buckets,
                 stats.instantiation_entries,
+                stats.physical_interface_entries,
             );
         }
     }

@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use surge_ts_checker::CompatibilityStats;
 use surge_ts_config::LoadedTsConfig;
 use surge_ts_diagnostics::{
-    Diagnostic, DiagnosticCoverageStats, catalog_coverage_stats, render_diagnostics,
+    Diagnostic, DiagnosticCoverageStats, LineIndex, catalog_coverage_stats, render_diagnostics,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -215,10 +215,19 @@ pub fn render_project_diagnostics_json(
     max_diagnostics: Option<usize>,
 ) -> Value {
     let limit = max_diagnostics.unwrap_or(usize::MAX);
+    let mut source_by_file: HashMap<&str, &str> = HashMap::with_capacity(sources.len());
+    for (_, source_file_name, source_text) in sources {
+        source_by_file
+            .entry(source_file_name.as_str())
+            .or_insert(source_text.as_str());
+    }
+    let mut line_indices: HashMap<&str, LineIndex> = HashMap::new();
     let diagnostics = diagnostics
         .iter()
         .take(limit)
-        .map(|diagnostic| render_diagnostic_json(loaded, diagnostic, sources))
+        .map(|diagnostic| {
+            render_diagnostic_json(loaded, diagnostic, &source_by_file, &mut line_indices)
+        })
         .collect::<Vec<_>>();
 
     let mut root = Map::new();
@@ -751,18 +760,23 @@ fn render_diagnostics_with_spans(diagnostics: &[Diagnostic], source_text: &str) 
         return String::new();
     }
 
+    let line_index = LineIndex::new(source_text);
     diagnostics
         .iter()
-        .map(|diagnostic| render_diagnostic_with_span(diagnostic, source_text))
+        .map(|diagnostic| render_diagnostic_with_span(diagnostic, source_text, &line_index))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-fn render_diagnostic_with_span(diagnostic: &Diagnostic, source_text: &str) -> String {
+fn render_diagnostic_with_span(
+    diagnostic: &Diagnostic,
+    source_text: &str,
+    line_index: &LineIndex,
+) -> String {
     let mut header = format!("{} {}", diagnostic.code, diagnostic.file_name);
 
     if let Some(span) = diagnostic.span {
-        let (line, column) = line_col_from_offset(source_text, span.start);
+        let (line, column) = line_index.line_col(source_text, span.start);
         header.push_str(&format!(
             " start={} end={} line={} column={}",
             span.start, span.end, line, column
@@ -771,34 +785,17 @@ fn render_diagnostic_with_span(diagnostic: &Diagnostic, source_text: &str) -> St
         header.push_str(" (no span)");
     }
 
-    format!("{header}\n{}", diagnostic.render(source_text))
+    format!(
+        "{header}\n{}",
+        diagnostic.render_with_line_index(source_text, line_index)
+    )
 }
 
-pub(crate) fn line_col_from_offset(source_text: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1usize;
-    let mut column = 1usize;
-    let target = offset.min(source_text.len());
-
-    for (byte_index, ch) in source_text.char_indices() {
-        if byte_index >= target {
-            break;
-        }
-
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    (line, column)
-}
-
-fn render_diagnostic_json(
+fn render_diagnostic_json<'a>(
     loaded: &LoadedTsConfig,
     diagnostic: &Diagnostic,
-    sources: &[(PathBuf, String, String)],
+    source_by_file: &HashMap<&'a str, &'a str>,
+    line_indices: &mut HashMap<&'a str, LineIndex>,
 ) -> Value {
     let mut item = Map::new();
     item.insert(
@@ -820,24 +817,19 @@ fn render_diagnostic_json(
         span_json.insert("end".to_string(), Value::from(span.end as u64));
         item.insert("span".to_string(), Value::Object(span_json));
 
-        if let Some(source_text) = source_text_for_diagnostic(sources, &diagnostic.file_name) {
-            let (line, column) = line_col_from_offset(source_text, span.start);
+        if let Some((source_file_name, source_text)) =
+            source_by_file.get_key_value(diagnostic.file_name.as_str())
+        {
+            let line_index = line_indices
+                .entry(source_file_name)
+                .or_insert_with(|| LineIndex::new(source_text));
+            let (line, column) = line_index.line_col(source_text, span.start);
             item.insert("line".to_string(), Value::from(line as u64));
             item.insert("column".to_string(), Value::from(column as u64));
         }
     }
 
     Value::Object(item)
-}
-
-fn source_text_for_diagnostic<'a>(
-    sources: &'a [(PathBuf, String, String)],
-    file_name: &str,
-) -> Option<&'a str> {
-    sources
-        .iter()
-        .find(|(_, source_file_name, _)| source_file_name == file_name)
-        .map(|(_, _, source_text)| source_text.as_str())
 }
 
 fn sort_counts(counts: HashMap<String, usize>) -> Vec<CompatReportCountEntry> {

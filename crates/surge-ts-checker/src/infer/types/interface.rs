@@ -3,7 +3,7 @@
 use super::*;
 
 use surge_ts_syntax::{ParsedFunctionType, ParsedInterfaceMember, ParsedNamedType, ParsedType};
-use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type};
+use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type, current_program_type_store};
 
 use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::{CheckerContext, DeclarationResolutionKey};
@@ -19,6 +19,7 @@ pub(crate) fn resolve_interface(
     substitution: &TypeParameterSubstitution,
     pre_resolved_arguments: Option<&[Type]>,
 ) -> ResolvedType {
+    crate::program::record_interface_resolution_attempt();
     let declaration_key = declaration_resolution_key(&interface.file_name, &interface.name);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
         // A recursive interface (`interface Node { next: Node }`) is always valid in
@@ -176,6 +177,60 @@ pub(crate) fn resolve_interface(
         };
     }
 
+    let physical_default_lib = is_physical_default_lib_file_name(&interface.file_name);
+    let collect_all_interface_identities = crate::program::dts_expansion_trace_enabled();
+    let stable_declaration = if physical_default_lib || collect_all_interface_identities {
+        stable_interface_declaration_id(interface).ok()
+    } else {
+        None
+    };
+    let interface_key = if physical_default_lib || collect_all_interface_identities {
+        match canonical_physical_interface_key(interface, &local_substitution, ctx) {
+            Ok(key) => Some(key),
+            Err(reason) => {
+                record_interface_cache_skip(reason);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let declaration_template = if physical_default_lib
+        && physical_interface_member_cache_enabled()
+        && let Some(declaration) = stable_declaration.as_ref()
+    {
+        physical_interface_declaration_template(ctx, interface, declaration)
+    } else {
+        None
+    };
+    let creation_before = crate::program::type_creation_snapshot();
+    if physical_default_lib {
+        if !physical_interface_cache_enabled() {
+            record_interface_cache_skip(InterfaceCacheSkipReason::Disabled);
+        } else if let Some(key) = interface_key.as_ref() {
+            if let Some(cached) = lookup_physical_interface_instantiation(ctx, key) {
+                crate::program::record_program_counter(|c| {
+                    c.physical_interface_cache_hit_count += 1
+                });
+                resolving.pop();
+                crate::program::record_interface_resolution_result(
+                    stable_declaration,
+                    Some(key),
+                    true,
+                    true,
+                    interface.body.extends.len(),
+                    interface.body.members.len(),
+                    creation_before,
+                );
+                return ResolvedType {
+                    ty: (*cached).clone(),
+                    had_error: false,
+                };
+            }
+            crate::program::record_program_counter(|c| c.physical_interface_cache_miss_count += 1);
+        }
+    }
+
     let namespace_prefix = interface
         .name
         .rsplit_once('.')
@@ -190,18 +245,33 @@ pub(crate) fn resolve_interface(
     // `CheckerContext::structural_resolution_frames`).
     ctx.structural_resolution_frames.push(resolving.len() - 1);
     ctx.push_type_parameter_constraints_only(&interface.body.type_parameters);
-    let resolved = with_type_declaration_scope(&declaration_effective_scope, ctx, |ctx| {
-        with_file_name(ctx, &interface.file_name, |ctx| {
-            resolve_interface_declaration(
-                &interface.body.extends,
-                &interface.body.members,
-                interface.body.string_index_type.as_ref(),
-                interface.body.call_signature.as_ref(),
-                &interface.body.construct_signatures,
-                ctx,
-                resolving,
-                &local_substitution,
-            )
+    let diagnostics_before = ctx.diagnostics().len();
+    let utility_keys_before = ctx.utility_diagnostic_keys.len();
+    let degradation_before = crate::program::expansion_degradation_epoch();
+    let expansion_reason = if physical_default_lib {
+        crate::program::DtsExpansionReason::DefaultLibInterfaceInstantiation
+    } else if interface.file_name.contains("node_modules") {
+        crate::program::DtsExpansionReason::DependencyInterfaceInstantiation
+    } else {
+        crate::program::DtsExpansionReason::InterfaceResolution
+    };
+    let resolved = crate::program::with_dts_expansion_reason(expansion_reason, || {
+        with_type_declaration_scope(&declaration_effective_scope, ctx, |ctx| {
+            with_file_name(ctx, &interface.file_name, |ctx| {
+                resolve_interface_declaration(
+                    &interface.body.extends,
+                    &interface.body.members,
+                    interface.body.string_index_type.as_ref(),
+                    interface.body.call_signature.as_ref(),
+                    &interface.body.construct_signatures,
+                    ctx,
+                    resolving,
+                    &local_substitution,
+                    stable_declaration.as_ref(),
+                    declaration_template.as_deref(),
+                    interface_key.as_ref(),
+                )
+            })
         })
     });
     ctx.pop_type_parameter_scope();
@@ -212,10 +282,55 @@ pub(crate) fn resolve_interface(
     }
     resolving.pop();
 
-    ResolvedType {
-        ty: resolved.ty,
-        had_error: resolved.had_error || arguments_had_error,
+    let had_error = resolved.had_error || arguments_had_error;
+    let emitted_diagnostics = ctx.diagnostics().len() != diagnostics_before
+        || ctx.utility_diagnostic_keys.len() != utility_keys_before;
+    let degraded_during_expansion =
+        crate::program::expansion_degradation_epoch() != degradation_before;
+    let clean = !had_error && !emitted_diagnostics && !degraded_during_expansion;
+    let mut ty = resolved.ty;
+    if physical_default_lib
+        && physical_interface_cache_enabled()
+        && let Some(key) = interface_key.clone()
+    {
+        let value_rejection = clean
+            .then(|| validate_physical_interface_cache_value(&ty).err())
+            .flatten();
+        if clean && value_rejection.is_none() {
+            ty = (*intern_physical_interface_instantiation(ctx, key, ty)).clone();
+        } else {
+            crate::program::record_program_counter(|c| {
+                c.physical_interface_cache_reject_had_error_count += u64::from(had_error);
+                c.physical_interface_cache_reject_diagnostics_count +=
+                    u64::from(emitted_diagnostics);
+                c.physical_interface_cache_reject_degradation_count +=
+                    u64::from(degraded_during_expansion);
+                c.physical_interface_cache_reject_unknown_count += u64::from(matches!(
+                    value_rejection,
+                    Some(InterfaceCacheValueRejection::Unknown)
+                ));
+                c.physical_interface_cache_reject_context_count += u64::from(matches!(
+                    value_rejection,
+                    Some(InterfaceCacheValueRejection::ResolutionContext)
+                ));
+                c.physical_interface_cache_reject_traversal_count += u64::from(matches!(
+                    value_rejection,
+                    Some(InterfaceCacheValueRejection::TraversalLimit)
+                ));
+            });
+        }
     }
+    crate::program::record_interface_resolution_result(
+        stable_declaration,
+        interface_key.as_ref(),
+        clean,
+        false,
+        interface.body.extends.len(),
+        interface.body.members.len(),
+        creation_before,
+    );
+
+    ResolvedType { ty, had_error }
 }
 
 pub(crate) fn resolve_interface_declaration(
@@ -227,7 +342,21 @@ pub(crate) fn resolve_interface_declaration(
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
+    interface_declaration: Option<&crate::context::StableInterfaceDeclarationId>,
+    declaration_template: Option<&crate::context::InterfaceDeclarationTemplate>,
+    interface_key: Option<&crate::context::InterfaceInstantiationKey>,
 ) -> ResolvedType {
+    crate::program::record_interface_member_declaration_visits(members.len());
+    crate::program::record_program_counter(|c| {
+        c.interface_own_property_map_alloc_count += 1;
+        c.interface_method_signature_group_alloc_count += members
+            .iter()
+            .filter(|member| matches!(member.ty, ParsedType::Function(_)))
+            .count() as u64;
+        c.interface_call_signature_array_alloc_count += u64::from(call_signature.is_some());
+        c.interface_construct_signature_array_alloc_count += construct_signatures.len() as u64;
+        c.interface_index_signature_alloc_count += u64::from(string_index_type.is_some());
+    });
     let mut properties = PropertyMap::new();
     let mut had_error = false;
     let mut inherited_index_type: Option<Type> = None;
@@ -242,7 +371,10 @@ pub(crate) fn resolve_interface_declaration(
     let in_declaration_file = is_declaration_file_name(&ctx.file_name);
     let mut base_is_open = false;
     for base in extends {
-        let resolved_base = resolve_named_type(base.clone(), ctx, resolving, substitution);
+        let resolved_base = crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::InterfaceHeritageResolution,
+            || resolve_named_type(base.clone(), ctx, resolving, substitution),
+        );
         had_error |= resolved_base.had_error;
         // A base that resolved with errors may be missing members surge could
         // not model; the derived member set is incomplete, so keep it open
@@ -255,7 +387,27 @@ pub(crate) fn resolve_interface_declaration(
         match resolved_base.ty.peeled() {
             Type::Object(object_type) => {
                 for (name, property) in object_type.properties.iter() {
-                    properties.entry(name.clone()).or_insert(property.clone());
+                    let reason = if matches!(property.ty, Type::Function(_)) {
+                        crate::program::DtsExpansionReason::InheritedMethodMerge
+                    } else {
+                        crate::program::DtsExpansionReason::InheritedPropertyMerge
+                    };
+                    crate::program::with_dts_expansion_reason(reason, || {
+                        properties.entry(name.clone()).or_insert(property.clone());
+                    });
+                }
+                if let Some(declaration) = interface_declaration {
+                    let inherited_methods = object_type
+                        .properties
+                        .values()
+                        .filter(|property| matches!(property.ty, Type::Function(_)))
+                        .count();
+                    crate::program::record_inherited_member_merge(
+                        declaration,
+                        &base.name,
+                        object_type.properties.len(),
+                        inherited_methods,
+                    );
                 }
                 if inherited_index_type.is_none() {
                     if let Some(index_type) = &object_type.string_index_type {
@@ -298,9 +450,157 @@ pub(crate) fn resolve_interface_declaration(
         }
     }
 
-    for member in members {
-        let property_type = resolve_parsed_type(member.ty.clone(), ctx, resolving, substitution);
+    let mut own_method_group_contaminated = std::collections::HashMap::<String, bool>::new();
+    let mut own_method_group_clean = std::collections::HashMap::<String, bool>::new();
+    for (member_index, member) in members.iter().enumerate() {
+        let is_method = matches!(member.ty, ParsedType::Function(_));
+        let reason = if is_method {
+            crate::program::DtsExpansionReason::InterfaceMethodMapping
+        } else {
+            crate::program::DtsExpansionReason::InterfaceOwnPropertyMapping
+        };
+        let member_template = declaration_template.and_then(|template| {
+            let member_template = template.members.get(member_index)?;
+            (member_template.declaration.declared_name.as_ref() == member.name
+                && member_template.declaration.declaration_kind
+                    == if is_method {
+                        crate::context::InterfaceMemberDeclarationKind::Method
+                    } else {
+                        crate::context::InterfaceMemberDeclarationKind::Property
+                    })
+            .then_some(member_template)
+        });
+        let method_key = is_method
+            .then(|| {
+                Some(interface_member_instantiation_key(
+                    &member_template?.declaration,
+                    interface_key?,
+                ))
+            })
+            .flatten();
+        let diagnostics_before = ctx.diagnostics().len();
+        let utility_keys_before = ctx.utility_diagnostic_keys.len();
+        let degradation_before = crate::program::expansion_degradation_epoch();
+        let cached_method = method_key
+            .as_ref()
+            .and_then(|key| lookup_physical_interface_method(ctx, key));
+        let method_cache_hit = cached_method.is_some();
+        if is_method && method_key.is_some() {
+            crate::program::record_program_counter(|c| {
+                if method_cache_hit {
+                    c.interface_method_cache_hit_count += 1;
+                    c.interface_method_function_payload_avoided_count += 1;
+                } else {
+                    c.interface_method_cache_miss_count += 1;
+                }
+            });
+        }
+        let mut property_type = if let Some(function) = cached_method {
+            ResolvedType {
+                ty: Type::Function(function),
+                had_error: false,
+            }
+        } else {
+            crate::program::with_dts_expansion_reason(reason, || {
+                resolve_parsed_type(member.ty.clone(), ctx, resolving, substitution)
+            })
+        };
+        let emitted_diagnostics = ctx.diagnostics().len() != diagnostics_before
+            || ctx.utility_diagnostic_keys.len() != utility_keys_before;
+        let degraded = crate::program::expansion_degradation_epoch() != degradation_before;
+        let value_rejection =
+            if is_method && !property_type.had_error && !emitted_diagnostics && !degraded {
+                validate_physical_interface_cache_value(&property_type.ty).err()
+            } else {
+                None
+            };
+        let contextual_typing_dependency = is_method
+            && physical_interface_method_has_contextual_typing_dependency(&property_type.ty);
+        let method_clean = is_method
+            && !property_type.had_error
+            && !emitted_diagnostics
+            && !degraded
+            && !contextual_typing_dependency
+            && value_rejection.is_none();
+        if is_method {
+            let degradation_reason = if method_clean {
+                None
+            } else if emitted_diagnostics {
+                Some(crate::program::InterfaceDegradationReason::DiagnosticProduced)
+            } else if matches!(value_rejection, Some(InterfaceCacheValueRejection::Unknown))
+                || matches!(property_type.ty, Type::Unknown)
+                || degraded
+            {
+                Some(crate::program::InterfaceDegradationReason::UnknownFallback)
+            } else if matches!(
+                value_rejection,
+                Some(InterfaceCacheValueRejection::ResolutionContext)
+            ) {
+                Some(crate::program::InterfaceDegradationReason::ContextRetainingReference)
+            } else if matches!(
+                value_rejection,
+                Some(InterfaceCacheValueRejection::TraversalLimit)
+            ) {
+                Some(crate::program::InterfaceDegradationReason::TraversalLimit)
+            } else if contextual_typing_dependency {
+                Some(crate::program::InterfaceDegradationReason::ContextualTypingDependency)
+            } else if property_type.had_error {
+                Some(crate::program::InterfaceDegradationReason::MethodSignatureFailure)
+            } else {
+                Some(crate::program::InterfaceDegradationReason::Other)
+            };
+            crate::program::record_interface_method_mapping(
+                method_key.as_ref(),
+                method_clean,
+                degradation_reason,
+            );
+            if method_key.is_some() {
+                crate::program::record_program_counter(|c| {
+                    c.interface_method_cache_reject_had_error_count +=
+                        u64::from(property_type.had_error);
+                    c.interface_method_cache_reject_diagnostics_count +=
+                        u64::from(emitted_diagnostics);
+                    c.interface_method_cache_reject_degradation_count += u64::from(degraded);
+                    c.interface_method_cache_reject_unknown_count += u64::from(matches!(
+                        value_rejection,
+                        Some(InterfaceCacheValueRejection::Unknown)
+                    ));
+                    c.interface_method_cache_reject_context_count += u64::from(matches!(
+                        value_rejection,
+                        Some(InterfaceCacheValueRejection::ResolutionContext)
+                    ));
+                    c.interface_method_cache_reject_contextual_typing_count +=
+                        u64::from(contextual_typing_dependency);
+                    c.interface_method_cache_reject_traversal_count += u64::from(matches!(
+                        value_rejection,
+                        Some(InterfaceCacheValueRejection::TraversalLimit)
+                    ));
+                });
+            }
+            if !method_cache_hit
+                && method_clean
+                && let (Some(key), Type::Function(function)) =
+                    (method_key.clone(), &property_type.ty)
+            {
+                property_type.ty =
+                    Type::Function(intern_physical_interface_method(ctx, key, function.clone()));
+            }
+        }
         had_error |= property_type.had_error;
+
+        if is_method {
+            let inherited_function = !own_method_group_contaminated.contains_key(&member.name)
+                && properties
+                    .get(&member.name)
+                    .is_some_and(|property| matches!(property.ty, Type::Function(_)));
+            own_method_group_contaminated
+                .entry(member.name.clone())
+                .or_insert(inherited_function);
+            own_method_group_clean
+                .entry(member.name.clone())
+                .and_modify(|clean| *clean &= method_clean)
+                .or_insert(method_clean);
+        }
 
         // Same-named function members are overloads (within one interface, or
         // merged across declaration-merged interfaces such as `ArrayConstructor`
@@ -311,7 +611,73 @@ pub(crate) fn resolve_interface_declaration(
             (properties.get(&member.name), &property_type.ty)
             && let Type::Function(existing_fn) = &existing.ty
         {
-            let merged = merge_overload_signatures(existing_fn, incoming);
+            let overload_key = member_template
+                .filter(|member| member.overload_position != 0)
+                .and_then(|member| {
+                    let clean = own_method_group_clean
+                        .get(member.declaration.declared_name.as_ref())
+                        .copied()
+                        .unwrap_or(false);
+                    let contaminated = own_method_group_contaminated
+                        .get(member.declaration.declared_name.as_ref())
+                        .copied()
+                        .unwrap_or(true);
+                    let group = declaration_template?
+                        .method_groups
+                        .get(member.overload_group? as usize)?;
+                    if !clean || contaminated {
+                        return None;
+                    }
+                    Some(interface_overload_instantiation_key(
+                        interface_declaration?,
+                        group,
+                        member.overload_position + 1,
+                        interface_key?,
+                    ))
+                });
+            let cached_overload = overload_key
+                .as_ref()
+                .and_then(|key| lookup_physical_interface_overload(ctx, key));
+            let overload_cache_hit = cached_overload.is_some();
+            if overload_key.is_some() {
+                crate::program::record_program_counter(|c| {
+                    if overload_cache_hit {
+                        c.interface_overload_cache_hit_count += 1;
+                        c.interface_overload_function_payload_avoided_count += 1;
+                    } else {
+                        c.interface_overload_cache_miss_count += 1;
+                    }
+                });
+            }
+            crate::program::record_interface_overload_construction(
+                overload_key.as_ref(),
+                overload_cache_hit,
+            );
+            let merged = if let Some(cached) = cached_overload {
+                cached
+            } else {
+                let merged = crate::program::with_dts_expansion_reason(
+                    crate::program::DtsExpansionReason::OverloadArrayMerge,
+                    || merge_overload_signatures(existing_fn, incoming),
+                );
+                match overload_key {
+                    Some(key)
+                        if validate_physical_interface_cache_value(&Type::Function(
+                            merged.clone(),
+                        ))
+                        .is_ok() =>
+                    {
+                        intern_physical_interface_overload(ctx, key, merged)
+                    }
+                    Some(_) => {
+                        crate::program::record_program_counter(|c| {
+                            c.interface_overload_cache_reject_count += 1
+                        });
+                        merged
+                    }
+                    None => merged,
+                }
+            };
             let optional = existing.optional && member.optional;
             properties.insert(
                 member.name.clone(),
@@ -337,7 +703,10 @@ pub(crate) fn resolve_interface_declaration(
     // base interface (e.g. `interface ProcessEnv extends Dict<string>`).
     let resolved_index_type = match string_index_type {
         Some(parsed) => {
-            let resolved = resolve_parsed_type(parsed.clone(), ctx, resolving, substitution);
+            let resolved = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::InterfaceIndexSignatureMapping,
+                || resolve_parsed_type(parsed.clone(), ctx, resolving, substitution),
+            );
             had_error |= resolved.had_error;
             Some(resolved.ty)
         }
@@ -346,11 +715,16 @@ pub(crate) fn resolve_interface_declaration(
 
     let mut object_type = alloc_object_type(properties, resolved_index_type);
     if let Some(call_signature) = call_signature {
-        let resolved = resolve_parsed_type(
-            ParsedType::Function(call_signature.clone()),
-            ctx,
-            resolving,
-            substitution,
+        let resolved = crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::InterfaceCallSignatureMapping,
+            || {
+                resolve_parsed_type(
+                    ParsedType::Function(call_signature.clone()),
+                    ctx,
+                    resolving,
+                    substitution,
+                )
+            },
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
@@ -366,16 +740,24 @@ pub(crate) fn resolve_interface_declaration(
     // `new Uint8Array([1,2,3])` both work).
     let mut merged_construct: Option<FunctionType> = None;
     for construct_signature in construct_signatures {
-        let resolved = resolve_parsed_type(
-            ParsedType::Function(construct_signature.clone()),
-            ctx,
-            resolving,
-            substitution,
+        let resolved = crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::InterfaceConstructSignatureMapping,
+            || {
+                resolve_parsed_type(
+                    ParsedType::Function(construct_signature.clone()),
+                    ctx,
+                    resolving,
+                    substitution,
+                )
+            },
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
             merged_construct = Some(match merged_construct {
-                Some(existing) => merge_overload_signatures(&existing, &function_type),
+                Some(existing) => crate::program::with_dts_expansion_reason(
+                    crate::program::DtsExpansionReason::OverloadArrayMerge,
+                    || merge_overload_signatures(&existing, &function_type),
+                ),
                 None => function_type,
             });
         }
@@ -401,6 +783,16 @@ pub(crate) fn resolve_interface_declaration(
 /// as the representative, matching the most basic form (e.g. `Array.from`'s
 /// `T[]`).
 fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
+    let canonical_merge = a
+        .id()
+        .zip(b.id())
+        .zip(current_program_type_store())
+        .map(|((left, right), store)| (left, right, store));
+    if let Some((left, right, store)) = canonical_merge.as_ref()
+        && let Some(merged) = store.lookup_overload_merge(*left, *right)
+    {
+        return merged;
+    }
     let (longer, shorter) = if a.parameters().len() >= b.parameters().len() {
         (a, b)
     } else {
@@ -418,13 +810,47 @@ fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType
         })
         .collect::<Vec<_>>();
 
-    alloc_function_type(
-        parameters,
-        shorter.return_type().clone(),
-        a.is_variadic() || b.is_variadic(),
-        a.required_parameter_count()
-            .min(b.required_parameter_count()),
-    )
+    let is_variadic = a.is_variadic() || b.is_variadic();
+    let required_parameter_count = a
+        .required_parameter_count()
+        .min(b.required_parameter_count());
+    let merged = [a, b]
+        .into_iter()
+        .find(|candidate| {
+            candidate.parameters() == parameters.as_slice()
+                && candidate.return_type() == shorter.return_type()
+                && candidate.is_variadic() == is_variadic
+                && candidate.required_parameter_count() == required_parameter_count
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            crate::program::record_program_counter(|c| c.overload_array_alloc_count += 1);
+            alloc_function_type(
+                parameters,
+                shorter.return_type().clone(),
+                is_variadic,
+                required_parameter_count,
+            )
+        });
+    match canonical_merge {
+        Some((left, right, store)) => store.record_overload_merge(left, right, merged),
+        None => merged,
+    }
+}
+
+fn record_interface_cache_skip(reason: InterfaceCacheSkipReason) {
+    crate::program::record_program_counter(|c| match reason {
+        InterfaceCacheSkipReason::Disabled => c.physical_interface_cache_skip_disabled_count += 1,
+        InterfaceCacheSkipReason::UnstableDeclaration => {
+            c.physical_interface_cache_skip_unstable_declaration_count += 1
+        }
+        InterfaceCacheSkipReason::UnresolvedTypeArgument => {
+            c.physical_interface_cache_skip_unresolved_argument_count += 1
+        }
+        InterfaceCacheSkipReason::UnsupportedTypeArgument => {
+            c.physical_interface_cache_skip_unsupported_argument_count += 1
+        }
+    });
 }
 
 fn is_declaration_file_name(file_name: &str) -> bool {

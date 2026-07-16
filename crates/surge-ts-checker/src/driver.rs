@@ -298,7 +298,10 @@ fn lower_global_augmentation_values(
         }
     }
 
-    for (loc, fun_ty) in local_function_signatures {
+    let mut ordered_function_signatures = local_function_signatures.into_iter().collect::<Vec<_>>();
+    ordered_function_signatures
+        .sort_by_key(|(location, _)| (location.file_index, location.statement_index));
+    for (loc, fun_ty) in ordered_function_signatures {
         let name = match &block_statements[loc.statement_index] {
             ParsedStatement::FunctionDeclaration(f) => f.name.clone(),
             ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
@@ -416,94 +419,34 @@ fn collect_local_type_declarations_from_statement(
 ) {
     match statement {
         ParsedStatement::TypeAliasDeclaration(alias) => {
-            let key = DeclarationResolutionKey {
-                file_name: canonicalize_if_exists_string(std::path::Path::new(file_name)),
-                name: alias.name.clone(),
-                namespace: DeclarationNamespace::Type,
-            };
-            if seen.insert(key)
-                && let Some(declaration) =
-                    ctx.type_declarations
-                        .iter()
-                        .find_map(|(_, declaration)| match declaration {
-                            TypeDeclarationInfo::Alias(info)
-                                if info.name == alias.name
-                                    && canonicalize_if_exists_string(std::path::Path::new(
-                                        &info.file_name,
-                                    )) == canonicalize_if_exists_string(
-                                        std::path::Path::new(file_name),
-                                    ) =>
-                            {
-                                Some(declaration)
-                            }
-                            _ => None,
-                        })
-            {
-                local_declarations.push(attach_current_type_scope_if_missing(
-                    declaration.clone(),
-                    ctx,
-                ));
-            }
+            collect_named_local_type_declaration(
+                &alias.name,
+                file_name,
+                LocalDeclarationKind::Alias,
+                seen,
+                local_declarations,
+                ctx,
+            );
         }
         ParsedStatement::InterfaceDeclaration(interface) => {
-            let key = DeclarationResolutionKey {
-                file_name: canonicalize_if_exists_string(std::path::Path::new(file_name)),
-                name: interface.name.clone(),
-                namespace: DeclarationNamespace::Type,
-            };
-            if seen.insert(key)
-                && let Some(declaration) =
-                    ctx.type_declarations
-                        .iter()
-                        .find_map(|(_, declaration)| match declaration {
-                            TypeDeclarationInfo::Interface(info)
-                                if info.name == interface.name
-                                    && canonicalize_if_exists_string(std::path::Path::new(
-                                        &info.file_name,
-                                    )) == canonicalize_if_exists_string(
-                                        std::path::Path::new(file_name),
-                                    ) =>
-                            {
-                                Some(declaration)
-                            }
-                            _ => None,
-                        })
-            {
-                local_declarations.push(attach_current_type_scope_if_missing(
-                    declaration.clone(),
-                    ctx,
-                ));
-            }
+            collect_named_local_type_declaration(
+                &interface.name,
+                file_name,
+                LocalDeclarationKind::Interface,
+                seen,
+                local_declarations,
+                ctx,
+            );
         }
         ParsedStatement::ClassDeclaration(class) => {
-            let key = DeclarationResolutionKey {
-                file_name: canonicalize_if_exists_string(std::path::Path::new(file_name)),
-                name: class.name.clone(),
-                namespace: DeclarationNamespace::Type,
-            };
-            if seen.insert(key)
-                && let Some(declaration) =
-                    ctx.type_declarations
-                        .iter()
-                        .find_map(|(_, declaration)| match declaration {
-                            TypeDeclarationInfo::Interface(info)
-                                if info.name == class.name
-                                    && canonicalize_if_exists_string(std::path::Path::new(
-                                        &info.file_name,
-                                    )) == canonicalize_if_exists_string(
-                                        std::path::Path::new(file_name),
-                                    ) =>
-                            {
-                                Some(declaration)
-                            }
-                            _ => None,
-                        })
-            {
-                local_declarations.push(attach_current_type_scope_if_missing(
-                    declaration.clone(),
-                    ctx,
-                ));
-            }
+            collect_named_local_type_declaration(
+                &class.name,
+                file_name,
+                LocalDeclarationKind::Interface,
+                seen,
+                local_declarations,
+                ctx,
+            );
         }
         ParsedStatement::ExportDeclaration(export) => {
             if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
@@ -517,6 +460,66 @@ fn collect_local_type_declarations_from_statement(
             }
         }
         _ => {}
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LocalDeclarationKind {
+    Alias,
+    Interface,
+}
+
+fn collect_named_local_type_declaration(
+    name: &str,
+    file_name: &str,
+    kind: LocalDeclarationKind,
+    seen: &mut HashSet<DeclarationResolutionKey>,
+    local_declarations: &mut Vec<TypeDeclarationInfo>,
+    ctx: &CheckerContext,
+) {
+    let canonical_file_name = canonicalize_if_exists_string(std::path::Path::new(file_name));
+    let key = DeclarationResolutionKey {
+        file_name: canonical_file_name.clone(),
+        name: name.to_string(),
+        namespace: DeclarationNamespace::Type,
+    };
+    if !seen.insert(key) {
+        return;
+    }
+
+    let matches = |declaration: &TypeDeclarationInfo| match (kind, declaration) {
+        (LocalDeclarationKind::Alias, TypeDeclarationInfo::Alias(info)) => {
+            info.name == name
+                && canonicalize_if_exists_string(std::path::Path::new(&info.file_name))
+                    == canonical_file_name
+        }
+        (LocalDeclarationKind::Interface, TypeDeclarationInfo::Interface(info)) => {
+            info.name == name
+                && canonicalize_if_exists_string(std::path::Path::new(&info.file_name))
+                    == canonical_file_name
+        }
+        _ => false,
+    };
+
+    // Local declarations are keyed by their own name, so the O(1) lookup covers
+    // essentially every hit; the full scan only runs when the keyed entry was
+    // shadowed (e.g. by an import alias) or absent.
+    let declaration = ctx
+        .type_declarations
+        .get(name)
+        .filter(|declaration| matches(declaration))
+        .or_else(|| {
+            ctx.type_declarations
+                .iter()
+                .map(|(_, declaration)| declaration)
+                .find(|declaration| matches(declaration))
+        });
+
+    if let Some(declaration) = declaration {
+        local_declarations.push(attach_current_type_scope_if_missing(
+            declaration.clone(),
+            ctx,
+        ));
     }
 }
 
@@ -1142,11 +1145,18 @@ fn filter_conflicting_interface_members(
     mut incoming: InterfaceInfo,
     ctx: &mut CheckerContext,
 ) -> InterfaceInfo {
+    // First declaration of each name wins, matching the `find` this replaces.
+    let mut existing_by_name = HashMap::new();
+    for member in &existing.body.members {
+        existing_by_name
+            .entry(member.name.as_str())
+            .or_insert(member);
+    }
+
     std::sync::Arc::make_mut(&mut incoming.body)
         .members
         .retain(|member| {
-            let Some(previous) = existing.body.members.iter().find(|m| m.name == member.name)
-            else {
+            let Some(previous) = existing_by_name.get(member.name.as_str()).copied() else {
                 return true;
             };
 

@@ -1,8 +1,12 @@
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::Type;
 use crate::clone_reason::{TypeCopyReason, current_type_copy_reason};
+use crate::store::{canonical_union_store_enabled, current_program_type_store};
+use crate::{Type, TypeListId, UnionTypeId};
 
 static UNION_TYPE_PAYLOAD_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 static UNION_TYPE_PAYLOAD_DEEP_CLONE_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -43,7 +47,8 @@ pub struct UnionTypeCounters {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct UnionTypePayload {
-    pub types: Vec<Type>,
+    pub types: Arc<[Type]>,
+    pub(crate) list_id: Option<TypeListId>,
 }
 
 impl Clone for UnionTypePayload {
@@ -51,20 +56,48 @@ impl Clone for UnionTypePayload {
         record_union_type_payload_deep_clone_count();
         Self {
             types: self.types.clone(),
+            list_id: self.list_id,
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct UnionType {
     payload: Arc<UnionTypePayload>,
+    id: Option<UnionTypeId>,
 }
 
 impl UnionType {
     pub fn new(types: Vec<Type>) -> Self {
+        if canonical_union_store_enabled()
+            && let Some(store) = current_program_type_store()
+        {
+            match store.intern_union(types) {
+                Ok((payload, id)) => {
+                    return Self {
+                        payload,
+                        id: Some(id),
+                    };
+                }
+                Err(types) => {
+                    record_union_type_payload_alloc_count();
+                    return Self {
+                        payload: Arc::new(UnionTypePayload {
+                            types: types.into(),
+                            list_id: None,
+                        }),
+                        id: None,
+                    };
+                }
+            }
+        }
         record_union_type_payload_alloc_count();
         Self {
-            payload: Arc::new(UnionTypePayload { types }),
+            payload: Arc::new(UnionTypePayload {
+                types: types.into(),
+                list_id: None,
+            }),
+            id: None,
         }
     }
 
@@ -75,7 +108,27 @@ impl UnionType {
     pub fn types(&self) -> &[Type] {
         &self.payload.types
     }
+
+    pub fn id(&self) -> Option<UnionTypeId> {
+        self.id
+    }
+
+    pub fn payload_address(&self) -> usize {
+        Arc::as_ptr(&self.payload) as usize
+    }
+
+    pub fn member_list_address(&self) -> usize {
+        self.payload.types.as_ptr() as usize
+    }
 }
+
+impl PartialEq for UnionType {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.payload, &other.payload) || self.payload == other.payload
+    }
+}
+
+impl Eq for UnionType {}
 
 impl Clone for UnionType {
     fn clone(&self) -> Self {
@@ -83,6 +136,7 @@ impl Clone for UnionType {
         record_union_type_copy_count_for_current_reason();
         Self {
             payload: self.payload.clone(),
+            id: self.id,
         }
     }
 }
@@ -139,18 +193,99 @@ pub fn union_type(types: Vec<Type>) -> Type {
     let had_members = !flattened.is_empty();
     flattened.retain(|ty| !matches!(ty, Type::Never));
 
-    let mut unique = Vec::new();
-    for ty in flattened {
-        if !unique.contains(&ty) {
-            unique.push(ty);
-        }
-    }
+    let unique = dedup_members(flattened);
 
     match unique.len() {
         0 if had_members => Type::Never,
         0 => Type::Unknown,
         1 => unique.into_iter().next().unwrap(),
         _ => Type::Union(UnionType::new(unique)),
+    }
+}
+
+/// Below this size, pairwise `contains` beats the per-member hashing overhead;
+/// most unions the checker builds have a handful of members.
+const LINEAR_DEDUP_LIMIT: usize = 16;
+
+fn dedup_members(flattened: Vec<Type>) -> Vec<Type> {
+    let mut unique: Vec<Type> = Vec::with_capacity(flattened.len().min(64));
+    if flattened.len() <= LINEAR_DEDUP_LIMIT {
+        for ty in flattened {
+            if !unique.contains(&ty) {
+                unique.push(ty);
+            }
+        }
+        return unique;
+    }
+
+    let mut buckets: HashMap<u64, Vec<usize>> = HashMap::with_capacity(flattened.len());
+    for ty in flattened {
+        let indices = buckets.entry(dedup_key(&ty)).or_default();
+        if indices.iter().any(|&index| unique[index] == ty) {
+            continue;
+        }
+        indices.push(unique.len());
+        unique.push(ty);
+    }
+    unique
+}
+
+fn dedup_key(ty: &Type) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    dedup_key_into(ty, &mut hasher, 0);
+    hasher.finish()
+}
+
+/// Coarse structural key for union dedup. Invariant: `a == b` (under `Type`'s
+/// `PartialEq`) must imply `dedup_key(a) == dedup_key(b)`, so only fields that
+/// participate in equality are hashed, and always structurally — never by
+/// pointer, since `ObjectType`/`FunctionType`/`UnionType` equality accepts
+/// structurally-equal values behind distinct `Arc`s.
+fn dedup_key_into(ty: &Type, hasher: &mut DefaultHasher, depth: u8) {
+    std::mem::discriminant(ty).hash(hasher);
+    if depth >= 3 {
+        return;
+    }
+    match ty {
+        Type::StringLiteral(value) => value.hash(hasher),
+        Type::NumberLiteral(value) => value.value.hash(hasher),
+        Type::BooleanLiteral(value) => value.hash(hasher),
+        Type::Reference(reference) => {
+            reference.id.hash(hasher);
+            reference.arguments.len().hash(hasher);
+            for argument in reference.arguments.iter() {
+                dedup_key_into(argument, hasher, depth + 1);
+            }
+        }
+        Type::Array(element) => dedup_key_into(element, hasher, depth + 1),
+        Type::Tuple(elements) => {
+            elements.len().hash(hasher);
+            for element in elements {
+                dedup_key_into(element, hasher, depth + 1);
+            }
+        }
+        Type::Union(union) => {
+            union.types().len().hash(hasher);
+            for member in union.types() {
+                dedup_key_into(member, hasher, depth + 1);
+            }
+        }
+        Type::Object(object) => {
+            object.properties.len().hash(hasher);
+            // IndexMap equality is order-independent, so property names must be
+            // mixed with a commutative combiner rather than hashed in iteration
+            // order.
+            let mut names: u64 = 0;
+            for name in object.properties.keys() {
+                let mut name_hasher = DefaultHasher::new();
+                name.hash(&mut name_hasher);
+                names = names.wrapping_add(name_hasher.finish());
+            }
+            names.hash(hasher);
+            object.string_index_type.is_some().hash(hasher);
+        }
+        Type::Function(_) => {}
+        _ => {}
     }
 }
 
@@ -382,6 +517,61 @@ mod tests {
         let ty = union_type(vec![Type::StringLiteral("ok".to_string()), Type::Any]);
 
         assert_eq!(ty, Type::Any);
+    }
+
+    #[test]
+    fn large_union_dedup_matches_linear_semantics() {
+        // Exceeds LINEAR_DEDUP_LIMIT so the hashed path runs; every member is
+        // duplicated once and first-seen order must survive.
+        let members: Vec<Type> = (0..40)
+            .map(|index| Type::StringLiteral(format!("member-{index}")))
+            .collect();
+        let mut doubled = members.clone();
+        doubled.extend(members.clone());
+
+        let ty = union_type(doubled);
+        match &ty {
+            Type::Union(union) => assert_eq!(union.types(), members.as_slice()),
+            other => panic!("expected union, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn large_union_dedups_structurally_equal_objects() {
+        use crate::{ObjectProperty, ObjectType, PropertyMap};
+        use std::sync::Arc;
+
+        // Structurally equal objects behind distinct Arcs must still dedup on
+        // the hashed path, matching `Type::eq`.
+        let object = || {
+            let mut properties = PropertyMap::new();
+            properties.insert("value".to_string(), ObjectProperty::required(Type::String));
+            Type::Object(ObjectType {
+                properties: Arc::new(properties),
+                property_map_id: None,
+                string_index_type: None,
+                alias_name: None,
+                alias_id: None,
+                construct_signature: None,
+                call_signature: None,
+                is_intersection: false,
+            })
+        };
+
+        let mut members: Vec<Type> = (0..40)
+            .map(|index| Type::StringLiteral(format!("member-{index}")))
+            .collect();
+        members.push(object());
+        members.push(object());
+
+        let ty = union_type(members);
+        match &ty {
+            Type::Union(union) => {
+                assert_eq!(union.types().len(), 41);
+                assert!(matches!(union.types().last(), Some(Type::Object(_))));
+            }
+            other => panic!("expected union, got {other:?}"),
+        }
     }
 
     #[test]

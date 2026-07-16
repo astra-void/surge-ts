@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::{FunctionType, Type, union_type};
+use crate::store::{canonical_property_map_store_enabled, current_program_type_store};
+use crate::{FunctionType, PropertyMapId, Type, union_type};
 
 /// Property map preserving declaration order, which tsc relies on when rendering
 /// object types in diagnostics (`{ disabled?: boolean; children?: unknown }`).
@@ -13,6 +14,7 @@ pub type PropertyMap = IndexMap<String, ObjectProperty>;
 #[derive(Debug)]
 pub struct ObjectType {
     pub properties: Arc<PropertyMap>,
+    pub property_map_id: Option<PropertyMapId>,
     pub string_index_type: Option<Arc<Type>>,
     /// Name of the interface or type alias this object was resolved from, used
     /// only for diagnostic display (tsc shows `'StrictObj'`, not the structural
@@ -88,8 +90,19 @@ impl ObjectProperty {
 
 impl ObjectType {
     pub fn new(properties: PropertyMap, string_index_type: Option<Type>) -> Self {
+        let (properties, property_map_id) = if canonical_property_map_store_enabled()
+            && let Some(store) = current_program_type_store()
+        {
+            match store.intern_property_map(properties) {
+                Ok((map, id)) => (map, Some(id)),
+                Err(properties) => (Arc::new(properties), None),
+            }
+        } else {
+            (Arc::new(properties), None)
+        };
         Self {
-            properties: Arc::new(properties),
+            properties,
+            property_map_id,
             string_index_type: string_index_type.map(Arc::new),
             alias_name: None,
             alias_id: None,
@@ -208,6 +221,7 @@ impl Clone for ObjectType {
     fn clone(&self) -> Self {
         Self {
             properties: self.properties.clone(),
+            property_map_id: self.property_map_id,
             string_index_type: self.string_index_type.clone(),
             alias_name: self.alias_name.clone(),
             alias_id: self.alias_id.clone(),

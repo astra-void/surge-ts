@@ -324,23 +324,8 @@ pub(crate) fn push_unresolved_export_diagnostic(
         diagnostic = diagnostic.with_span(convert_span(span));
     }
 
-    let key = (
-        diagnostic.code.to_string(),
-        diagnostic.file_name.clone(),
-        diagnostic.span.map(|span| (span.start, span.end)),
-        diagnostic.message.clone(),
-    );
-
-    if ctx.diagnostics().iter().any(|existing| {
-        (
-            existing.code.to_string(),
-            existing.file_name.clone(),
-            existing.span.map(|span| (span.start, span.end)),
-            existing.message.clone(),
-        ) == key
-    }) {
-        return;
-    }
-
+    // `CheckerContext::push` already dedups by (code, file, message, span) via
+    // its O(1) key index, so no pre-scan of the accumulated diagnostics is
+    // needed here.
     ctx.push(diagnostic);
 }

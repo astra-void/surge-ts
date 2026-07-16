@@ -10,8 +10,15 @@ pub(crate) fn collect_exportable_value_symbols(
     let mut file_kinds = HashMap::new();
     file_kinds.insert(ctx.file_name.clone(), FileKind::RootSource);
     let mut shadow_ctx =
-        CheckerContext::new(ctx.file_name.clone(), ctx.options.clone(), file_kinds);
+        CheckerContext::new(ctx.file_name.clone(), (*ctx.options).clone(), file_kinds);
     shadow_ctx.timings = ctx.timings.clone();
+    shadow_ctx.physical_interface_instantiations = ctx.physical_interface_instantiations.clone();
+    shadow_ctx.physical_interface_declaration_templates =
+        ctx.physical_interface_declaration_templates.clone();
+    shadow_ctx.physical_interface_method_instantiations =
+        ctx.physical_interface_method_instantiations.clone();
+    shadow_ctx.physical_interface_overload_instantiations =
+        ctx.physical_interface_overload_instantiations.clone();
 
     let _ = local_type_declarations;
     shadow_ctx.type_declarations = ctx.type_declarations.clone();
@@ -79,29 +86,6 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
             let existing_symbol = exportable_values.get_shared(&variable.name);
-            if !check_initializers
-                && std::env::var_os("SURGE_EAGER_DEPENDENCY_ANNOTATIONS").is_none()
-                && let Some(annotation) = variable.declared_type.clone()
-            {
-                if existing_symbol.is_none() {
-                    let declaration_start = variable.name_span.map_or(0, |span| span.start);
-                    let ty = crate::infer::make_lazy_declaration_annotation_reference(
-                        ctx,
-                        &variable.name,
-                        declaration_start,
-                        annotation,
-                    );
-                    let _ = exportable_values.insert(
-                        variable.name.clone(),
-                        SymbolInfo {
-                            ty,
-                            kind: crate::symbols::map_symbol_kind(variable.kind),
-                            function_signature: None,
-                        },
-                    );
-                }
-                return;
-            }
             let _ = check_variable_declaration_with_symbols(
                 variable.as_ref().clone(),
                 exportable_values,

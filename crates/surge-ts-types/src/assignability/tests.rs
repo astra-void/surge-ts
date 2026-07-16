@@ -766,3 +766,55 @@ fn tuple_union_assignability_mismatch() {
         &union_type(vec![Type::Tuple(vec![Type::String, Type::String])])
     ));
 }
+
+fn plain_object(entries: Vec<(&str, Type)>) -> Type {
+    let mut properties = PropertyMap::new();
+    for (name, ty) in entries {
+        properties.insert(name.to_string(), ObjectProperty::required(ty));
+    }
+    Type::Object(ObjectType {
+        properties: Arc::new(properties),
+        property_map_id: None,
+        string_index_type: None,
+        alias_name: None,
+        alias_id: None,
+        construct_signature: None,
+        call_signature: None,
+        is_intersection: false,
+    })
+}
+
+/// Diamond-shaped nesting: each level's `a` and `b` share the same child type
+/// (one `Arc`), and the source carries an extra `tag` so no identity/equality
+/// fast path fires. Without the relation cache each sibling re-compares the
+/// same child pair, which is 2^depth — at depth 64 this test only terminates
+/// because completed sub-results are memoized.
+fn diamond(depth: usize, leaf: Type, tagged: bool) -> Type {
+    let mut current = if tagged {
+        plain_object(vec![("leaf", leaf), ("tag", Type::Number)])
+    } else {
+        plain_object(vec![("leaf", leaf)])
+    };
+    for _ in 0..depth {
+        let mut entries = vec![("a", current.clone()), ("b", current)];
+        if tagged {
+            entries.push(("tag", Type::Number));
+        }
+        current = plain_object(entries);
+    }
+    current
+}
+
+#[test]
+fn diamond_object_assignability_terminates_and_accepts() {
+    let source = diamond(64, Type::String, true);
+    let target = diamond(64, Type::String, false);
+    assert!(is_assignable_to(&source, &target));
+}
+
+#[test]
+fn diamond_object_assignability_terminates_and_rejects_leaf_mismatch() {
+    let source = diamond(64, Type::String, true);
+    let target = diamond(64, Type::Number, false);
+    assert!(!is_assignable_to(&source, &target));
+}

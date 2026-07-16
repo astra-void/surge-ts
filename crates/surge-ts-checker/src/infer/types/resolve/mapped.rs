@@ -86,10 +86,17 @@ pub(crate) fn resolve_mapped_type(
         }
     });
 
+    let _expansion_scope = TypeExpansionScope::enter();
     let mut properties = PropertyMap::new();
     let mut had_error = false;
 
     for key in keys {
+        if !try_consume_type_expansion_step() {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: false,
+            };
+        }
         let mut new_substitution =
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
         new_substitution.insert(mapped.key_name.clone(), Type::StringLiteral(key.clone()));
