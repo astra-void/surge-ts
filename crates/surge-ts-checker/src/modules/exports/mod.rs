@@ -16,7 +16,6 @@ pub(crate) use values::*;
 
 use super::*;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 

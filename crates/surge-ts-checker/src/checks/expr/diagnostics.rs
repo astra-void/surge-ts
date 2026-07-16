@@ -13,7 +13,7 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
         // it (and its alias name) as-is rather than widening its members.
         Type::Object(obj) if obj.alias_name.is_some() => ty.clone(),
         Type::Object(obj) => {
-            let mut new_props = surge_ts_types::PropertyMap::new();
+            let mut new_props = surge_ts_types::PropertyMap::default();
             for (k, v) in obj.properties.iter() {
                 new_props.insert(
                     k.clone(),

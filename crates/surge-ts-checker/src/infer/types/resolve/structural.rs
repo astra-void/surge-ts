@@ -135,7 +135,7 @@ pub(crate) fn resolve_object_type(
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     let mut had_error = false;
 
     for property in object_type.properties {

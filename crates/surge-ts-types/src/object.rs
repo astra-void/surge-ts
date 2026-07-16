@@ -9,7 +9,9 @@ use crate::{FunctionType, PropertyMapId, Type, union_type};
 /// object types in diagnostics (`{ disabled?: boolean; children?: unknown }`).
 /// Equality is order-independent, matching the previous `BTreeMap` semantics, so
 /// structural comparisons and type caching are unaffected.
-pub type PropertyMap = IndexMap<String, ObjectProperty>;
+// Insertion-ordered like any IndexMap (iteration order is hasher-independent),
+// with the fast workspace hasher for the per-lookup cost.
+pub type PropertyMap = IndexMap<String, ObjectProperty, crate::fx::FxBuildHasher>;
 
 #[derive(Debug)]
 pub struct ObjectType {

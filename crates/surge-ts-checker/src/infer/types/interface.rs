@@ -357,7 +357,7 @@ pub(crate) fn resolve_interface_declaration(
         c.interface_construct_signature_array_alloc_count += construct_signatures.len() as u64;
         c.interface_index_signature_alloc_count += u64::from(string_index_type.is_some());
     });
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     let mut had_error = false;
     let mut inherited_index_type: Option<Type> = None;
     let mut inherited_call_signature: Option<FunctionType> = None;
@@ -859,7 +859,7 @@ fn is_declaration_file_name(file_name: &str) -> bool {
 }
 
 pub(crate) fn generated_default_lib_map_instance_type() -> Type {
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     properties.insert(
         "get".to_string(),
         ObjectProperty::required(Type::Function(alloc_function_type(

@@ -579,7 +579,7 @@ impl TypeDeclarationScope {
 /// must not replace the original entry.
 pub(crate) struct TypeDeclarationTable {
     arena: CheckerArena,
-    declarations: HashMap<ArenaStr, TypeDeclarationId>,
+    declarations: surge_ts_types::fx::FxHashMap<ArenaStr, TypeDeclarationId>,
     payloads: Vec<usize>,
 }
 
@@ -594,7 +594,7 @@ impl TypeDeclarationTable {
     pub(crate) fn with_arena(arena: CheckerArena) -> Self {
         Self {
             arena,
-            declarations: HashMap::new(),
+            declarations: Default::default(),
             payloads: Vec::new(),
         }
     }

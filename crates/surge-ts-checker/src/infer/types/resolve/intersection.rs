@@ -247,7 +247,7 @@ fn merge_intersection_members_now(
     }
 
     if !object_members.is_empty() {
-        let mut properties: PropertyMap = PropertyMap::new();
+        let mut properties: PropertyMap = PropertyMap::default();
         let mut string_index_type: Option<Type> = None;
         // A callable operand (`F & { … }`, or an interface with a call signature)
         // keeps the merged intersection callable; the first signature wins, like

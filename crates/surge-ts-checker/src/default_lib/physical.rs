@@ -26,12 +26,42 @@ pub struct DefaultLibIoStats {
 /// self-describing: when physical mode is off these files are simply never
 /// injected, so this predicate cannot misfire on ordinary projects.
 pub fn is_physical_default_lib_file_name(file_name: &str) -> bool {
-    let lower = file_name.replace('\\', "/").to_ascii_lowercase();
-    let Some(idx) = lower.rfind('/') else {
+    crate::default_lib::source::default_lib_name_flags(file_name).1
+}
+
+pub(crate) fn is_physical_default_lib_file_name_uncached(file_name: &str) -> bool {
+    // Allocation-free equivalent of lowercasing and normalizing `\` to `/`:
+    // this predicate sits on per-type-resolution paths, so it must not build
+    // a fresh `String` per call.
+    fn norm(byte: u8) -> u8 {
+        if byte == b'\\' {
+            b'/'
+        } else {
+            byte.to_ascii_lowercase()
+        }
+    }
+    fn ends_with_norm(haystack: &[u8], suffix: &[u8]) -> bool {
+        haystack.len() >= suffix.len()
+            && haystack[haystack.len() - suffix.len()..]
+                .iter()
+                .zip(suffix)
+                .all(|(&h, &s)| norm(h) == s)
+    }
+    fn starts_with_norm(haystack: &[u8], prefix: &[u8]) -> bool {
+        haystack.len() >= prefix.len()
+            && haystack[..prefix.len()]
+                .iter()
+                .zip(prefix)
+                .all(|(&h, &s)| norm(h) == s)
+    }
+    let bytes = file_name.as_bytes();
+    let Some(idx) = bytes.iter().rposition(|&b| b == b'/' || b == b'\\') else {
         return false;
     };
-    let (dir, file) = lower.split_at(idx);
-    dir.ends_with("/typescript/lib") && file.starts_with("/lib.") && file.ends_with(".d.ts")
+    let (dir, file) = bytes.split_at(idx);
+    ends_with_norm(dir, b"/typescript/lib")
+        && starts_with_norm(file, b"/lib.")
+        && ends_with_norm(file, b".d.ts")
 }
 
 /// Outcome of resolving the physical default libs for a project.

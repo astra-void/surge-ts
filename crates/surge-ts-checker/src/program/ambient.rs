@@ -263,7 +263,7 @@ fn lower_ambient_namespace_values(parsed_files: &[ParsedProgramFile], ctx: &mut 
             if let Some(namespace) = namespace {
                 let entry = merged.entry(namespace.name.clone()).or_insert_with(|| {
                     order.push(namespace.name.clone());
-                    PropertyMap::new()
+                    PropertyMap::default()
                 });
                 crate::modules::fill_namespace_value_properties(namespace, entry);
             }

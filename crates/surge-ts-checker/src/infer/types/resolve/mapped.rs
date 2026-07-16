@@ -43,7 +43,7 @@ pub(crate) fn resolve_mapped_type(
             resolve_parsed_type(*mapped.value_type, ctx, resolving, &value_substitution);
         return ResolvedType {
             ty: Type::Object(alloc_object_type(
-                PropertyMap::new(),
+                PropertyMap::default(),
                 Some(resolved_value.ty),
             )),
             had_error: resolved_value.had_error,
@@ -87,7 +87,7 @@ pub(crate) fn resolve_mapped_type(
     });
 
     let _expansion_scope = TypeExpansionScope::enter();
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     let mut had_error = false;
 
     for key in keys {

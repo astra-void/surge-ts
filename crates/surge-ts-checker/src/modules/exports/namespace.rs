@@ -63,7 +63,7 @@ pub(crate) fn namespace_export_object_type(export_table: &ModuleExportTable) -> 
 
 pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTable) -> Type {
     crate::program::record_module_export_namespace_export_object_materialization_count();
-    let mut properties = surge_ts_types::PropertyMap::new();
+    let mut properties = surge_ts_types::PropertyMap::default();
     let mut property_count = 0u64;
 
     for (name, symbol) in export_table.symbols.iter() {

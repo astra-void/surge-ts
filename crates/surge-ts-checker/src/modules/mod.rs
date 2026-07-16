@@ -152,7 +152,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, file)| (canonical_file_identity(&file.file_name).into(), index))
-            .collect::<HashMap<Arc<str>, usize>>();
+            .collect::<surge_ts_types::fx::FxHashMap<Arc<str>, usize>>();
 
         super::resolve_relative_module(
             importer_file_name,
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn module_resolver_marks_unresolved_star_exports() {
         let files = program(&[("src/index.ts", "export * from \"./missing\";")]);
-        let mut file_kinds = HashMap::new();
+        let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
         file_kinds.insert("src/index.ts".to_string(), FileKind::RootSource);
         let mut ctx =
             CheckerContext::new("src/index.ts".to_string(), Default::default(), file_kinds);
@@ -313,7 +313,7 @@ mod tests {
         // rather than index out of bounds and panic.
         let files = program(&[("src/index.ts", "export { foo } from \"target-pkg\";")]);
 
-        let mut file_kinds = HashMap::new();
+        let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
         file_kinds.insert("src/index.ts".to_string(), FileKind::RootSource);
         let mut options = crate::context::CheckerOptions::default();
         options
@@ -321,7 +321,7 @@ mod tests {
             .insert("target-pkg".to_string(), "src/target.ts".to_string());
         let mut ctx = CheckerContext::new("src/index.ts".to_string(), options, file_kinds);
 
-        let mut identity = HashMap::new();
+        let mut identity = surge_ts_types::fx::FxHashMap::default();
         identity.insert(canonical_file_identity("src/target.ts").into(), 194usize);
         ctx.set_module_file_index_by_identity(identity);
 

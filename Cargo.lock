@@ -797,6 +797,7 @@ dependencies = [
  "surge-ts-config",
  "surge-ts-diagnostics",
  "surge-ts-syntax",
+ "surge-ts-types",
 ]
 
 [[package]]
@@ -836,6 +837,7 @@ dependencies = [
  "jsonc-parser",
  "serde",
  "serde_json",
+ "surge-ts-types",
  "thiserror",
  "walkdir",
 ]

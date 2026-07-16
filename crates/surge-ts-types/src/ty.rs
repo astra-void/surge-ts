@@ -77,7 +77,7 @@ fn array_iterator_type(yields: Type) -> Type {
     use crate::{ObjectProperty, PropertyMap};
     let display = format!("ArrayIterator<{}>", yields.name());
 
-    let mut result_props = PropertyMap::new();
+    let mut result_props = PropertyMap::default();
     // The protocol's terminal result carries `value: undefined`, so the merged
     // `next()` result type is `T | undefined` — matching tsc and keeping the
     // possibly-absent value sound.
@@ -88,7 +88,7 @@ fn array_iterator_type(yields: Type) -> Type {
     result_props.insert("done".to_string(), ObjectProperty::required(Type::Boolean));
     let result = Type::Object(ObjectType::new(result_props, None));
 
-    let mut props = PropertyMap::new();
+    let mut props = PropertyMap::default();
     props.insert(
         "next".to_string(),
         ObjectProperty::required(function_type(vec![], result, false, 0)),
@@ -179,7 +179,7 @@ impl Type {
             "Uint8Array" => Some(Type::Array(Box::new(Type::Number))),
             "Map" => Some(Type::Object(ObjectType::new(
                 {
-                    let mut properties = crate::PropertyMap::new();
+                    let mut properties = crate::PropertyMap::default();
                     properties.insert(
                         "get".to_string(),
                         crate::ObjectProperty::required(function_type(
@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn array_type_name_object() {
-        let mut properties = crate::PropertyMap::new();
+        let mut properties = crate::PropertyMap::default();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(
@@ -823,7 +823,7 @@ mod tests {
 
     #[test]
     fn tuple_type_name_object_element() {
-        let mut properties = crate::PropertyMap::new();
+        let mut properties = crate::PropertyMap::default();
         properties.insert("name".to_string(), ObjectProperty::required(Type::String));
 
         assert_eq!(

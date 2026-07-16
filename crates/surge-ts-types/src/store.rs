@@ -1,10 +1,10 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
 
 use crate::function::record_function_type_payload_alloc_count;
+use crate::fx::{FxHashMap, FxHasher, PrehashedU64Map};
 use crate::union::record_union_type_payload_alloc_count;
 use crate::{FunctionType, FunctionTypePayload, PropertyMap, Type, UnionTypePayload};
 
@@ -116,13 +116,13 @@ pub struct ProgramTypeStore {
     next_function: AtomicU32,
     next_union: AtomicU32,
     next_property_map: AtomicU32,
-    parameter_lists: [Mutex<HashMap<u64, Vec<ListEntry>>>; STORE_SHARDS],
-    functions: [Mutex<HashMap<u64, Vec<FunctionEntry>>>; STORE_SHARDS],
+    parameter_lists: [Mutex<PrehashedU64Map<Vec<ListEntry>>>; STORE_SHARDS],
+    functions: [Mutex<PrehashedU64Map<Vec<FunctionEntry>>>; STORE_SHARDS],
     overload_merges: [Mutex<
-        HashMap<(FunctionTypeId, FunctionTypeId), (FunctionTypeId, Weak<FunctionTypePayload>)>,
+        FxHashMap<(FunctionTypeId, FunctionTypeId), (FunctionTypeId, Weak<FunctionTypePayload>)>,
     >; STORE_SHARDS],
-    unions: [Mutex<HashMap<u64, Vec<UnionEntry>>>; STORE_SHARDS],
-    property_maps: [Mutex<HashMap<u64, Vec<PropertyMapEntry>>>; STORE_SHARDS],
+    unions: [Mutex<PrehashedU64Map<Vec<UnionEntry>>>; STORE_SHARDS],
+    property_maps: [Mutex<PrehashedU64Map<Vec<PropertyMapEntry>>>; STORE_SHARDS],
     counters: StoreCounters,
 }
 
@@ -136,11 +136,11 @@ impl ProgramTypeStore {
             next_function: AtomicU32::new(1),
             next_union: AtomicU32::new(1),
             next_property_map: AtomicU32::new(1),
-            parameter_lists: std::array::from_fn(|_| Mutex::new(HashMap::new())),
-            functions: std::array::from_fn(|_| Mutex::new(HashMap::new())),
-            overload_merges: std::array::from_fn(|_| Mutex::new(HashMap::new())),
-            unions: std::array::from_fn(|_| Mutex::new(HashMap::new())),
-            property_maps: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+            parameter_lists: std::array::from_fn(|_| Mutex::new(PrehashedU64Map::default())),
+            functions: std::array::from_fn(|_| Mutex::new(PrehashedU64Map::default())),
+            overload_merges: std::array::from_fn(|_| Mutex::new(FxHashMap::default())),
+            unions: std::array::from_fn(|_| Mutex::new(PrehashedU64Map::default())),
+            property_maps: std::array::from_fn(|_| Mutex::new(PrehashedU64Map::default())),
             counters: StoreCounters::default(),
         })
     }
@@ -340,6 +340,37 @@ impl ProgramTypeStore {
         Ok((payload, id))
     }
 
+    /// Borrowed-member interner probe for `union_type`: on a hit no member is
+    /// cloned; on a miss (or an over-budget fingerprint) the caller falls back
+    /// to the owned [`Self::intern_union`] path.
+    pub(crate) fn intern_union_borrowed(
+        &self,
+        types: &[&Type],
+    ) -> Option<(Arc<UnionTypePayload>, UnionTypeId)> {
+        let mut budget = FingerprintBudget::default();
+        let key = fingerprint_borrowed_types(types, &mut budget)?;
+        let mut unions = self.lock_shard(&self.unions[shard_index(key)]);
+        let bucket = unions.entry(key).or_default();
+        for entry in bucket.iter() {
+            let existing = &entry.value;
+            if existing.types.len() == types.len()
+                && existing
+                    .types
+                    .iter()
+                    .zip(types.iter())
+                    .all(|(left, right)| canonical_types_equal(left, right))
+            {
+                self.counters.union_requests.fetch_add(1, Ordering::Relaxed);
+                self.counters.union_hits.fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .union_member_elements_avoided
+                    .fetch_add(types.len() as u64, Ordering::Relaxed);
+                return Some((existing.clone(), entry.id));
+            }
+        }
+        None
+    }
+
     pub(crate) fn intern_property_map(
         &self,
         properties: PropertyMap,
@@ -348,7 +379,7 @@ impl ProgramTypeStore {
             .property_map_requests
             .fetch_add(1, Ordering::Relaxed);
         let mut budget = FingerprintBudget::default();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         properties.len().hash(&mut hasher);
         for (name, property) in &properties {
             name.hash(&mut hasher);
@@ -477,8 +508,17 @@ impl Default for FingerprintBudget {
     }
 }
 
+fn fingerprint_borrowed_types(types: &[&Type], budget: &mut FingerprintBudget) -> Option<u64> {
+    let mut hasher = FxHasher::default();
+    types.len().hash(&mut hasher);
+    for ty in types {
+        fingerprint_type(ty, budget)?.hash(&mut hasher);
+    }
+    Some(hasher.finish())
+}
+
 fn fingerprint_types(types: &[Type], budget: &mut FingerprintBudget) -> Option<u64> {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     types.len().hash(&mut hasher);
     for ty in types {
         fingerprint_type(ty, budget)?.hash(&mut hasher);
@@ -492,7 +532,7 @@ fn fingerprint_type(ty: &Type, budget: &mut FingerprintBudget) -> Option<u64> {
     }
     budget.remaining -= 1;
     budget.depth += 1;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     std::mem::discriminant(ty).hash(&mut hasher);
     match ty {
         Type::Unknown => return None,
@@ -608,7 +648,7 @@ fn fingerprint_property_type(ty: &Type, budget: &mut FingerprintBudget) -> Optio
     }
     budget.remaining -= 1;
     budget.depth += 1;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     std::mem::discriminant(ty).hash(&mut hasher);
     match ty {
         Type::StringLiteral(value) => value.hash(&mut hasher),
@@ -642,7 +682,7 @@ fn fingerprint_property_type(ty: &Type, budget: &mut FingerprintBudget) -> Optio
 }
 
 fn hash_key(value: &impl Hash) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }
@@ -673,22 +713,35 @@ pub fn current_program_type_store() -> Option<Arc<ProgramTypeStore>> {
     ACTIVE_TYPE_STORE.with(|active| active.borrow().clone())
 }
 
+// These gates sit on every intern request (millions per run), so the env
+// probes are read once per process rather than per call.
 pub(crate) fn canonical_store_enabled() -> bool {
-    std::env::var_os("SURGE_DISABLE_CANONICAL_TYPE_STORE").is_none()
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_DISABLE_CANONICAL_TYPE_STORE").is_none())
 }
 
 pub(crate) fn canonical_function_store_enabled() -> bool {
-    canonical_store_enabled()
-        && std::env::var_os("SURGE_DISABLE_CANONICAL_FUNCTION_STORE").is_none()
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        canonical_store_enabled()
+            && std::env::var_os("SURGE_DISABLE_CANONICAL_FUNCTION_STORE").is_none()
+    })
 }
 
 pub(crate) fn canonical_union_store_enabled() -> bool {
-    canonical_store_enabled() && std::env::var_os("SURGE_DISABLE_CANONICAL_UNION_STORE").is_none()
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        canonical_store_enabled()
+            && std::env::var_os("SURGE_DISABLE_CANONICAL_UNION_STORE").is_none()
+    })
 }
 
 pub(crate) fn canonical_property_map_store_enabled() -> bool {
-    canonical_store_enabled()
-        && std::env::var_os("SURGE_DISABLE_CANONICAL_PROPERTY_MAP_STORE").is_none()
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        canonical_store_enabled()
+            && std::env::var_os("SURGE_DISABLE_CANONICAL_PROPERTY_MAP_STORE").is_none()
+    })
 }
 
 #[cfg(test)]
@@ -815,10 +868,10 @@ mod tests {
             let second = UnionType::new(vec![Type::String, Type::Number]);
             assert_eq!(first.id(), second.id());
 
-            let mut first_properties = PropertyMap::new();
+            let mut first_properties = PropertyMap::default();
             first_properties.insert("a".into(), ObjectProperty::required(Type::String));
             first_properties.insert("b".into(), ObjectProperty::required(Type::Number));
-            let mut second_properties = PropertyMap::new();
+            let mut second_properties = PropertyMap::default();
             second_properties.insert("a".into(), ObjectProperty::required(Type::String));
             second_properties.insert("b".into(), ObjectProperty::required(Type::Number));
             let first_object = ObjectType::new(first_properties, None);

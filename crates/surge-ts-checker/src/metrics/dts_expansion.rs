@@ -691,7 +691,7 @@ pub(crate) fn record_lazy_reference_expansion(
     add_expansion(
         trace
             .expansions_by_file
-            .entry(key.file_name.clone())
+            .entry(key.file_name.as_ref().to_string())
             .or_default(),
         objects,
         functions,

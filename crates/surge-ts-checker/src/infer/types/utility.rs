@@ -239,7 +239,7 @@ pub(crate) fn resolve_partial_utility_type(
         };
     };
 
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     for (name, property) in object_type.properties.iter() {
         properties.insert(name.clone(), ObjectProperty::optional(property.ty.clone()));
     }
@@ -273,7 +273,7 @@ pub(crate) fn resolve_required_utility_type(
     // `Required<T>` only strips the optional *modifier* (`-?`); it keeps each
     // property's declared type intact, including an explicit `| undefined` member
     // (`jitter?: boolean | … | undefined` stays assignable from `undefined`).
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     for (name, property) in object_type.properties.iter() {
         properties.insert(name.clone(), ObjectProperty::required(property.ty.clone()));
     }
@@ -327,7 +327,7 @@ pub(crate) fn resolve_record_utility_type(
     if key_type == Type::String {
         return ResolvedType {
             ty: Type::Object(alloc_object_type(
-                PropertyMap::new(),
+                PropertyMap::default(),
                 Some(substitution.get("T").cloned().unwrap_or(Type::Unknown)),
             )),
             had_error: false,
@@ -342,7 +342,7 @@ pub(crate) fn resolve_record_utility_type(
     };
 
     let value_type = substitution.get("T").cloned().unwrap_or(Type::Unknown);
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
 
     for key in keys {
         properties.insert(key, ObjectProperty::required(value_type.clone()));
@@ -387,7 +387,7 @@ pub(crate) fn resolve_pick_utility_type(
         };
     };
 
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     for key in keys {
         let Some(property) = object_type.properties.get(&key) else {
             let key_type_name = key_type.name();
@@ -443,7 +443,7 @@ pub(crate) fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution
     };
 
     let keys: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     for (key, property) in object_type.properties.iter() {
         if keys.contains(key.as_str()) {
             continue;
@@ -527,7 +527,7 @@ mod tests {
     use surge_ts_types::ObjectType;
 
     fn optional_object() -> Type {
-        let mut props = PropertyMap::new();
+        let mut props = PropertyMap::default();
         props.insert("a".to_string(), ObjectProperty::optional(Type::Number));
         props.insert("b".to_string(), ObjectProperty::optional(Type::String));
         Type::Object(ObjectType::new(props, None))

@@ -7,10 +7,13 @@ pub(crate) fn collect_exportable_value_symbols(
     imported_symbols: Option<&SymbolTable>,
     ctx: &CheckerContext,
 ) -> SymbolTable {
-    let mut file_kinds = HashMap::new();
+    let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(ctx.file_name.clone(), FileKind::RootSource);
-    let mut shadow_ctx =
-        CheckerContext::new(ctx.file_name.clone(), (*ctx.options).clone(), file_kinds);
+    let mut shadow_ctx = CheckerContext::new_with_shared_options(
+        ctx.file_name.clone(),
+        Arc::clone(&ctx.options),
+        file_kinds,
+    );
     shadow_ctx.timings = ctx.timings.clone();
     shadow_ctx.physical_interface_instantiations = ctx.physical_interface_instantiations.clone();
     shadow_ctx.physical_interface_declaration_templates =
@@ -133,7 +136,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
 /// re-resolving a partially modelled surface and cascading. Used to bind an
 /// `export = <namespace>` value so `import * as Ns` exposes `Ns.member`.
 pub(crate) fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
-    let mut properties = surge_ts_types::PropertyMap::new();
+    let mut properties = surge_ts_types::PropertyMap::default();
     fill_namespace_value_properties(namespace, &mut properties);
     Type::Object(crate::arena::alloc_object_type(properties, None))
 }

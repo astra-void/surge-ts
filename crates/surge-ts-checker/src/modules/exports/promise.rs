@@ -3,7 +3,7 @@ use super::*;
 pub(crate) const PROMISE_LIKE_VALUE_PROPERTY: &str = "\0surgePromiseValue";
 
 pub(crate) fn promise_like_type(value_type: Type) -> Type {
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     properties.insert(
         PROMISE_LIKE_VALUE_PROPERTY.to_string(),
         ObjectProperty::required(value_type.clone()),

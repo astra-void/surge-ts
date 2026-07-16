@@ -532,11 +532,11 @@ fn check_program_with_stats_and_jobs_inner(
                 index,
             )
         })
-        .collect::<HashMap<Arc<str>, usize>>();
+        .collect::<surge_ts_types::fx::FxHashMap<Arc<str>, usize>>();
     let file_kinds = parsed_files
         .iter()
         .map(|file| (file.file_name.clone(), file.file_kind))
-        .collect::<HashMap<_, _>>();
+        .collect::<surge_ts_types::fx::FxHashMap<_, _>>();
     let first_file_name = parsed_files
         .first()
         .map(|file| file.file_name.clone())
@@ -880,7 +880,8 @@ fn check_program_with_stats_and_jobs_inner(
     {
         let saved_file_name = ctx.file_name.clone();
         let saved_type_declarations = std::mem::take(&mut ctx.type_declarations);
-        let mut module_local_values: HashMap<Arc<str>, Arc<SymbolTable>> = HashMap::new();
+        let mut module_local_values: surge_ts_types::fx::FxHashMap<Arc<str>, Arc<SymbolTable>> =
+            surge_ts_types::fx::FxHashMap::default();
         // Declaration modules are included: a library annotation chain routinely
         // crosses `typeof <importedValue>` (radix's
         // `ComponentPropsWithoutRef<typeof Primitive.button>`), which resolves
@@ -1282,10 +1283,16 @@ fn check_program_files_serial(
 ) -> Vec<FileCheckResult> {
     let mut results = Vec::with_capacity(parsed_files.len());
 
+    // One reused context for the whole pass, exactly like a single parallel
+    // worker: `check_program_file` already isolates per-file state (see
+    // `begin_file_check`), and serial/parallel diagnostic equality is an
+    // asserted invariant. Cloning the (large) context per file was a measured
+    // ~3% of check-phase time on tRPC.
+    let mut local_ctx = ctx.clone();
+    local_ctx.diagnostics.clear();
+    local_ctx.stats = CompatibilityStats::default();
+
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-        let mut local_ctx = ctx.clone();
-        local_ctx.diagnostics.clear();
-        local_ctx.stats = CompatibilityStats::default();
         let result = check_program_file(
             file_index,
             parsed_file,
@@ -1546,7 +1553,7 @@ fn locate_jsx_intrinsic_elements_declarer(
 fn module_scope_by_file_map(
     parsed_files: &[ParsedProgramFile],
     module_resolution_scopes: &[Option<Arc<crate::symbols::TypeDeclarationScope>>],
-) -> HashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>> {
+) -> surge_ts_types::fx::FxHashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>> {
     parsed_files
         .iter()
         .zip(module_resolution_scopes.iter())
@@ -1668,7 +1675,7 @@ fn check_program_file(
         signature_ctx.diagnostics.clear();
         signature_ctx.reset_utility_diagnostic_keys();
         signature_ctx.resolved_named_types =
-            std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+            std::sync::Arc::new(std::sync::Mutex::new(Default::default()));
         // Seed from `validation_symbols` rather than `merged_symbols`: it carries
         // the local `const`/`let`/`var` value symbols inferred during declaration
         // validation, so `typeof <localConst>` resolves inside parameter type

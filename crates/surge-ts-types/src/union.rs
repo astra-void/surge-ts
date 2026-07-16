@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+
+use crate::fx::{FxHasher, PrehashedU64Map};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -101,6 +101,23 @@ impl UnionType {
         }
     }
 
+    /// Like [`Self::new`], but probes the interner through borrowed members so
+    /// an interner hit (the overwhelmingly common case: 2.4M hits vs 89k
+    /// unique unions on tRPC) never deep-clones the member types. Only a miss
+    /// — a genuinely new canonical union — materializes the owned member list.
+    fn from_borrowed_members(members: &[&Type]) -> Self {
+        if canonical_union_store_enabled()
+            && let Some(store) = current_program_type_store()
+            && let Some((payload, id)) = store.intern_union_borrowed(members)
+        {
+            return Self {
+                payload,
+                id: Some(id),
+            };
+        }
+        Self::new(members.iter().map(|ty| (*ty).clone()).collect())
+    }
+
     pub fn payload(&self) -> &UnionTypePayload {
         &self.payload
     }
@@ -174,11 +191,14 @@ pub fn remove_nullish(ty: &Type) -> Type {
 }
 
 pub fn union_type(types: Vec<Type>) -> Type {
-    let mut flattened = Vec::new();
+    // Flatten, simplify, and dedup over *borrowed* members: the members are
+    // only cloned when the result is a genuinely new canonical union (see
+    // `UnionType::from_borrowed_members`) or the single surviving member.
+    let mut flattened: Vec<&Type> = Vec::with_capacity(types.len());
 
-    for ty in types {
+    for ty in &types {
         match ty {
-            Type::Union(union) => flattened.extend(union.types().iter().cloned()),
+            Type::Union(union) => flattened.extend(union.types().iter()),
             other => flattened.push(other),
         }
     }
@@ -198,8 +218,8 @@ pub fn union_type(types: Vec<Type>) -> Type {
     match unique.len() {
         0 if had_members => Type::Never,
         0 => Type::Unknown,
-        1 => unique.into_iter().next().unwrap(),
-        _ => Type::Union(UnionType::new(unique)),
+        1 => unique[0].clone(),
+        _ => Type::Union(UnionType::from_borrowed_members(&unique)),
     }
 }
 
@@ -207,31 +227,44 @@ pub fn union_type(types: Vec<Type>) -> Type {
 /// most unions the checker builds have a handful of members.
 const LINEAR_DEDUP_LIMIT: usize = 16;
 
-fn dedup_members(flattened: Vec<Type>) -> Vec<Type> {
-    let mut unique: Vec<Type> = Vec::with_capacity(flattened.len().min(64));
+fn dedup_members<'a>(flattened: Vec<&'a Type>) -> Vec<&'a Type> {
+    let mut unique: Vec<&'a Type> = Vec::with_capacity(flattened.len().min(64));
     if flattened.len() <= LINEAR_DEDUP_LIMIT {
         for ty in flattened {
-            if !unique.contains(&ty) {
+            if !unique.iter().any(|existing| *existing == ty) {
                 unique.push(ty);
             }
         }
         return unique;
     }
 
-    let mut buckets: HashMap<u64, Vec<usize>> = HashMap::with_capacity(flattened.len());
+    // Inline-first buckets: the overflow `Vec` only allocates on a fingerprint
+    // collision between distinct members (vanishingly rare with 64-bit keys),
+    // so a large union's dedup costs one map allocation instead of one `Vec`
+    // per distinct member.
+    let mut buckets: PrehashedU64Map<(usize, Vec<usize>)> =
+        PrehashedU64Map::with_capacity_and_hasher(flattened.len(), Default::default());
     for ty in flattened {
-        let indices = buckets.entry(dedup_key(&ty)).or_default();
-        if indices.iter().any(|&index| unique[index] == ty) {
-            continue;
+        match buckets.entry(dedup_key(ty)) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert((unique.len(), Vec::new()));
+                unique.push(ty);
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let (first, overflow) = entry.get_mut();
+                if unique[*first] == ty || overflow.iter().any(|&index| unique[index] == ty) {
+                    continue;
+                }
+                overflow.push(unique.len());
+                unique.push(ty);
+            }
         }
-        indices.push(unique.len());
-        unique.push(ty);
     }
     unique
 }
 
 fn dedup_key(ty: &Type) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     dedup_key_into(ty, &mut hasher, 0);
     hasher.finish()
 }
@@ -241,7 +274,7 @@ fn dedup_key(ty: &Type) -> u64 {
 /// participate in equality are hashed, and always structurally — never by
 /// pointer, since `ObjectType`/`FunctionType`/`UnionType` equality accepts
 /// structurally-equal values behind distinct `Arc`s.
-fn dedup_key_into(ty: &Type, hasher: &mut DefaultHasher, depth: u8) {
+fn dedup_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8) {
     std::mem::discriminant(ty).hash(hasher);
     if depth >= 3 {
         return;
@@ -277,7 +310,7 @@ fn dedup_key_into(ty: &Type, hasher: &mut DefaultHasher, depth: u8) {
             // order.
             let mut names: u64 = 0;
             for name in object.properties.keys() {
-                let mut name_hasher = DefaultHasher::new();
+                let mut name_hasher = FxHasher::default();
                 name.hash(&mut name_hasher);
                 names = names.wrapping_add(name_hasher.finish());
             }
@@ -544,7 +577,7 @@ mod tests {
         // Structurally equal objects behind distinct Arcs must still dedup on
         // the hashed path, matching `Type::eq`.
         let object = || {
-            let mut properties = PropertyMap::new();
+            let mut properties = PropertyMap::default();
             properties.insert("value".to_string(), ObjectProperty::required(Type::String));
             Type::Object(ObjectType {
                 properties: Arc::new(properties),

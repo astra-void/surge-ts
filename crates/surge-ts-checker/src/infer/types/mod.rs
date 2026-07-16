@@ -230,8 +230,15 @@ fn with_file_name<R>(
     f: impl FnOnce(&mut CheckerContext) -> R,
 ) -> R {
     let current_file_name = ctx.file_name.clone();
+    let crossed_file = current_file_name != file_name;
     ctx.set_file_name(file_name.to_string());
+    if crossed_file {
+        ctx.cross_file_resolution_depth += 1;
+    }
     let result = f(ctx);
+    if crossed_file {
+        ctx.cross_file_resolution_depth -= 1;
+    }
     ctx.set_file_name(current_file_name);
     result
 }

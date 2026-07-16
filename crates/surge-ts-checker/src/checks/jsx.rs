@@ -155,7 +155,7 @@ fn component_props_type(component_type: &Type) -> Option<Type> {
             .parameters()
             .first()
             .cloned()
-            .unwrap_or_else(|| Type::Object(alloc_object_type(PropertyMap::new(), None))),
+            .unwrap_or_else(|| Type::Object(alloc_object_type(PropertyMap::default(), None))),
     )
 }
 

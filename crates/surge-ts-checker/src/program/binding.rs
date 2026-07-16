@@ -330,7 +330,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
             }
         }
         ctx.truncate_diagnostics(diagnostics_before_signatures);
-        ctx.resolved_named_types = Arc::new(Mutex::new(HashMap::new()));
+        ctx.resolved_named_types = Arc::new(Mutex::new(surge_ts_types::fx::FxHashMap::default()));
 
         // Lower this module's `declare global` augmentation values now that its
         // type environment (local declarations + import scope) is active. The

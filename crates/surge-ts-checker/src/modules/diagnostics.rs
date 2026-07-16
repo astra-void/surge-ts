@@ -106,7 +106,7 @@ pub(crate) fn clear_star_export_unresolved_cache() {
 pub(crate) fn module_has_unresolved_star_export(
     file_index: usize,
     parsed_files: &[ParsedProgramFile],
-    file_index_by_identity: &HashMap<Arc<str>, usize>,
+    file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
 ) -> bool {
     if let Some(cached) =
         STAR_EXPORT_UNRESOLVED_CACHE.with(|cache| cache.borrow().get(&file_index).copied())

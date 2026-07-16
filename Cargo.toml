@@ -19,3 +19,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/astra-void/surge-ts"
 homepage = "https://github.com/astra-void/surge-ts"
 authors = ["astra-void"]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

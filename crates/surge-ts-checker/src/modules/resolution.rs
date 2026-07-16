@@ -47,7 +47,7 @@ pub(crate) fn resolve_relative_module(
     importer_file_name: &str,
     specifier: &str,
     program_files: &[ParsedProgramFile],
-    file_index_by_identity: &HashMap<Arc<str>, usize>,
+    file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
 ) -> Option<ModuleResolution> {
     if !is_relative_specifier(specifier) {
         return None;
@@ -76,7 +76,7 @@ pub(crate) fn resolve_relative_module_uncached(
     importer_file_name: &str,
     specifier: &str,
     program_files: &[ParsedProgramFile],
-    file_index_by_identity: &HashMap<Arc<str>, usize>,
+    file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
 ) -> Option<ModuleResolution> {
     let importer_dir = module_directory(importer_file_name);
     let normalized_specifier = normalize_path_string(specifier);
@@ -107,7 +107,7 @@ pub(crate) fn resolve_relative_local_type_scope(
     importer_file_name: &str,
     module_specifier: &str,
     program_files: &[ParsedProgramFile],
-    file_index_by_identity: &HashMap<Arc<str>, usize>,
+    file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
 ) -> Option<(usize, Arc<TypeDeclarationScope>)> {
     let resolved = resolve_relative_module(

@@ -31,7 +31,7 @@ pub fn check_source_with_options(
 ) -> Vec<Diagnostic> {
     let parsed = parse_source(source_text, file_name);
     let file_name = parsed.file_name;
-    let mut file_kinds = std::collections::HashMap::new();
+    let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(file_name.clone(), classify_file_kind(&file_name));
     let mut ctx = CheckerContext::new(file_name.clone(), options, file_kinds);
 
@@ -340,7 +340,7 @@ fn lower_global_augmentation_values(
 pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
     use surge_ts_types::PropertyMap;
 
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     for (name, symbol) in ctx.ambient_global_symbols.iter() {
         if name.as_ref() == "globalThis" {
             continue;
@@ -477,7 +477,8 @@ fn collect_named_local_type_declaration(
     local_declarations: &mut Vec<TypeDeclarationInfo>,
     ctx: &CheckerContext,
 ) {
-    let canonical_file_name = canonicalize_if_exists_string(std::path::Path::new(file_name));
+    let canonical_file_name =
+        crate::paths::canonicalize_if_exists_arc(std::path::Path::new(file_name));
     let key = DeclarationResolutionKey {
         file_name: canonical_file_name.clone(),
         name: name.to_string(),
@@ -491,12 +492,12 @@ fn collect_named_local_type_declaration(
         (LocalDeclarationKind::Alias, TypeDeclarationInfo::Alias(info)) => {
             info.name == name
                 && canonicalize_if_exists_string(std::path::Path::new(&info.file_name))
-                    == canonical_file_name
+                    == *canonical_file_name
         }
         (LocalDeclarationKind::Interface, TypeDeclarationInfo::Interface(info)) => {
             info.name == name
                 && canonicalize_if_exists_string(std::path::Path::new(&info.file_name))
-                    == canonical_file_name
+                    == *canonical_file_name
         }
         _ => false,
     };

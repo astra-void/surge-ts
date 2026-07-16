@@ -1,9 +1,10 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
     env,
     path::{Path, PathBuf},
 };
+
+use surge_ts_types::fx::FxHashMap;
 
 thread_local! {
     // `std::fs::canonicalize` issues a `realpath()` syscall on every call.
@@ -11,7 +12,8 @@ thread_local! {
     // import-graph fixpoint) canonicalizes the same paths repeatedly, and
     // profiling showed the syscall as a top cost. The filesystem is stable for
     // the duration of a run, so memoizing per thread is safe.
-    static CANONICALIZE_CACHE: RefCell<HashMap<PathBuf, PathBuf>> = RefCell::new(HashMap::new());
+    static CANONICALIZE_CACHE: RefCell<FxHashMap<PathBuf, PathBuf>> =
+        RefCell::new(FxHashMap::default());
 }
 
 /// Drops the calling thread's canonicalization memo. The cache is only valid

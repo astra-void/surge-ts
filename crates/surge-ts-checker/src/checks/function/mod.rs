@@ -51,9 +51,12 @@ pub(crate) fn collect_function_declaration_signature(
     // `concrete_instantiation` short-circuit.
     crate::program::record_program_counter(|c| c.function_signatures_indexed_count += 1);
     let map_signature = |ctx: &mut CheckerContext| {
+        static LAZY_DEPENDENCY_SIGNATURES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let lazy_dependency_signatures = *LAZY_DEPENDENCY_SIGNATURES
+            .get_or_init(|| std::env::var_os("SURGE_EAGER_DEPENDENCY_SIGNATURES").is_none());
         if ctx.current_file_kind == crate::context::FileKind::DependencyDeclaration
             && allow_lazy_dependency_signature
-            && std::env::var_os("SURGE_EAGER_DEPENDENCY_SIGNATURES").is_none()
+            && lazy_dependency_signatures
         {
             map_lazy_dependency_function_signature(function, ctx)
         } else {

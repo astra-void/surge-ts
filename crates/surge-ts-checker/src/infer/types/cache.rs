@@ -16,7 +16,6 @@ use crate::context::{
     InterfaceOverloadInstantiationKey, StableInterfaceDeclarationFragmentId,
     StableInterfaceDeclarationId, StableInterfaceMemberDeclarationId,
 };
-use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::TypeDeclarationInfo;
 
 pub(crate) fn type_declaration_resolution_key(
@@ -174,8 +173,8 @@ pub(crate) fn cache_persistent_generic_resolution(
     }
 }
 
-pub(crate) fn canonical_declaration_file_name(file_name: &str) -> String {
-    canonicalize_if_exists_string(Path::new(file_name))
+pub(crate) fn canonical_declaration_file_name(file_name: &str) -> Arc<str> {
+    crate::paths::canonicalize_if_exists_arc(Path::new(file_name))
 }
 
 /// Resolver for a lazy [`Type::Reference`] that resolves to an already-computed,
@@ -393,7 +392,7 @@ impl LazyDeclarationAnnotation {
             0,
         );
         let mut ctx = Box::new(ctx);
-        ctx.set_file_name(self.key.file_name.clone());
+        ctx.set_file_name(self.key.file_name.as_ref().to_string());
         if self.creation_scope.is_some() {
             ctx.type_declaration_scope = self.creation_scope.clone();
         }
@@ -1009,7 +1008,7 @@ pub(crate) fn physical_interface_declaration_template(
         };
         let member_declaration = StableInterfaceMemberDeclarationId {
             containing_interface: declaration.clone(),
-            canonical_file: Arc::from(canonical_declaration_file_name(&fragment.file_name)),
+            canonical_file: canonical_declaration_file_name(&fragment.file_name),
             declaration_start: u32::try_from(member.name_span?.start).ok()?,
             declaration_kind,
             declared_name: Arc::from(member.name.as_str()),
@@ -1195,13 +1194,13 @@ pub(crate) fn stable_interface_declaration_id(
     let mut merged_fragments = Vec::with_capacity(interface.body.declaration_fragments.len());
     for fragment in &interface.body.declaration_fragments {
         merged_fragments.push(StableInterfaceDeclarationFragmentId {
-            canonical_file: Arc::from(canonical_declaration_file_name(&fragment.file_name)),
+            canonical_file: canonical_declaration_file_name(&fragment.file_name),
             declaration_start: u32::try_from(fragment.declaration_start)
                 .map_err(|_| InterfaceCacheSkipReason::UnstableDeclaration)?,
         });
     }
     Ok(StableInterfaceDeclarationId {
-        canonical_file: Arc::from(canonical_declaration_file_name(&interface.file_name)),
+        canonical_file: canonical_declaration_file_name(&interface.file_name),
         declaration_start,
         declaration_name: Arc::from(
             interface
@@ -1555,7 +1554,10 @@ mod physical_interface_cache_tests {
         CheckerContext::new(
             LIB_DOM.to_string(),
             options,
-            HashMap::from([(LIB_DOM.to_string(), FileKind::PhysicalDefaultLib)]),
+            surge_ts_types::fx::FxHashMap::from_iter([(
+                LIB_DOM.to_string(),
+                FileKind::PhysicalDefaultLib,
+            )]),
         )
     }
 
@@ -1756,7 +1758,7 @@ mod physical_interface_cache_tests {
             false,
             1,
         ));
-        let mut properties = PropertyMap::new();
+        let mut properties = PropertyMap::default();
         properties.insert(
             "method".to_string(),
             ObjectProperty::required(union_type(vec![first_overload, second_overload])),

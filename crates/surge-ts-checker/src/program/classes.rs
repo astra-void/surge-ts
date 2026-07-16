@@ -177,7 +177,7 @@ pub(crate) fn build_class_value_symbol(
     let instance_type = class_instance_type(class, ctx);
     let construct_signature = class_construct_signature(class, instance_type, ctx);
 
-    let mut properties = PropertyMap::new();
+    let mut properties = PropertyMap::default();
     for member in &class.members {
         match member {
             ParsedClassMember::Property(property) if property.is_static => {

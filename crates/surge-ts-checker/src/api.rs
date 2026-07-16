@@ -124,7 +124,7 @@ impl Checker {
         mut self,
         resolved_modules: std::collections::HashMap<String, String>,
     ) -> Self {
-        self.options.resolved_modules = resolved_modules;
+        self.options.resolved_modules = resolved_modules.into_iter().collect();
         self
     }
 

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+
 use std::sync::Arc;
+use surge_ts_types::fx::FxBuildHasher;
 
 use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan};
 use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
@@ -51,20 +53,20 @@ pub(crate) struct SymbolTable {
     // module-binding fixpoint clones symbol tables thousands of times but
     // mutates almost none of those clones, so sharing makes the clones
     // effectively free and the deep copy is deferred to the rare mutate path.
-    symbols: Arc<HashMap<Arc<str>, SymbolInfoHandle>>,
+    symbols: Arc<HashMap<Arc<str>, SymbolInfoHandle, FxBuildHasher>>,
     // Name spans of the *first* block-scoped declaration (let/const or function
     // implementation) registered in this scope, so a later redeclaration can
     // back-emit the duplicate diagnostic (TS2451/TS2393) at the original site
     // too — tsc flags every conflicting declaration, not just the latest. Shares
     // the same copy-on-write discipline as `symbols`; empty in nearly every
     // table, so the extra `Arc` clone is effectively free.
-    declaration_spans: Arc<HashMap<Arc<str>, TextSpan>>,
+    declaration_spans: Arc<HashMap<Arc<str>, TextSpan, FxBuildHasher>>,
     // Names that already have a body-bearing function *implementation* registered
     // in this scope. A second implementation is the only thing that yields
     // TS2393 ("Duplicate function implementation"); bodyless declarations
     // (overload signatures, ambient `declare function`s) merge as overloads and
     // must not trip it. Shares the copy-on-write discipline of `symbols`.
-    function_implementations: Arc<HashSet<Arc<str>>>,
+    function_implementations: Arc<HashSet<Arc<str>, FxBuildHasher>>,
     // Optional read-only fallback consulted by lookups (`get`, `get_handle`,
     // `contains_let_or_const`) when a name is absent from `symbols`. A function
     // body's root scope sets this to the module/ambient environment instead of
@@ -100,9 +102,9 @@ impl SymbolTable {
     /// through to `parent`. See the `parent` field. Used for function-body roots.
     pub(crate) fn with_parent(parent: Arc<SymbolTable>) -> Self {
         Self {
-            symbols: Arc::new(HashMap::new()),
-            declaration_spans: Arc::new(HashMap::new()),
-            function_implementations: Arc::new(HashSet::new()),
+            symbols: Arc::new(HashMap::default()),
+            declaration_spans: Arc::new(HashMap::default()),
+            function_implementations: Arc::new(HashSet::default()),
             parent: Some(parent),
         }
     }
@@ -133,7 +135,7 @@ impl SymbolTable {
     /// the copy-on-write deep copy only if this table currently shares its map
     /// with a clone. The deep copy is what the per-entry handle-copy counters
     /// now measure.
-    fn symbols_mut(&mut self) -> &mut HashMap<Arc<str>, SymbolInfoHandle> {
+    fn symbols_mut(&mut self) -> &mut HashMap<Arc<str>, SymbolInfoHandle, FxBuildHasher> {
         if Arc::strong_count(&self.symbols) > 1 {
             let entry_count = self.symbols.len() as u64;
             record_symbol_table_entry_handle_copy_count(entry_count);

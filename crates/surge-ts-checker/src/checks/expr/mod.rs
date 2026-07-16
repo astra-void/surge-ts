@@ -69,7 +69,7 @@ pub(crate) fn evaluate_const_expression(
             result
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
-            let mut props = surge_ts_types::PropertyMap::new();
+            let mut props = surge_ts_types::PropertyMap::default();
             for property in properties {
                 let inferred = evaluate_const_expression(
                     &property.value,

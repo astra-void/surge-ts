@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use surge_ts_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
 use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan as SyntaxTextSpan};
+use surge_ts_types::fx::FxHashMap;
 use surge_ts_types::{FunctionType, ProgramTypeStore, Type, current_program_type_store};
 
 use crate::program::ProgramTimings;
@@ -77,30 +78,31 @@ struct DeclarationEnvironmentData {
     type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
     program_type_store: Arc<ProgramTypeStore>,
     substitution_store: Arc<SubstitutionStore>,
-    resolved_named_types: Arc<Mutex<HashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
+    resolved_named_types:
+        Arc<Mutex<FxHashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
     program_resolved_generic_types:
-        Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>>>,
+        Arc<Mutex<FxHashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>>>,
     program_instantiations:
-        Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<InstantiationCacheEntry>>>>,
-    physical_interface_instantiations: Arc<Mutex<HashMap<InterfaceInstantiationKey, Arc<Type>>>>,
+        Arc<Mutex<FxHashMap<DeclarationResolutionKey, Vec<InstantiationCacheEntry>>>>,
+    physical_interface_instantiations: Arc<Mutex<FxHashMap<InterfaceInstantiationKey, Arc<Type>>>>,
     physical_interface_declaration_templates:
-        Arc<Mutex<HashMap<StableInterfaceDeclarationId, Arc<InterfaceDeclarationTemplate>>>>,
+        Arc<Mutex<FxHashMap<StableInterfaceDeclarationId, Arc<InterfaceDeclarationTemplate>>>>,
     physical_interface_method_instantiations:
-        Arc<Mutex<HashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
+        Arc<Mutex<FxHashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
     physical_interface_overload_instantiations:
-        Arc<Mutex<HashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
-    ambient_modules: Arc<HashMap<String, ModuleExportTable>>,
-    module_augmentations: Arc<HashMap<String, ModuleExportTable>>,
+        Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
+    ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
+    module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,
     ambient_global_symbols: SymbolTable,
     ambient_global_type_declarations: Arc<TypeDeclarationTable>,
-    module_file_index_by_identity: Arc<HashMap<Arc<str>, usize>>,
-    module_scope_by_file: Arc<HashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
-    module_local_values_by_file: Arc<HashMap<Arc<str>, Arc<SymbolTable>>>,
+    module_file_index_by_identity: Arc<FxHashMap<Arc<str>, usize>>,
+    module_scope_by_file: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
+    module_local_values_by_file: Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>,
     jsx_intrinsic_elements_declarer: Option<(Arc<TypeDeclarationTable>, String)>,
     type_parameter_scopes: Vec<HashMap<String, Type>>,
     type_parameter_constraint_scopes: Vec<HashMap<String, ParsedType>>,
     timings: Option<Arc<Mutex<ProgramTimings>>>,
-    file_kinds: Arc<HashMap<String, FileKind>>,
+    file_kinds: Arc<FxHashMap<String, FileKind>>,
     module_value_fallback: Option<Arc<SymbolTable>>,
 }
 
@@ -286,7 +288,7 @@ pub struct CheckerOptions {
     pub no_unused_locals: bool,
     pub no_unused_parameters: bool,
     pub stub_external_modules: bool,
-    pub resolved_modules: std::collections::HashMap<String, String>,
+    pub resolved_modules: FxHashMap<String, String>,
     /// Importer-scoped module resolutions: canonical importer file name →
     /// specifier → resolved file. Consulted before [`Self::resolved_modules`]
     /// so two importers can resolve the same bare specifier to different files
@@ -294,8 +296,7 @@ pub struct CheckerOptions {
     /// `resolved_modules` stays as the project-wide fallback: `paths`/`baseUrl`
     /// mappings are importer-independent, and older callers only populate the
     /// flat map.
-    pub resolved_modules_by_importer:
-        std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    pub resolved_modules_by_importer: FxHashMap<String, FxHashMap<String, String>>,
     /// Effective type-package names included in the program. When the project's
     /// `compilerOptions.types` used the `"*"` wildcard, the literal `"*"` is kept
     /// in this list as a sentinel (see [`Self::types_uses_wildcard`]); it never
@@ -355,8 +356,8 @@ impl Default for CheckerOptions {
             no_unused_locals: false,
             no_unused_parameters: false,
             stub_external_modules: false,
-            resolved_modules: std::collections::HashMap::new(),
-            resolved_modules_by_importer: std::collections::HashMap::new(),
+            resolved_modules: FxHashMap::default(),
+            resolved_modules_by_importer: FxHashMap::default(),
             types: Vec::new(),
             no_lib: false,
             skip_lib_check: false,
@@ -375,7 +376,7 @@ pub(crate) enum DeclarationNamespace {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DeclarationResolutionKey {
-    pub(crate) file_name: String,
+    pub(crate) file_name: Arc<str>,
     pub(crate) name: String,
     pub(crate) namespace: DeclarationNamespace,
 }
@@ -629,12 +630,15 @@ pub(crate) struct CheckerContext {
     // O(D^2) — e.g. a single file with thousands of unresolved-name reports. The
     // set makes the check O(1); `diagnostic_keys_len` lets `push` detect when
     // `diagnostics` was mutated directly (clear/take/truncate) and rebuild lazily.
-    diagnostic_keys: HashSet<(
-        String,
-        String,
-        String,
-        Option<surge_ts_diagnostics::TextSpan>,
-    )>,
+    diagnostic_keys: HashSet<
+        (
+            String,
+            String,
+            String,
+            Option<surge_ts_diagnostics::TextSpan>,
+        ),
+        surge_ts_types::fx::FxBuildHasher,
+    >,
     diagnostic_keys_len: usize,
     pub(crate) stats: CompatibilityStats,
     /// File-region overlay of `push_utility_diagnostic_once` keys: entries
@@ -655,7 +659,7 @@ pub(crate) struct CheckerContext {
     pub(crate) declaration_environment_store: Arc<DeclarationEnvironmentStore>,
     declaration_environment_generation: u64,
     pub(crate) resolved_named_types:
-        Arc<Mutex<HashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
+        Arc<Mutex<FxHashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
     /// Program-scoped cache for context-free *generic* library/dependency
     /// instantiations, keyed by declaration and the resolved type arguments. The
     /// real `lib*.d.ts` typed-array/iterator cluster (`Uint8Array`,
@@ -667,34 +671,34 @@ pub(crate) struct CheckerContext {
     /// the cached value matches a standalone resolution. Never reset; shared via
     /// `Arc` across all `CheckerContext` clones and jobs.
     pub(crate) program_resolved_generic_types:
-        Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>>>,
+        Arc<Mutex<FxHashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>>>,
     /// Program-wide instantiation interner backing lazy/nominal `Type::Reference`
     /// resolution. Maps a declaration + resolved type arguments to the shared
     /// structural expansion, so a reference resolves (and the body expands) at
     /// most once per unique instantiation rather than at every use site. Shared
     /// via `Arc` across all `CheckerContext` clones and jobs.
     pub(crate) program_instantiations:
-        Arc<Mutex<HashMap<DeclarationResolutionKey, Vec<InstantiationCacheEntry>>>>,
+        Arc<Mutex<FxHashMap<DeclarationResolutionKey, Vec<InstantiationCacheEntry>>>>,
     /// Completed, clean physical-default-lib interface expansions keyed without
     /// structural `Type` equality. Unlike `program_instantiations`, this index is
     /// eligible inside an enclosing generic scope when every actual argument has
     /// a stable nominal/literal identity.
     pub(crate) physical_interface_instantiations:
-        Arc<Mutex<HashMap<InterfaceInstantiationKey, Arc<Type>>>>,
+        Arc<Mutex<FxHashMap<InterfaceInstantiationKey, Arc<Type>>>>,
     pub(crate) physical_interface_declaration_templates:
-        Arc<Mutex<HashMap<StableInterfaceDeclarationId, Arc<InterfaceDeclarationTemplate>>>>,
+        Arc<Mutex<FxHashMap<StableInterfaceDeclarationId, Arc<InterfaceDeclarationTemplate>>>>,
     pub(crate) physical_interface_method_instantiations:
-        Arc<Mutex<HashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
+        Arc<Mutex<FxHashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
     pub(crate) physical_interface_overload_instantiations:
-        Arc<Mutex<HashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
-    pub(crate) ambient_modules: Arc<std::collections::HashMap<String, ModuleExportTable>>,
+        Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
+    pub(crate) ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
     /// Module augmentations (`declare module "x"` in a file that is itself a
     /// module). Unlike ambient module declarations, these only merge into an
     /// already-resolved target; they do not make `"x"` resolvable on their own.
-    pub(crate) module_augmentations: Arc<std::collections::HashMap<String, ModuleExportTable>>,
+    pub(crate) module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,
     pub(crate) ambient_global_symbols: SymbolTable,
     pub(crate) ambient_global_type_declarations: Arc<TypeDeclarationTable>,
-    pub(crate) module_file_index_by_identity: Arc<HashMap<Arc<str>, usize>>,
+    pub(crate) module_file_index_by_identity: Arc<FxHashMap<Arc<str>, usize>>,
     /// Each module's resolution scope keyed by its source `file_name`, mirroring
     /// `shared_state.module_resolution_scopes` but addressable by name. A type
     /// alias/interface imported across a module *import cycle* can lose its
@@ -706,14 +710,14 @@ pub(crate) struct CheckerContext {
     /// the freshest resolution scopes (signature collection resolves parameter
     /// types through local aliases whose attached scope lacks import layers), then
     /// set a final time before the check phase.
-    pub(crate) module_scope_by_file: Arc<HashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
+    pub(crate) module_scope_by_file: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     /// Each module's local value symbols, keyed by `file_name`. The value analogue
     /// of [`Self::module_scope_by_file`]: when an imported type alias's body is
     /// resolved while checking a *consumer* file, a `typeof <localValue>` in that
     /// body must resolve against the *declaring* module's values, not the
     /// consumer's `symbols`. Populated once (read-only) before the check phase and
     /// shared across jobs. Consulted via `get` only.
-    pub(crate) module_local_values_by_file: Arc<HashMap<Arc<str>, Arc<SymbolTable>>>,
+    pub(crate) module_local_values_by_file: Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>,
     /// The export-table type declarations of the module that exports the
     /// program's JSX intrinsic-elements interface, plus its key in that table
     /// (`JSX.IntrinsicElements`), located once after module binding. Under the
@@ -734,6 +738,10 @@ pub(crate) struct CheckerContext {
     /// they resolve to `unknown` without a TS2304 cascade — tsc resolves them
     /// against the full `@types/*`/generated namespace and reports nothing.
     pub(crate) namespace_member_resolution_depth: usize,
+    /// Depth of `with_file_name` frames whose file differs from the enclosing
+    /// one — nonzero exactly while a declaration from another file is being
+    /// resolved. See [`Self::lookup_ignores_local_table`].
+    pub(crate) cross_file_resolution_depth: u32,
     /// Stack of namespace prefixes for the member bodies currently being
     /// resolved (e.g. `"React"` while expanding `React.ChangeEventHandler`).
     /// Namespace members are stored under qualified names but reference their
@@ -757,7 +765,7 @@ pub(crate) struct CheckerContext {
     /// `resolve_interface`/`resolve_type_alias` for the duration of their body
     /// resolution.
     pub(crate) structural_resolution_frames: Vec<usize>,
-    file_kinds: Arc<HashMap<String, FileKind>>,
+    file_kinds: Arc<FxHashMap<String, FileKind>>,
     /// All module-scope value bindings of the file currently being checked,
     /// inferred up front. Consulted only when a bare identifier misses the
     /// positional scope, so a function body may reference a `const`/`let`/`class`
@@ -770,9 +778,20 @@ impl CheckerContext {
     pub(crate) fn new(
         file_name: String,
         options: CheckerOptions,
-        file_kinds: HashMap<String, FileKind>,
+        file_kinds: FxHashMap<String, FileKind>,
     ) -> Self {
-        let options = Arc::new(options);
+        Self::new_with_shared_options(file_name, Arc::new(options), file_kinds)
+    }
+
+    /// Like [`Self::new`], but shares an existing options handle. The options
+    /// carry the project-wide module-resolution tables
+    /// (`resolved_modules_by_importer`), so per-module shadow contexts must not
+    /// deep-clone them.
+    pub(crate) fn new_with_shared_options(
+        file_name: String,
+        options: Arc<CheckerOptions>,
+        file_kinds: FxHashMap<String, FileKind>,
+    ) -> Self {
         let current_file_kind = file_kinds
             .get(&file_name)
             .copied()
@@ -783,10 +802,10 @@ impl CheckerContext {
             current_file_kind,
             options,
             diagnostics: Vec::new(),
-            diagnostic_keys: HashSet::new(),
+            diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
             stats: CompatibilityStats::default(),
-            utility_diagnostic_keys: HashSet::new(),
+            utility_diagnostic_keys: HashSet::default(),
             utility_diagnostic_keys_baseline: None,
             symbols: SymbolTable::new(),
             type_declarations: TypeDeclarationTable::new(),
@@ -795,25 +814,26 @@ impl CheckerContext {
             substitution_store: SubstitutionStore::new(),
             declaration_environment_store: DeclarationEnvironmentStore::new(),
             declaration_environment_generation: 0,
-            resolved_named_types: Arc::new(Mutex::new(HashMap::new())),
-            program_resolved_generic_types: Arc::new(Mutex::new(HashMap::new())),
-            program_instantiations: Arc::new(Mutex::new(HashMap::new())),
-            physical_interface_instantiations: Arc::new(Mutex::new(HashMap::new())),
-            physical_interface_declaration_templates: Arc::new(Mutex::new(HashMap::new())),
-            physical_interface_method_instantiations: Arc::new(Mutex::new(HashMap::new())),
-            physical_interface_overload_instantiations: Arc::new(Mutex::new(HashMap::new())),
-            ambient_modules: Arc::new(std::collections::HashMap::new()),
-            module_augmentations: Arc::new(std::collections::HashMap::new()),
+            resolved_named_types: Arc::new(Mutex::new(FxHashMap::default())),
+            program_resolved_generic_types: Arc::new(Mutex::new(FxHashMap::default())),
+            program_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
+            physical_interface_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
+            physical_interface_declaration_templates: Arc::new(Mutex::new(FxHashMap::default())),
+            physical_interface_method_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
+            physical_interface_overload_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
+            ambient_modules: Arc::new(FxHashMap::default()),
+            module_augmentations: Arc::new(FxHashMap::default()),
             ambient_global_symbols: SymbolTable::new(),
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
-            module_file_index_by_identity: Arc::new(HashMap::new()),
-            module_scope_by_file: Arc::new(HashMap::new()),
-            module_local_values_by_file: Arc::new(HashMap::new()),
+            module_file_index_by_identity: Arc::new(FxHashMap::default()),
+            module_scope_by_file: Arc::new(FxHashMap::default()),
+            module_local_values_by_file: Arc::new(FxHashMap::default()),
             jsx_intrinsic_elements_declarer: None,
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
             namespace_member_resolution_depth: 0,
+            cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
@@ -839,10 +859,10 @@ impl CheckerContext {
             current_file_kind: data.current_file_kind,
             options: data.options.clone(),
             diagnostics: Vec::new(),
-            diagnostic_keys: HashSet::new(),
+            diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
             stats: CompatibilityStats::default(),
-            utility_diagnostic_keys: HashSet::new(),
+            utility_diagnostic_keys: HashSet::default(),
             utility_diagnostic_keys_baseline: None,
             symbols: data.symbols.clone(),
             type_declarations: data.type_declarations.clone(),
@@ -876,6 +896,7 @@ impl CheckerContext {
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
             timings: data.timings.clone(),
             namespace_member_resolution_depth: 0,
+            cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
@@ -1085,7 +1106,7 @@ impl CheckerContext {
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"
         );
-        self.resolved_named_types = Arc::new(Mutex::new(HashMap::new()));
+        self.resolved_named_types = Arc::new(Mutex::new(FxHashMap::default()));
     }
 
     /// Empties both the overlay and the baseline — the equivalent of clearing
@@ -1137,8 +1158,29 @@ impl CheckerContext {
         self.lookup_type_declaration_exact(name)
     }
 
+    /// Whether name lookups for the file currently being resolved must ignore
+    /// the consumer module's own declaration table (`self.type_declarations`).
+    ///
+    /// While a dependency `.d.ts` declaration body is being expanded from
+    /// another file (a `with_file_name` frame whose file differs from the one
+    /// being analyzed), `self.type_declarations` still holds the *consuming*
+    /// module's local table. Consulting it would let a consumer-local type
+    /// name shadow the dependency's own lexical scope inside the dependency's
+    /// body — wrong per tsc, and it makes expansions depend on which module
+    /// triggered them (defeating cross-module expansion reuse). The dependency
+    /// file's own declarations travel in its installed resolution scope, so
+    /// scope lookup serves the body's own names. Same-file resolution and
+    /// windows with no installed scope keep the local-table consult.
+    fn lookup_ignores_local_table(&self) -> bool {
+        self.cross_file_resolution_depth > 0
+            && self.current_file_kind == FileKind::DependencyDeclaration
+            && self.type_declaration_scope.is_some()
+    }
+
     fn lookup_type_declaration_exact(&self, name: &str) -> Option<&TypeDeclarationInfo> {
-        if let Some(declaration) = self.type_declarations.get(name) {
+        if !self.lookup_ignores_local_table()
+            && let Some(declaration) = self.type_declarations.get(name)
+        {
             crate::program::record_type_declaration_lookup(1);
             return Some(declaration);
         }
@@ -1200,7 +1242,9 @@ impl CheckerContext {
         &self,
         name: &str,
     ) -> Option<crate::symbols::TypeDeclarationHandle> {
-        if let Some(handle) = self.type_declarations.get_handle(name) {
+        if !self.lookup_ignores_local_table()
+            && let Some(handle) = self.type_declarations.get_handle(name)
+        {
             crate::program::record_type_declaration_lookup(1);
             return Some(handle);
         }
@@ -1238,7 +1282,7 @@ impl CheckerContext {
 
     pub(crate) fn set_module_file_index_by_identity(
         &mut self,
-        module_file_index_by_identity: HashMap<Arc<str>, usize>,
+        module_file_index_by_identity: FxHashMap<Arc<str>, usize>,
     ) {
         self.module_file_index_by_identity = Arc::new(module_file_index_by_identity);
         self.declaration_environment_generation =
@@ -1247,7 +1291,7 @@ impl CheckerContext {
 
     pub(crate) fn set_module_scope_by_file(
         &mut self,
-        module_scope_by_file: HashMap<Arc<str>, Arc<TypeDeclarationScope>>,
+        module_scope_by_file: FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>,
     ) {
         self.module_scope_by_file = Arc::new(module_scope_by_file);
         self.declaration_environment_generation =
@@ -1267,7 +1311,7 @@ impl CheckerContext {
 
     pub(crate) fn set_module_local_values_by_file(
         &mut self,
-        module_local_values_by_file: HashMap<Arc<str>, Arc<SymbolTable>>,
+        module_local_values_by_file: FxHashMap<Arc<str>, Arc<SymbolTable>>,
     ) {
         self.module_local_values_by_file = Arc::new(module_local_values_by_file);
         self.declaration_environment_generation =

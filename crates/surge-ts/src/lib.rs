@@ -265,11 +265,11 @@ impl Project {
         }
         surge_ts_checker::lowlevel::record_loader_rss_stage("default_libs_loaded");
 
-        let mut resolved_modules = std::collections::HashMap::new();
-        let mut resolved_modules_by_importer: std::collections::HashMap<
+        let mut resolved_modules = surge_ts_types::fx::FxHashMap::default();
+        let mut resolved_modules_by_importer: surge_ts_types::fx::FxHashMap<
             String,
-            std::collections::HashMap<String, String>,
-        > = std::collections::HashMap::new();
+            surge_ts_types::fx::FxHashMap<String, String>,
+        > = surge_ts_types::fx::FxHashMap::default();
         let mut package_resolution_cache =
             package_declarations::PackageDeclarationResolverCache::default();
 

@@ -25,7 +25,7 @@ pub(crate) fn infer_object_literal(
     ctx: &mut CheckerContext,
 ) -> Type {
     let object_literal_start = Instant::now();
-    let mut merged_properties: PropertyMap = PropertyMap::new();
+    let mut merged_properties: PropertyMap = PropertyMap::default();
     for property in properties {
         record_property_lookup();
         record_object_literal_property_check();
