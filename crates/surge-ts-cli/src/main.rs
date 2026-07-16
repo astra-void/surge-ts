@@ -1,5 +1,6 @@
 mod global_alloc;
 mod report;
+mod run_report;
 
 use std::io::IsTerminal;
 use std::time::Instant;
@@ -167,6 +168,20 @@ struct Cli {
     #[arg(long = "compatReport")]
     compat_report: bool,
 
+    /// Print an extended run-statistics block (files, phase times, memory) to
+    /// stderr after the normal diagnostics output.
+    #[arg(long = "extendedDiagnostics")]
+    extended_diagnostics: bool,
+
+    /// Print a memory-focused report (physical footprint, peak RSS) to stderr
+    /// after the normal diagnostics output.
+    #[arg(long = "memoryReport")]
+    memory_report: bool,
+
+    /// Write a versioned machine-readable run report (JSON) to the given file.
+    #[arg(long = "reportJson", value_name = "PATH")]
+    report_json: Option<PathBuf>,
+
     #[arg(long, value_enum)]
     format: Option<ReportFormat>,
 
@@ -254,6 +269,27 @@ fn main() -> ExitCode {
         .exit();
     }
 
+    let report_request = run_report::ReportRequest {
+        extended: cli.extended_diagnostics,
+        memory: cli.memory_report,
+        json_path: cli.report_json.clone(),
+    };
+
+    if cli.show_config && report_request.any() {
+        let flag = if cli.extended_diagnostics {
+            "--extendedDiagnostics"
+        } else if cli.memory_report {
+            "--memoryReport"
+        } else {
+            "--reportJson"
+        };
+        Error::raw(
+            ErrorKind::ArgumentConflict,
+            format!("{flag} cannot be used with --showConfig"),
+        )
+        .exit();
+    }
+
     if cli.project.is_some() {
         if cli.ignore_config {
             Error::raw(
@@ -281,6 +317,7 @@ fn main() -> ExitCode {
                 .into(),
             cli.physical_libs,
             cli.timings,
+            report_request,
         );
     }
 
@@ -304,6 +341,30 @@ fn main() -> ExitCode {
         Error::raw(
             ErrorKind::MissingRequiredArgument,
             "--compatReport requires --project",
+        )
+        .exit();
+    }
+
+    if cli.extended_diagnostics {
+        Error::raw(
+            ErrorKind::MissingRequiredArgument,
+            "--extendedDiagnostics requires --project",
+        )
+        .exit();
+    }
+
+    if cli.memory_report {
+        Error::raw(
+            ErrorKind::MissingRequiredArgument,
+            "--memoryReport requires --project",
+        )
+        .exit();
+    }
+
+    if cli.report_json.is_some() {
+        Error::raw(
+            ErrorKind::MissingRequiredArgument,
+            "--reportJson requires --project",
         )
         .exit();
     }
@@ -528,13 +589,17 @@ fn run_project_mode(
     diagnostic_profile: surge_ts_checker::DiagnosticProfile,
     physical_libs_flag: bool,
     timings_enabled: bool,
+    report_request: run_report::ReportRequest,
 ) -> ExitCode {
     let mut timings = CliTimings::default();
+    // The report flags reuse the existing `collect_timings` plumbing; only
+    // `--timings` controls whether the CLI timings block itself is rendered.
+    let collect_timings = timings_enabled || report_request.wants_timings();
 
     let run_start = Instant::now();
     let config_start = run_start;
     let project = Project::load(project);
-    if timings_enabled {
+    if collect_timings {
         timings.config_project_loading += config_start.elapsed();
     }
     let loaded = project.config();
@@ -567,11 +632,19 @@ fn run_project_mode(
             pretty,
             color,
             max_diagnostics,
-            timings_enabled,
+            collect_timings,
             &mut timings,
         );
-        if timings_enabled {
+        if collect_timings {
             timings.total = run_start.elapsed();
+        }
+        if let Err(error) =
+            run_report::emit_run_reports(&report_request, &[], diagnostics.len(), jobs, &timings)
+        {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+        if timings_enabled {
             render_cli_timings(&timings);
         }
         return exit_code;
@@ -585,7 +658,7 @@ fn run_project_mode(
             physical_libs_flag,
             &loaded.config_path,
         ),
-        collect_timings: timings_enabled,
+        collect_timings,
     };
 
     let result = match project.check(&options) {
@@ -599,7 +672,7 @@ fn run_project_mode(
     for warning in &result.warnings {
         eprintln!("warning: {warning}");
     }
-    if timings_enabled {
+    if collect_timings {
         merge_project_timings(&mut timings, &result.timings);
     }
 
@@ -614,11 +687,23 @@ fn run_project_mode(
         pretty,
         color,
         max_diagnostics,
-        timings_enabled,
+        collect_timings,
         &mut timings,
     );
-    if timings_enabled {
+    if collect_timings {
         timings.total = run_start.elapsed();
+    }
+    if let Err(error) = run_report::emit_run_reports(
+        &report_request,
+        &result.sources,
+        result.diagnostics.len(),
+        jobs,
+        &timings,
+    ) {
+        eprintln!("{error}");
+        return ExitCode::from(1);
+    }
+    if timings_enabled {
         render_cli_timings(&timings);
     }
     exit_code
@@ -678,7 +763,7 @@ fn render_project_mode_output(
     pretty: bool,
     color: bool,
     max_diagnostics: Option<usize>,
-    timings_enabled: bool,
+    collect_timings: bool,
     timings: &mut CliTimings,
 ) -> ExitCode {
     let render_start = Instant::now();
@@ -705,7 +790,7 @@ fn render_project_mode_output(
                 println!("{}", preview);
             }
         }
-        if timings_enabled {
+        if collect_timings {
             timings.diagnostic_rendering += render_start.elapsed();
         }
         return ExitCode::SUCCESS;
@@ -753,7 +838,7 @@ fn render_project_mode_output(
         DiagnosticStyle::Custom => unreachable!("custom handled by force_custom"),
     }
 
-    if timings_enabled {
+    if collect_timings {
         timings.diagnostic_rendering += render_start.elapsed();
     }
 
