@@ -125,10 +125,10 @@ Two input modes: a single `.ts` **file** (positional argument) or a
 
 ```bash
 # Single file (quick standalone oracle)
-surge-ts path/to/file.ts
+surge path/to/file.ts
 
 # Project mode (the main compatibility path)
-surge-ts --project ./tsconfig.json
+surge --project ./tsconfig.json
 ```
 
 **Stable flags:**

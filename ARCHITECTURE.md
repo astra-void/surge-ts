@@ -27,7 +27,8 @@ knowledge, where it exists, is diagnostic/resolution support (e.g. missing-modul
 hints), not Node global type synthesis.
 
 Measured state: the auth-kit real-project baseline matches TypeScript exactly
-(0/0), the oracle preset sweep is 75/75 under the normal gate, and the
+(0/0), the oracle preset sweep is green across all registered presets (83 at
+commit 6fc9e6c; the count grows as fixtures are added) under the normal gate, and the
 `diagnostics-pack` preset is green. The normal gate is diagnostic code-count and
 file/code/line; message-text and span/column drift are reported but non-gating
 unless `--strictMessages` / `--strictSpans` are passed. Performance notes and

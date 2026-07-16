@@ -5,8 +5,7 @@ checker) against real projects and baseline compilers. `TypeScript`/`tsc` refer
 to the upstream compiler used as the oracle baseline. Historical version notes
 below may refer to the project by its earlier `surge-ts` / `ts-rust`
 labels; those are kept verbatim as measured-at-the-time records. The internal
-Cargo crates are still named `surge-ts-*`; current report output and the
-CLI binary are `surge-ts`.
+Cargo crates are still named `surge-ts-*`; the CLI binary is `surge`.
 
 ## Current state
 
