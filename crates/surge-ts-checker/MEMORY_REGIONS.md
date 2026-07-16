@@ -21,13 +21,18 @@ Compilation (one check_program_with_stats_and_jobs run)
 │   │                                      bindings/scopes, per-round export tables
 │   └── dropped at `preliminary_release` once the final round supersedes them
 ├── WorkerRegion × check worker            one CheckerContext clone, reused across files
+│   │                                      (serial checking is a single worker of this kind:
+│   │                                      one context clone reused for the whole pass)
 │   ├── FileCheckRegion                    per-file symbol/declaration environment, per-file
 │   │                                      resolved_named_types cache, utility diagnostic keys
 │   ├── FunctionCheckRegion                FunctionFlowState, scope stacks — function-local by
 │   │                                      construction (created per body, dropped on return)
 │   └── recursion scratch                  resolving stacks, peel stack, assignability
 │                                          depth/visited — unwind-scoped thread state
-└── CacheRegion                            program_resolved_generic_types, program_instantiations,
+└── CacheRegion                            ProgramTypeStore (canonical payload interner),
+                                           program_resolved_generic_types, program_instantiations,
+                                           physical-interface caches, substitution store,
+                                           declaration-environment store,
                                            per-run thread-local path/module caches
 ```
 
@@ -40,8 +45,13 @@ Rules the code enforces:
   `Diagnostic`s in `FileCheckResult`).
 - Cache lifetime is separate from correctness-critical program data: every
   entry in the CacheRegion is a memo of a recomputable resolution. The caches
-  are torn down at end of run (`clear_program_type_caches`) to break the
-  snapshot Arc cycle; the per-run thread-local caches are cleared at run start.
+  are torn down at end of run (`clear_program_type_caches`, followed by
+  `ProgramTypeStore::clear`) to break the snapshot Arc cycle; the per-run
+  thread-local caches are cleared at run start.
+- The canonical `ProgramTypeStore` (`surge-ts-types/src/store.rs`) is created
+  per run and installed thread-locally on the main thread and every check
+  worker. Its interned payloads are program-lifetime and write-once; its IDs
+  embed a per-run owner tag and must never cross program owners.
 - No region reset bypasses destructors: only the `CheckerArena` bump storage is
   drop-free, and it stores only `Drop`-free payload shapes behind write-once
   handles (see arena.rs safety notes).
@@ -62,10 +72,10 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
 | Final `module_analyses` / `module_import_bindings` / `module_resolution_scopes` | `shared_state` | program | any worker may check any file, so the full set stays live through the check phase |
 | Per-round `module_export_tables` | orchestrator local | phase | last read by the JSX intrinsic locator; dropped at `preliminary_release` |
 | `local_type_declarations_by_module` | orchestrator local | phase | last read by the final scope build; dropped at `preliminary_release` |
-| Worker `CheckerContext` clone | check worker | worker-scratch | one clone per worker, mutated in place per file |
+| Worker `CheckerContext` clone | check worker | worker-scratch | one clone per worker, mutated in place per file; serial checking uses one reused clone for the whole pass (cloning per file was a measured ~3% of check time on tRPC) |
 | `ctx.symbols`, `ctx.type_declarations`, `ctx.type_declaration_scope`, `module_value_fallback` | worker context | file | replaced at each file boundary by `check_program_file` |
 | `ctx.resolved_named_types` | worker context, `Arc<Mutex<HashMap>>` | file | per-file memo; the map is swapped (not cleared in place) because lazy-resolution snapshots hold the old `Arc` |
-| `ctx.utility_diagnostic_keys` | worker context | file | keys embed the file name; cleared at file begin so a reused worker context does not accumulate every file's keys |
+| `ctx.utility_diagnostic_keys` | worker context | file | keys embed the file name; split into a shared pre-check baseline (captured on the first `begin_file_check`) plus a per-file overlay cleared at each file begin, with a retained-capacity bound so one pathological file cannot pin a huge table |
 | `ctx.diagnostics` + dedup keys | worker context | file → owned-output | `mem::take`n into `FileCheckResult` per file |
 | `FunctionFlowState` (flow scopes, branch captures, alias guards) | function-local | function | created per function body, dropped on return |
 | `type_parameter_scopes` / constraint scopes / namespace prefix stack / structural frames | worker context | function | balanced push/pop inside a file |
@@ -83,7 +93,10 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
 | `resolved_named_types` | file-local cache | fresh map per checked file (stale cross-file entries would be incorrect: resolution depends on the consumer file's environment) |
 | `program_resolved_generic_types` | program-wide bounded cache | bucket cap per declaration; over-cap entries recompute; structural-equality lookup makes collisions harmless |
 | `program_instantiations` | program-wide bounded cache | same cap; first-wins; degraded (`had_error`) expansions are never interned |
-| relative-module / canonicalize / star-export / namespace-alias thread-locals | program-wide mandatory memoization (per run) | keyed by the fixed file set; cleared at run start |
+| `ProgramTypeStore` (functions/unions/parameter lists/property maps/overload merges) | program-wide canonical interner | sharded, uncapped; fingerprint-bucketed with exact structural-equality confirmation; cleared by `ProgramTypeStore::clear` at end of run |
+| `physical_interface_*` caches + `SubstitutionStore` | program-wide cache | completed, clean physical-lib interface/member/overload expansions keyed by stable declaration + substitution + environment identity; cleared in `clear_program_type_caches` |
+| `DeclarationEnvironmentStore` | program-wide interner | narrow captured declaration environments behind handles (instead of retained full contexts); cleared in `clear_program_type_caches` |
+| relative-module / canonicalize / star-export / namespace-alias thread-locals | program-wide mandatory memoization (per run) | keyed by the fixed file set; cleared at run start; canonical paths shared as `Arc<str>` so hits are refcount bumps |
 | `EQ_PROBE_VISITS` (`SURGE_EQ_STATS` only) | diagnostic probe | unbounded across runs by design; marked for removal with the probe |
 
 ## Lifetime mismatches found (and their fixes)
@@ -95,8 +108,10 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
    `preliminary_release` boundary after their last reads (eq probe, binding
    merge, final scope build, JSX locator).
 2. `ctx.utility_diagnostic_keys` accumulated every checked file's keys on a
-   reused parallel worker context (serial checking clones a fresh context per
-   file, so only parallel runs grew). Fixed: cleared in `begin_file_check`.
+   reused parallel worker context (at the time, serial checking cloned a fresh
+   context per file, so only parallel runs grew; serial checking has since
+   moved to the same single reused context and relies on the same reset).
+   Fixed: reset in `begin_file_check` via the baseline/overlay split.
 3. `signature_ctx` (a full per-file context clone for signature collection)
    duplicated per-file scaffolding; retained, but its diagnostics/keys are
    cleared on construction. Cost is Arc bumps; measured as noise.

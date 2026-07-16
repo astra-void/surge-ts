@@ -48,3 +48,29 @@
   the benchmark harness).
 - Do not edit fixtures, expected output, or checker semantics to make the sweep
   pass; report real regressions honestly instead.
+
+## Performance and correctness guardrails
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) and
+[docs/PERFORMANCE_INVARIANTS.md](docs/PERFORMANCE_INVARIANTS.md) for rationale.
+
+- MUST NOT introduce any pattern in the "Prohibited patterns" list of
+  docs/PERFORMANCE_INVARIANTS.md (deep-cloned `CheckerOptions`, per-file
+  `CheckerContext` clones, `getenv` in hot loops, uninterned persistent type
+  payloads, consumer-local lookup before dependency lexical scope, …).
+- MUST NOT add environment-insensitive cross-pass or cross-module caches;
+  cache keys must capture declaration, arguments, and environment identity,
+  and preliminary-pass results must never install first-wins global state.
+- MUST NOT cache degraded (`had_error`) results, fallback `Unknown`, or
+  recursion-in-progress results program-wide; overload order and duplicates
+  must be preserved exactly.
+- REQUIRES BENCHMARK: changes to `crates/surge-ts-types/src/store.rs`,
+  `crates/surge-ts-checker/src/context.rs`, hashing (`fx.rs`, hasher choices),
+  caching, or canonicalization need an interleaved before/after benchmark on a
+  real project (`pnpm real:trpc` style; single runs are noise — see
+  MEMORY_REGIONS.md) plus the full oracle sweep.
+- REQUIRES ORACLE PARITY: any change that can affect emitted diagnostics needs
+  `pnpm run oracle:sweep -- --all --maxDiagnostics 200` before landing.
+- New per-file checker state MUST join the `begin_file_check` reset; new
+  program-lifetime caches MUST join the end-of-run teardown
+  (`clear_program_type_caches`).

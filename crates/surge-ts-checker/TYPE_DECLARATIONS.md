@@ -32,18 +32,29 @@ Resolution model:
 
 Current limitations:
 
-- no interface merging
+- no interface merging for program-file declarations (duplicates report TS2300
+  and the first declaration wins); ambient/declaration-file interface merging
+  is supported (same file, across global files, reopened `declare module`
+  blocks, `declare global`, and physical default libs — conflicting property
+  types report TS2717)
 - narrow interface `extends` over imported object/interface types is supported; full declaration merging is still unsupported
 - no generic inference
-- no methods
-- no call signatures
-- no construct signatures
+- interface members with function types lower to function-typed members
+  (methods); the physical-lib path additionally models ordered method
+  overload groups. Full method semantics (`this` types, generic methods,
+  overload resolution at call sites) remain unsupported
+- call and construct signatures are modeled on object types
+  (`ObjectType::call_signature` / `construct_signature`) for callable values
+  and class statics; standalone interface call/construct signature members
+  remain unsupported
 - no full index signatures; the checker only models a narrow string-index fallback for fixture-backed paths and synthetic `process.env`
-- no readonly properties
+- no readonly property semantics (the modifier stays parser-safe; class
+  properties parse it without enforcement)
 - no computed properties
-- no alias/interface-preserving diagnostic display
 - explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
-- `baseUrl` resolution remains unsupported/deprecated
+- `baseUrl` non-relative specifier resolution is supported in the loader
+  (`crates/surge-ts/src/path_mapping.rs`); the option is deprecated upstream
+  but honored for compatibility
 - full package resolution remains unsupported
 - full tsconfig path ecosystem features such as rootDirs/projectReferences remain unsupported
 - no full declaration-file semantics, CommonJS semantics, or declaration merging
@@ -53,8 +64,14 @@ Current limitations:
 
 Design note:
 
-- interface names are not preserved in downstream diagnostics today because the
-  checker resolves them to object types before assignability and display.
+- resolved object types carry their source declaration's name for diagnostic
+  display (`ObjectType::alias_name`) and a nominal identity
+  (`ObjectType::alias_id`, qualified `file::name`) used by assignability to
+  treat two expansions of the same declaration as the same named type; both
+  are excluded from structural equality. Named instantiations are otherwise
+  represented as lazy nominal `Type::Reference`s whose `display` string
+  preserves the written form (`Box<string>`), so interface/alias names survive
+  into diagnostics without forcing structural expansion.
 
 Representation note:
 
