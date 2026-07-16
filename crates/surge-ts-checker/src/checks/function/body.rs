@@ -17,6 +17,18 @@ use crate::program::{
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
 
 pub(crate) fn should_check_missing_return(return_type: &Type) -> bool {
+    // Peel lazy named references so the exemption sees what the annotation
+    // resolves to: `Promise<T>` is modeled as its awaited `T` (implicit await),
+    // so an async `(): Promise<void>` body with no `return` is exempt exactly
+    // like `(): void`, and a named alias of `void`/`undefined`/`any` is exempt
+    // like the keyword itself (tsc treats aliases as transparent here).
+    let peeled;
+    let return_type = if matches!(return_type, Type::Reference(_)) {
+        peeled = return_type.peeled();
+        &peeled
+    } else {
+        return_type
+    };
     !matches!(
         return_type,
         Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Undefined | Type::Void
