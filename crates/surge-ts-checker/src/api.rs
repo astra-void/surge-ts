@@ -51,9 +51,14 @@ impl Checker {
         &mut self.options
     }
 
-    /// Number of worker threads for multi-file checks. Values below 1 are clamped to 1.
+    /// Number of worker threads for multi-file checks. `0` requests automatic
+    /// per-phase sizing; other values are used literally.
+    ///
+    /// The former `.max(1)` clamp silently rewrote the automatic sentinel (`0`,
+    /// the CLI's `--jobs auto`) into a forced-serial `1`, leaving the automatic
+    /// branches in `resolve_parse_worker_count`/`resolve_worker_count` dead.
     pub fn jobs(mut self, jobs: usize) -> Self {
-        self.jobs = jobs.max(1);
+        self.jobs = jobs;
         self
     }
 
