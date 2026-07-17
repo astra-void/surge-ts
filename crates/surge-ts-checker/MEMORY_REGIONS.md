@@ -42,9 +42,14 @@ Rules the code enforces:
   entry in the CacheRegion is a memo of a recomputable resolution. The caches
   are torn down at end of run (`clear_program_type_caches`) to break the
   snapshot Arc cycle; the per-run thread-local caches are cleared at run start.
-- No region reset bypasses destructors: only the `CheckerArena` bump storage is
-  drop-free, and it stores only `Drop`-free payload shapes behind write-once
-  handles (see arena.rs safety notes).
+- No region reset bypasses destructors: `CheckerArena` bump storage registers
+  every `Drop`-requiring payload in a `pending_drops` list at allocation time
+  and runs each payload's typed `drop_in_place` exactly once when the last
+  arena handle drops (see arena.rs safety notes). Trivially droppable payloads
+  carry no destructor metadata. Before this registration existed, payloads
+  allocated through `MaybeUninit` never ran `Drop`, leaking every declaration
+  payload's `String`s and `Arc` refcounts to process exit (~400 MB of the tRPC
+  finish footprint).
 
 ## Lifetime inventory
 
@@ -110,6 +115,64 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
    yet changed: `SourceFileInput.source_text` is a public `String` field and
    render-time re-reads would change observable behavior on files modified
    mid-run.
+
+## Memory-lifetime program (2026-07-17)
+
+The retained-memory series (`f518a81..8f0c3a9`, tag `trpc-memory-1.8gb`) cut
+the tRPC peak physical footprint from ~3.8 GB to ~1.8 GB and the finish
+footprint from ~1.97 GB to ~0.56 GB with byte-identical diagnostics. Full
+evidence and rejected designs: [docs/MEMORY-OPTIMIZATION-REPORT.md](../../docs/MEMORY-OPTIMIZATION-REPORT.md).
+The load-bearing mechanisms, which later work must preserve:
+
+- **Weak canonical-store retention** (`surge-ts-types/src/store.rs`): bucket
+  entries for functions, parameter lists, unions, and property maps hold
+  `Weak` payload references; a payload lives exactly as long as some consumer
+  holds its `Arc`. IDs are monotonic and never reused, so ID-equality fast
+  paths cannot ABA; expired entries are swept on the next bucket scan and an
+  equivalent payload re-interns under a fresh ID. Do not convert a store back
+  to strong retention without measured justification.
+- **Arena Drop registration** (`arena.rs` `pending_drops`): see the rule above.
+  Any new arena payload shape that owns heap data must be registered exactly
+  once.
+- **Compact declaration environments**: an environment captures an
+  `Arc<TypeDeclarationTable>` snapshot deduplicated by the table's
+  `(instance_id, version)` mutation stamp — one shared snapshot per mutation
+  burst, zero full-table clones per environment — plus span-free symbol
+  tables (`clone_for_environment_capture`) and an empty working value table.
+  `typeof` and value-dependent lookup resolve through ambient →
+  `module_value_fallback` → `module_local_values_by_file`. Environments must
+  not capture span maps, value tables, diagnostics, flow state, or checker
+  context: the pre-fix representation retained ~1.03 GB, including 5.9 M
+  COW-defeated span-map entries.
+- **Qualified-import payload sharing with owning-arena retention**:
+  `TypeDeclarationTable::insert_shared_from` adopts the exporter's payload
+  pointer instead of deep-copying per importer, and retains the payload's
+  owning arena in `foreign_payload_arenas` so a shared handle can never
+  outlive its arena. `get_handle` hands back the true owning arena.
+- **True-death lifecycle releases**: declaration-file AST bodies are filtered
+  to import/export statements after final module analysis; superseded
+  binding/scope generations drop before each rebuild (never three generations
+  live); the serial check loop frees each file's AST, `module_analyses[i]`,
+  and `module_import_bindings[i]` progressively; `shared_state`/`parsed_files`
+  drop before the finish measurement; run-scoped TLS caches clear at teardown;
+  `malloc_zone_pressure_relief` runs at generation boundaries and every 256
+  files (macOS-only, supplementary — never a substitute for ownership fixes).
+
+Instrumentation: `SURGE_RETENTION_CENSUS=1` walks the retained heap at each
+lifecycle boundary with per-owner-group attribution (opt-in,
+diagnostics-neutral); `SURGE_PAUSE_AT_STAGE=<label>` self-SIGSTOPs for
+`vmmap`/`malloc_history` attachment; `SURGE_RSS=1` prints the per-stage
+`fp`/`fp_peak` physical-footprint columns.
+
+Measured-and-rejected lifetime shortcuts (do not retry without a semantic
+redesign): sharing `export *` re-export payloads across tables, and pruning
+`program_instantiations` entries by strong-count — both shift which first-wins
+expansion later consumers observe and drift zod diagnostics. Expansion-cache
+lifetime is semantically load-bearing; only true-death reclamation (an entry
+dying because no consumer exists) is safe. Never share resolution results
+keyed only on declaration identity when the result can depend on analysis
+pass, lexical/module/type-parameter scope, import or augmentation generation,
+recursion state, or resolution mode.
 
 ## Dependency declaration expansion policy
 

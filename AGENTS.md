@@ -48,3 +48,27 @@
   the benchmark harness).
 - Do not edit fixtures, expected output, or checker semantics to make the sweep
   pass; report real regressions honestly instead.
+
+## Memory-Lifetime Rules
+
+Background: `crates/surge-ts-checker/MEMORY_REGIONS.md` ("Memory-lifetime
+program") and `docs/MEMORY-OPTIMIZATION-REPORT.md`.
+
+- MUST NOT retain canonical type-store payloads strongly without measured
+  justification; the stores use `Weak` retention with monotonic, never-reused
+  IDs.
+- MUST register every `Drop`-requiring arena payload with the arena's
+  destructor list exactly once (`pending_drops` in arena.rs).
+- MUST NOT capture declaration span maps, value tables, diagnostics, flow
+  state, or checker context in type declaration environments; environments
+  hold stamp-deduplicated `Arc` table snapshots only.
+- MUST NOT prune or shorten expansion-cache lifetimes (including
+  `program_instantiations`) without full oracle evidence; cache lifetime is
+  semantically load-bearing and pruning has measurably drifted zod
+  diagnostics. Only true-death reclamation is approved.
+- MUST NOT share resolution results keyed only on declaration identity when
+  the result can depend on analysis pass, lexical/module/type-parameter
+  scope, import or augmentation generation, recursion state, or resolution
+  mode.
+- MUST NOT use `git stash` for large cross-cutting memory work; commit and
+  validate each memory stage independently.

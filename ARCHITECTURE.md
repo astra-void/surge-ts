@@ -89,6 +89,25 @@ v1.2.5 continues that direction inside `surge-ts-checker` by decomposing the lar
 - Checker-local path normalization lives in `surge-ts-checker`; config loading and normalization remain in `surge-ts-config` for tsconfig discovery.
 - Default-lib loading lives in `surge-ts-checker` and is shared by single-file and program checking. Project mode loads the physical `lib*.d.ts` graph from the local `typescript` package by default, feeding lib selection from tsconfig into the real ambient declarations; the generated subset is the fallback when that package is absent (and the single-file support path).
 
+## Memory-lifetime model
+
+Retained memory is governed by ownership lifetimes, not by cache pruning. The
+canonical type stores in `surge-ts-types` hold `Weak` payload references with
+monotonic never-reused IDs; `CheckerArena` registers destructors for every
+`Drop`-requiring payload; declaration environments capture compact
+stamp-deduplicated table snapshots instead of table copies; qualified-import
+payloads are shared across importers while explicitly retaining their owning
+arena; and superseded analysis, AST, binding-generation, and TLS state is
+released at true-death lifecycle boundaries. The full region model, the
+prohibited lifetime shortcuts (expansion-cache pruning, broad re-export
+payload sharing, environment-insensitive result sharing), and the measurement
+tooling (`SURGE_RETENTION_CENSUS`, `SURGE_PAUSE_AT_STAGE`, `SURGE_RSS`) are
+documented in
+[crates/surge-ts-checker/MEMORY_REGIONS.md](crates/surge-ts-checker/MEMORY_REGIONS.md)
+and [docs/MEMORY-OPTIMIZATION-REPORT.md](docs/MEMORY-OPTIMIZATION-REPORT.md);
+the canonical-store retention rules live in
+[crates/surge-ts-types/FUNCTION_TYPES.md](crates/surge-ts-types/FUNCTION_TYPES.md).
+
 ## Diagnostics
 
 Diagnostics are catalog-driven in `surge-ts-diagnostics`.

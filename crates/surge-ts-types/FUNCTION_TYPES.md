@@ -37,3 +37,21 @@ Clone accounting:
 - handle-copy measurements are attributed through `TypeCopyReason` and
   reasoned helper methods on callers, but the function-type representation
   itself remains handle-backed and semantically unchanged
+
+Canonical-store retention:
+
+- the canonical stores in `store.rs` (function payloads, parameter lists,
+  unions, property maps) hold `Weak` payload references: a payload lives
+  exactly as long as some consumer holds its `Arc`, and the store never keeps
+  the whole type graph alive for program lifetime
+- canonical IDs are monotonic within a program owner and never reused, so an
+  expired entry cannot ABA into a later payload; ID-equality fast paths stay
+  sound, and re-interning an equivalent payload after expiration allocates a
+  fresh ID
+- expired bucket entries are swept opportunistically on the next bucket scan;
+  cleanup must stay deterministic and no lock may be held across recursive
+  canonicalization of child types
+- do not restore strong retention in a store, and do not tie payload lifetime
+  to cache pruning: expansion-cache lifetime is semantically load-bearing
+  (see `crates/surge-ts-checker/MEMORY_REGIONS.md`), and only true-death
+  reclamation — an entry dying because no consumer exists — is approved
