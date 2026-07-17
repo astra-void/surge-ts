@@ -50,6 +50,8 @@ pub(crate) fn rename_type_declaration(
                 alias.declared_name = Some(alias.name.clone());
             }
             alias.name = exported_name;
+            alias.cached_resolution_key = std::sync::OnceLock::new();
+            alias.cached_alias_id = std::sync::OnceLock::new();
             TypeDeclarationInfo::Alias(alias)
         }
         TypeDeclarationInfo::Interface(mut interface) => {
@@ -57,6 +59,8 @@ pub(crate) fn rename_type_declaration(
                 interface.declared_name = Some(interface.name.clone());
             }
             interface.name = exported_name;
+            interface.cached_resolution_key = std::sync::OnceLock::new();
+            interface.cached_alias_id = std::sync::OnceLock::new();
             TypeDeclarationInfo::Interface(interface)
         }
     }

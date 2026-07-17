@@ -481,7 +481,7 @@ fn collect_named_local_type_declaration(
         crate::paths::canonicalize_if_exists_arc(std::path::Path::new(file_name));
     let key = DeclarationResolutionKey {
         file_name: canonical_file_name.clone(),
-        name: name.to_string(),
+        name: std::sync::Arc::from(name),
         namespace: DeclarationNamespace::Type,
     };
     if !seen.insert(key) {

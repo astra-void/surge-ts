@@ -447,7 +447,7 @@ pub(crate) enum DeclarationNamespace {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DeclarationResolutionKey {
     pub(crate) file_name: Arc<str>,
-    pub(crate) name: String,
+    pub(crate) name: Arc<str>,
     pub(crate) namespace: DeclarationNamespace,
 }
 
