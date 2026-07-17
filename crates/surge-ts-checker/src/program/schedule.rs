@@ -39,8 +39,9 @@ pub(crate) struct Scc {
 }
 
 impl Scc {
-    /// A cyclic group (more than one module, or a single module with a
-    /// self-import) must be analyzed serially within itself.
+    /// A multi-module group must be analyzed serially within itself. A lone
+    /// module (even one that imports itself) is a singleton with no internal
+    /// ordering, so it is not cyclic for scheduling purposes.
     pub(crate) fn is_cyclic(&self) -> bool {
         self.members.len() > 1
     }
@@ -64,17 +65,12 @@ pub(crate) struct ModuleSchedule {
 impl ModuleSchedule {
     /// Builds the schedule from `module_count` modules and importer→importee
     /// `edges`. Edges referencing out-of-range indices are ignored (a module
-    /// may import a file that is filtered from analysis). Self-edges are kept so
-    /// a self-importing module is reported cyclic.
+    /// may import a file that is filtered from analysis).
     pub(crate) fn build(module_count: usize, edges: &[(ModuleIndex, ModuleIndex)]) -> Self {
         let mut adjacency: Vec<Vec<ModuleIndex>> = vec![Vec::new(); module_count];
-        let mut has_self_edge = vec![false; module_count];
         for &(from, to) in edges {
             if from >= module_count || to >= module_count {
                 continue;
-            }
-            if from == to {
-                has_self_edge[from] = true;
             }
             adjacency[from].push(to);
         }
@@ -306,12 +302,12 @@ mod tests {
     }
 
     #[test]
-    fn self_edge_is_cyclic() {
+    fn self_edge_stays_singleton() {
         let schedule = ModuleSchedule::build(1, &[(0, 0)]);
         assert_eq!(schedule.scc_count(), 1);
-        // A single self-importing module still commits, and the members list is
-        // the lone module.
+        // A self-importing module is a singleton with no internal ordering.
         assert_eq!(scc_members(&schedule), vec![vec![0]]);
+        assert!(!schedule.sccs()[0].is_cyclic());
         assert_eq!(schedule.commit_order(), vec![0]);
     }
 
