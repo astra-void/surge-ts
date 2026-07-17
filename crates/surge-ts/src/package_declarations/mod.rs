@@ -132,6 +132,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
         .collect();
     let mut queued_specifiers: HashSet<(String, String)> = HashSet::new();
 
+    scanner.prefetch(sources, cache.scanned_sources);
     for index in cache.scanned_sources..sources.len() {
         let (file_path, file_name, source_text) = {
             let (file_path, file_name, source_text) = &sources[index];

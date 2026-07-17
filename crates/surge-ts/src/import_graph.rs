@@ -45,6 +45,7 @@ pub fn expand_project_inputs(
 
     let mut added = 0usize;
 
+    scanner.prefetch(sources, state.next_source_index);
     while state.next_source_index < sources.len() {
         let index = state.next_source_index;
         state.next_source_index += 1;

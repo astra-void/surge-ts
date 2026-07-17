@@ -22,6 +22,70 @@ impl ModuleSpecifierScanner {
         }
     }
 
+    /// Parse `sources[start..]` on a small worker pool and fill the cache, so
+    /// the scanners' serial BFS resolution only pays lookup cost. Extraction is
+    /// pure per file (one arena per worker thread, results index-ordered), so
+    /// this changes no observable ordering. The loader's source reads are
+    /// already unconditionally parallel, so this follows the same contract.
+    pub(crate) fn prefetch(
+        &mut self,
+        sources: &[(std::path::PathBuf, String, String)],
+        start: usize,
+    ) {
+        let pending: Vec<usize> = (start..sources.len())
+            .filter(|&index| self.scanned.get(index).is_none_or(|slot| slot.is_none()))
+            .collect();
+        if pending.len() < 32 {
+            return;
+        }
+        if self.scanned.len() < sources.len() {
+            self.scanned.resize(sources.len(), None);
+        }
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(pending.len());
+        if workers <= 1 {
+            return;
+        }
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let results: Vec<(usize, Arc<[String]>)> = std::thread::scope(|scope| {
+            let pending = &pending;
+            let next = &next;
+            let mut handles = Vec::with_capacity(workers);
+            for _ in 0..workers {
+                handles.push(scope.spawn(move || {
+                    let mut parser = ParserWorker::new();
+                    let mut out = Vec::new();
+                    loop {
+                        let slot = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if slot >= pending.len() {
+                            break;
+                        }
+                        let index = pending[slot];
+                        let (_, file_name, source_text) = &sources[index];
+                        let parsed = parser.parse(source_text, file_name);
+                        let specifiers: Arc<[String]> = parsed
+                            .statements
+                            .into_iter()
+                            .filter_map(statement_module_specifier)
+                            .collect::<Vec<_>>()
+                            .into();
+                        out.push((index, specifiers));
+                    }
+                    out
+                }));
+            }
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().expect("specifier scan worker panicked"))
+                .collect()
+        });
+        for (index, specifiers) in results {
+            self.scanned[index] = Some(specifiers);
+        }
+    }
+
     /// Module specifiers of `sources[index]`, parsing on first request only.
     /// `index` must be the file's position in the loader's append-only
     /// `sources` vector so repeated requests hit the cache.
