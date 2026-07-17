@@ -652,14 +652,40 @@ fn check_program_with_stats_and_jobs_inner(
     });
 
     let type_collection_start = Instant::now();
-    let preliminary_module_analyses = collect_module_analyses_with_bindings(
-        &parsed_files,
-        &local_type_declarations_by_module,
-        &preliminary_module_import_bindings,
-        false,
-        &mut ctx,
-        timings.as_ref(),
-    );
+    // Experimental (`SURGE_PARALLEL_ANALYSIS=1`): the preliminary pass never
+    // lowers `declare global` values, so its only cross-module writes go
+    // through the speculative cache sessions — but full byte-identity is still
+    // blocked by declaration-environment identity: `DeclarationEnvironmentKey`
+    // embeds context pointers, so the physical-interface caches key the same
+    // logical instantiation differently across context instances, flipping
+    // hit/miss on entries whose values are context-sensitive in a way conflict
+    // validation cannot see (tRPC: 2 extra TS2304). Off by default until
+    // environment identity is content-based; the serial-equivalent commit,
+    // per-worker contexts, and arena ownership transfer are in place.
+    let analysis_worker_count = if std::env::var_os("SURGE_PARALLEL_ANALYSIS").is_some() {
+        resolve_worker_count(jobs, &parsed_files)
+    } else {
+        1
+    };
+    let preliminary_module_analyses = if analysis_worker_count > 1 {
+        collect_module_analyses_with_bindings_parallel(
+            &parsed_files,
+            &local_type_declarations_by_module,
+            &preliminary_module_import_bindings,
+            &mut ctx,
+            timings.as_ref(),
+            analysis_worker_count,
+        )
+    } else {
+        collect_module_analyses_with_bindings(
+            &parsed_files,
+            &local_type_declarations_by_module,
+            &preliminary_module_import_bindings,
+            false,
+            &mut ctx,
+            timings.as_ref(),
+        )
+    };
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_analysis_collection += type_collection_start.elapsed()
     });

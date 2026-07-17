@@ -194,6 +194,233 @@ fn module_memory_trace_threshold() -> Option<u64> {
     })
 }
 
+fn next_analysis_round() -> u64 {
+    static ROUND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    ROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
+/// Analyzes one module: seeds its value/signature environment, collects
+/// function signatures, and builds its export table. Extracted from the serial
+/// loop so the parallel driver runs the identical body per worker; the caller
+/// owns declaration-file type dedup (its shared cache picks pointer-identity
+/// representatives, which must be chosen in deterministic file order) and the
+/// ordered `analyses` placement.
+#[allow(clippy::too_many_arguments)]
+fn analyze_module(
+    file_index: usize,
+    parsed_file: &ParsedProgramFile,
+    local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
+    preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
+    lower_global_augmentation_values: bool,
+    analysis_round: u64,
+    memory_trace_threshold: Option<u64>,
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) -> Option<ModuleAnalysis> {
+    let eq_probe_start = super::eq_probe_enabled().then(Instant::now);
+    let module_time_start = super::module_time_dump_enabled().then(Instant::now);
+    let degraded_before = super::degraded_resolution_count();
+    let memory_before = memory_trace_threshold.map(|_| {
+        (
+            Instant::now(),
+            crate::metrics::rss::current_rss_bytes().unwrap_or(0),
+            crate::metrics::rss::peak_rss_bytes().unwrap_or(0),
+            crate::metrics::rss::current_footprint_bytes(),
+            crate::metrics::rss::peak_footprint_bytes(),
+        )
+    });
+
+    record_program_counter(|c| {
+        c.module_analysis_total_calls += 1;
+        c.module_analysis_unique_files += 1;
+    });
+
+    ctx.set_file_name(parsed_file.file_name.clone());
+    // The named-resolution memo is module-scoped, like `begin_file_check` makes
+    // it file-scoped for the check phase. Without this reset the module's early
+    // phase (value collection / signature seeding) reads entries left by
+    // whichever module happened to be analyzed just before it — a
+    // schedule-dependent carry-over that leaks another module's resolution
+    // context (observed as a type-parameter name flipping in one zod display)
+    // and would make parallel analysis diverge from serial.
+    ctx.resolved_named_types = Arc::new(Mutex::new(surge_ts_types::fx::FxHashMap::default()));
+    let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
+    ctx.type_declaration_scope = None;
+    let Some(local_type_declarations) = local_type_declarations_by_module[file_index].as_ref()
+    else {
+        ctx.type_declaration_scope = saved_type_declaration_scope;
+        return None;
+    };
+
+    // Set up the full type environment for function signature collection
+    let merge_start = Instant::now();
+    let imported_layers = preliminary_module_import_bindings[file_index]
+        .as_ref()
+        .map(|bindings| bindings.scope_layers());
+    let mut scope_layers = vec![local_type_declarations.clone()];
+    if let Some(imported_layers) = imported_layers {
+        scope_layers.extend(imported_layers);
+    }
+    let full_type_declarations_scope = Arc::new(TypeDeclarationScope::new(scope_layers));
+    ctx.type_declarations = local_type_declarations.as_ref().clone();
+    ctx.type_declaration_scope = Some(full_type_declarations_scope.clone());
+    record_program_timing(timings, |timings| {
+        timings.declaration_table_merging_cloning += merge_start.elapsed()
+    });
+
+    // `typeof <value>` inside a parameter annotation resolves against the
+    // module's value bindings — imports and `const`s alike — which signature
+    // collection alone never sees (function declarations hoist above them).
+    // Collect the signatures inside a seeded environment (imported bindings +
+    // the module's inferred value symbols, mirroring the check phase's merged
+    // environment) so the exported function types carry real parameter types.
+    // The seed is environment-only: `local_symbols` keeps just what collection
+    // itself declared (the file's functions and classes) — a leaked seed would
+    // re-report the declaration as TS2451 when the check phase declares it
+    // again. Declaration files skip the seeding: their exports resolve through
+    // the declaration tables, and running initializer inference over large
+    // dependency `.d.ts` files here would be pure cost.
+    // The per-file scope fallback (`module_scope_by_file`) is live only for
+    // SIGNATURE collection: a parameter typed through a local alias of an
+    // imported qualified type (`type BtnProps = React.ComponentProps<…>`)
+    // must not bake a degraded signature into the module's symbols and
+    // export table (the alias's attached scope carries no import layers).
+    // Value collection and export-table construction stay map-less: with the
+    // fallback live they eagerly materialize every exported initializer of a
+    // large cyclic program (zod: +11s/+380MB), and their degraded shapes are
+    // re-resolved lazily by the check phase anyway.
+    let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
+    let mut signature_env = SymbolTable::new();
+    let mut seeded_names: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
+    if !parsed_file.file_kind.is_declaration() {
+        let mut import_seed = SymbolTable::new();
+        if let Some(bindings) = preliminary_module_import_bindings[file_index].as_ref() {
+            for (name, symbol) in bindings.symbols.iter_shared() {
+                let _ = import_seed.insert_shared(name.clone(), symbol.clone());
+            }
+        }
+        let value_env = crate::modules::collect_exportable_value_symbols(
+            &parsed_file.statements,
+            local_type_declarations.as_ref(),
+            &import_seed,
+            None,
+            ctx,
+        );
+        for (name, symbol) in value_env.iter_shared() {
+            let _ = signature_env.insert_shared(name.clone(), symbol.clone());
+            seeded_names.insert(name.clone());
+        }
+    }
+    ctx.module_scope_by_file = saved_module_scope_by_file;
+    // The per-location signature map is only needed by the global path
+    // (`collect_global_function_signatures`); module analysis consumes the
+    // signatures through `signature_env` → `local_symbols`, so this one is
+    // discarded.
+    let mut discarded_function_signatures = HashMap::new();
+    let diagnostics_before_signatures = ctx.diagnostics().len();
+    let consults_before_signatures = super::scope_fallback_consult_count();
+    with_dts_expansion_reason(DtsExpansionReason::ModuleExportCollection, || {
+        collect_function_signatures_from_statements(
+            &parsed_file.statements,
+            file_index,
+            &mut signature_env,
+            &mut discarded_function_signatures,
+            ctx,
+        )
+    });
+    let signature_scope_consults =
+        super::scope_fallback_consult_count() - consults_before_signatures;
+    let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
+    let mut local_symbols = SymbolTable::new();
+    for (name, symbol) in signature_env.iter_shared() {
+        if !seeded_names.contains(name) {
+            let _ = local_symbols.insert_shared(name.clone(), symbol.clone());
+        }
+    }
+    ctx.truncate_diagnostics(diagnostics_before_signatures);
+    ctx.resolved_named_types = Arc::new(Mutex::new(surge_ts_types::fx::FxHashMap::default()));
+
+    // Lower this module's `declare global` augmentation values now that its
+    // type environment (local declarations + import scope) is active. The
+    // augmentation types were merged globally before binding, so a value such
+    // as `var Buffer: BufferConstructor` sees the fully-merged interface while
+    // `var x: ImportedType` still resolves through the module's imports.
+    if lower_global_augmentation_values {
+        lower_global_augmentation_values_from_statements(&parsed_file.statements, ctx);
+    }
+
+    let imported_symbols = preliminary_module_import_bindings[file_index]
+        .as_ref()
+        .map(|bindings| &bindings.symbols);
+    let empty_imported_symbols = SymbolTable::new();
+    let export_table =
+        with_dts_expansion_reason(DtsExpansionReason::ModuleExportCollection, || {
+            build_module_export_table(
+                parsed_file,
+                local_type_declarations.as_ref(),
+                &local_symbols,
+                imported_symbols.unwrap_or(&empty_imported_symbols),
+                Some(full_type_declarations_scope),
+                ctx,
+            )
+        });
+    ctx.module_scope_by_file = saved_module_scope_by_file;
+
+    let analysis = ModuleAnalysis {
+        local_type_declarations: local_type_declarations.clone(),
+        local_symbols,
+        local_export_table: export_table,
+    };
+    ctx.type_declaration_scope = saved_type_declaration_scope;
+    if let Some(start) = module_time_start {
+        super::record_module_time(
+            analysis_round,
+            &parsed_file.file_name,
+            start.elapsed().as_micros(),
+        );
+    }
+    if let Some(start) = eq_probe_start {
+        super::record_eq_probe_visit(
+            file_index,
+            super::EqProbeVisit {
+                elapsed: start.elapsed(),
+                signature_scope_consults,
+                degraded_resolutions: super::degraded_resolution_count() - degraded_before,
+                augmentation_insertions_after: super::augmentation_value_insertion_count(),
+            },
+        );
+    }
+    if let Some((start, rss_before, peak_before, footprint_before, footprint_peak_before)) =
+        memory_before
+    {
+        let peak_after = crate::metrics::rss::peak_rss_bytes().unwrap_or(0);
+        let footprint_after = crate::metrics::rss::current_footprint_bytes();
+        let footprint_peak_after = crate::metrics::rss::peak_footprint_bytes();
+        let high_water_before = footprint_peak_before.unwrap_or(peak_before);
+        let high_water_after = footprint_peak_after.unwrap_or(peak_after);
+        if high_water_after.saturating_sub(high_water_before)
+            >= memory_trace_threshold.unwrap_or(u64::MAX)
+        {
+            let rss_after = crate::metrics::rss::current_rss_bytes().unwrap_or(0);
+            eprintln!(
+                "{{\"moduleMemory\":\"{}\",\"round\":{analysis_round},\"peakDeltaBytes\":{},\
+                 \"rssBeforeBytes\":{rss_before},\"rssAfterBytes\":{rss_after},\
+                 \"peakAfterBytes\":{peak_after},\"footprintBeforeBytes\":{},\
+                 \"footprintAfterBytes\":{},\"peakFootprintAfterBytes\":{},\
+                 \"elapsedMs\":{:.3}}}",
+                parsed_file.file_name,
+                high_water_after - high_water_before,
+                footprint_before.map_or_else(|| "null".to_string(), |v| v.to_string()),
+                footprint_after.map_or_else(|| "null".to_string(), |v| v.to_string()),
+                footprint_peak_after.map_or_else(|| "null".to_string(), |v| v.to_string()),
+                start.elapsed().as_secs_f64() * 1e3,
+            );
+        }
+    }
+
+    Some(analysis)
+}
+
 pub(crate) fn collect_module_analyses_with_bindings(
     parsed_files: &[ParsedProgramFile],
     local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
@@ -205,10 +432,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
     let mut analyses = Vec::with_capacity(parsed_files.len());
     let memory_trace_threshold = module_memory_trace_threshold();
     let mut type_dedup_cache = TypeDedupCache::new();
-    let analysis_round = {
-        static ROUND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        ROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
-    };
+    let analysis_round = next_analysis_round();
 
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !parsed_file.is_module && parsed_file.file_kind != FileKind::DependencyDeclaration {
@@ -216,153 +440,19 @@ pub(crate) fn collect_module_analyses_with_bindings(
             continue;
         }
 
-        let eq_probe_start = super::eq_probe_enabled().then(Instant::now);
-        let module_time_start = super::module_time_dump_enabled().then(Instant::now);
-        let degraded_before = super::degraded_resolution_count();
-        let memory_before = memory_trace_threshold.map(|_| {
-            (
-                Instant::now(),
-                crate::metrics::rss::current_rss_bytes().unwrap_or(0),
-                crate::metrics::rss::peak_rss_bytes().unwrap_or(0),
-                crate::metrics::rss::current_footprint_bytes(),
-                crate::metrics::rss::peak_footprint_bytes(),
-            )
-        });
-
-        record_program_counter(|c| {
-            c.module_analysis_total_calls += 1;
-            c.module_analysis_unique_files += 1;
-        });
-
-        ctx.set_file_name(parsed_file.file_name.clone());
-        let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
-        ctx.type_declaration_scope = None;
-        let Some(local_type_declarations) = local_type_declarations_by_module[file_index].as_ref()
-        else {
+        let Some(mut analysis) = analyze_module(
+            file_index,
+            parsed_file,
+            local_type_declarations_by_module,
+            preliminary_module_import_bindings,
+            lower_global_augmentation_values,
+            analysis_round,
+            memory_trace_threshold,
+            ctx,
+            timings,
+        ) else {
             analyses.push(None);
-            ctx.type_declaration_scope = saved_type_declaration_scope;
             continue;
-        };
-
-        // Set up the full type environment for function signature collection
-        let merge_start = Instant::now();
-        let imported_layers = preliminary_module_import_bindings[file_index]
-            .as_ref()
-            .map(|bindings| bindings.scope_layers());
-        let mut scope_layers = vec![local_type_declarations.clone()];
-        if let Some(imported_layers) = imported_layers {
-            scope_layers.extend(imported_layers);
-        }
-        let full_type_declarations_scope = Arc::new(TypeDeclarationScope::new(scope_layers));
-        ctx.type_declarations = local_type_declarations.as_ref().clone();
-        ctx.type_declaration_scope = Some(full_type_declarations_scope.clone());
-        record_program_timing(timings, |timings| {
-            timings.declaration_table_merging_cloning += merge_start.elapsed()
-        });
-
-        // `typeof <value>` inside a parameter annotation resolves against the
-        // module's value bindings — imports and `const`s alike — which signature
-        // collection alone never sees (function declarations hoist above them).
-        // Collect the signatures inside a seeded environment (imported bindings +
-        // the module's inferred value symbols, mirroring the check phase's merged
-        // environment) so the exported function types carry real parameter types.
-        // The seed is environment-only: `local_symbols` keeps just what collection
-        // itself declared (the file's functions and classes) — a leaked seed would
-        // re-report the declaration as TS2451 when the check phase declares it
-        // again. Declaration files skip the seeding: their exports resolve through
-        // the declaration tables, and running initializer inference over large
-        // dependency `.d.ts` files here would be pure cost.
-        // The per-file scope fallback (`module_scope_by_file`) is live only for
-        // SIGNATURE collection: a parameter typed through a local alias of an
-        // imported qualified type (`type BtnProps = React.ComponentProps<…>`)
-        // must not bake a degraded signature into the module's symbols and
-        // export table (the alias's attached scope carries no import layers).
-        // Value collection and export-table construction stay map-less: with the
-        // fallback live they eagerly materialize every exported initializer of a
-        // large cyclic program (zod: +11s/+380MB), and their degraded shapes are
-        // re-resolved lazily by the check phase anyway.
-        let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
-        let mut signature_env = SymbolTable::new();
-        let mut seeded_names: std::collections::HashSet<Arc<str>> =
-            std::collections::HashSet::new();
-        if !parsed_file.file_kind.is_declaration() {
-            let mut import_seed = SymbolTable::new();
-            if let Some(bindings) = preliminary_module_import_bindings[file_index].as_ref() {
-                for (name, symbol) in bindings.symbols.iter_shared() {
-                    let _ = import_seed.insert_shared(name.clone(), symbol.clone());
-                }
-            }
-            let value_env = crate::modules::collect_exportable_value_symbols(
-                &parsed_file.statements,
-                local_type_declarations.as_ref(),
-                &import_seed,
-                None,
-                ctx,
-            );
-            for (name, symbol) in value_env.iter_shared() {
-                let _ = signature_env.insert_shared(name.clone(), symbol.clone());
-                seeded_names.insert(name.clone());
-            }
-        }
-        ctx.module_scope_by_file = saved_module_scope_by_file;
-        // The per-location signature map is only needed by the global path
-        // (`collect_global_function_signatures`); module analysis consumes the
-        // signatures through `signature_env` → `local_symbols`, so this one is
-        // discarded.
-        let mut discarded_function_signatures = HashMap::new();
-        let diagnostics_before_signatures = ctx.diagnostics().len();
-        let consults_before_signatures = super::scope_fallback_consult_count();
-        with_dts_expansion_reason(DtsExpansionReason::ModuleExportCollection, || {
-            collect_function_signatures_from_statements(
-                &parsed_file.statements,
-                file_index,
-                &mut signature_env,
-                &mut discarded_function_signatures,
-                ctx,
-            )
-        });
-        let signature_scope_consults =
-            super::scope_fallback_consult_count() - consults_before_signatures;
-        let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
-        let mut local_symbols = SymbolTable::new();
-        for (name, symbol) in signature_env.iter_shared() {
-            if !seeded_names.contains(name) {
-                let _ = local_symbols.insert_shared(name.clone(), symbol.clone());
-            }
-        }
-        ctx.truncate_diagnostics(diagnostics_before_signatures);
-        ctx.resolved_named_types = Arc::new(Mutex::new(surge_ts_types::fx::FxHashMap::default()));
-
-        // Lower this module's `declare global` augmentation values now that its
-        // type environment (local declarations + import scope) is active. The
-        // augmentation types were merged globally before binding, so a value such
-        // as `var Buffer: BufferConstructor` sees the fully-merged interface while
-        // `var x: ImportedType` still resolves through the module's imports.
-        if lower_global_augmentation_values {
-            lower_global_augmentation_values_from_statements(&parsed_file.statements, ctx);
-        }
-
-        let imported_symbols = preliminary_module_import_bindings[file_index]
-            .as_ref()
-            .map(|bindings| &bindings.symbols);
-        let empty_imported_symbols = SymbolTable::new();
-        let export_table =
-            with_dts_expansion_reason(DtsExpansionReason::ModuleExportCollection, || {
-                build_module_export_table(
-                    parsed_file,
-                    local_type_declarations.as_ref(),
-                    &local_symbols,
-                    imported_symbols.unwrap_or(&empty_imported_symbols),
-                    Some(full_type_declarations_scope),
-                    ctx,
-                )
-            });
-        ctx.module_scope_by_file = saved_module_scope_by_file;
-
-        let mut analysis = ModuleAnalysis {
-            local_type_declarations: local_type_declarations.clone(),
-            local_symbols,
-            local_export_table: export_table,
         };
         if parsed_file.file_kind.is_declaration() && module_type_dedup_enabled() {
             with_dts_expansion_reason(DtsExpansionReason::ModuleDedup, || {
@@ -377,54 +467,260 @@ pub(crate) fn collect_module_analyses_with_bindings(
         if (file_index + 1) % 256 == 0 {
             crate::metrics::release_free_memory();
         }
-        ctx.type_declaration_scope = saved_type_declaration_scope;
-        if let Some(start) = module_time_start {
-            super::record_module_time(
-                analysis_round,
-                &parsed_file.file_name,
-                start.elapsed().as_micros(),
-            );
-        }
-        if let Some(start) = eq_probe_start {
-            super::record_eq_probe_visit(
-                file_index,
-                super::EqProbeVisit {
-                    elapsed: start.elapsed(),
-                    signature_scope_consults,
-                    degraded_resolutions: super::degraded_resolution_count() - degraded_before,
-                    augmentation_insertions_after: super::augmentation_value_insertion_count(),
-                },
-            );
-        }
-        if let Some((start, rss_before, peak_before, footprint_before, footprint_peak_before)) =
-            memory_before
-        {
-            let peak_after = crate::metrics::rss::peak_rss_bytes().unwrap_or(0);
-            let footprint_after = crate::metrics::rss::current_footprint_bytes();
-            let footprint_peak_after = crate::metrics::rss::peak_footprint_bytes();
-            let high_water_before = footprint_peak_before.unwrap_or(peak_before);
-            let high_water_after = footprint_peak_after.unwrap_or(peak_after);
-            if high_water_after.saturating_sub(high_water_before)
-                >= memory_trace_threshold.unwrap_or(u64::MAX)
-            {
-                let rss_after = crate::metrics::rss::current_rss_bytes().unwrap_or(0);
-                eprintln!(
-                    "{{\"moduleMemory\":\"{}\",\"round\":{analysis_round},\"peakDeltaBytes\":{},\
-                     \"rssBeforeBytes\":{rss_before},\"rssAfterBytes\":{rss_after},\
-                     \"peakAfterBytes\":{peak_after},\"footprintBeforeBytes\":{},\
-                     \"footprintAfterBytes\":{},\"peakFootprintAfterBytes\":{},\
-                     \"elapsedMs\":{:.3}}}",
-                    parsed_file.file_name,
-                    high_water_after - high_water_before,
-                    footprint_before.map_or_else(|| "null".to_string(), |v| v.to_string()),
-                    footprint_after.map_or_else(|| "null".to_string(), |v| v.to_string()),
-                    footprint_peak_after.map_or_else(|| "null".to_string(), |v| v.to_string()),
-                    start.elapsed().as_secs_f64() * 1e3,
-                );
-            }
-        }
     }
 
+    analyses
+}
+
+/// Parallel counterpart of [`collect_module_analyses_with_bindings`] for the
+/// preliminary pass (which never lowers `declare global` values — the final
+/// pass's first-wins global publication is order-sensitive and stays serial
+/// until it is scheduled around explicitly). Workers run the identical
+/// [`analyze_module`] body against a speculative cache session; the commit
+/// walk below publishes cache insertions, analyses, and diagnostics in serial
+/// file order and re-analyzes any module whose observed cache hit/miss
+/// pattern serial analysis would not have produced, so the result is
+/// byte-identical to the serial pass (see `crate::speculative`).
+pub(crate) fn collect_module_analyses_with_bindings_parallel(
+    parsed_files: &[ParsedProgramFile],
+    local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
+    preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+    worker_count: usize,
+) -> Vec<Option<ModuleAnalysis>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    debug_assert!(worker_count > 1, "serial analysis uses the dedicated path");
+
+    let memory_trace_threshold = module_memory_trace_threshold();
+    let analysis_round = next_analysis_round();
+    let live = crate::speculative::LiveCacheHandles::capture(ctx);
+    let base = Arc::new(crate::speculative::CacheSnapshots::capture(&live));
+
+    struct WorkerModuleOutcome {
+        file_index: usize,
+        analysis: Option<ModuleAnalysis>,
+        diagnostics: Vec<Diagnostic>,
+    }
+
+    let next_index = AtomicUsize::new(0);
+    let worker_outputs = std::thread::scope(|scope| {
+        let next_index = &next_index;
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let seed_ctx = ctx.clone();
+            let session = Arc::new(crate::speculative::CheckSession::new(
+                live.clone(),
+                base.clone(),
+            ));
+            handles.push(scope.spawn(move || {
+                let type_store = seed_ctx.program_type_store.clone();
+                let outcomes = with_program_type_store(type_store, || {
+                    crate::speculative::with_check_session(session.clone(), || {
+                        let mut outcomes = Vec::new();
+                        loop {
+                            // Ascending dispatch keeps each worker's overlay a
+                            // subsequence of serial module order.
+                            let file_index = next_index.fetch_add(1, Ordering::Relaxed);
+                            if file_index >= parsed_files.len() {
+                                break;
+                            }
+                            let parsed_file = &parsed_files[file_index];
+                            if !parsed_file.is_module
+                                && parsed_file.file_kind != FileKind::DependencyDeclaration
+                            {
+                                continue;
+                            }
+                            // Declaration modules are serial-only: their heavy
+                            // interface resolution goes through the
+                            // environment-identity-keyed physical caches, whose
+                            // pointer-derived keys are not stable across
+                            // context instances — a fresh worker context flips
+                            // hit/miss on entries whose values are
+                            // context-sensitive (observed as 5 divergent
+                            // node_modules .d.ts modules on tRPC). They run on
+                            // the coordinator's rolling context at their
+                            // file-order position instead — the exact serial
+                            // regime.
+                            if parsed_file.file_kind.is_declaration() {
+                                continue;
+                            }
+                            // A fresh per-module context: unlike the check
+                            // phase (whose `begin_file_check` re-scopes a
+                            // reused context per file), the analysis body has
+                            // no per-module reset, so a reused worker context
+                            // would carry another module's resolution state in
+                            // a schedule-dependent way.
+                            let mut local_ctx = seed_ctx.clone();
+                            local_ctx.diagnostics.clear();
+                            session.begin_file(file_index);
+                            let analysis = analyze_module(
+                                file_index,
+                                parsed_file,
+                                local_type_declarations_by_module,
+                                preliminary_module_import_bindings,
+                                false,
+                                analysis_round,
+                                memory_trace_threshold,
+                                &mut local_ctx,
+                                timings,
+                            );
+                            let diagnostics = std::mem::take(&mut local_ctx.diagnostics);
+                            outcomes.push(WorkerModuleOutcome {
+                                file_index,
+                                analysis,
+                                diagnostics,
+                            });
+                        }
+                        outcomes
+                    })
+                });
+                (outcomes, session.take_file_logs())
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .expect("parallel module analysis worker panicked")
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let mut analyses: Vec<Option<ModuleAnalysis>> = (0..parsed_files.len()).map(|_| None).collect();
+    let mut slots: Vec<Option<WorkerModuleOutcome>> =
+        (0..parsed_files.len()).map(|_| None).collect();
+    let mut logs_by_index: Vec<Option<crate::speculative::FileCacheLog>> =
+        (0..parsed_files.len()).map(|_| None).collect();
+    let mut logs = Vec::new();
+    for (outcomes, worker_logs) in worker_outputs {
+        for outcome in outcomes {
+            // The worker threads are joined: this thread now has exclusive
+            // access to the arenas their analyses created (export tables), and
+            // later serial phases (the binding fixpoint) allocate into them.
+            if let Some(analysis) = outcome.analysis.as_ref() {
+                analysis
+                    .local_export_table
+                    .type_declarations
+                    .arena_handle()
+                    .adopt_current_thread_as_owner();
+                analysis
+                    .local_type_declarations
+                    .arena_handle()
+                    .adopt_current_thread_as_owner();
+            }
+            let file_index = outcome.file_index;
+            slots[file_index] = Some(outcome);
+        }
+        logs.extend(worker_logs);
+    }
+    for log in logs {
+        let file_index = log.file_index;
+        logs_by_index[file_index] = Some(log);
+    }
+
+    // Deterministic commit in file order. Declaration-file type dedup runs here
+    // (not in workers): its shared cache picks pointer-identity representatives,
+    // and representative identity feeds the pinned dedup-fingerprint machinery,
+    // so it must be chosen in the serial file order.
+    let cap = crate::infer::types::cache::generic_instantiation_bucket_cap();
+    let mut published = surge_ts_types::fx::FxHashSet::default();
+    let mut dirty = surge_ts_types::fx::FxHashSet::default();
+    let mut stats = crate::speculative::StcCommitStats::default();
+    let mut type_dedup_cache = TypeDedupCache::new();
+    for file_index in 0..parsed_files.len() {
+        let parsed_file = &parsed_files[file_index];
+        if !parsed_file.is_module && parsed_file.file_kind != FileKind::DependencyDeclaration {
+            continue;
+        }
+        let mut outcome_analysis;
+        let verdict = match logs_by_index[file_index].as_ref() {
+            Some(log) => crate::speculative::commit_file_log(
+                &live,
+                log,
+                &mut published,
+                &dirty,
+                cap,
+                &mut stats,
+            ),
+            // Serial-only module (declaration kind): always analyzed here, on
+            // the rolling coordinator context — the exact serial regime.
+            None => {
+                stats.files += 1;
+                crate::speculative::CommitVerdict::MissConflict
+            }
+        };
+        match verdict {
+            crate::speculative::CommitVerdict::Clean => {
+                let outcome = slots[file_index]
+                    .take()
+                    .expect("worker outcome for committed module");
+                outcome_analysis = outcome.analysis;
+                for diagnostic in outcome.diagnostics {
+                    ctx.push_collected(diagnostic);
+                }
+            }
+            crate::speculative::CommitVerdict::MissConflict
+            | crate::speculative::CommitVerdict::DependencyConflict => {
+                dirty.insert(file_index);
+                slots[file_index] = None;
+                let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
+                    live.clone(),
+                ));
+                outcome_analysis = crate::speculative::with_check_session(session.clone(), || {
+                    session.begin_file(file_index);
+                    analyze_module(
+                        file_index,
+                        parsed_file,
+                        local_type_declarations_by_module,
+                        preliminary_module_import_bindings,
+                        false,
+                        analysis_round,
+                        memory_trace_threshold,
+                        ctx,
+                        timings,
+                    )
+                });
+                for recheck_log in session.take_file_logs() {
+                    let complete = crate::speculative::apply_file_log(
+                        &live,
+                        &recheck_log,
+                        &mut published,
+                        cap,
+                        &mut stats,
+                    );
+                    debug_assert!(complete, "re-analysis publication must be complete");
+                }
+            }
+        }
+        if let Some(analysis) = outcome_analysis.as_mut()
+            && parsed_file.file_kind.is_declaration()
+            && module_type_dedup_enabled()
+        {
+            with_dts_expansion_reason(DtsExpansionReason::ModuleDedup, || {
+                dedup_module_analysis_types(analysis, &mut type_dedup_cache)
+            });
+        }
+        if let Some(analysis) = outcome_analysis.as_ref() {
+            record_retained_export_nodes(
+                &parsed_file.file_name,
+                retained_module_analysis_type_nodes(analysis),
+            );
+        }
+        analyses[file_index] = outcome_analysis;
+    }
+    if std::env::var_os("SURGE_STC_STATS").is_some() {
+        eprintln!(
+            "[stc-analysis] modules={} clean={} miss_conflicts={} dep_conflicts={} published={}",
+            stats.files,
+            stats.clean_commits,
+            stats.miss_conflicts,
+            stats.dependency_conflicts,
+            stats.published_entries,
+        );
+    }
+    crate::metrics::release_free_memory();
     analyses
 }
 

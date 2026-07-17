@@ -1403,7 +1403,19 @@ impl CheckerContext {
             self.record_suppressed(&diagnostic);
             return;
         }
+        self.push_deduplicated(diagnostic);
+    }
 
+    /// Merges a diagnostic that already passed suppression in the context it
+    /// was emitted from (a parallel analysis worker's, whose `current_file_kind`
+    /// matched the emitting module). Must not re-run [`Self::should_suppress`]:
+    /// this context's current file is unrelated to the diagnostic's origin at
+    /// merge time, only the order-preserving dedup applies.
+    pub(crate) fn push_collected(&mut self, diagnostic: Diagnostic) {
+        self.push_deduplicated(diagnostic);
+    }
+
+    fn push_deduplicated(&mut self, diagnostic: Diagnostic) {
         // `diagnostics` is also mutated directly elsewhere (clear / mem::take /
         // truncate); if its length no longer matches what the index reflects, the
         // index is stale, so rebuild it from the current diagnostics before use.

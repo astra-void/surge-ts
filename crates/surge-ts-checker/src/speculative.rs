@@ -170,6 +170,49 @@ impl FileCacheLog {
     pub(crate) fn miss_count(&self) -> usize {
         self.misses.len()
     }
+
+    /// Debug probe: a stable one-line summary of this file's cache insertions
+    /// (digests plus degraded flags), for regime-bisection dumps.
+    pub(crate) fn debug_insert_line(&self) -> String {
+        let mut generic: Vec<String> = self
+            .generic_inserts
+            .iter()
+            .map(|(_, entry, digest)| format!("g{digest:x}:{}", u8::from(entry.had_error)))
+            .collect();
+        generic.sort_unstable();
+        let mut other: Vec<String> = self
+            .instantiation_inserts
+            .iter()
+            .map(|(_, _, digest)| format!("i{digest:x}"))
+            .chain(
+                self.physical_inserts
+                    .iter()
+                    .map(|(_, _, d)| format!("p{d:x}")),
+            )
+            .chain(
+                self.template_inserts
+                    .iter()
+                    .map(|(_, _, d)| format!("t{d:x}")),
+            )
+            .chain(
+                self.method_inserts
+                    .iter()
+                    .map(|(_, _, d)| format!("m{d:x}")),
+            )
+            .chain(
+                self.overload_inserts
+                    .iter()
+                    .map(|(_, _, d)| format!("o{d:x}")),
+            )
+            .collect();
+        other.sort_unstable();
+        format!(
+            "misses={} {} {}",
+            self.misses.len(),
+            generic.join(","),
+            other.join(",")
+        )
+    }
 }
 
 struct WorkerOverlay {
