@@ -216,3 +216,93 @@ workers: per-module analysis 5.39 s → ~0.8 s; binding fixpoint ~2.2 s (partial
 parallelism TBD); check phase ~3 s → ~0.5 s; frontend ~1 s; finish ~0.5 s →
 plausibly ~5–6 s, with the binding fixpoint the swing factor. This justifies the
 per-worker-arena Stage 5 investment.
+
+---
+
+## Implementation session — what landed, what blocked, verdicts
+
+Commits `b83721a` (check-phase STC), `ef64078` (analysis machinery, gated),
+plus the auto-policy commit. All stages validated: nextest 1555/1555,
+oracle:test green, canonical hashes intact, whitespace clean.
+
+### Landed: serial-equivalent speculative checking (the historic blocker, solved)
+
+`crate::speculative` makes every parallel check path **byte-identical to
+`--jobs 1`** — previously `--jobs 2/4/8` each produced different bytes.
+Mechanism: workers never write the six order-visible caches; each speculates
+against an immutable fan-out snapshot + a private overlay (installed
+per-thread so env-materialized shadow contexts route through it, recognized by
+live-handle pointer identity), recording per file its observed misses and
+consumed worker-overlay entries. A single-threaded commit publishes insertions
+in serial file order; a file whose miss-set intersects earlier publications
+(or that consumed an invalidated overlay entry) is re-checked against the
+committed state. Induction over file order ⇒ byte-equality. Conflict digests
+are equality-consistent (`type_conflict_digest`); collisions cause only
+spurious sound rechecks.
+
+Measured (tRPC, 10 workers): 95.7% of files commit clean; ~215 rechecks;
+worker phase 3.0 s → ~1.0 s but the ordered serial recheck tail (~2.0 s —
+conflicted files are the expensive ones, ~16× average cost) holds the check
+phase at parity. **Byte-identity: proven** — jobs 1/2/4/6/8/auto raw-`cmp`
+identical on tRPC, zod, ky, ofetch; 5× deterministic.
+
+### Landed (gated off): parallel module analysis machinery
+
+The per-module analysis body is extracted (`analyze_module`) and shared
+verbatim between the serial loop and a parallel driver: fresh per-module
+worker contexts, speculative sessions, suppression-free ordered diagnostic
+merge (`push_collected`), coordinator-side declaration-type dedup (its
+representative choice feeds pinned pointer-identity machinery), and arena
+ownership transfer at the join (`adopt_current_thread_as_owner` — the debug
+owner assert located the exact violation: the serial binding fixpoint inserts
+into worker-built export-table arenas). The named-resolution memo was made
+module-scoped (byte-inert serially on all corpora), mirroring
+`begin_file_check`.
+
+**Proof of the framework:** force-recheck mode (every module re-analyzed on
+the coordinator's rolling context through the full transaction pipeline)
+reproduces serial bytes exactly on tRPC — coordinator, commit, merge, arenas
+all correct.
+
+### The precisely-characterized blocker: environment identity
+
+With real speculation, tRPC gains 2 extra `TS2304` diagnostics (zod is fully
+clean). Localized by regime-bisection to 5 library `.d.ts` modules whose
+**physical-interface cache keys differ across context instances**:
+`DeclarationEnvironmentKey` embeds context pointers
+(`resolved_named_types`/scope addresses, generations), so a fresh worker
+context derives different environment identities than the serial rolling
+context, flipping hit/miss on cache entries whose values are
+context-sensitive — invisible to conflict validation (different keys never
+collide). The induction covers cache *observations*; value equality
+additionally requires **content-based environment identity**. That redesign
+(replacing pointer-derived `DeclarationEnvironmentKey` components with
+content-derived ones, without disturbing canonicalization discriminators) is
+the single lever that unblocks parallel analysis — and would likely also
+remove the analysis-phase conflict class entirely.
+
+### Verdicts against the mission gates
+
+| gate | result |
+|---|---|
+| jobs=1 byte-stability + no regression | ✅ canonical `4d69a2d5`, wall unchanged |
+| `--jobs N` byte-identity (any N) | ✅ **new capability** (was divergent) |
+| jobs=auto ≤ 10 s (Milestone A) | ❌ not reached — auto held serial (see below) |
+| memory: peak ≤ 2.10 / finish ≤ 0.60 GB | ✅ default config (1.96/0.45); parallel check 2.23 GB peak — over gate |
+| workspace/oracle/corpora validation | ✅ 1555/1555, oracle green, 4 corpora × jobs=1≡auto raw-cmp |
+
+`--jobs auto` stays serial **on measured grounds, not correctness**: parallel
+checking at wall parity + ~6 s extra CPU + 0.27 GB extra peak is net-negative
+for defaults. `SURGE_PARALLEL_CHECK_AUTO=1` / `SURGE_PARALLEL_ANALYSIS=1` opt
+in for measurement.
+
+### Remaining path to 5 s (ordered by leverage)
+
+1. **Content-based declaration-environment identity** — unblocks parallel
+   analysis (5.39 s → ~0.8 s at 8 workers) and shrinks conflict classes.
+2. **Pipelined rechecks** (ordered-delta speculation for the conflict tail) —
+   turns check-phase parity into ~1.4 s (≈ −1.7 s wall).
+3. **Per-file release in the parallel loop** + memory-aware worker cap —
+   closes the 2.23 vs 2.10 GB gap.
+4. **Binding fixpoint** (~2.2 s) — dirty-module tracking once analysis is
+   parallel.
