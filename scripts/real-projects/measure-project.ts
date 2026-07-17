@@ -141,6 +141,7 @@ export type MeasuredCommandResult = {
   durationMs: number;
   peakRssBytes: number | null;
   peakRssSource: PeakRssSource;
+  peakFootprintBytes: number | null;
   error: string | null;
 };
 
@@ -169,6 +170,8 @@ export type MemoryModeResult = {
   peakRssBytes: number | null;
   peakRssMb: number | null;
   peakRssSource: PeakRssSource;
+  peakFootprintBytes: number | null;
+  peakFootprintMb: number | null;
   durationMs: number;
   status: number | null;
 };
@@ -203,6 +206,18 @@ export function parsePeakRssBytes(report: string, source: PeakRssSource): number
     return match ? Number(match[1]) * 1024 : null;
   }
   return null;
+}
+
+/// Parse the peak physical memory footprint (phys_footprint, in bytes) out of
+/// a macOS `time -l` report. This is the Activity-Monitor-comparable metric
+/// and matches the kernel's per-task phys_footprint peak. GNU time has no
+/// equivalent field, so Linux reports yield null and callers fall back to RSS.
+export function parsePeakFootprintBytes(report: string, source: PeakRssSource): number | null {
+  if (source !== 'macos-time') {
+    return null;
+  }
+  const match = report.match(/(\d+)\s+peak memory footprint/i);
+  return match ? Number(match[1]) : null;
 }
 
 export function peakRssMb(bytes: number | null): number | null {
@@ -258,6 +273,7 @@ export function runMeasuredCommand(
     durationMs: number,
     peakRssBytes: number | null,
     peakRssSource: PeakRssSource,
+    peakFootprintBytes: number | null = null,
   ): MeasuredCommandResult => ({
     command,
     args,
@@ -268,6 +284,7 @@ export function runMeasuredCommand(
     durationMs,
     peakRssBytes,
     peakRssSource,
+    peakFootprintBytes,
     error: result.error ? result.error.message : null,
   });
 
@@ -287,11 +304,13 @@ export function runMeasuredCommand(
 
   const report = readReport(reportPath);
   const peakRssBytes = report !== null ? parsePeakRssBytes(report, measurement.source) : null;
+  const peakFootprintBytes = report !== null ? parsePeakFootprintBytes(report, measurement.source) : null;
   return toResult(
     result,
     durationMs,
     peakRssBytes,
     peakRssBytes !== null ? measurement.source : 'unavailable',
+    peakFootprintBytes,
   );
 }
 
@@ -863,6 +882,8 @@ function toMemoryModeResult(
     peakRssBytes: result.peakRssBytes,
     peakRssMb: peakRssMb(result.peakRssBytes),
     peakRssSource: result.peakRssSource,
+    peakFootprintBytes: result.peakFootprintBytes,
+    peakFootprintMb: peakRssMb(result.peakFootprintBytes),
     durationMs: Math.round(result.durationMs),
     status: result.status,
   };
@@ -947,29 +968,43 @@ function toMemoryJson(result: MemoryModeResult): Record<string, unknown> {
     peak_rss_bytes: result.peakRssBytes,
     peak_rss_mb: result.peakRssMb,
     peak_rss_source: result.peakRssSource,
+    peak_footprint_bytes: result.peakFootprintBytes,
+    peak_footprint_mb: result.peakFootprintMb,
     duration_ms: result.durationMs,
     status: result.status,
   };
+}
+
+function formatMemoryMb(mb: number | null): string {
+  if (mb === null) {
+    return 'n/a';
+  }
+  if (mb >= 1024) {
+    return `${(mb / 1024).toFixed(2)} GB`;
+  }
+  return `${mb.toFixed(0)} MB`;
 }
 
 function formatPeakRss(result: MemoryModeResult): string {
   if (result.peakRssBytes === null || result.peakRssMb === null) {
     return `unavailable (${result.peakRssSource})`;
   }
-  if (result.peakRssMb >= 1024) {
-    return `${(result.peakRssMb / 1024).toFixed(2)} GB`;
-  }
-  return `${result.peakRssMb.toFixed(0)} MB`;
+  return formatMemoryMb(result.peakRssMb);
 }
 
 function formatMemorySection(memoryResults: MemoryModeResult[]): string[] {
   if (memoryResults.length === 0) {
     return ['- none'];
   }
-  const lines = ['| Command | Mode | Peak RSS | Wall |', '| --- | --- | ---: | ---: |'];
+  const lines = [
+    '| Command | Mode | Peak footprint | Peak RSS | Wall |',
+    '| --- | --- | ---: | ---: | ---: |',
+  ];
   for (const result of memoryResults) {
     const wall = `${(result.durationMs / 1000).toFixed(2)}s`;
-    lines.push(`| ${result.command} | ${result.mode} | ${formatPeakRss(result)} | ${wall} |`);
+    lines.push(
+      `| ${result.command} | ${result.mode} | ${formatMemoryMb(result.peakFootprintMb)} | ${formatPeakRss(result)} | ${wall} |`,
+    );
   }
   return lines;
 }
@@ -1033,7 +1068,8 @@ function renderMeasurementMarkdown(input: {
     `- suppressed rust-only diagnostics: ${compatReport.suppressedRustOnlyDiagnosticsTotal}`,
     '',
     '## Memory',
-    'Peak resident set size per command/mode. Raw bytes are in `memory.json`.',
+    'Peak memory per command/mode: phys_footprint (Activity-Monitor-comparable,',
+    'macOS only) and resident set size. Raw bytes are in `memory.json`.',
     '',
     ...formatMemorySection(input.memoryResults),
     '',

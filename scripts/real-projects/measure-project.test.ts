@@ -9,6 +9,7 @@ import {
   type MeasuredCommandResult,
   outputPathsForProject,
   parseArgs,
+  parsePeakFootprintBytes,
   parsePeakRssBytes,
   parseRustJobs,
   peakRssMb,
@@ -67,6 +68,16 @@ test('parsePeakRssBytes returns null when the field is absent', () => {
   assert.equal(parsePeakRssBytes(MACOS_TIME_REPORT, 'unavailable'), null);
 });
 
+test('parsePeakFootprintBytes reads the macOS phys_footprint peak', () => {
+  assert.equal(parsePeakFootprintBytes(MACOS_TIME_REPORT, 'macos-time'), 167330320);
+});
+
+test('parsePeakFootprintBytes is macOS-only and null when absent', () => {
+  assert.equal(parsePeakFootprintBytes(LINUX_TIME_REPORT, 'linux-time'), null);
+  assert.equal(parsePeakFootprintBytes(MACOS_TIME_REPORT, 'unavailable'), null);
+  assert.equal(parsePeakFootprintBytes('no footprint here', 'macos-time'), null);
+});
+
 test('peakRssMb rounds bytes to one decimal megabyte', () => {
   assert.equal(peakRssMb(null), null);
   assert.equal(peakRssMb(1024 * 1024), 1);
@@ -93,6 +104,7 @@ test('runMeasuredCommand parses macOS peak RSS and keeps child output clean', ()
 
   assert.equal(result.peakRssBytes, 170999808);
   assert.equal(result.peakRssSource, 'macos-time');
+  assert.equal(result.peakFootprintBytes, 167330320);
   assert.equal(result.status, 0);
   assert.equal(result.stdout, 'OK');
   assert.equal(result.stderr, 'Timings:\n  parsing: 1ms');
@@ -115,6 +127,7 @@ test('runMeasuredCommand parses Linux peak RSS', () => {
 
   assert.equal(result.peakRssBytes, 166992 * 1024);
   assert.equal(result.peakRssSource, 'linux-time');
+  assert.equal(result.peakFootprintBytes, null);
   assert.equal(calls[0].args[0], '-v');
 });
 
