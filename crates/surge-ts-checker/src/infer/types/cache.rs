@@ -1823,7 +1823,7 @@ mod physical_interface_cache_tests {
         ));
         let mut properties = PropertyMap::default();
         properties.insert(
-            "method".to_string(),
+            "method".into(),
             ObjectProperty::required(union_type(vec![first_overload, second_overload])),
         );
         let object = ObjectType::new(properties, Some(Type::String))

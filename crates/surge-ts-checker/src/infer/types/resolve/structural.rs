@@ -147,7 +147,7 @@ pub(crate) fn resolve_object_type(
             ObjectProperty::required(property_type.ty)
         };
 
-        properties.insert(property.name, object_property);
+        properties.insert(property.name.into(), object_property);
     }
 
     let mut resolved_object = alloc_object_type(properties, None);

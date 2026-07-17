@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn crate_root_reexports_still_work() {
         let mut properties = PropertyMap::default();
-        properties.insert("name".to_string(), ObjectProperty::required(Type::String));
+        properties.insert("name".into(), ObjectProperty::required(Type::String));
 
         let ty = Type::Object(ObjectType::new(properties, None));
 
@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn optional_property_access_widens_to_undefined() {
         let mut properties = PropertyMap::default();
-        properties.insert("name".to_string(), ObjectProperty::optional(Type::String));
+        properties.insert("name".into(), ObjectProperty::optional(Type::String));
 
         let ty = ObjectType::new(properties, None);
 

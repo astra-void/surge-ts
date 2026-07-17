@@ -292,7 +292,7 @@ impl Walker {
         ) {
             for (name, property) in object.properties.iter() {
                 self.add(
-                    (size_of::<String>() + name.capacity()) as u64
+                    (size_of::<Arc<str>>() + name.len()) as u64
                         + size_of::<surge_ts_types::ObjectProperty>() as u64,
                 );
                 self.walk_type(&property.ty);

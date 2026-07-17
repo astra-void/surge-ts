@@ -578,7 +578,7 @@ mod tests {
         // the hashed path, matching `Type::eq`.
         let object = || {
             let mut properties = PropertyMap::default();
-            properties.insert("value".to_string(), ObjectProperty::required(Type::String));
+            properties.insert("value".into(), ObjectProperty::required(Type::String));
             Type::Object(ObjectType {
                 properties: Arc::new(properties),
                 property_map_id: None,

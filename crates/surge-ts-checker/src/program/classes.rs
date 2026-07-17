@@ -187,7 +187,7 @@ pub(crate) fn build_class_value_symbol(
                 } else {
                     ObjectProperty::required(property_type)
                 };
-                properties.insert(property.name.clone(), object_property);
+                properties.insert(property.name.as_str().into(), object_property);
             }
             ParsedClassMember::Method(method) if method.is_static => {
                 let function_type = map_function_signature(
@@ -198,14 +198,14 @@ pub(crate) fn build_class_value_symbol(
                     ctx,
                 );
                 properties.insert(
-                    method.name.clone(),
+                    method.name.as_str().into(),
                     ObjectProperty::required(Type::Function(function_type)),
                 );
             }
             ParsedClassMember::Accessor(accessor) if accessor.is_static => {
                 let property_type = map_parsed_type(accessor_property_type(accessor), ctx);
                 properties.insert(
-                    accessor.name.clone(),
+                    accessor.name.as_str().into(),
                     ObjectProperty::required(property_type),
                 );
             }

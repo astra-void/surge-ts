@@ -82,15 +82,15 @@ fn array_iterator_type(yields: Type) -> Type {
     // `next()` result type is `T | undefined` — matching tsc and keeping the
     // possibly-absent value sound.
     result_props.insert(
-        "value".to_string(),
+        "value".into(),
         ObjectProperty::required(crate::union_type(vec![yields.clone(), Type::Undefined])),
     );
-    result_props.insert("done".to_string(), ObjectProperty::required(Type::Boolean));
+    result_props.insert("done".into(), ObjectProperty::required(Type::Boolean));
     let result = Type::Object(ObjectType::new(result_props, None));
 
     let mut props = PropertyMap::default();
     props.insert(
-        "next".to_string(),
+        "next".into(),
         ObjectProperty::required(function_type(vec![], result, false, 0)),
     );
     let body = Type::Object(ObjectType::new(props, None));
@@ -181,7 +181,7 @@ impl Type {
                 {
                     let mut properties = crate::PropertyMap::default();
                     properties.insert(
-                        "get".to_string(),
+                        "get".into(),
                         crate::ObjectProperty::required(function_type(
                             vec![Type::Any],
                             Type::Any,
@@ -190,7 +190,7 @@ impl Type {
                         )),
                     );
                     properties.insert(
-                        "set".to_string(),
+                        "set".into(),
                         crate::ObjectProperty::required(function_type(
                             vec![Type::Any, Type::Any],
                             Type::Any,
@@ -199,7 +199,7 @@ impl Type {
                         )),
                     );
                     properties.insert(
-                        "has".to_string(),
+                        "has".into(),
                         crate::ObjectProperty::required(function_type(
                             vec![Type::Any],
                             Type::Boolean,
@@ -208,7 +208,7 @@ impl Type {
                         )),
                     );
                     properties.insert(
-                        "delete".to_string(),
+                        "delete".into(),
                         crate::ObjectProperty::required(function_type(
                             vec![Type::Any],
                             Type::Boolean,
@@ -217,7 +217,7 @@ impl Type {
                         )),
                     );
                     properties.insert(
-                        "clear".to_string(),
+                        "clear".into(),
                         crate::ObjectProperty::required(function_type(
                             vec![],
                             Type::Void,
@@ -225,10 +225,7 @@ impl Type {
                             0,
                         )),
                     );
-                    properties.insert(
-                        "size".to_string(),
-                        crate::ObjectProperty::required(Type::Number),
-                    );
+                    properties.insert("size".into(), crate::ObjectProperty::required(Type::Number));
                     properties
                 },
                 None,
@@ -755,7 +752,7 @@ mod tests {
     #[test]
     fn array_type_name_object() {
         let mut properties = crate::PropertyMap::default();
-        properties.insert("name".to_string(), ObjectProperty::required(Type::String));
+        properties.insert("name".into(), ObjectProperty::required(Type::String));
 
         assert_eq!(
             Type::Array(Box::new(Type::Object(ObjectType::new(properties, None)))).name(),
@@ -824,7 +821,7 @@ mod tests {
     #[test]
     fn tuple_type_name_object_element() {
         let mut properties = crate::PropertyMap::default();
-        properties.insert("name".to_string(), ObjectProperty::required(Type::String));
+        properties.insert("name".into(), ObjectProperty::required(Type::String));
 
         assert_eq!(
             Type::Tuple(vec![

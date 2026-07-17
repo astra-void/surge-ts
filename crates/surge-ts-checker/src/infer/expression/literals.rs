@@ -49,7 +49,7 @@ pub(crate) fn infer_object_literal(
         }
 
         merged_properties.insert(
-            property.name.clone(),
+            property.name.as_str().into(),
             ObjectProperty::required(infer_object_property_type(property, symbols, ctx)),
         );
     }

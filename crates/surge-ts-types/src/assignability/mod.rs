@@ -540,14 +540,14 @@ pub fn object_assignability_failure(
     };
 
     for (property_name, target_property) in target.properties.iter() {
-        let source_property = source.properties.get(property_name.as_str());
+        let source_property = source.properties.get(property_name.as_ref());
         let source_property_ty = source_property
             .map(|property| &property.ty)
             .or_else(|| source.string_index_type.as_deref());
 
         let source_property_ty = source_property_ty
             .cloned()
-            .or_else(|| callable_object_function_member(source, property_name.as_str()));
+            .or_else(|| callable_object_function_member(source, property_name.as_ref()));
 
         let Some(source_property_ty) = source_property_ty.as_ref() else {
             if target_property.is_optional() {
@@ -555,7 +555,7 @@ pub fn object_assignability_failure(
             }
 
             return Some(ObjectAssignabilityFailure::MissingProperty {
-                property_name: property_name.clone(),
+                property_name: property_name.to_string(),
             });
         };
 
@@ -564,13 +564,13 @@ pub fn object_assignability_failure(
             && target_property.is_required()
         {
             return Some(ObjectAssignabilityFailure::MissingProperty {
-                property_name: property_name.clone(),
+                property_name: property_name.to_string(),
             });
         }
 
         if !is_assignable_to(source_property_ty, &target_property.ty) {
             return Some(ObjectAssignabilityFailure::PropertyTypeMismatch {
-                property_name: property_name.clone(),
+                property_name: property_name.to_string(),
                 source_type: source_property_ty.clone(),
                 target_type: target_property.ty.clone(),
             });

@@ -347,7 +347,7 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
         }
 
         properties.insert(
-            name.to_string(),
+            name.clone(),
             surge_ts_types::ObjectProperty::required(symbol.ty.clone()),
         );
     }

@@ -267,7 +267,7 @@ pub(crate) fn resolve_parsed_type(
             match &resolved_inner.ty.peeled() {
                 Type::Object(object_type) => {
                     for key in object_type.properties.keys() {
-                        keys.push(Type::StringLiteral(key.clone()));
+                        keys.push(Type::StringLiteral(key.to_string()));
                     }
                 }
                 _ => {

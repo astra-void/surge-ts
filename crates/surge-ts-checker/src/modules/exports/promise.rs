@@ -5,11 +5,11 @@ pub(crate) const PROMISE_LIKE_VALUE_PROPERTY: &str = "\0surgePromiseValue";
 pub(crate) fn promise_like_type(value_type: Type) -> Type {
     let mut properties = PropertyMap::default();
     properties.insert(
-        PROMISE_LIKE_VALUE_PROPERTY.to_string(),
+        PROMISE_LIKE_VALUE_PROPERTY.into(),
         ObjectProperty::required(value_type.clone()),
     );
     properties.insert(
-        "then".to_string(),
+        "then".into(),
         ObjectProperty::required(Type::Function(FunctionType::new(
             vec![Type::Function(FunctionType::new(
                 vec![value_type],
@@ -23,7 +23,7 @@ pub(crate) fn promise_like_type(value_type: Type) -> Type {
         ))),
     );
     properties.insert(
-        "catch".to_string(),
+        "catch".into(),
         ObjectProperty::required(Type::Function(FunctionType::new(
             vec![Type::Any],
             Type::Unknown,
@@ -32,7 +32,7 @@ pub(crate) fn promise_like_type(value_type: Type) -> Type {
         ))),
     );
     properties.insert(
-        "finally".to_string(),
+        "finally".into(),
         ObjectProperty::required(Type::Function(FunctionType::new(
             vec![Type::Any],
             Type::Unknown,

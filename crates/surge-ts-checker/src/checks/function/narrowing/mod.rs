@@ -134,7 +134,7 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
             if let Some(existing) = object_type.properties.get(property).cloned() {
                 let properties = Arc::make_mut(&mut object_type.properties);
                 properties.insert(
-                    property.to_string(),
+                    property.into(),
                     surge_ts_types::ObjectProperty {
                         ty: surge_ts_types::remove_undefined(&existing.ty),
                         optional: false,
@@ -582,7 +582,8 @@ pub(crate) fn narrow_discriminant_in_scope(
             let Type::Object(object_type) = &symbol_ty else {
                 return;
             };
-            let Some(base_property_type) = object_type.properties.get(base_property) else {
+            let Some(base_property_type) = object_type.properties.get(base_property.as_str())
+            else {
                 return;
             };
             let Some(narrowed_property) = narrow_union_by_discriminant(
@@ -596,7 +597,7 @@ pub(crate) fn narrow_discriminant_in_scope(
             let mut new_object = object_type.clone();
             let properties = std::sync::Arc::make_mut(&mut new_object.properties);
             properties.insert(
-                base_property.clone(),
+                base_property.as_str().into(),
                 surge_ts_types::ObjectProperty {
                     ty: narrowed_property,
                     optional: base_property_type.optional,

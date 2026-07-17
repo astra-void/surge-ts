@@ -69,7 +69,7 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
     for (name, symbol) in export_table.symbols.iter() {
         property_count += 1;
         properties.insert(
-            name.to_string(),
+            name.clone(),
             surge_ts_types::ObjectProperty::required(symbol.ty.clone()),
         );
     }
@@ -77,7 +77,7 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
     if let Some(default_symbol) = &export_table.default_symbol {
         property_count += 1;
         properties.insert(
-            "default".to_string(),
+            "default".into(),
             surge_ts_types::ObjectProperty::required(default_symbol.ty.clone()),
         );
     }

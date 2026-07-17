@@ -117,7 +117,7 @@ pub(crate) fn resolve_mapped_type(
             .and_then(|object| object.get_property(&key))
             .is_some_and(|property| property.is_optional());
         properties.insert(
-            key,
+            key.into(),
             ObjectProperty {
                 ty: resolved_value.ty,
                 optional: mapped.optional || source_optional,
