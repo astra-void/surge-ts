@@ -243,7 +243,7 @@ fn analyze_module(
     // schedule-dependent carry-over that leaks another module's resolution
     // context (observed as a type-parameter name flipping in one zod display)
     // and would make parallel analysis diverge from serial.
-    ctx.resolved_named_types = Arc::new(Mutex::new(surge_ts_types::fx::FxHashMap::default()));
+    ctx.replace_resolved_named_types(0);
     let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
     ctx.type_declaration_scope = None;
     let Some(local_type_declarations) = local_type_declarations_by_module[file_index].as_ref()
@@ -338,7 +338,7 @@ fn analyze_module(
         }
     }
     ctx.truncate_diagnostics(diagnostics_before_signatures);
-    ctx.resolved_named_types = Arc::new(Mutex::new(surge_ts_types::fx::FxHashMap::default()));
+    ctx.replace_resolved_named_types(1);
 
     // Lower this module's `declare global` augmentation values now that its
     // type environment (local declarations + import scope) is active. The
@@ -440,7 +440,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
             continue;
         }
 
-        let Some(mut analysis) = analyze_module(
+        let analysis_result = analyze_module(
             file_index,
             parsed_file,
             local_type_declarations_by_module,
@@ -450,7 +450,8 @@ pub(crate) fn collect_module_analyses_with_bindings(
             memory_trace_threshold,
             ctx,
             timings,
-        ) else {
+        );
+        let Some(mut analysis) = analysis_result else {
             analyses.push(None);
             continue;
         };
@@ -501,6 +502,19 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
         file_index: usize,
         analysis: Option<ModuleAnalysis>,
         diagnostics: Vec<Diagnostic>,
+        /// The module's post-analysis named-resolution memo. Serial analysis
+        /// leaves the last module's memo on the rolling context and later
+        /// stages observably resolve through it, so the commit walk installs
+        /// the last committed module's memo on the main context.
+        resolved_named_types: Arc<
+            Mutex<
+                surge_ts_types::fx::FxHashMap<
+                    crate::context::DeclarationResolutionKey,
+                    crate::context::DeclarationResolutionState,
+                >,
+            >,
+        >,
+        resolved_named_types_identity: crate::context::EnvironmentMapIdentity,
     }
 
     let next_index = AtomicUsize::new(0);
@@ -570,6 +584,10 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                                 file_index,
                                 analysis,
                                 diagnostics,
+                                resolved_named_types: local_ctx.resolved_named_types.clone(),
+                                resolved_named_types_identity: local_ctx
+                                    .resolved_named_types_identity
+                                    .clone(),
                             });
                         }
                         outcomes
@@ -660,6 +678,11 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                 for diagnostic in outcome.diagnostics {
                     ctx.push_collected(diagnostic);
                 }
+                // Reproduce the serial carry: after the pass, the rolling
+                // context holds the last analyzed module's memo, which later
+                // stages observably resolve through.
+                ctx.resolved_named_types = outcome.resolved_named_types;
+                ctx.resolved_named_types_identity = outcome.resolved_named_types_identity;
             }
             crate::speculative::CommitVerdict::MissConflict
             | crate::speculative::CommitVerdict::DependencyConflict => {
@@ -668,6 +691,9 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                 let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
                     live.clone(),
                 ));
+                // Recheck environments must not dedup with the discarded
+                // speculative attempt's (their memo maps differ semantically).
+                ctx.environment_attempt = 1;
                 outcome_analysis = crate::speculative::with_check_session(session.clone(), || {
                     session.begin_file(file_index);
                     analyze_module(
@@ -682,6 +708,7 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                         timings,
                     )
                 });
+                ctx.environment_attempt = 0;
                 for recheck_log in session.take_file_logs() {
                     let complete = crate::speculative::apply_file_log(
                         &live,

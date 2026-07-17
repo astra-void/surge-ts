@@ -51,21 +51,79 @@ impl DeclarationEnvironmentId {
     fn index(self) -> usize {
         (self.0 as u32).saturating_sub(1) as usize
     }
+}
 
-    fn canonicalization_discriminator(self) -> u64 {
-        self.0
+/// Content-stable identity of one `resolved_named_types` memo map instance.
+/// Pointer identity is regime-dependent (a parallel worker's fresh context
+/// creates different map instances than the serial rolling context), so map
+/// instances are identified by *where the program created them*: the file
+/// whose body window created the map, the deterministic resolution-stage
+/// counter, the within-body ordinal (body start / mid-body / shadow), and the
+/// speculative-attempt tag (0 = first attempt, 1 = STC recheck, which must
+/// not collide with the discarded speculative attempt's environments).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct EnvironmentMapIdentity {
+    creator: Arc<str>,
+    stage: u64,
+    ordinal: u32,
+    attempt: u64,
+}
+
+impl EnvironmentMapIdentity {
+    fn initial() -> Self {
+        Self {
+            creator: Arc::from(""),
+            stage: 0,
+            ordinal: 0,
+            attempt: 0,
+        }
     }
 }
 
+/// Dedup key for interned declaration environments. Every component is
+/// content-derived (never a bare allocation address), so two contexts in the
+/// same semantic state — a parallel worker's fresh clone and the serial
+/// rolling context at the same module — intern to the same environment and,
+/// critically, produce the same canonicalization discriminator: lazy
+/// `Type::Reference`s compare equal across regimes exactly when serial
+/// semantics say they should (see `program_canonicalization_discriminator`
+/// consumers in the canonical type store).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DeclarationEnvironmentKey {
     file_name: String,
     file_kind: FileKind,
-    type_declaration_scope: usize,
-    resolved_named_types: usize,
-    module_scope_generation: usize,
-    module_values_generation: usize,
-    resolution_generation: u64,
+    /// `(instance_id, version)` per scope layer, in layer order; `None` scope
+    /// is distinguished from an empty layer list.
+    has_scope: bool,
+    scope_layers: Vec<(u64, u64)>,
+    resolved_named_types_identity: EnvironmentMapIdentity,
+    /// The per-file module maps are stage-installed shared `Arc`s (regime
+    /// stable); an empty map is identified as 0 regardless of which default
+    /// `Arc` instance holds it (`mem::take` windows create fresh empties).
+    module_scope_identity: usize,
+    module_values_identity: usize,
+    /// `(instance_id, version)` of the context's live declaration table. The
+    /// pointer scheme guaranteed key-equal interns shared one table (same
+    /// memo-map burst implied same table); the content key must carry it
+    /// explicitly or environments from different table contexts merge and
+    /// first-wins data capture materializes the wrong table.
+    type_declarations_identity: (u64, u64),
+    /// Deterministic stage counter at intern time: distinguishes re-visits of
+    /// a file across stage boundaries that share a carried memo map.
+    stage_at_intern: u64,
+    /// File-switch ordinal within the current anchor window (window = last
+    /// memo-map replacement or stage boundary): the regime-stable
+    /// reconstruction of the old rolling generation, which separated fixpoint
+    /// re-entries of the same file — observable through which re-entry's
+    /// references canonicalize together.
+    visit: u64,
+}
+
+fn environment_content_discriminator(key: &DeclarationEnvironmentKey) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = surge_ts_types::fx::FxHasher::default();
+    key.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +167,10 @@ struct DeclarationEnvironmentData {
     timings: Option<Arc<Mutex<ProgramTimings>>>,
     file_kinds: Arc<FxHashMap<String, FileKind>>,
     module_value_fallback: Option<Arc<SymbolTable>>,
+    resolved_named_types_identity: EnvironmentMapIdentity,
+    resolution_stage_counter: u64,
+    environment_attempt: u64,
+    environment_visit_counter: u64,
 }
 
 #[derive(Debug)]
@@ -126,13 +188,16 @@ pub(crate) struct DeclarationEnvironmentStore {
 
 #[derive(Debug, Default)]
 struct DeclarationEnvironmentEntries {
-    by_key: HashMap<DeclarationEnvironmentKey, DeclarationEnvironmentId>,
+    by_key: HashMap<DeclarationEnvironmentKey, (DeclarationEnvironmentId, u64)>,
     by_id: Vec<Arc<DeclarationEnvironmentData>>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct DeclarationEnvironmentHandle {
     id: DeclarationEnvironmentId,
+    /// Content hash of the environment's dedup key: equal for semantically
+    /// identical environments regardless of context instance or intern order.
+    discriminator: u64,
     store: Weak<DeclarationEnvironmentStore>,
 }
 
@@ -173,23 +238,41 @@ impl DeclarationEnvironmentStore {
         let key = DeclarationEnvironmentKey {
             file_name: ctx.file_name.clone(),
             file_kind: ctx.current_file_kind,
-            type_declaration_scope: ctx
+            has_scope: ctx.type_declaration_scope.is_some(),
+            scope_layers: ctx
                 .type_declaration_scope
                 .as_ref()
-                .map_or(0, |scope| Arc::as_ptr(scope) as usize),
-            resolved_named_types: Arc::as_ptr(&ctx.resolved_named_types) as usize,
-            module_scope_generation: Arc::as_ptr(&ctx.module_scope_by_file) as usize,
-            module_values_generation: Arc::as_ptr(&ctx.module_local_values_by_file) as usize,
-            resolution_generation: ctx.declaration_environment_generation,
+                .map_or_else(Vec::new, |scope| {
+                    scope
+                        .layers()
+                        .iter()
+                        .map(|layer| layer.snapshot_identity())
+                        .collect()
+                }),
+            resolved_named_types_identity: ctx.resolved_named_types_identity.clone(),
+            module_scope_identity: if ctx.module_scope_by_file.is_empty() {
+                0
+            } else {
+                Arc::as_ptr(&ctx.module_scope_by_file) as usize
+            },
+            module_values_identity: if ctx.module_local_values_by_file.is_empty() {
+                0
+            } else {
+                Arc::as_ptr(&ctx.module_local_values_by_file) as usize
+            },
+            type_declarations_identity: ctx.type_declarations.snapshot_identity(),
+            stage_at_intern: ctx.resolution_stage_counter,
+            visit: ctx.environment_visit_counter,
         };
         let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let Some(id) = entries.by_key.get(&key) {
+        if let Some((id, discriminator)) = entries.by_key.get(&key) {
             self.hits.fetch_add(1, Ordering::Relaxed);
             return DeclarationEnvironmentHandle {
                 id: *id,
+                discriminator: *discriminator,
                 store: Arc::downgrade(self),
             };
         }
@@ -197,15 +280,17 @@ impl DeclarationEnvironmentStore {
             self.owner,
             self.next_index.fetch_add(1, Ordering::Relaxed),
         );
+        let discriminator = environment_content_discriminator(&key);
         let data = Arc::new(DeclarationEnvironmentData::capture(
             ctx,
             self.snapshot_type_declarations(ctx),
         ));
         debug_assert_eq!(id.index(), entries.by_id.len());
-        entries.by_key.insert(key, id);
+        entries.by_key.insert(key, (id, discriminator));
         entries.by_id.push(data);
         DeclarationEnvironmentHandle {
             id,
+            discriminator,
             store: Arc::downgrade(self),
         }
     }
@@ -275,7 +360,7 @@ impl DeclarationEnvironmentHandle {
     }
 
     pub(crate) fn canonicalization_discriminator(&self) -> u64 {
-        self.id.canonicalization_discriminator()
+        self.discriminator
     }
 }
 
@@ -318,6 +403,10 @@ impl DeclarationEnvironmentData {
             type_parameter_constraint_scopes: ctx.type_parameter_constraint_scopes.clone(),
             timings: ctx.timings.clone(),
             file_kinds: ctx.file_kinds.clone(),
+            resolved_named_types_identity: ctx.resolved_named_types_identity.clone(),
+            resolution_stage_counter: ctx.resolution_stage_counter,
+            environment_attempt: ctx.environment_attempt,
+            environment_visit_counter: ctx.environment_visit_counter,
             module_value_fallback: ctx.module_value_fallback.clone(),
         }
     }
@@ -730,6 +819,20 @@ pub(crate) struct CheckerContext {
     pub(crate) substitution_store: Arc<SubstitutionStore>,
     pub(crate) declaration_environment_store: Arc<DeclarationEnvironmentStore>,
     declaration_environment_generation: u64,
+    /// See [`EnvironmentMapIdentity`]: content-stable identity of the current
+    /// `resolved_named_types` instance, updated at every replacement site.
+    pub(crate) resolved_named_types_identity: EnvironmentMapIdentity,
+    /// Deterministic count of main-thread resolution stages entered
+    /// ([`Self::begin_resolution_stage`]); identical in serial and parallel
+    /// modes because stage transitions happen on the linear driver path.
+    pub(crate) resolution_stage_counter: u64,
+    /// 0 for first-attempt work, 1 while re-running a file/module in the STC
+    /// commit walk, so recheck environments never collide with the discarded
+    /// speculative attempt's.
+    pub(crate) environment_attempt: u64,
+    /// See `DeclarationEnvironmentKey::visit`: bumped on every file switch,
+    /// reset at every memo-map replacement and stage boundary.
+    environment_visit_counter: u64,
     pub(crate) resolved_named_types:
         Arc<Mutex<FxHashMap<DeclarationResolutionKey, DeclarationResolutionState>>>,
     /// Program-scoped cache for context-free *generic* library/dependency
@@ -886,6 +989,10 @@ impl CheckerContext {
             substitution_store: SubstitutionStore::new(),
             declaration_environment_store: DeclarationEnvironmentStore::new(),
             declaration_environment_generation: 0,
+            resolved_named_types_identity: EnvironmentMapIdentity::initial(),
+            resolution_stage_counter: 0,
+            environment_attempt: 0,
+            environment_visit_counter: 0,
             resolved_named_types: Arc::new(Mutex::new(FxHashMap::default())),
             program_resolved_generic_types: Arc::new(Mutex::new(FxHashMap::default())),
             program_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
@@ -912,6 +1019,33 @@ impl CheckerContext {
             file_kinds: Arc::new(file_kinds),
             module_value_fallback: None,
         }
+    }
+
+    /// Replaces the named-resolution memo with a fresh map and records its
+    /// content-stable identity: (current file, current resolution stage,
+    /// `ordinal`, current attempt). Every site that swaps the map must go
+    /// through here so environment identity stays pointer-free.
+    pub(crate) fn replace_resolved_named_types(&mut self, ordinal: u32) {
+        self.resolved_named_types = Arc::new(Mutex::new(FxHashMap::default()));
+        self.resolved_named_types_identity = EnvironmentMapIdentity {
+            creator: Arc::from(self.file_name.as_str()),
+            stage: self.resolution_stage_counter,
+            ordinal,
+            attempt: self.environment_attempt,
+        };
+        self.environment_visit_counter = 0;
+    }
+
+    /// Marks a main-thread resolution stage boundary: bumps the deterministic
+    /// stage counter so map identities created in different stages never
+    /// collide. The carried memo map itself is deliberately left in place —
+    /// stage-time resolution hitting the previous stage's memo is observable
+    /// serial behavior (one tRPC display depends on it), so parallel drivers
+    /// must instead reproduce the serial carry (see the last-committed-module
+    /// hand-off in `collect_module_analyses_with_bindings_parallel`).
+    pub(crate) fn begin_resolution_stage(&mut self) {
+        self.resolution_stage_counter += 1;
+        self.environment_visit_counter = 0;
     }
 
     pub(crate) fn note_resolution_cycle(&mut self, target_index: usize) {
@@ -943,6 +1077,10 @@ impl CheckerContext {
             substitution_store: data.substitution_store.clone(),
             declaration_environment_store,
             declaration_environment_generation: 0,
+            resolved_named_types_identity: data.resolved_named_types_identity.clone(),
+            resolution_stage_counter: data.resolution_stage_counter,
+            environment_attempt: data.environment_attempt,
+            environment_visit_counter: data.environment_visit_counter,
             resolved_named_types: data.resolved_named_types.clone(),
             program_resolved_generic_types: data.program_resolved_generic_types.clone(),
             program_instantiations: data.program_instantiations.clone(),
@@ -1133,6 +1271,7 @@ impl CheckerContext {
         if self.file_name != file_name {
             self.declaration_environment_generation =
                 self.declaration_environment_generation.wrapping_add(1);
+            self.environment_visit_counter = self.environment_visit_counter.wrapping_add(1);
         }
         self.current_file_kind = self
             .file_kinds
@@ -1178,7 +1317,7 @@ impl CheckerContext {
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"
         );
-        self.resolved_named_types = Arc::new(Mutex::new(FxHashMap::default()));
+        self.replace_resolved_named_types(0);
     }
 
     /// Empties both the overlay and the baseline — the equivalent of clearing

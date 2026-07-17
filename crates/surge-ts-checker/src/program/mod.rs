@@ -592,6 +592,7 @@ fn check_program_with_stats_and_jobs_inner(
 
     let ambient_collection_start = Instant::now();
     emit_parser_diagnostics(&parsed_files, &mut ctx);
+    ctx.begin_resolution_stage();
     collect_ambient_globals(&parsed_files, &mut ctx, timings.as_ref());
     crate::driver::collect_global_augmentations(&parsed_files, &mut ctx);
     collect_ambient_modules(&parsed_files, &mut ctx, timings.as_ref());
@@ -629,6 +630,7 @@ fn check_program_with_stats_and_jobs_inner(
 
     // PRELIMINARY PASS: collect types and resolve imports/exports to make them available for function signature collection
     let type_collection_start = Instant::now();
+    ctx.begin_resolution_stage();
     let (
         local_type_declarations_by_module,
         preliminary_module_import_bindings,
@@ -662,6 +664,7 @@ fn check_program_with_stats_and_jobs_inner(
     // validation cannot see (tRPC: 2 extra TS2304). Off by default until
     // environment identity is content-based; the serial-equivalent commit,
     // per-worker contexts, and arena ownership transfer are in place.
+    ctx.begin_resolution_stage();
     let analysis_worker_count = if std::env::var_os("SURGE_PARALLEL_ANALYSIS").is_some() {
         resolve_worker_count(jobs, &parsed_files)
     } else {
@@ -733,6 +736,7 @@ fn check_program_with_stats_and_jobs_inner(
                     .map(|analysis| analysis.local_export_table.clone())
             })
             .collect::<Vec<_>>();
+        ctx.begin_resolution_stage();
         resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx)
     };
     record_program_timing(timings.as_ref(), |timings| {
@@ -822,6 +826,7 @@ fn check_program_with_stats_and_jobs_inner(
     // deliberately runs without the map: its outputs are superseded by this
     // round, and resolving the full import graph twice measurably regresses
     // check time/memory on large cyclic programs (zod).
+    ctx.begin_resolution_stage();
     ctx.set_module_scope_by_file(module_scope_by_file_map(
         &parsed_files,
         &module_resolution_scopes,
@@ -909,6 +914,7 @@ fn check_program_with_stats_and_jobs_inner(
                     .map(|analysis| analysis.local_export_table.clone())
             })
             .collect::<Vec<_>>();
+        ctx.begin_resolution_stage();
         resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx)
     };
     record_program_timing(timings.as_ref(), |timings| {
@@ -1806,6 +1812,9 @@ fn check_program_files_parallel(
                     let mut local_ctx = ctx.clone();
                     local_ctx.diagnostics.clear();
                     local_ctx.stats = CompatibilityStats::default();
+                    // Recheck environments must not dedup with the discarded
+                    // speculative attempt's (their memo maps differ).
+                    local_ctx.environment_attempt = 1;
                     local_ctx
                 });
                 // Re-check against the now-committed cache state; by induction
