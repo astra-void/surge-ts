@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Instant;
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{ParsedStatement, ParserWorker};
+use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, ParserWorker};
 use surge_ts_types::{FunctionType, ProgramTypeStore, with_program_type_store};
 
 // Instrumentation lives in `metrics`; re-export it so existing callers that
@@ -685,6 +685,11 @@ fn check_program_with_stats_and_jobs_inner(
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
     let import_binding_start = Instant::now();
+    // The rebuild reads only the analyses, export tables, and scopes — never
+    // the previous bindings — so the superseded generation is dropped first
+    // rather than held across the rebuild (two full binding generations at
+    // once is a transient footprint hump on dependency-heavy projects).
+    drop(std::mem::take(&mut module_import_bindings));
     module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &preliminary_module_analyses,
@@ -696,6 +701,7 @@ fn check_program_with_stats_and_jobs_inner(
         timings.import_binding_resolution += import_binding_start.elapsed()
     });
     let scope_build_start = Instant::now();
+    drop(std::mem::take(&mut module_resolution_scopes));
     module_resolution_scopes = build_module_resolution_scopes(
         &local_type_declarations_by_module,
         &module_import_bindings,
@@ -722,6 +728,10 @@ fn check_program_with_stats_and_jobs_inner(
     };
     if early_release_enabled {
         drop(std::mem::take(&mut module_export_tables));
+        // A whole superseded generation (preliminary analyses + round-1 export
+        // tables) was just dropped; return its pages before the final round
+        // re-materializes every module's type surface on top of them.
+        crate::metrics::release_free_memory();
     }
     // The per-file scope fallback (`module_scope_by_file`, consulted when a
     // declaration's pre-attached `resolution_scope` is incomplete) must be
@@ -784,6 +794,33 @@ fn check_program_with_stats_and_jobs_inner(
         augmentation_insertions_before_final,
     );
     drop(preliminary_module_analyses);
+    // The final analyses are built; the remaining pipeline reads declaration
+    // files' statements only for their import/export binding surface
+    // (`resolve_module_imports` matches `ImportDeclaration`,
+    // `resolve_module_export_tables` matches specifier-bearing
+    // `ExportDeclaration`s), and under `skipLibCheck` the check phase drops
+    // them entirely. Shedding the declaration bodies here — before the binding
+    // rounds and the check-phase peak — releases the bulk of the dependency
+    // `.d.ts` ASTs several hundred megabytes earlier than the full release
+    // below. The eq-stats probe re-reads full analyses, so it keeps them.
+    if ctx.options.skip_lib_check && !eq_probe_enabled() {
+        for parsed_file in parsed_files.iter_mut() {
+            if !parsed_file.file_kind.is_declaration() {
+                continue;
+            }
+            parsed_file.statements.retain(|statement| match statement {
+                ParsedStatement::ImportDeclaration(_) => true,
+                ParsedStatement::ExportDeclaration(export) => !matches!(
+                    export.as_ref(),
+                    ParsedExportDeclaration::Statement { .. }
+                        | ParsedExportDeclaration::Default { .. }
+                ),
+                _ => false,
+            });
+            parsed_file.statements.shrink_to_fit();
+        }
+        crate::metrics::release_free_memory();
+    }
     let export_resolution_start = Instant::now();
     module_export_tables = {
         let local_module_export_tables = module_analyses
@@ -800,6 +837,7 @@ fn check_program_with_stats_and_jobs_inner(
         timings.final_export_table_resolution += export_resolution_start.elapsed()
     });
     let import_binding_start = Instant::now();
+    drop(std::mem::take(&mut module_import_bindings));
     module_import_bindings = collect_module_import_bindings(
         &parsed_files,
         &module_analyses,
@@ -811,6 +849,7 @@ fn check_program_with_stats_and_jobs_inner(
         timings.import_binding_resolution += import_binding_start.elapsed()
     });
     let scope_build_start = Instant::now();
+    drop(std::mem::take(&mut module_resolution_scopes));
     module_resolution_scopes = build_module_resolution_scopes(
         &local_type_declarations_by_module,
         &module_import_bindings,
@@ -850,7 +889,8 @@ fn check_program_with_stats_and_jobs_inner(
         merge_module_import_bindings(&module_import_bindings, &preliminary_module_import_bindings);
     drop(module_import_bindings);
     drop(preliminary_module_import_bindings);
-    let shared_state = ProgramCheckSharedState {
+    crate::metrics::release_free_memory();
+    let mut shared_state = ProgramCheckSharedState {
         global_type_declarations,
         script_type_declarations,
         global_symbols,
@@ -952,6 +992,7 @@ fn check_program_with_stats_and_jobs_inner(
                 parsed_file.statements = Vec::new();
             }
         }
+        crate::metrics::release_free_memory();
         record_rss_stage(
             timings.as_ref(),
             "declaration_ast_release",
@@ -960,8 +1001,9 @@ fn check_program_with_stats_and_jobs_inner(
     }
 
     let worker_count = resolve_worker_count(jobs, &parsed_files);
+    crate::metrics::release_free_memory();
     let file_results = if worker_count <= 1 {
-        check_program_files_serial(&parsed_files, &shared_state, &ctx, timings.clone())
+        check_program_files_serial(&mut parsed_files, &mut shared_state, &ctx, timings.clone())
     } else {
         // From here on, workers only read arena-backed tables. Freezing makes a
         // late allocation — a data race on the non-thread-safe bump allocator —
@@ -988,6 +1030,12 @@ fn check_program_with_stats_and_jobs_inner(
         ctx.stats.suppressed_rust_only_diagnostics_total +=
             result.stats.suppressed_rust_only_diagnostics_total;
     }
+    // Checking is complete and the diagnostics are extracted: the cross-file
+    // program state and every remaining parse tree are dead. Dropping them here
+    // (rather than at function exit, after the finish measurements) makes the
+    // finish footprint reflect what a long-lived host would actually retain.
+    drop(shared_state);
+    drop(parsed_files);
 
     if timings.is_some() {
         let cache_stats = ctx.program_cache_stats();
@@ -1000,6 +1048,15 @@ fn check_program_with_stats_and_jobs_inner(
     emit_type_graph_census("before_cache_cleanup", Some(&ctx), &store, census_external);
     ctx.clear_program_type_caches();
     store.clear();
+    // The run-scoped thread-local caches are otherwise cleared only at the
+    // START of the next run, so in a one-shot process they survive to exit —
+    // the namespace-alias tables in particular retain whole per-module
+    // declaration tables.
+    crate::paths::clear_canonicalize_cache();
+    crate::modules::clear_relative_module_cache();
+    crate::modules::clear_star_export_unresolved_cache();
+    crate::modules::clear_namespace_alias_table_cache();
+    crate::metrics::release_free_memory();
     emit_type_graph_census("after_cache_cleanup", Some(&ctx), &store, census_external);
     emit_type_graph_census("before_process_exit", Some(&ctx), &store, census_external);
     let (diagnostics, stats) = ctx.finish_with_stats();
@@ -1276,8 +1333,8 @@ fn inject_generated_default_lib_inputs(files: &mut Vec<SourceFileInput>, no_lib:
 }
 
 fn check_program_files_serial(
-    parsed_files: &[ParsedProgramFile],
-    shared_state: &ProgramCheckSharedState,
+    parsed_files: &mut [ParsedProgramFile],
+    shared_state: &mut ProgramCheckSharedState,
     ctx: &CheckerContext,
     timings: Option<Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<FileCheckResult> {
@@ -1292,16 +1349,33 @@ fn check_program_files_serial(
     local_ctx.diagnostics.clear();
     local_ctx.stats = CompatibilityStats::default();
 
-    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+    let file_count = parsed_files.len();
+    for file_index in 0..file_count {
         let result = check_program_file(
             file_index,
-            parsed_file,
+            &parsed_files[file_index],
             shared_state,
             &mut local_ctx,
             timings.as_ref(),
         );
         results.push(result);
-        if let Some(label) = census_check_milestone(file_index + 1, parsed_files.len()) {
+        // The file is fully checked, and per-file program state is only ever
+        // read under the file's own index (checking never consults another
+        // file's parse tree, analysis, or bindings — cross-file resolution
+        // goes through the scope/value maps on the context). Everything
+        // index-scoped can therefore free before the next file's checking
+        // allocates. Cross-file `Arc`-shared pieces (scope layers, exported
+        // symbol handles held by importers' bindings) survive through their
+        // remaining owners; only the genuinely-dead remainder frees.
+        parsed_files[file_index].statements = Vec::new();
+        shared_state.module_analyses[file_index] = None;
+        shared_state.module_import_bindings[file_index] = None;
+        // Per-file inference churn leaves freed-but-dirty pages that otherwise
+        // accumulate against the footprint across the whole phase.
+        if (file_index + 1) % 256 == 0 {
+            crate::metrics::release_free_memory();
+        }
+        if let Some(label) = census_check_milestone(file_index + 1, file_count) {
             emit_type_graph_census(
                 label,
                 Some(&local_ctx),
@@ -1386,9 +1460,7 @@ fn check_program_files_parallel(
     worker_count: usize,
     timings: Option<Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<FileCheckResult> {
-    if worker_count <= 1 {
-        return check_program_files_serial(parsed_files, shared_state, ctx, timings);
-    }
+    debug_assert!(worker_count > 1, "serial checking uses the dedicated path");
 
     let next_index = AtomicUsize::new(0);
     let completed = AtomicUsize::new(0);

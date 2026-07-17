@@ -48,6 +48,24 @@ pub fn record_loader_rss_stage(label: &str) {
     }
 }
 
+/// Returns freed allocator memory to the OS. The module-analysis pipeline drops
+/// whole superseded generations (preliminary analyses, round-1/2 binding tables)
+/// whose pages otherwise stay dirty in malloc freelists, get compressed under
+/// pressure, and keep counting against the process physical footprint through
+/// the check-phase peak. Called at the few lifecycle boundaries where a large
+/// generation has just been dropped; a no-op outside macOS.
+pub(crate) fn release_free_memory() {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+        unsafe {
+            malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+        }
+    }
+}
+
 pub(crate) fn rss_stages_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {

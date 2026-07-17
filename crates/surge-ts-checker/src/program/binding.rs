@@ -373,6 +373,9 @@ pub(crate) fn collect_module_analyses_with_bindings(
             retained_module_analysis_type_nodes(&analysis),
         );
         analyses.push(Some(analysis));
+        if (file_index + 1) % 256 == 0 {
+            crate::metrics::release_free_memory();
+        }
         ctx.type_declaration_scope = saved_type_declaration_scope;
         if let Some(start) = eq_probe_start {
             super::record_eq_probe_visit(
