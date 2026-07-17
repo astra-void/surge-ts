@@ -1615,16 +1615,26 @@ fn resolve_worker_count(jobs: usize, parsed_files: &[ParsedProgramFile]) -> usiz
     // parallel path is serial-equivalent regardless: workers speculate against
     // a frozen cache snapshot and a single-threaded commit publishes their
     // insertions in serial file order, re-checking conflicted files (see
-    // `crate::speculative`). `--jobs auto` therefore sizes from available
-    // cores, gated by parsed work so tiny programs stay serial; an explicit
-    // `--jobs N` is an upper bound on the same byte-identical path.
+    // `crate::speculative`), so an explicit `--jobs N` is byte-identical to
+    // `--jobs 1` at any N. AUTO stays serial for now on measured grounds, not
+    // correctness ones: the ~4% of files that conflict re-check serially in
+    // the ordered commit, holding wall time at parity with serial while
+    // spending more CPU and ~+0.27GB peak footprint (tRPC, 10 workers).
+    // Flipping AUTO to the parallel path needs the recheck tail pipelined and
+    // per-file release wired into the parallel loop first;
+    // `SURGE_PARALLEL_CHECK_AUTO=1` opts in for measurement meanwhile.
     let requested = if jobs == AUTO_JOBS {
-        let total_statements: usize = parsed_files.iter().map(|file| file.statements.len()).sum();
-        let by_work = total_statements / MIN_STATEMENTS_PER_WORKER;
-        let cores = thread::available_parallelism()
-            .map(|cores| cores.get())
-            .unwrap_or(1);
-        cores.min(by_work)
+        if std::env::var_os("SURGE_PARALLEL_CHECK_AUTO").is_some() {
+            let total_statements: usize =
+                parsed_files.iter().map(|file| file.statements.len()).sum();
+            let by_work = total_statements / MIN_STATEMENTS_PER_WORKER;
+            let cores = thread::available_parallelism()
+                .map(|cores| cores.get())
+                .unwrap_or(1);
+            cores.min(by_work)
+        } else {
+            1
+        }
     } else {
         jobs
     };
