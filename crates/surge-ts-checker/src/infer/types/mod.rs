@@ -8,7 +8,7 @@ use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
 use crate::context::{CheckerContext, convert_span};
 use crate::symbols::TypeDeclarationInfo;
 
-mod cache;
+pub(crate) mod cache;
 mod diagnostics;
 mod interface;
 mod resolve;

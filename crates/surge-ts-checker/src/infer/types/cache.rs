@@ -123,7 +123,7 @@ const GENERIC_INSTANTIATION_BUCKET_CAP: usize = 4096;
 /// bounded-vs-unbounded regression tests. Over-cap entries are simply not
 /// cached (re-expanded on demand), so any cap produces identical diagnostics —
 /// only time/memory change. Read once per process.
-fn generic_instantiation_bucket_cap() -> usize {
+pub(crate) fn generic_instantiation_bucket_cap() -> usize {
     static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *CAP.get_or_init(|| {
         std::env::var("SURGE_GENERIC_CACHE_BUCKET_CAP")
@@ -138,18 +138,25 @@ pub(crate) fn get_persistent_generic_resolution(
     key: &DeclarationResolutionKey,
     arguments: &[Type],
 ) -> Option<ResolvedType> {
-    let resolved = ctx
-        .program_resolved_generic_types
-        .lock()
-        .ok()
-        .and_then(|cache| {
-            cache.get(key)?.iter().find_map(|entry| {
-                (entry.arguments == arguments).then(|| ResolvedType {
-                    ty: entry.ty.clone(),
-                    had_error: entry.had_error,
+    let resolved = if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_generic(&ctx.program_resolved_generic_types))
+    {
+        session
+            .generic_lookup(key, arguments)
+            .map(|(ty, had_error)| ResolvedType { ty, had_error })
+    } else {
+        ctx.program_resolved_generic_types
+            .lock()
+            .ok()
+            .and_then(|cache| {
+                cache.get(key)?.iter().find_map(|entry| {
+                    (entry.arguments == arguments).then(|| ResolvedType {
+                        ty: entry.ty.clone(),
+                        had_error: entry.had_error,
+                    })
                 })
             })
-        });
+    };
     crate::program::record_program_counter(|c| {
         if resolved.is_some() {
             c.generic_type_cache_hit_count += 1;
@@ -166,6 +173,18 @@ pub(crate) fn cache_persistent_generic_resolution(
     arguments: Vec<Type>,
     resolved: &ResolvedType,
 ) {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_generic(&ctx.program_resolved_generic_types))
+    {
+        session.generic_insert(
+            key,
+            arguments,
+            resolved.ty.clone(),
+            resolved.had_error,
+            generic_instantiation_bucket_cap(),
+        );
+        return;
+    }
     if let Ok(mut cache) = ctx.program_resolved_generic_types.lock() {
         let bucket = cache.entry(key.clone()).or_default();
         if bucket.iter().any(|entry| entry.arguments == arguments) {
@@ -967,6 +986,16 @@ pub(crate) fn intern_instantiation(
     arguments: &[Type],
     structural: Type,
 ) -> Arc<Type> {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_instantiations(&ctx.program_instantiations))
+    {
+        return session.instantiation_intern(
+            key,
+            arguments,
+            structural,
+            generic_instantiation_bucket_cap(),
+        );
+    }
     let Ok(mut cache) = ctx.program_instantiations.lock() else {
         return Arc::new(structural);
     };
@@ -994,6 +1023,11 @@ pub(crate) fn lookup_instantiation(
     key: &DeclarationResolutionKey,
     arguments: &[Type],
 ) -> Option<InstantiationCacheEntry> {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_instantiations(&ctx.program_instantiations))
+    {
+        return session.instantiation_lookup(key, arguments);
+    }
     let cache = ctx.program_instantiations.lock().ok()?;
     cache
         .get(key)?
@@ -1029,12 +1063,17 @@ pub(crate) fn physical_interface_declaration_template(
     interface: &crate::symbols::InterfaceInfo,
     declaration: &StableInterfaceDeclarationId,
 ) -> Option<Arc<InterfaceDeclarationTemplate>> {
-    if let Some(template) = ctx
-        .physical_interface_declaration_templates
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(declaration).cloned())
-    {
+    let session = crate::speculative::active_check_session()
+        .filter(|session| session.owns_templates(&ctx.physical_interface_declaration_templates));
+    let cached = if let Some(session) = session.as_ref() {
+        session.template_lookup(declaration)
+    } else {
+        ctx.physical_interface_declaration_templates
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(declaration).cloned())
+    };
+    if let Some(template) = cached {
         crate::program::record_program_counter(|c| {
             c.interface_template_hit_count += 1;
         });
@@ -1124,6 +1163,9 @@ pub(crate) fn physical_interface_declaration_template(
         members: Arc::from(members),
         method_groups: Arc::from(method_groups),
     });
+    if let Some(session) = session {
+        return Some(session.template_intern(declaration.clone(), template, retained_bytes));
+    }
     let Ok(mut cache) = ctx.physical_interface_declaration_templates.lock() else {
         return Some(template);
     };
@@ -1155,6 +1197,11 @@ pub(crate) fn lookup_physical_interface_method(
     ctx: &CheckerContext,
     key: &InterfaceMemberInstantiationKey,
 ) -> Option<FunctionType> {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_methods(&ctx.physical_interface_method_instantiations))
+    {
+        return session.method_lookup(key);
+    }
     ctx.physical_interface_method_instantiations
         .lock()
         .ok()?
@@ -1167,6 +1214,13 @@ pub(crate) fn intern_physical_interface_method(
     key: InterfaceMemberInstantiationKey,
     function: FunctionType,
 ) -> FunctionType {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_methods(&ctx.physical_interface_method_instantiations))
+    {
+        let key_bytes = std::mem::size_of::<InterfaceMemberInstantiationKey>() as u64;
+        let value_bytes = interface_function_value_shallow_bytes(&function) as u64;
+        return session.method_intern(key, function, key_bytes, value_bytes);
+    }
     let Ok(mut cache) = ctx.physical_interface_method_instantiations.lock() else {
         return function;
     };
@@ -1203,6 +1257,11 @@ pub(crate) fn lookup_physical_interface_overload(
     ctx: &CheckerContext,
     key: &InterfaceOverloadInstantiationKey,
 ) -> Option<FunctionType> {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_overloads(&ctx.physical_interface_overload_instantiations))
+    {
+        return session.overload_lookup(key);
+    }
     ctx.physical_interface_overload_instantiations
         .lock()
         .ok()?
@@ -1215,6 +1274,13 @@ pub(crate) fn intern_physical_interface_overload(
     key: InterfaceOverloadInstantiationKey,
     function: FunctionType,
 ) -> FunctionType {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_overloads(&ctx.physical_interface_overload_instantiations))
+    {
+        let key_bytes = std::mem::size_of::<InterfaceOverloadInstantiationKey>() as u64;
+        let value_bytes = interface_function_value_shallow_bytes(&function) as u64;
+        return session.overload_intern(key, function, key_bytes, value_bytes);
+    }
     let Ok(mut cache) = ctx.physical_interface_overload_instantiations.lock() else {
         return function;
     };
@@ -1379,6 +1445,11 @@ pub(crate) fn lookup_physical_interface_instantiation(
     ctx: &CheckerContext,
     key: &InterfaceInstantiationKey,
 ) -> Option<Arc<Type>> {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_physical(&ctx.physical_interface_instantiations))
+    {
+        return session.physical_lookup(key);
+    }
     let cache = ctx.physical_interface_instantiations.lock().ok()?;
     cache.get(key).cloned()
 }
@@ -1500,6 +1571,11 @@ pub(crate) fn intern_physical_interface_instantiation(
     key: InterfaceInstantiationKey,
     resolved: Type,
 ) -> Arc<Type> {
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_physical(&ctx.physical_interface_instantiations))
+    {
+        return session.physical_intern(key, resolved);
+    }
     let Ok(mut cache) = ctx.physical_interface_instantiations.lock() else {
         return Arc::new(resolved);
     };

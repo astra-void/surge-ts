@@ -1,5 +1,5 @@
 pub(crate) mod expression;
-mod types;
+pub(crate) mod types;
 
 pub(crate) use expression::{infer_expression, tuple_index_value};
 pub(crate) use types::{

@@ -1583,15 +1583,25 @@ fn resolve_worker_count(jobs: usize, parsed_files: &[ParsedProgramFile]) -> usiz
         return 1;
     }
 
-    // AUTO keeps the check phase serial. Checking is coupled to the shared
-    // resolution caches in an order-visible way: whether a file's resolution
-    // hits an entry seeded by an *earlier-checked* file decides between the
-    // nominal (`ReadonlyArray<Auth>`) and structural (`Auth[]`) display of the
-    // same type in ~28 tRPC messages (measured via SURGE_CHECK_CACHE_ISOLATION),
-    // so any true concurrency here changes rendered bytes between jobs=1 and
-    // jobs=auto. An explicit `--jobs N` keeps today's parallel path (and its
-    // documented display divergence) for users who opt in.
-    let requested = if jobs == AUTO_JOBS { 1 } else { jobs };
+    // Checking is coupled to the shared resolution caches in an order-visible
+    // way (whether a file hits an entry seeded by an earlier-checked file can
+    // flip a rendered display form), so naive concurrency changes bytes. The
+    // parallel path is serial-equivalent regardless: workers speculate against
+    // a frozen cache snapshot and a single-threaded commit publishes their
+    // insertions in serial file order, re-checking conflicted files (see
+    // `crate::speculative`). `--jobs auto` therefore sizes from available
+    // cores, gated by parsed work so tiny programs stay serial; an explicit
+    // `--jobs N` is an upper bound on the same byte-identical path.
+    let requested = if jobs == AUTO_JOBS {
+        let total_statements: usize = parsed_files.iter().map(|file| file.statements.len()).sum();
+        let by_work = total_statements / MIN_STATEMENTS_PER_WORKER;
+        let cores = thread::available_parallelism()
+            .map(|cores| cores.get())
+            .unwrap_or(1);
+        cores.min(by_work)
+    } else {
+        jobs
+    };
 
     requested.max(1).min(file_count)
 }
@@ -1640,6 +1650,18 @@ fn check_program_files_parallel(
 ) -> Vec<FileCheckResult> {
     debug_assert!(worker_count > 1, "serial checking uses the dedicated path");
 
+    // Serial-equivalent speculative checking: workers never write the six
+    // order-visible program caches. Each speculates against an immutable
+    // snapshot taken here plus a private overlay, recording per file which
+    // cache keys it observed missing; the single-threaded commit pass below
+    // publishes insertions in serial file order and re-checks any file whose
+    // hit/miss pattern a serial run would not have produced, making the final
+    // diagnostics and cache contents byte-identical to `--jobs 1`. See
+    // `crate::speculative` for the model and its induction argument.
+    let live = crate::speculative::LiveCacheHandles::capture(ctx);
+    let base = Arc::new(crate::speculative::CacheSnapshots::capture(&live));
+    let stc_phase_start = Instant::now();
+
     let next_index = AtomicUsize::new(0);
     let completed = AtomicUsize::new(0);
 
@@ -1654,37 +1676,49 @@ fn check_program_files_parallel(
             let mut local_ctx = ctx.clone();
             local_ctx.diagnostics.clear();
             local_ctx.stats = CompatibilityStats::default();
+            let session = Arc::new(crate::speculative::CheckSession::new(
+                live.clone(),
+                base.clone(),
+            ));
 
             handles.push(scope.spawn(move || {
                 let type_store = local_ctx.program_type_store.clone();
-                with_program_type_store(type_store, || {
-                    let mut worker_results = Vec::new();
-                    loop {
-                        let file_index = next_index.fetch_add(1, Ordering::Relaxed);
-                        if file_index >= parsed_files.len() {
-                            break;
+                let worker_results = with_program_type_store(type_store, || {
+                    crate::speculative::with_check_session(session.clone(), || {
+                        let mut worker_results = Vec::new();
+                        loop {
+                            // `fetch_add` hands each worker an ascending file
+                            // sequence, so a worker's overlay only ever holds
+                            // entries from files earlier in serial order than
+                            // the one it is checking.
+                            let file_index = next_index.fetch_add(1, Ordering::Relaxed);
+                            if file_index >= parsed_files.len() {
+                                break;
+                            }
+                            session.begin_file(file_index);
+                            worker_results.push(check_program_file(
+                                file_index,
+                                &parsed_files[file_index],
+                                shared_state,
+                                &mut local_ctx,
+                                timings.as_ref(),
+                            ));
+                            let completed_count = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            if let Some(label) =
+                                census_check_milestone(completed_count, parsed_files.len())
+                            {
+                                emit_type_graph_census(
+                                    label,
+                                    Some(&local_ctx),
+                                    &local_ctx.program_type_store,
+                                    CensusExternalRetention::default(),
+                                );
+                            }
                         }
-                        worker_results.push(check_program_file(
-                            file_index,
-                            &parsed_files[file_index],
-                            shared_state,
-                            &mut local_ctx,
-                            timings.as_ref(),
-                        ));
-                        let completed_count = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                        if let Some(label) =
-                            census_check_milestone(completed_count, parsed_files.len())
-                        {
-                            emit_type_graph_census(
-                                label,
-                                Some(&local_ctx),
-                                &local_ctx.program_type_store,
-                                CensusExternalRetention::default(),
-                            );
-                        }
-                    }
-                    worker_results
-                })
+                        worker_results
+                    })
+                });
+                (worker_results, session.take_file_logs())
             }));
         }
 
@@ -1699,9 +1733,101 @@ fn check_program_files_parallel(
         outputs
     });
 
-    let mut flattened = results.into_iter().flatten().collect::<Vec<_>>();
-    flattened.sort_by_key(|result| result.file_index);
-    flattened
+    let worker_phase = stc_phase_start.elapsed();
+    let commit_phase_start = Instant::now();
+    let mut slots: Vec<Option<FileCheckResult>> = (0..parsed_files.len()).map(|_| None).collect();
+    let mut logs = Vec::with_capacity(parsed_files.len());
+    for (worker_results, worker_logs) in results {
+        for result in worker_results {
+            let file_index = result.file_index;
+            slots[file_index] = Some(result);
+        }
+        logs.extend(worker_logs);
+    }
+    logs.sort_by_key(|log| log.file_index);
+
+    // Deterministic commit: file order, independent of worker completion order.
+    let cap = crate::infer::types::cache::generic_instantiation_bucket_cap();
+    let mut published = surge_ts_types::fx::FxHashSet::default();
+    let mut dirty = surge_ts_types::fx::FxHashSet::default();
+    let mut stats = crate::speculative::StcCommitStats::default();
+    let mut recheck_ctx: Option<CheckerContext> = None;
+    for log in &logs {
+        match crate::speculative::commit_file_log(
+            &live,
+            log,
+            &mut published,
+            &dirty,
+            cap,
+            &mut stats,
+        ) {
+            crate::speculative::CommitVerdict::Clean => {}
+            crate::speculative::CommitVerdict::MissConflict
+            | crate::speculative::CommitVerdict::DependencyConflict => {
+                let file_index = log.file_index;
+                dirty.insert(file_index);
+                let local_ctx = recheck_ctx.get_or_insert_with(|| {
+                    let mut local_ctx = ctx.clone();
+                    local_ctx.diagnostics.clear();
+                    local_ctx.stats = CompatibilityStats::default();
+                    local_ctx
+                });
+                // Re-check against the now-committed cache state; by induction
+                // this is exactly what a serial run would have observed at this
+                // position, and the recheck's own insertions cannot conflict
+                // (its base view already contains everything published). The
+                // session reads the live maps directly — the commit pass is
+                // single-threaded, so no snapshot clone is needed.
+                let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
+                    live.clone(),
+                ));
+                let result = crate::speculative::with_check_session(session.clone(), || {
+                    session.begin_file(file_index);
+                    check_program_file(
+                        file_index,
+                        &parsed_files[file_index],
+                        shared_state,
+                        local_ctx,
+                        timings.as_ref(),
+                    )
+                });
+                slots[file_index] = Some(result);
+                for recheck_log in session.take_file_logs() {
+                    let complete = crate::speculative::apply_file_log(
+                        &live,
+                        &recheck_log,
+                        &mut published,
+                        cap,
+                        &mut stats,
+                    );
+                    debug_assert!(complete, "recheck publication must be complete");
+                }
+            }
+        }
+    }
+    if std::env::var_os("SURGE_STC_STATS").is_some() {
+        let total_misses: usize = logs
+            .iter()
+            .map(crate::speculative::FileCacheLog::miss_count)
+            .sum();
+        eprintln!(
+            "[stc] files={} clean={} miss_conflicts={} dep_conflicts={} published={} \
+             skipped_existing={} cap_blocked={} total_misses={} worker_phase={:.2}s \
+             commit_phase={:.2}s",
+            stats.files,
+            stats.clean_commits,
+            stats.miss_conflicts,
+            stats.dependency_conflicts,
+            stats.published_entries,
+            stats.merge_skipped_existing,
+            stats.merge_cap_blocked,
+            total_misses,
+            worker_phase.as_secs_f64(),
+            commit_phase_start.elapsed().as_secs_f64(),
+        );
+    }
+
+    slots.into_iter().flatten().collect()
 }
 
 fn census_check_milestone(completed: usize, total: usize) -> Option<&'static str> {

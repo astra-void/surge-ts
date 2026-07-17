@@ -269,6 +269,15 @@ fn dedup_key(ty: &Type) -> u64 {
     hasher.finish()
 }
 
+/// Equality-consistent structural digest of a type: `a == b` (under `Type`'s
+/// `PartialEq`) implies equal digests, and the digest is never pointer-based
+/// (see [`dedup_key_into`]'s invariant). Used by the checker's speculative-check
+/// conflict tracking, where a digest collision only causes a spurious (sound)
+/// serial recheck, never a missed conflict.
+pub fn type_conflict_digest(ty: &Type) -> u64 {
+    dedup_key(ty)
+}
+
 /// Coarse structural key for union dedup. Invariant: `a == b` (under `Type`'s
 /// `PartialEq`) must imply `dedup_key(a) == dedup_key(b)`, so only fields that
 /// participate in equality are hashed, and always structurally — never by
