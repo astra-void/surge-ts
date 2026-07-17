@@ -168,3 +168,51 @@ demonstrated output-affecting nondeterminism is the six shared caches.
 
 Serial `--jobs 1` remains the trusted reference path throughout; the ≤3%
 serial-regression gate constrains all shared-state refactors.
+
+---
+
+## Stage 5.0 — module graph, SCC, and Amdahl ceiling (measured)
+
+Two opt-in dumps were added (zero-cost when unset; canonical hash `4d69a2d5`
+unchanged with them off):
+
+- `SURGE_MODULE_GRAPH_DUMP=<path>` (import_graph.rs) — every resolved relative /
+  `paths` import edge, **including back-edges to already-discovered files**, so
+  the full cyclic graph is reconstructable. tRPC: **12,126 edges, 4,455 nodes**
+  (1,114 app / 3,341 library). (Bare-package `.d.ts` edges are not followed by
+  this scan; they point outward to acyclic library leaves and do not create
+  app-source cycles, so the app SCC structure is complete.)
+- `SURGE_MODULE_TIME_DUMP=<path>` (binding.rs) — real per-module analysis time,
+  both passes. tRPC: **5.39 s total** (prelim 2.72 s + final 2.67 s; the ~2.2 s
+  gap to the 7.6 s stage wall is the binding fixpoint + scope construction, not
+  per-module work). Split app 2.45 s / library 2.94 s; heaviest single module
+  186 ms; cost spread broadly, not concentrated.
+
+Offline Tarjan SCC + condensation on the real weights:
+
+| metric | value |
+|---|---|
+| total SCCs | 3,317 |
+| largest SCC | 281 nodes — **100% library** (`@types`-style cycles), 0 app |
+| largest app-containing SCC | 24 app nodes; only 65/1,114 app files in any cycle |
+| condensation critical path (real time weights) | **0.23 s (4% of 5.39 s)** |
+| **structural parallel ceiling** | **~23×** |
+| heaviest SCC by cost | a **singleton**, 0.19 s (3%) |
+
+**Verdict: module analysis is embarrassingly parallel.** The dependency graph is
+*not* the bottleneck — the app source is 94% acyclic, the heavy modules are
+independent singletons, and the longest dependent chain carries only 0.23 s of
+analysis work. The real limits are (a) worker count (≈8–10 cores → ~7× on the
+5.39 s per-module work) and (b) the ~2.2 s binding fixpoint, which is
+cross-module and needs its own treatment or becomes the new floor.
+
+Note this **overturns** a first-pass estimate from the partial collect-time
+proxy (which put ~50% of cost in one 21-node cyclic SCC — `utilsProxy.ts` et
+al.). Real per-module timing shows those files are not analysis-cost-dominant;
+the proxy measured only type-declaration collection (0.8 s of the 5.39 s).
+
+**Revised feasibility:** 5 s is **structurally reachable**. Rough model with 8
+workers: per-module analysis 5.39 s → ~0.8 s; binding fixpoint ~2.2 s (partial
+parallelism TBD); check phase ~3 s → ~0.5 s; frontend ~1 s; finish ~0.5 s →
+plausibly ~5–6 s, with the binding fixpoint the swing factor. This justifies the
+per-worker-arena Stage 5 investment.

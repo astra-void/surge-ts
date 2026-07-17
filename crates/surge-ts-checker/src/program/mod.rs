@@ -183,6 +183,32 @@ pub(crate) fn augmentation_value_insertion_count() -> u64 {
     AUGMENTATION_VALUE_INSERTIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Opt-in per-module analysis-time dump (`SURGE_MODULE_TIME_DUMP=<path>`): one
+/// `round\tmicros\tfile_name` line per analyzed module, so the real per-module
+/// analysis cost distribution can be joined with the import-edge dump for
+/// SCC critical-path weighting. Off by default; zero-cost when unset.
+fn module_time_sink() -> Option<&'static Mutex<std::fs::File>> {
+    static SINK: std::sync::OnceLock<Option<Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+    SINK.get_or_init(|| {
+        let path = std::env::var_os("SURGE_MODULE_TIME_DUMP")?;
+        std::fs::File::create(path).ok().map(Mutex::new)
+    })
+    .as_ref()
+}
+
+pub(crate) fn module_time_dump_enabled() -> bool {
+    module_time_sink().is_some()
+}
+
+pub(crate) fn record_module_time(round: u64, file_name: &str, micros: u128) {
+    use std::io::Write;
+    if let Some(sink) = module_time_sink()
+        && let Ok(mut file) = sink.lock()
+    {
+        let _ = writeln!(file, "{round}\t{micros}\t{file_name}");
+    }
+}
+
 fn eq_probe_verbose() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_EQ_STATS_VERBOSE").is_some())

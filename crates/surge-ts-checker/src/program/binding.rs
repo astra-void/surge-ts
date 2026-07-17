@@ -217,6 +217,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
         }
 
         let eq_probe_start = super::eq_probe_enabled().then(Instant::now);
+        let module_time_start = super::module_time_dump_enabled().then(Instant::now);
         let degraded_before = super::degraded_resolution_count();
         let memory_before = memory_trace_threshold.map(|_| {
             (
@@ -377,6 +378,13 @@ pub(crate) fn collect_module_analyses_with_bindings(
             crate::metrics::release_free_memory();
         }
         ctx.type_declaration_scope = saved_type_declaration_scope;
+        if let Some(start) = module_time_start {
+            super::record_module_time(
+                analysis_round,
+                &parsed_file.file_name,
+                start.elapsed().as_micros(),
+            );
+        }
         if let Some(start) = eq_probe_start {
             super::record_eq_probe_visit(
                 file_index,
