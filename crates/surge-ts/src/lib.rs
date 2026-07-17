@@ -24,6 +24,7 @@ mod io_stats;
 mod package_declarations;
 mod package_resolution;
 mod path_mapping;
+mod specifier_scan;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -294,6 +295,9 @@ impl Project {
             &loaded.compiler_options.type_roots,
         );
 
+        let mut specifier_scanner = specifier_scan::ModuleSpecifierScanner::new();
+        let mut import_graph_state = import_graph::ImportGraphState::default();
+
         loop {
             let files_before = inputs.len();
 
@@ -305,6 +309,7 @@ impl Project {
                     &loaded.root_dir,
                     &resolver_options,
                     &mut package_resolution_cache,
+                    &mut specifier_scanner,
                 );
             if collect {
                 timings.package_declaration_discovery += package_start.elapsed();
@@ -324,6 +329,8 @@ impl Project {
 
             let import_graph_start = Instant::now();
             let graph_loaded = import_graph::expand_project_inputs(
+                &mut import_graph_state,
+                &mut specifier_scanner,
                 &mut inputs,
                 &mut sources,
                 &loaded.root_dir,

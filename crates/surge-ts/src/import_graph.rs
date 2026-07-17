@@ -11,47 +11,59 @@ use surge_ts_config::{
     canonicalize_if_exists, canonicalize_if_exists_string, normalize_path_string,
     select_path_mapping_targets,
 };
-use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, ParserWorker};
+
+use crate::specifier_scan::ModuleSpecifierScanner;
+
+/// Import-graph BFS state that survives across loader fixpoint iterations, so
+/// each source is scanned exactly once no matter how many times the loader
+/// loop re-enters the expansion.
+#[derive(Default)]
+pub struct ImportGraphState {
+    known_files: HashSet<String>,
+    probe_cache: HashMap<String, bool>,
+    next_source_index: usize,
+    synced_inputs: usize,
+}
 
 pub fn expand_project_inputs(
+    state: &mut ImportGraphState,
+    scanner: &mut ModuleSpecifierScanner,
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
     root_dir: &Path,
     base_url: Option<&Path>,
     paths: &[PathMapping],
 ) -> usize {
-    let mut known_files = HashSet::new();
-    for input in inputs.iter() {
-        known_files.insert(canonicalize_if_exists_string(Path::new(&input.file_name)));
+    // Other scanners (package declarations, reference directives) may have
+    // appended inputs since the previous call; fold them into the known set so
+    // their files are not re-added under a second path spelling.
+    for input in inputs[state.synced_inputs..].iter() {
+        state
+            .known_files
+            .insert(canonicalize_if_exists_string(Path::new(&input.file_name)));
     }
 
     let mut added = 0usize;
-    let mut index = 0usize;
-    let mut probe_cache: HashMap<String, bool> = HashMap::new();
-    let mut parser = ParserWorker::new();
 
-    while index < sources.len() {
+    while state.next_source_index < sources.len() {
+        let index = state.next_source_index;
+        state.next_source_index += 1;
+
         let (file_path, file_name, source_text) = {
             let (file_path, file_name, source_text) = &sources[index];
             (file_path.clone(), file_name.clone(), source_text.clone())
         };
-        index += 1;
 
-        let parsed = parser.parse(&source_text, &file_name);
-        for statement in parsed.statements {
-            let Some(module_specifier) = module_specifier_from_statement(&statement) else {
-                continue;
-            };
-
-            let candidate = if is_relative_specifier(&module_specifier) {
-                resolve_relative_candidate(&file_path, &module_specifier, &mut probe_cache)
+        for module_specifier in scanner.specifiers(index, &file_name, &source_text).iter() {
+            let candidate = if is_relative_specifier(module_specifier) {
+                resolve_relative_candidate(&file_path, module_specifier, &mut state.probe_cache)
             } else {
                 resolve_paths_alias_candidate(
-                    &module_specifier,
+                    module_specifier,
                     paths,
                     base_url,
                     root_dir,
-                    &mut probe_cache,
+                    &mut state.probe_cache,
                 )
             };
 
@@ -67,7 +79,7 @@ pub fn expand_project_inputs(
 
             let canonical = canonicalize_if_exists(&candidate);
             let normalized = canonicalize_if_exists_string(&canonical);
-            if !known_files.insert(normalized) {
+            if !state.known_files.insert(normalized) {
                 continue;
             }
 
@@ -87,27 +99,8 @@ pub fn expand_project_inputs(
         }
     }
 
+    state.synced_inputs = inputs.len();
     added
-}
-
-fn module_specifier_from_statement(statement: &ParsedStatement) -> Option<String> {
-    match statement {
-        ParsedStatement::ImportDeclaration(import) => Some(import.module_specifier.clone()),
-        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
-            ParsedExportDeclaration::Named {
-                module_specifier: Some(module_specifier),
-                ..
-            } => Some(module_specifier.clone()),
-            ParsedExportDeclaration::All {
-                module_specifier, ..
-            }
-            | ParsedExportDeclaration::Namespace {
-                module_specifier, ..
-            } => Some(module_specifier.clone()),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 fn resolve_relative_candidate(

@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use surge_ts_checker::SourceFileInput;
 use surge_ts_config::canonicalize_if_exists_string;
 use surge_ts_syntax::{
-    ParsedExportDeclaration, ParsedStatement, ReferenceTypeDirective, TextSpan,
-    extract_reference_path_directives, extract_reference_type_directives,
+    ReferenceTypeDirective, TextSpan, extract_reference_path_directives,
+    extract_reference_type_directives,
 };
 
 use crate::package_resolution::{
@@ -29,6 +29,9 @@ pub struct PackageDeclarationRequest {
 pub(crate) struct PackageDeclarationResolverCache {
     package_json_cache: HashMap<PathBuf, Option<serde_json::Value>>,
     entrypoint_cache: HashMap<PackageEntrypointCacheKey, Option<PackageEntrypointResolution>>,
+    /// Count of `sources` entries whose specifiers this resolver has already
+    /// queued, so loader fixpoint iterations scan each source exactly once.
+    scanned_sources: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -101,12 +104,14 @@ pub fn resolve_package_declaration_entrypoints(
     root_dir: &Path,
 ) -> PackageResolutions {
     let mut cache = PackageDeclarationResolverCache::default();
+    let mut scanner = crate::specifier_scan::ModuleSpecifierScanner::new();
     resolve_package_declaration_entrypoints_with_cache(
         inputs,
         sources,
         root_dir,
         &ResolverOptions::default(),
         &mut cache,
+        &mut scanner,
     )
 }
 
@@ -116,6 +121,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
     root_dir: &Path,
     opts: &ResolverOptions,
     cache: &mut PackageDeclarationResolverCache,
+    scanner: &mut crate::specifier_scan::ModuleSpecifierScanner,
 ) -> PackageResolutions {
     let mut packages_to_resolve: VecDeque<PackageDeclarationRequest> = VecDeque::new();
     let mut resolutions: PackageResolutions = Vec::new();
@@ -125,13 +131,16 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
         .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
         .collect();
     let mut queued_specifiers: HashSet<(String, String)> = HashSet::new();
-    let mut parser = surge_ts_syntax::ParserWorker::new();
 
-    for (file_path, _, source_text) in sources.iter() {
+    for index in cache.scanned_sources..sources.len() {
+        let (file_path, file_name, source_text) = {
+            let (file_path, file_name, source_text) = &sources[index];
+            (file_path.clone(), file_name.clone(), source_text.clone())
+        };
         let importer_dir = file_path.parent().unwrap_or(root_dir).to_path_buf();
+        let specifiers = scanner.specifiers(index, &file_name, &source_text);
         extract_packages_from_source(
-            &mut parser,
-            source_text,
+            &specifiers,
             &file_path.to_string_lossy(),
             &importer_dir,
             opts,
@@ -201,10 +210,12 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                         source_text.clone(),
                     ));
 
+                    let new_index = sources.len() - 1;
+                    let specifiers =
+                        scanner.specifiers(new_index, &normalized_file_name, &source_text);
                     let new_importer_dir = path.parent().unwrap_or(root_dir).to_path_buf();
                     extract_packages_from_source(
-                        &mut parser,
-                        &source_text,
+                        &specifiers,
                         &normalized_file_name,
                         &new_importer_dir,
                         opts,
@@ -222,6 +233,11 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
             }
         }
     }
+
+    // Every source present at exit has been queued (pre-existing ones by the
+    // entry loop, self-loaded declarations inline above); later calls resume
+    // from here.
+    cache.scanned_sources = sources.len();
 
     resolutions
 }
