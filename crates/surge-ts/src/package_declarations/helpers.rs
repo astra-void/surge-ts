@@ -657,8 +657,7 @@ pub(super) fn resolve_declaration_or_runtime_candidate(
 
 pub(super) fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
     for candidate in runtime_javascript_candidates(path.to_path_buf()) {
-        crate::io_stats::record_existence_probe();
-        if candidate.exists() && candidate.is_file() {
+        if crate::probe::is_existing_file(&candidate) {
             return Some(PackageEntrypointResolution {
                 path: candidate,
                 kind: PackageEntrypointKind::RuntimeOnly,
@@ -677,16 +676,12 @@ pub(super) fn types_package_name(package_name: &str) -> String {
 }
 
 pub(super) fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
-    if is_declaration_file_path(path) {
-        crate::io_stats::record_existence_probe();
-        if path.exists() && path.is_file() {
-            return Some(path.to_path_buf());
-        }
+    if is_declaration_file_path(path) && crate::probe::is_existing_file(path) {
+        return Some(path.to_path_buf());
     }
 
     for candidate in declaration_candidates(path.to_path_buf()) {
-        crate::io_stats::record_existence_probe();
-        if candidate.exists() && candidate.is_file() {
+        if crate::probe::is_existing_file(&candidate) {
             return Some(candidate);
         }
     }

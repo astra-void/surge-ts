@@ -537,6 +537,11 @@ fn declaration_file_is_library_scoped(
     declaration: &TypeDeclarationInfo,
     ctx: &CheckerContext,
 ) -> bool {
+    // NOT memoizable on the declaration: `is_library_scoped_file` consults
+    // `ctx.file_kinds`, which differs between the program context and the
+    // synthetic contexts lazy resolvers run under, so the same declaration
+    // legitimately gets different answers per consumer (measured 467k
+    // divergences on tRPC when a per-declaration memo was attempted).
     let file_name = match declaration {
         TypeDeclarationInfo::Alias(alias) => alias.file_name.as_str(),
         TypeDeclarationInfo::Interface(interface) => interface.file_name.as_str(),

@@ -24,6 +24,7 @@ mod io_stats;
 mod package_declarations;
 mod package_resolution;
 mod path_mapping;
+mod probe;
 mod specifier_scan;
 
 use std::path::{Path, PathBuf};
@@ -199,6 +200,8 @@ impl Project {
                 timings,
             });
         }
+
+        probe::clear_probe_cache();
 
         let file_discovery_start = Instant::now();
         let read_workers = std::thread::available_parallelism()
