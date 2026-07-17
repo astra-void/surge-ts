@@ -98,6 +98,22 @@ dominant identified share of the allocator gap.
    - Last hot SipHash maps → Fx (`utility_diagnostic_keys`, loader probe +
      import-graph caches); membership-only sets, order-invisible.
    Interleaved A/B (cumulative with 1): user −0.6…−1.1 s in-window.
+3. `a2c7247` **PropertyMap keys interned as `Arc<str>`** (the report's #1
+   named follow-up lever). A derived interface inheriting its bases' members
+   allocated a fresh `String` per inherited key even though the base maps are
+   `Arc`-shared and reused across every derived type; the key clone is now a
+   refcount bump and derived types share one allocation per base member name.
+   Equality by str content (order-independent, unchanged), `Arc<str>: Hash`
+   matches `String::hash` byte-for-byte → fingerprint / union dedup key /
+   canonical property-map store untouched; the assignability failure enum keeps
+   its `String` fields (cold path). Interleaved A/B vs `b9d1334` (jobs=1, one
+   window): wall 14.68 → 14.58 s, **user 12.66 → 12.55 s (−0.9%), and all 5
+   paired NEW user times below their OLD counterpart** — small but robust.
+   Memory neutral within noise (gates hold). This confirms the program's
+   recurring finding: the property-map allocation was a smaller malloc owner
+   than its ~millions of clone *events* implied — clone-count censuses
+   overstate malloc impact because most counted clones are cheap or already
+   `Arc`-shared through the canonical store.
 
 ## Changes evaluated and declined (with evidence)
 
@@ -114,28 +130,41 @@ dominant identified share of the allocator gap.
 - **`type_dedup_fingerprint` hasher: untouched** (pinned; bucket composition
   is semantically load-bearing — see prior program).
 
-## Remaining allocation owners (post-change profile)
+## Remaining allocation owners (post-`a2c7247` profile)
 
 ```text
-malloc self-time ≈ 17.5% (from 22–24%)
-fingerprint_type SipHash          181 self samples (semantically pinned)
-interface member resolution        76 malloc-parent samples (property-map +
-                                   member Strings; needs PropertyNameId
-                                   interning in surge-ts-types to go further)
-union_type / FunctionType::new /
-TypeReference::new                 ~85 (pre-intern Type-layer temporaries)
+malloc self-time flattened; remaining owners are pinned or structural:
+RawVecInner (Vec growth)          144 malloc-parent samples (resolve/parse/
+                                  diagnostics temporaries; diffuse)
+fingerprint_type SipHash          161 self samples (PINNED — bucket
+                                  composition sets Arc pointer identity that
+                                  assignability ptr_eq fast-paths depend on;
+                                  Fx-hashing it drifted 1292 diagnostics)
+interface member resolution        43 malloc-parent + 120 self (IndexMap
+                                  backbone alloc; the key Strings are gone now)
+FunctionType::new / union_type /
+TypeReference::new                 ~58 (Type-layer payloads that feed the
+                                  canonical weak stores — not scratch-lifetime)
 display strings (Type::name,
-parsed_type_display, join)         ~64 (byte-exactness-sensitive)
-ParsedType::clone self             108 (refcount atomics + census branch, 33M events)
-memmove                            550 (parser + Vec copies)
+parsed_type_display, join)         ~37 (byte-exactness-sensitive; risky)
+TypeParameterSubstitution::set      24 (sorted-vec growth; entries are 1–3, tiny)
+memmove                           377 (parser + Vec copies)
 ```
 
-Next-step recommendation: (1) intern property names (`PropertyNameId` /
-`Arc<str>` keys in `PropertyMap`) — the largest single remaining owner; (2)
-reduce clone *events* by threading `Arc<ParsedNamedType>` deeper into the
-lazy-reference captures; (3) then re-evaluate speculative transactional
-checking (see TRPC-5S-REPORT.md) for the parallel win — allocation work has
-now consumed most of the serial headroom.
+**Returns have flattened.** After three landed changes the remaining owners
+are either semantically pinned (the fingerprint hash, display strings) or
+structural Type-layer construction that feeds the canonical stores and so
+cannot move to scratch/arena allocation. No large *reducible* allocation owner
+remains that would not risk diagnostics.
+
+Next-step recommendation: (1) the serial allocation headroom is now largely
+consumed — the highest-value remaining work is the **parallel** win via
+speculative transactional checking (see `TRPC-5S-REPORT.md`), which the
+allocation program was scoped to exclude; (2) if pursuing more serial memory,
+`Arc<[T]>` for the three `ParsedType` list variants would drop the inner `Vec`
+header (recovers part of the +Arc-header peak); (3) reducing named clone
+*events* (13.2 M refcount atomics) by threading `Arc<ParsedNamedType>` deeper
+into the lazy-reference captures is a micro-optimization with unclear payoff.
 
 ## Memory safety / lifetime notes
 
@@ -147,21 +176,26 @@ earlier dependency-AST release.
 
 ## Final measured distribution
 
-4-way interleave (jobs=1): see the outcome table; per-run spread OLD-sys
+4-way interleave (jobs=1) at the `8161a72`/`b9d1334` state: OLD-sys
 15.17–15.99, NEW-sys 13.94–14.74, OLD-mim 11.84–11.87, NEW-mim 10.93–11.45.
-A separate 5-run jobs=auto matrix at the final commit: 14.07–16.02
-(median 15.13, hot window), byte-identical to jobs=1. All runs sha256
-`4d69a2d5f549616083afa9c9e3bccc3484a8bdc96457988fd1f060b805b5ee59`.
+Property-interning increment (`a2c7247`), 5-run interleave vs `b9d1334`
+(jobs=1, one window): OLD 15.40/14.67/14.70/14.68/14.44 (median 14.68),
+NEW 14.87/14.69/14.58/14.53/13.91 (median 14.58); user OLD median 12.66,
+NEW median 12.55. All runs (every commit, both allocators, jobs=1/auto)
+sha256 `4d69a2d5f549616083afa9c9e3bccc3484a8bdc96457988fd1f060b805b5ee59`.
 Raw log: `TRPC-ALLOCATION-VOLUME-MATRIX.txt`.
 
-## Validation
+## Validation (final commit `a2c7247`)
 
 ```text
 cargo fmt --check ✓   cargo check --workspace ✓ (0 errors)
 cargo nextest run --workspace: 1546/1546
 pnpm oracle:test: green    oracle sweep: 97/97, messageDriftOnly=5 (pre-existing)
 real projects: 28 pass / 0 fail / 3 conditional skips
-raw cmp vs 5515b68 binary: tRPC ✓ zod ✓ ky ✓ ofetch ✓ (jobs=1 and auto)
+raw cmp vs b9d1334 binary: tRPC ✓ zod ✓ ky ✓ ofetch ✓ (jobs=1 and auto)
+memory: peak fp ~1.97 GB (≤2.00 ✓), finish fp ~464 MB (≤0.70 ✓)
 ```
 
-Final commit: recorded in the branch log (`git log --oneline` from 5515b68).
+Final commit: `a2c7247` (`git log --oneline` from 5515b68 shows the four
+retained commits: `5d05b06` census, `beb33d5` ParsedType Arc, `8161a72`
+small-alloc batch, `a2c7247` PropertyMap interning).
