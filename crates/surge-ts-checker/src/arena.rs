@@ -253,6 +253,91 @@ unsafe impl Sync for ArenaStr {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    struct CountedPayload {
+        _heap: String,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Drop for CountedPayload {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn payload_destructors_run_once_when_the_last_handle_drops() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let arena = CheckerArena::new();
+        let clone = arena.clone();
+        for i in 0..3 {
+            let _ = arena.alloc_type_declaration_payload(CountedPayload {
+                _heap: format!("payload-{i}"),
+                drops: drops.clone(),
+            });
+        }
+        drop(arena);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(clone);
+        assert_eq!(drops.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn arc_owning_payload_releases_its_reference() {
+        let shared = Arc::new("shared".to_string());
+        let arena = CheckerArena::new();
+        let _ = arena.alloc_type_declaration_payload(shared.clone());
+        assert_eq!(Arc::strong_count(&shared), 2);
+        drop(arena);
+        assert_eq!(Arc::strong_count(&shared), 1);
+    }
+
+    #[test]
+    fn nested_payload_drops_every_element() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let arena = CheckerArena::new();
+        let _ = arena.alloc_type_declaration_payload(vec![
+            CountedPayload {
+                _heap: "a".to_string(),
+                drops: drops.clone(),
+            },
+            CountedPayload {
+                _heap: "b".to_string(),
+                drops: drops.clone(),
+            },
+        ]);
+        drop(arena);
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn trivially_droppable_payloads_register_no_destructors() {
+        let arena = CheckerArena::new();
+        let _ = arena.alloc_type_declaration_payload(7u64);
+        let _ = arena.alloc_type_declaration_payload([0usize; 4]);
+        let _ = arena.alloc_str("plain str");
+        assert_eq!(
+            arena.allocator.pending_drops.lock().unwrap().len(),
+            0,
+            "non-Drop payloads must not carry destructor metadata"
+        );
+    }
+
+    #[test]
+    fn zero_sized_drop_payload_runs_exactly_once() {
+        static ZST_DROPS: AtomicUsize = AtomicUsize::new(0);
+        struct ZstDrop;
+        impl Drop for ZstDrop {
+            fn drop(&mut self) {
+                ZST_DROPS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let arena = CheckerArena::new();
+        let _ = arena.alloc_type_declaration_payload(ZstDrop);
+        drop(arena);
+        assert_eq!(ZST_DROPS.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn allocation_works_during_construction() {

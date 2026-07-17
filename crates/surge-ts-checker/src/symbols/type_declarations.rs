@@ -884,6 +884,53 @@ mod tests {
         ));
     }
 
+    fn sample_alias(name: &str, file: &str) -> TypeDeclarationInfo {
+        TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+            name.to_string(),
+            file.to_string(),
+            None,
+            vec![],
+            ParsedType::String,
+            None,
+        ))
+    }
+
+    #[test]
+    fn snapshot_identity_tracks_mutations_and_never_aliases_instances() {
+        let mut table = TypeDeclarationTable::new();
+        let unmodified = table.snapshot_identity();
+
+        let _ = table.insert("User", sample_alias("User", "a.ts"));
+        let mutated = table.snapshot_identity();
+        assert_eq!(unmodified.0, mutated.0);
+        assert_ne!(unmodified.1, mutated.1);
+
+        let mut clone = table.clone();
+        assert_ne!(clone.snapshot_identity().0, table.snapshot_identity().0);
+        let _ = clone.insert("Other", sample_alias("Other", "b.ts"));
+        assert_eq!(table.snapshot_identity(), mutated);
+    }
+
+    #[test]
+    fn shared_payload_stays_valid_after_source_table_drops() {
+        let mut source = TypeDeclarationTable::new();
+        let _ = source.insert("User", sample_alias("User", "exporter.d.ts"));
+
+        let mut importer = TypeDeclarationTable::new();
+        assert!(importer.insert_shared_from("Renamed", &source, "User"));
+        assert!(!importer.insert_shared_from("Renamed", &source, "User"));
+
+        drop(source);
+        assert!(matches!(
+            importer.get("Renamed"),
+            Some(TypeDeclarationInfo::Alias(_))
+        ));
+
+        let handle = importer.get_handle("Renamed").expect("shared entry");
+        drop(importer);
+        assert!(matches!(handle.get(), TypeDeclarationInfo::Alias(_)));
+    }
+
     #[test]
     fn type_declaration_scope_honors_layer_precedence() {
         let mut ambient = TypeDeclarationTable::new();
