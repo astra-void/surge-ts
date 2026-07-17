@@ -300,6 +300,20 @@ export const fixturePresets: Record<string, string> = {
   'interface-method-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-method-merge-basic/tsconfig.json'),
   'class-interface-merge-policy-pinned': path.join(workspaceRoot, 'tests/compat-projects/class-interface-merge-policy-pinned/tsconfig.json'),
   'physical-lib-iterator-for-of-basic': path.join(workspaceRoot, 'tests/compat-projects/physical-lib-iterator-for-of-basic/tsconfig.json'),
+  'react19-jsx-function-component-basic': path.join(workspaceRoot, 'tests/compat-projects/react19-jsx-function-component-basic/tsconfig.json'),
+  'react19-jsx-generic-component-basic': path.join(workspaceRoot, 'tests/compat-projects/react19-jsx-generic-component-basic/tsconfig.json'),
+  'query-generics-observer-basic': path.join(workspaceRoot, 'tests/compat-projects/query-generics-observer-basic/tsconfig.json'),
+  'query-generics-options-mapped-basic': path.join(workspaceRoot, 'tests/compat-projects/query-generics-options-mapped-basic/tsconfig.json'),
+  'schema-inference-nested-basic': path.join(workspaceRoot, 'tests/compat-projects/schema-inference-nested-basic/tsconfig.json'),
+  'schema-inference-recursive-basic': path.join(workspaceRoot, 'tests/compat-projects/schema-inference-recursive-basic/tsconfig.json'),
+  'express-augmentation-cycle-basic': path.join(workspaceRoot, 'tests/compat-projects/express-augmentation-cycle-basic/tsconfig.json'),
+  'express-augmentation-cycle-collision-pinned': path.join(workspaceRoot, 'tests/compat-projects/express-augmentation-cycle-collision-pinned/tsconfig.json'),
+  'router-graph-procedures-basic': path.join(workspaceRoot, 'tests/compat-projects/router-graph-procedures-basic/tsconfig.json'),
+  'router-graph-subscription-basic': path.join(workspaceRoot, 'tests/compat-projects/router-graph-subscription-basic/tsconfig.json'),
+  'node-decl-callable-namespace-basic': path.join(workspaceRoot, 'tests/compat-projects/node-decl-callable-namespace-basic/tsconfig.json'),
+  'node-decl-subpath-cts-mts-basic': path.join(workspaceRoot, 'tests/compat-projects/node-decl-subpath-cts-mts-basic/tsconfig.json'),
+  'combined-conditional-mapped-indexed-basic': path.join(workspaceRoot, 'tests/compat-projects/combined-conditional-mapped-indexed-basic/tsconfig.json'),
+  'combined-augmentation-generic-registry-basic': path.join(workspaceRoot, 'tests/compat-projects/combined-augmentation-generic-registry-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

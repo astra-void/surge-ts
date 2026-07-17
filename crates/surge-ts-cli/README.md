@@ -128,7 +128,7 @@ cargo run -p surge-ts-cli -- --ignoreConfig examples/basic.ts
 - `--format json` (or `--diagnosticStyle json`) prints diagnostic JSON in normal project or single-file mode.
 - `--compatReport --format json` prints compatibility-report JSON.
 - `--diagnosticProfile <tsc|native>` sets the diagnostic profile. The `tsc` profile strictly aligns with TypeScript's oracle baseline, while `native` aggressively suppresses noisy cascades at boundaries like `satisfies`. (Default: `tsc`)
-- `--jobs` is project-mode infrastructure for deterministic per-file checking only. It keeps shared prepasses serial and merges diagnostics in loaded-file order. The default is `1`.
+- `--jobs` is project-mode infrastructure for deterministic per-file checking only. It keeps shared prepasses serial and merges diagnostics in loaded-file order. The default is `auto`.
 - `--showSpans` is a text-mode affordance; JSON output already carries spans and,
   when available, 1-based line and column numbers.
 - `--maxDiagnostics` limits rendered diagnostics in normal diagnostic mode.

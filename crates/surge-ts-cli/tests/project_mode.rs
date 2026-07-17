@@ -3821,6 +3821,23 @@ fn cli_contextual_async_object_property_return_basic_reports_type_errors_only() 
 }
 
 #[test]
+fn cli_async_void_promise_return_basic_exempts_awaited_void_from_ts2355() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/async-void-promise-return-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    // The only diagnostic is the intentional TS2355 on the value-promise
+    // function; every `Promise<void|undefined|any>` shape (function, arrow,
+    // object method, class method, alias) must stay clean.
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2355".to_string()], "got {codes:?}");
+    assert_eq!(json_diagnostic_lines(&parsed, "TS2355"), vec![Some(42)]);
+}
+
+#[test]
 fn cli_array_find_contextual_callback_basic_resolves_find_and_reports_property_error() {
     let parsed = run_cli_json(&[
         "--project",

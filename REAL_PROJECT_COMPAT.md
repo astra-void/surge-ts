@@ -5,8 +5,7 @@ checker) against real projects and baseline compilers. `TypeScript`/`tsc` refer
 to the upstream compiler used as the oracle baseline. Historical version notes
 below may refer to the project by its earlier `surge-ts` / `ts-rust`
 labels; those are kept verbatim as measured-at-the-time records. The internal
-Cargo crates are still named `surge-ts-*`; current report output and the
-CLI binary are `surge-ts`.
+Cargo crates are still named `surge-ts-*`; the CLI binary is `surge`.
 
 ## Current state
 
@@ -39,6 +38,82 @@ CLI binary are `surge-ts`.
   higher (roughly `~0.6s` in the latest local measurement). Treat those older
   medians as historical and read current numbers from the latest
   `.bench/` measurement artifacts rather than the snapshot-era figures.
+
+## Compatibility fixture matrix
+
+Fourteen real-world-shaped oracle presets (2026-07-16) pin the library patterns
+below at exact diagnostic parity (code-count and file/code/line) against the
+native tsc oracle. Each fixture is registered in
+`scripts/oracle/compare-tsc.ts` and covered by `pnpm run oracle:sweep -- --all`
+(97 presets total after this addition). "Pos" counts the typed positive
+assertions that must stay diagnostic-free; "neg" counts intentional errors
+pinned at exact file/code/line parity.
+
+| Fixture | Family | What it pins | Pos/Neg |
+| --- | --- | --- | --- |
+| `react19-jsx-function-component-basic` | React 19 / JSX | `jsx: react-jsx` runtime lookup through `@types/react` `React.JSX`, intrinsic elements, function-component props, `children`, ref-as-prop, callback contextual typing inside JSX props | 5/1 |
+| `react19-jsx-generic-component-basic` | React 19 / JSX | generic function components: inference from props, explicit `<List<string>>` type arguments, namespace import of React, callback param inference in JSX attributes | 3/1 |
+| `query-generics-observer-basic` | TanStack-style generics | explicit-type-arg generic hook over an options object, optional contextual callbacks (`onSuccess`/`select`), Promise-returning `queryFn`, alias-annotated result, optional chaining on `data`/`error` | 5/2 |
+| `query-generics-options-mapped-basic` | TanStack-style generics | mapped result record over an inferred constrained record (indexed access in the mapped body), nested generic aliases, top-level conditional `infer` alias with concrete args | 5/1 |
+| `schema-inference-nested-basic` | Zod-style inference | `_output` indexed-access inference through nested `object`/`array`/`optional`/`union` combinators, `Infer` alias round-trip | 7/1 |
+| `schema-inference-recursive-basic` | Zod-style inference | recursive interface schema via `lazy<T>` with explicit type arg and self-referencing const, deep recursive member chains | 2/1 |
+| `express-augmentation-cycle-basic` | Express-style augmentation + cycles | cyclic `.d.ts` imports (`index` <-> `application`), module augmentation of a package interface from a second package and from a consumer `.d.ts`, merged members visible on direct import | 5/1 |
+| `express-augmentation-cycle-collision-pinned` | Express-style augmentation + cycles | consumer-local `Store` types (interface in one file, alias in another) colliding with the dependency-internal `Store`; dependency-scope name resolution inside dependency interfaces, cycle re-entry (`store.connection().store`) — pins per-environment resolution against naive cross-consumer caching | 4/2 |
+| `router-graph-procedures-basic` | tRPC-style router graph | nested router records (intersection + record inference), callable procedure interfaces, conditional `InputOf`/`OutputOf` extraction over concrete `typeof`, mapped record over a router, Promise-typed results, void-input call | 7/1 |
+| `router-graph-subscription-basic` | tRPC-style router graph | nested generic interfaces (`Subscription<Envelope<T>>`), contextual callback parameter typing from declared function types, generic member chains | 5/1 |
+| `node-decl-callable-namespace-basic` | Node declaration shapes | `typeRoots` + `types`-configured `@types` packages, `export =` callable import via `import ... = require(...)`, namespace type member access (`log.Options`), ambient `declare var` global, ambient namespace const/interface | 5/1 |
+| `node-decl-subpath-cts-mts-basic` | Node declaration shapes | package.json `exports` `types` conditions, subpath exports, `import`/`require` condition split resolving the `.d.mts` surface | 4/1 |
+| `combined-conditional-mapped-indexed-basic` | Combined features | conditional + mapped + indexed-access combinations, distributive conditional over a union, recursive generic interface substitution (`Tree<T>` flatten inference), constrained mapped `PickByKey` | 8/1 |
+| `combined-augmentation-generic-registry-basic` | Combined features | module augmentation adding a member to a generic interface and adding a module export, explicit generic annotation resolving augmented members, imported generic type usage | 5/1 |
+
+### Known limitations discovered (excluded from the fixtures above)
+
+Shapes below currently mismatch the oracle and were reduced out of the
+fixtures rather than pinned. Each is a candidate checker fix; none is gated.
+
+- `interface X extends NS.Member` does not see members merged into
+  `NS.Member` from other files' `declare global { namespace NS { ... } }`
+  blocks (surge-only TS2339). Direct type-position use of `NS.Member` sees the
+  merge. This is the `Express.Request` global-namespace pattern; the express
+  fixtures use `declare module` augmentation instead.
+- Module augmentations of a package interface are lost when the interface is
+  imported through a star re-export wrapper (`export * from "core"` in
+  `wrapper`; importing from `wrapper` yields the unaugmented shape, importing
+  from `core` is correct). Fixtures import from the core package directly.
+- Generic type-parameter inference from a callback argument's return type
+  (`fn: () => T`, `fn: () => Promise<T>`) silently degrades: no false
+  positives, but mismatches tsc reports are missed (under-report). Same for
+  generic JSX components: prop mismatches on type-parameter-dependent props
+  (explicit `<List<string>>` or inference conflicts) are missed, while
+  non-generic props on generic components are checked. Query/schema fixtures
+  pin explicit-type-arg and value-inference paths instead.
+- Conditional types with `infer` report a false TS2304 ("Cannot find name")
+  when the conditional sits in — or is referenced from — a mapped-type body,
+  and when the infer position is inside an object-literal type
+  (`{ initial: infer V }`). Top-level conditional-infer aliases over
+  interface/alias/`Promise` references with concrete arguments work.
+- A required property typed `string | undefined` is rejected against an
+  optional target property (`slug?: string`) inside generic comparisons
+  (surge-only TS2322; tsc accepts without `exactOptionalPropertyTypes`).
+- `async function f(): Promise<void> {}` with no return statement raises a
+  false TS2355; inferred async return types are unaffected.
+- Module-scope bindings holding a generic-instantiated callable interface
+  (`const p = procedure<I, O>()` imported cross-module) lose type-argument
+  substitution when called inside later function bodies or chained
+  (`.then`), surfacing `Promise<TOutput>` TS2339 false positives;
+  module-scope annotated uses are correct. Unannotated module-scope
+  `createRegistry<string>()` also misses augmentation-added members, while an
+  explicit `Registry<string>` annotation resolves them.
+- Overload groups (function declarations and interface call signatures)
+  resolve against the first overload only; calls selecting a later overload
+  raise false TS2345. The subscription fixture uses distinct functions
+  instead of overloads.
+- Callable-function + namespace declaration merging is inconsistent: through
+  `export =` the namespace's value members are dropped (call and type-position
+  `log.Options` work); in a same-file merge the callability is dropped
+  (false TS2349).
+- `typeof import("pkg")` in a type alias does not resolve (TS2304 at the
+  alias use site).
 
 ## unnamed (Next.js real-project measurement)
 

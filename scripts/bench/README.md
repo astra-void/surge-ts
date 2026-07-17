@@ -198,3 +198,64 @@ at least 5 post-warmup runs, with `--jobs 1` and parallel results kept
 separate. Do not change the default allocator without a repeatable ≥5% median
 time win (no material RSS regression) or ≥10% peak-RSS win (no material time
 regression) on real projects.
+
+## Complexity Regression Suite (`complexity-regression.ts`)
+
+Guards against algorithmic (big-O) regressions rather than wall-clock drift.
+It generates synthetic projects at multiple sizes under `target/complexity-gen/`
+(never committed), runs the release `surge` binary with `SURGE_TIMINGS=1` at
+`--jobs 1`, parses the instrumentation counters from stderr, and classifies
+each tracked counter's growth as constant / ~linear / superlinear via the tail
+exponent between the two largest sizes.
+
+```bash
+pnpm bench:complexity                       # builds the release CLI, runs everything
+pnpm bench:complexity -- --skipBuild        # reuse target/release/surge
+pnpm bench:complexity -- --json             # machine-readable output
+pnpm bench:complexity -- --case union       # substring filter over case names
+pnpm bench:complexity -- --sizes 32,64,128  # override sizes for quick iteration
+```
+
+Cases and their counter proxies:
+
+- **shared-checker-options** (module graph, growing module count, fixed
+  node_modules deps): `dependency_declaration_table_clone_count` and
+  `generated_default_lib_table_clone_count` must stay exactly `0`;
+  `type_declaration_table_clone_count` stays constant;
+  `module_analysis_total_calls` stays linear.
+- **serial-context-reuse** (same projects, `--jobs 1`):
+  `symbol_table_clone_count` / `module_export_table_clone_count` /
+  `expression_check_count` stay linear in file count.
+- **union-scaling** (flat/duplicated/nested/canonical literal-alias unions plus
+  a discriminated union routed through a switch and n conditional-expression
+  unions): `union_type_clone_count` and `union_type_payload_alloc_count` stay
+  linear; `union_type_alloc_count` and `union_type_payload_deep_clone_count`
+  stay `0`.
+- **overload-scaling** (growing interface overload group probed by fixed calls,
+  plus n calls against small fixed groups with callbacks and duplicate
+  signatures): `overload_array_alloc_count`,
+  `interface_member_declaration_visit_count`, and `expression_check_count` stay
+  linear; `overload_group_create_count` stays constant.
+- **inheritance-scaling** (n-deep extends chain and n-wide multi-extends
+  interface with repeated/overridden properties, fixed property probes):
+  `interface_member_declaration_visit_count` and
+  `interface_own_property_map_alloc_count` stay linear;
+  `property_lookup_count` stays constant.
+- **determinism**: the CLI runs twice (fresh processes, `--jobs 1`) over
+  `tests/compat-projects/complexity-zod-shaped-determinism/` and — when
+  present — `.local-projects/zod`, asserting identical SHA-256 of stdout.
+
+The suite exits non-zero when a zero-expected counter becomes nonzero, a
+constant/linear-expected counter classifies as superlinear, a synthetic
+project unexpectedly produces diagnostics, or a determinism check fails. Wall
+time is displayed per run but never gated, and there are no wall-clock
+assertions anywhere in the suite. Companion Rust integration tests live in
+`crates/surge-ts-checker/tests/determinism.rs` (byte-identical diagnostics
+across fresh in-process runs) and
+`crates/surge-ts-checker/tests/complexity_regression.rs` (dependency `.d.ts`
+lexical-scope resolution, mirroring
+`tests/compat-projects/complexity-dependency-lexical-scope/`).
+
+Harness unit tests (generator determinism, stderr counter parsing, growth
+classification, gating) run as part of `pnpm run bench:test` and need no cargo
+build.

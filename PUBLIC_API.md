@@ -125,10 +125,10 @@ Two input modes: a single `.ts` **file** (positional argument) or a
 
 ```bash
 # Single file (quick standalone oracle)
-surge-ts path/to/file.ts
+surge path/to/file.ts
 
 # Project mode (the main compatibility path)
-surge-ts --project ./tsconfig.json
+surge --project ./tsconfig.json
 ```
 
 **Stable flags:**
@@ -139,6 +139,9 @@ surge-ts --project ./tsconfig.json
 | `--ignoreConfig` | File mode: ignore any discovered config (file-only) |
 | `--showConfig` | Print the resolved config (requires `--project`) |
 | `--compatReport` | Emit the compatibility-report JSON (requires `--project`) |
+| `--extendedDiagnostics` | Print run statistics (files, phase times, memory) to stderr after the diagnostics (requires `--project`) |
+| `--memoryReport` | Print a memory-focused report to stderr after the diagnostics (requires `--project`) |
+| `--reportJson <PATH>` | Write a versioned machine-readable run report to `PATH` (requires `--project`; see §1.4) |
 | `--format <json>` | Machine-readable JSON output (oracle harness format) |
 | `--diagnosticStyle <tsc\|custom\|json>` | Select the renderer |
 | `--pretty <true\|false\|auto>` | `tsc`-style code-frame output |
@@ -150,6 +153,77 @@ surge-ts --project ./tsconfig.json
 | `--noLib` | Disable default libs (no standard/DOM globals) |
 | `--showSpans` | Debug: force the custom span renderer |
 | `--physicalLibs` | Debug aid; physical `lib*.d.ts` loading is already the default |
+
+The three reporting flags never change the diagnostics output: stdout stays
+byte-identical to a run without them. `--extendedDiagnostics` and
+`--memoryReport` write human-readable blocks to stderr; `--reportJson` writes
+to the given file. All three require `--project` and reject `--showConfig`
+(no check runs under `--showConfig`, so there is nothing to report). They
+compose with `--compatReport`, `--format json`, `--jobs`, and
+`--maxDiagnostics` (the report counts all diagnostics, not the truncated
+display). All measurements are taken at existing phase boundaries after
+checking completes — the flags add no hot-path instrumentation, and a run
+without them collects nothing.
+
+### 1.4 Machine-readable run report (`--reportJson <PATH>`)
+
+One JSON object, pretty-printed, with a fixed key order (`schemaVersion`
+first; within each object the order below). Metrics the platform cannot
+provide are `null` — never omitted, never fabricated.
+
+```json
+{
+  "schemaVersion": 1,
+  "summary": {
+    "files": 77,
+    "sourceFiles": 1,
+    "dependencyDeclarationFiles": 1,
+    "defaultLibFiles": 75,
+    "diagnostics": 1,
+    "wallTimeMs": 156.346,
+    "jobs": "auto",
+    "allocator": "system"
+  },
+  "phases": {
+    "configProjectLoadingMs": 1.173,
+    "fileDiscoveryMs": 0.065,
+    "defaultLibLoadingMs": 3.922,
+    "packageDeclarationDiscoveryMs": 0.569,
+    "importGraphExpansionMs": 0.078,
+    "pathMappingResolutionMs": 0.003,
+    "checkingMs": 150.008,
+    "diagnosticRenderingMs": 0.202,
+    "totalMs": 156.346
+  },
+  "memory": {
+    "peakPhysicalBytes": 45089248,
+    "finishPhysicalBytes": 45089248,
+    "peakRssBytes": 54886400
+  }
+}
+```
+
+- `schemaVersion` — `1`. Bumped on any breaking change to this shape.
+- `summary.files` — every file in the checked program;
+  `sourceFiles` + `dependencyDeclarationFiles` + `defaultLibFiles` always
+  equals `files`. Source files are project-owned files (including root
+  declaration files); dependency declaration files are `.d.ts`/`.d.mts`/
+  `.d.cts` under `node_modules/`; default lib files are the physical
+  TypeScript `lib*.d.ts` set or the generated fallback subset.
+- `summary.diagnostics` — total diagnostics emitted (not capped by
+  `--maxDiagnostics`).
+- `summary.wallTimeMs` and every `phases.*Ms` value — fractional
+  milliseconds (microsecond precision). The phase set mirrors the
+  `--timings` categories; `totalMs` duplicates `wallTimeMs`.
+- `summary.jobs` — the string `"auto"` when worker selection is automatic
+  (the default), otherwise the requested worker count as a number.
+- `summary.allocator` — the compiled-in global allocator: `"system"`,
+  `"mimalloc"`, `"jemalloc"`, or `"snmalloc"`.
+- `memory.peakPhysicalBytes` / `memory.finishPhysicalBytes` — the
+  `phys_footprint` peak and at-report values (macOS only; the
+  Activity-Monitor-comparable figure). `null` elsewhere.
+- `memory.peakRssBytes` — the OS-tracked resident-set high-water mark
+  (macOS and Linux). `null` elsewhere.
 
 ---
 
