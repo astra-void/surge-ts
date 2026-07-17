@@ -391,6 +391,13 @@ impl Project {
 
         let reference_type_resolution = reference_type_resolver.into_resolution();
 
+        // The scan caches (parser arena, per-file specifier lists, probe and
+        // known-file sets) are loader-lifetime only; release them before the
+        // checker's peak so they never count against the program footprint.
+        drop(specifier_scanner);
+        drop(import_graph_state);
+        probe::clear_probe_cache();
+
         let mut checker_types = type_package_resolution.effective_type_names.clone();
         for name in &reference_type_resolution.effective_type_names {
             if !checker_types.contains(name) {
