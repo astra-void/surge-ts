@@ -686,7 +686,7 @@ fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType) -> String
                 .collect::<Vec<_>>();
             if let Some(call) = &object.call_signature {
                 members.push(parsed_annotation_display(&ParsedType::Function(
-                    call.as_ref().clone(),
+                    std::sync::Arc::new(call.as_ref().clone()),
                 )));
             }
             format!("{{ {} }}", members.join("; "))
@@ -1642,11 +1642,11 @@ mod physical_interface_cache_tests {
                 }),
                 optional: false,
                 is_abstract: false,
-                ty: ParsedType::Function(ParsedFunctionType {
+                ty: ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
                     parameters: Vec::new(),
                     return_type: Box::new(ParsedType::String),
                     type_parameters: Vec::new(),
-                }),
+                })),
             })
             .collect();
         body.member_fragments = vec![body.declaration_fragments[0].clone(); body.members.len()];

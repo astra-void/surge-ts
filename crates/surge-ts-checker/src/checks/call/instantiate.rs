@@ -635,18 +635,20 @@ fn substitute_parsed_type_parameters(
                 }
                 ParsedType::Named(named.clone())
             } else {
-                let mut substituted = named.clone();
-                substituted.type_arguments = named
-                    .type_arguments
-                    .iter()
-                    .map(|argument| substitute_parsed_type_parameters(argument, map))
-                    .collect();
-                ParsedType::Named(substituted)
+                ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                    name: named.name.clone(),
+                    span: named.span,
+                    type_arguments: named
+                        .type_arguments
+                        .iter()
+                        .map(|argument| substitute_parsed_type_parameters(argument, map))
+                        .collect(),
+                }))
             }
         }
-        ParsedType::Array(element) => {
-            ParsedType::Array(Box::new(substitute_parsed_type_parameters(element, map)))
-        }
+        ParsedType::Array(element) => ParsedType::Array(std::sync::Arc::new(
+            substitute_parsed_type_parameters(element, map),
+        )),
         other => other.clone(),
     }
 }

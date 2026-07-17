@@ -50,20 +50,17 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSNeverKeyword(_) => Some(ParsedType::Never),
         TSType::TSLiteralType(literal_type) => Some(parse_literal_type(literal_type)),
         TSType::TSTypeLiteral(type_literal) => Some(parse_type_literal(type_literal)),
-        TSType::TSArrayType(array_type) => {
-            parse_type(&array_type.element_type).map(|ty| ParsedType::Array(Box::new(ty)))
-        }
+        TSType::TSArrayType(array_type) => parse_type(&array_type.element_type)
+            .map(|ty| ParsedType::Array(std::sync::Arc::new(ty))),
         TSType::TSTupleType(tuple_type) => parse_tuple_type(tuple_type),
-        TSType::TSFunctionType(function_type) => {
-            parse_function_type(function_type).map(ParsedType::Function)
-        }
+        TSType::TSFunctionType(function_type) => parse_function_type(function_type)
+            .map(|function| ParsedType::Function(std::sync::Arc::new(function))),
         // A constructor type (`new (args) => T`) is lowered to a callable
         // signature; surge does not distinguish newability, and keeping it parsed
         // prevents a union member like `JSXElementConstructor`'s `new (...) => …`
         // from collapsing the whole alias to `Unknown`.
-        TSType::TSConstructorType(constructor_type) => {
-            parse_constructor_type(constructor_type).map(ParsedType::Function)
-        }
+        TSType::TSConstructorType(constructor_type) => parse_constructor_type(constructor_type)
+            .map(|function| ParsedType::Function(std::sync::Arc::new(function))),
         TSType::TSParenthesizedType(parenthesized_type) => {
             parse_type(&parenthesized_type.type_annotation)
         }
@@ -209,9 +206,8 @@ fn flatten_qualified_type_name(
 
 fn parse_type_operator(type_operator: &TSTypeOperator<'_>) -> Option<ParsedType> {
     match type_operator.operator {
-        TSTypeOperatorOperator::Keyof => {
-            parse_type(&type_operator.type_annotation).map(|ty| ParsedType::KeyOf(Box::new(ty)))
-        }
+        TSTypeOperatorOperator::Keyof => parse_type(&type_operator.type_annotation)
+            .map(|ty| ParsedType::KeyOf(std::sync::Arc::new(ty))),
         // `readonly T[]` / `readonly [A, B]` are not distinguished from their
         // mutable forms here; lowering to the inner array/tuple keeps the
         // annotation intact instead of dropping it (which would cascade into
@@ -268,11 +264,11 @@ fn parse_type_reference(type_reference: &TSTypeReference<'_>) -> Option<ParsedTy
         None => Vec::new(),
     };
 
-    Some(ParsedType::Named(ParsedNamedType {
+    Some(ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
         name,
         span: Some(span),
         type_arguments,
-    }))
+    })))
 }
 
 /// Flatten a (possibly qualified) type name into a dotted string and the span of
@@ -320,7 +316,7 @@ fn parse_union_type(union_type: &TSUnionType<'_>) -> ParsedType {
         types.push(parsed_type);
     }
 
-    ParsedType::Union(types)
+    ParsedType::Union(std::sync::Arc::new(types))
 }
 
 fn parse_intersection_type(intersection_type: &TSIntersectionType<'_>) -> ParsedType {
@@ -334,7 +330,7 @@ fn parse_intersection_type(intersection_type: &TSIntersectionType<'_>) -> Parsed
         types.push(parsed_type);
     }
 
-    ParsedType::Intersection(types)
+    ParsedType::Intersection(std::sync::Arc::new(types))
 }
 
 /// Tuple labels are display-only, so named members lower to their element type.
@@ -373,7 +369,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
         }
     }
 
-    Some(ParsedType::Tuple(elements))
+    Some(ParsedType::Tuple(std::sync::Arc::new(elements)))
 }
 
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
@@ -566,11 +562,11 @@ pub(crate) fn parse_type_method_signature(
     Some(ParsedObjectTypeProperty {
         name: key.name.to_string(),
         name_span: Some(text_span_from_oxc_span(key.span)),
-        ty: ParsedType::Function(ParsedFunctionType {
+        ty: ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
             parameters,
             return_type: Box::new(return_type),
             type_parameters: parse_type_parameters(method_signature.type_parameters.as_deref()),
-        }),
+        })),
         optional: method_signature.optional,
     })
 }

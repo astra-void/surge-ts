@@ -202,11 +202,11 @@ fn resolve_intrinsic_props_type(
         }
     };
 
-    let named = ParsedType::Named(ParsedNamedType {
+    let named = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
         name: intrinsic_elements,
         span: None,
         type_arguments: Vec::new(),
-    });
+    }));
     let intrinsic_type = match declarer_scope {
         Some(scope) => crate::infer::with_type_declaration_scope(&Some(scope), ctx, |ctx| {
             map_parsed_type(named, ctx)

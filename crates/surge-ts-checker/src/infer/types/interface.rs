@@ -373,7 +373,14 @@ pub(crate) fn resolve_interface_declaration(
     for base in extends {
         let resolved_base = crate::program::with_dts_expansion_reason(
             crate::program::DtsExpansionReason::InterfaceHeritageResolution,
-            || resolve_named_type(base.clone(), ctx, resolving, substitution),
+            || {
+                resolve_named_type(
+                    std::sync::Arc::new(base.clone()),
+                    ctx,
+                    resolving,
+                    substitution,
+                )
+            },
         );
         had_error |= resolved_base.had_error;
         // A base that resolved with errors may be missing members surge could
@@ -719,7 +726,7 @@ pub(crate) fn resolve_interface_declaration(
             crate::program::DtsExpansionReason::InterfaceCallSignatureMapping,
             || {
                 resolve_parsed_type(
-                    ParsedType::Function(call_signature.clone()),
+                    ParsedType::Function(std::sync::Arc::new(call_signature.clone())),
                     ctx,
                     resolving,
                     substitution,
@@ -744,7 +751,7 @@ pub(crate) fn resolve_interface_declaration(
             crate::program::DtsExpansionReason::InterfaceConstructSignatureMapping,
             || {
                 resolve_parsed_type(
-                    ParsedType::Function(construct_signature.clone()),
+                    ParsedType::Function(std::sync::Arc::new(construct_signature.clone())),
                     ctx,
                     resolving,
                     substitution,

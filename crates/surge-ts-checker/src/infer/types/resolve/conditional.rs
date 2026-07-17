@@ -1,6 +1,6 @@
 use super::*;
 
-use surge_ts_syntax::{ParsedConditionalType, ParsedNamedType};
+use surge_ts_syntax::{ParsedConditionalType, ParsedFunctionType, ParsedNamedType};
 use surge_ts_types::is_assignable_to;
 
 use crate::symbols::TypeDeclarationInfo;
@@ -281,7 +281,7 @@ fn bind_infer_captures(
         // `JSXElementConstructor`) binds from whichever member structurally lines
         // up with the check type; members that do not align bind nothing.
         ParsedType::Union(members) | ParsedType::Intersection(members) => {
-            for member in members {
+            for member in members.iter() {
                 bind_infer_captures(
                     member,
                     check,
@@ -424,7 +424,7 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
         ParsedType::Union(members)
         | ParsedType::Intersection(members)
         | ParsedType::Tuple(members) => {
-            for member in members {
+            for member in members.iter() {
                 collect_infer_names(member, names);
             }
         }
@@ -505,54 +505,58 @@ pub(crate) fn substitute_parsed_type_parameters_deep(
                 }
                 return ParsedType::Named(named.clone());
             }
-            let mut substituted = named.clone();
-            substituted.type_arguments = named
-                .type_arguments
-                .iter()
-                .map(|argument| substitute_parsed_type_parameters_deep(argument, map))
-                .collect();
-            ParsedType::Named(substituted)
+            ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                name: named.name.clone(),
+                span: named.span,
+                type_arguments: named
+                    .type_arguments
+                    .iter()
+                    .map(|argument| substitute_parsed_type_parameters_deep(argument, map))
+                    .collect(),
+            }))
         }
-        ParsedType::Array(element) => ParsedType::Array(Box::new(
+        ParsedType::Array(element) => ParsedType::Array(std::sync::Arc::new(
             substitute_parsed_type_parameters_deep(element, map),
         )),
-        ParsedType::KeyOf(inner) => {
-            ParsedType::KeyOf(Box::new(substitute_parsed_type_parameters_deep(inner, map)))
-        }
-        ParsedType::Union(members) => ParsedType::Union(
+        ParsedType::KeyOf(inner) => ParsedType::KeyOf(std::sync::Arc::new(
+            substitute_parsed_type_parameters_deep(inner, map),
+        )),
+        ParsedType::Union(members) => ParsedType::Union(std::sync::Arc::new(
             members
                 .iter()
                 .map(|member| substitute_parsed_type_parameters_deep(member, map))
                 .collect(),
-        ),
-        ParsedType::Intersection(members) => ParsedType::Intersection(
+        )),
+        ParsedType::Intersection(members) => ParsedType::Intersection(std::sync::Arc::new(
             members
                 .iter()
                 .map(|member| substitute_parsed_type_parameters_deep(member, map))
                 .collect(),
-        ),
-        ParsedType::Tuple(members) => ParsedType::Tuple(
+        )),
+        ParsedType::Tuple(members) => ParsedType::Tuple(std::sync::Arc::new(
             members
                 .iter()
                 .map(|member| substitute_parsed_type_parameters_deep(member, map))
                 .collect(),
-        ),
+        )),
         ParsedType::Function(function) => {
-            let mut substituted = function.clone();
-            substituted.parameters = function
-                .parameters
-                .iter()
-                .map(|parameter| {
-                    let mut parameter = parameter.clone();
-                    parameter.ty = substitute_parsed_type_parameters_deep(&parameter.ty, map);
-                    parameter
-                })
-                .collect();
-            substituted.return_type = Box::new(substitute_parsed_type_parameters_deep(
-                &function.return_type,
-                map,
-            ));
-            ParsedType::Function(substituted)
+            let substituted = ParsedFunctionType {
+                parameters: function
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        let mut parameter = parameter.clone();
+                        parameter.ty = substitute_parsed_type_parameters_deep(&parameter.ty, map);
+                        parameter
+                    })
+                    .collect(),
+                return_type: Box::new(substitute_parsed_type_parameters_deep(
+                    &function.return_type,
+                    map,
+                )),
+                type_parameters: function.type_parameters.clone(),
+            };
+            ParsedType::Function(std::sync::Arc::new(substituted))
         }
         other => other.clone(),
     }

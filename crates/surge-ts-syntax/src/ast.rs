@@ -68,7 +68,7 @@ pub enum ParsedVariableKind {
     Const,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParsedType {
     String,
     Number,
@@ -91,14 +91,14 @@ pub enum ParsedType {
     NumberLiteral(String),
     BooleanLiteral(bool),
     Object(ParsedObjectType),
-    Array(Box<ParsedType>),
-    Tuple(Vec<ParsedType>),
-    Union(Vec<ParsedType>),
-    Intersection(Vec<ParsedType>),
-    Function(ParsedFunctionType),
-    Named(ParsedNamedType),
+    Array(std::sync::Arc<ParsedType>),
+    Tuple(std::sync::Arc<Vec<ParsedType>>),
+    Union(std::sync::Arc<Vec<ParsedType>>),
+    Intersection(std::sync::Arc<Vec<ParsedType>>),
+    Function(std::sync::Arc<ParsedFunctionType>),
+    Named(std::sync::Arc<ParsedNamedType>),
     TypeOf(ParsedTypeOfType),
-    KeyOf(Box<ParsedType>),
+    KeyOf(std::sync::Arc<ParsedType>),
     IndexedAccess(ParsedIndexedAccessType),
     Mapped(ParsedMappedType),
     Conditional(ParsedConditionalType),
@@ -107,6 +107,72 @@ pub enum ParsedType {
     /// so a conditional that uses it (e.g. React's `ComponentProps<T>`) survives
     /// parsing instead of degrading the whole conditional to `Unknown`.
     Infer(String),
+}
+
+impl Clone for ParsedType {
+    fn clone(&self) -> Self {
+        crate::clone_census::record_parsed_type_clone(self.census_variant());
+        match self {
+            Self::String => Self::String,
+            Self::Number => Self::Number,
+            Self::Boolean => Self::Boolean,
+            Self::BigInt => Self::BigInt,
+            Self::Symbol => Self::Symbol,
+            Self::Undefined => Self::Undefined,
+            Self::Void => Self::Void,
+            Self::Any => Self::Any,
+            Self::Unknown => Self::Unknown,
+            Self::UnknownKeyword => Self::UnknownKeyword,
+            Self::Never => Self::Never,
+            Self::StringLiteral(value) => Self::StringLiteral(value.clone()),
+            Self::NumberLiteral(value) => Self::NumberLiteral(value.clone()),
+            Self::BooleanLiteral(value) => Self::BooleanLiteral(*value),
+            Self::Object(payload) => Self::Object(payload.clone()),
+            Self::Array(payload) => Self::Array(payload.clone()),
+            Self::Tuple(payload) => Self::Tuple(payload.clone()),
+            Self::Union(payload) => Self::Union(payload.clone()),
+            Self::Intersection(payload) => Self::Intersection(payload.clone()),
+            Self::Function(payload) => Self::Function(payload.clone()),
+            Self::Named(payload) => Self::Named(payload.clone()),
+            Self::TypeOf(payload) => Self::TypeOf(payload.clone()),
+            Self::KeyOf(payload) => Self::KeyOf(payload.clone()),
+            Self::IndexedAccess(payload) => Self::IndexedAccess(payload.clone()),
+            Self::Mapped(payload) => Self::Mapped(payload.clone()),
+            Self::Conditional(payload) => Self::Conditional(payload.clone()),
+            Self::TemplateLiteral(payload) => Self::TemplateLiteral(payload.clone()),
+            Self::Infer(name) => Self::Infer(name.clone()),
+        }
+    }
+}
+
+impl ParsedType {
+    fn census_variant(&self) -> usize {
+        match self {
+            Self::String
+            | Self::Number
+            | Self::Boolean
+            | Self::BigInt
+            | Self::Symbol
+            | Self::Undefined
+            | Self::Void
+            | Self::Any
+            | Self::Unknown
+            | Self::UnknownKeyword
+            | Self::Never
+            | Self::BooleanLiteral(_) => 0,
+            Self::StringLiteral(_) => 1,
+            Self::NumberLiteral(_) => 2,
+            Self::Object(_) => 3,
+            Self::Array(_) | Self::KeyOf(_) => 4,
+            Self::Tuple(_) | Self::Union(_) | Self::Intersection(_) => 5,
+            Self::Function(_) => 6,
+            Self::Named(_) => 7,
+            Self::TypeOf(_) => 8,
+            Self::IndexedAccess(_) => 9,
+            Self::Mapped(_) | Self::Conditional(_) => 10,
+            Self::TemplateLiteral(_) | Self::Infer(_) => 11,
+        }
+    }
 }
 
 /// A template literal type in type position, e.g. `` `/${Entity}/${Action}` ``.

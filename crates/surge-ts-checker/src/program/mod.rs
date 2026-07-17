@@ -1138,6 +1138,16 @@ fn check_program_with_stats_and_jobs_inner(
         }
     }
 
+    if std::env::var_os("SURGE_ALLOCATION_CENSUS").is_some() {
+        eprintln!("ParsedType clone census:");
+        let census = surge_ts_syntax::clone_census::parsed_type_clone_census();
+        let total: u64 = census.iter().map(|(_, count)| count).sum();
+        for (name, count) in census {
+            eprintln!("  {name}: {count}");
+        }
+        eprintln!("  total: {total}");
+    }
+
     ProgramCheckResult { diagnostics, stats }
 }
 

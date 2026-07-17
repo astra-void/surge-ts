@@ -18,7 +18,7 @@ fn defer_concrete_library_aliases() -> bool {
 }
 
 pub(crate) fn resolve_named_type(
-    named_type: ParsedNamedType,
+    named_type: std::sync::Arc<ParsedNamedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
@@ -91,7 +91,7 @@ pub(crate) fn resolve_named_type(
                     &display,
                     handle,
                     cache_key.clone(),
-                    named_type.type_arguments,
+                    named_type.type_arguments.clone(),
                     Vec::new(),
                     substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
                 ),
@@ -106,7 +106,7 @@ pub(crate) fn resolve_named_type(
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
                 alias,
                 handle.clone(),
-                named_type.type_arguments,
+                named_type.type_arguments.clone(),
                 named_type.span,
                 ctx,
                 resolving,
@@ -116,7 +116,7 @@ pub(crate) fn resolve_named_type(
             TypeDeclarationInfo::Interface(interface) => resolve_interface(
                 interface,
                 handle.clone(),
-                named_type.type_arguments,
+                named_type.type_arguments.clone(),
                 ctx,
                 resolving,
                 substitution,
@@ -289,7 +289,7 @@ pub(crate) fn resolve_named_type(
                 display,
                 handle,
                 decl_key.clone(),
-                named_type.type_arguments,
+                named_type.type_arguments.clone(),
                 arguments.clone(),
                 substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
             ),
@@ -316,7 +316,7 @@ pub(crate) fn resolve_named_type(
                 display,
                 handle,
                 decl_key.clone(),
-                named_type.type_arguments,
+                named_type.type_arguments.clone(),
                 arguments.clone(),
                 substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
             ),
@@ -341,7 +341,7 @@ pub(crate) fn resolve_named_type(
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
             alias,
             handle.clone(),
-            named_type.type_arguments,
+            named_type.type_arguments.clone(),
             named_type.span,
             ctx,
             resolving,
@@ -351,7 +351,7 @@ pub(crate) fn resolve_named_type(
         TypeDeclarationInfo::Interface(interface) => resolve_interface(
             interface,
             handle.clone(),
-            named_type.type_arguments,
+            named_type.type_arguments.clone(),
             ctx,
             resolving,
             substitution,
