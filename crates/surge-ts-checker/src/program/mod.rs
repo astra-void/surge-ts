@@ -27,6 +27,7 @@ mod ambient;
 mod binding;
 mod classes;
 mod globals;
+mod schedule;
 mod statements;
 mod unused_locals;
 
