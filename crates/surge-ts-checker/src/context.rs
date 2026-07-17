@@ -74,7 +74,12 @@ struct DeclarationEnvironmentData {
     current_file_kind: FileKind,
     options: Arc<CheckerOptions>,
     symbols: SymbolTable,
-    type_declarations: TypeDeclarationTable,
+    /// Immutable snapshot of the capturing context's `type_declarations`.
+    /// Shared across every environment interned while the live table is
+    /// unmutated (see [`DeclarationEnvironmentStore::snapshot_type_declarations`]);
+    /// tens of thousands of environments would otherwise each own a full index
+    /// copy of their module's declaration table.
+    type_declarations: Arc<TypeDeclarationTable>,
     type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
     program_type_store: Arc<ProgramTypeStore>,
     substitution_store: Arc<SubstitutionStore>,
@@ -113,6 +118,10 @@ pub(crate) struct DeclarationEnvironmentStore {
     requests: AtomicU64,
     hits: AtomicU64,
     entries: Mutex<DeclarationEnvironmentEntries>,
+    /// `(instance_id, version)` → snapshot memo for the most recent
+    /// `type_declarations` capture. Environments are interned in bursts between
+    /// table mutations, so one snapshot serves the whole burst.
+    type_declarations_snapshot: Mutex<Option<((u64, u64), Arc<TypeDeclarationTable>)>>,
 }
 
 #[derive(Debug, Default)]
@@ -137,7 +146,26 @@ impl DeclarationEnvironmentStore {
             requests: AtomicU64::new(0),
             hits: AtomicU64::new(0),
             entries: Mutex::new(DeclarationEnvironmentEntries::default()),
+            type_declarations_snapshot: Mutex::new(None),
         })
+    }
+
+    /// Returns a shared immutable snapshot of `ctx.type_declarations`, reusing
+    /// the previous snapshot while the exact same table instance is unmutated.
+    fn snapshot_type_declarations(&self, ctx: &CheckerContext) -> Arc<TypeDeclarationTable> {
+        let identity = ctx.type_declarations.snapshot_identity();
+        let mut memo = self
+            .type_declarations_snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((cached_identity, snapshot)) = memo.as_ref()
+            && *cached_identity == identity
+        {
+            return snapshot.clone();
+        }
+        let snapshot = Arc::new(ctx.type_declarations.clone());
+        *memo = Some((identity, snapshot.clone()));
+        snapshot
     }
 
     fn intern(self: &Arc<Self>, ctx: &CheckerContext) -> DeclarationEnvironmentHandle {
@@ -169,7 +197,10 @@ impl DeclarationEnvironmentStore {
             self.owner,
             self.next_index.fetch_add(1, Ordering::Relaxed),
         );
-        let data = Arc::new(DeclarationEnvironmentData::capture(ctx));
+        let data = Arc::new(DeclarationEnvironmentData::capture(
+            ctx,
+            self.snapshot_type_declarations(ctx),
+        ));
         debug_assert_eq!(id.index(), entries.by_id.len());
         entries.by_key.insert(key, id);
         entries.by_id.push(data);
@@ -188,6 +219,42 @@ impl DeclarationEnvironmentStore {
                 .map(|entries| entries.by_id.len() as u64)
                 .unwrap_or_default(),
         )
+    }
+
+    /// Census-only iteration over the interned environments, exposing the
+    /// owned captures a retained-memory walk needs to attribute.
+    pub(crate) fn census_environments(
+        &self,
+        f: &mut dyn FnMut(
+            &str,
+            &SymbolTable,
+            &TypeDeclarationTable,
+            Option<&Arc<TypeDeclarationScope>>,
+            usize,
+        ),
+    ) {
+        let Ok(entries) = self.entries.lock() else {
+            return;
+        };
+        for data in &entries.by_id {
+            let type_parameter_scope_entries = data
+                .type_parameter_scopes
+                .iter()
+                .map(HashMap::len)
+                .sum::<usize>()
+                + data
+                    .type_parameter_constraint_scopes
+                    .iter()
+                    .map(HashMap::len)
+                    .sum::<usize>();
+            f(
+                &data.file_name,
+                &data.symbols,
+                &data.type_declarations,
+                data.type_declaration_scope.as_ref(),
+                type_parameter_scope_entries,
+            );
+        }
     }
 }
 
@@ -213,13 +280,16 @@ impl DeclarationEnvironmentHandle {
 }
 
 impl DeclarationEnvironmentData {
-    fn capture(ctx: &CheckerContext) -> Self {
+    fn capture(ctx: &CheckerContext, type_declarations: Arc<TypeDeclarationTable>) -> Self {
         Self {
             file_name: ctx.file_name.clone(),
             current_file_kind: ctx.current_file_kind,
             options: ctx.options.clone(),
-            symbols: ctx.symbols.clone(),
-            type_declarations: ctx.type_declarations.clone(),
+            // EXPERIMENT(env-symbols): drop the working value-table capture;
+            // typeof falls back to ambient globals / module_value_fallback /
+            // module_local_values_by_file.
+            symbols: SymbolTable::new(),
+            type_declarations,
             type_declaration_scope: ctx.type_declaration_scope.clone(),
             program_type_store: ctx.program_type_store.clone(),
             substitution_store: ctx.substitution_store.clone(),
@@ -238,7 +308,7 @@ impl DeclarationEnvironmentData {
                 .clone(),
             ambient_modules: ctx.ambient_modules.clone(),
             module_augmentations: ctx.module_augmentations.clone(),
-            ambient_global_symbols: ctx.ambient_global_symbols.clone(),
+            ambient_global_symbols: ctx.ambient_global_symbols.clone_for_environment_capture(),
             ambient_global_type_declarations: ctx.ambient_global_type_declarations.clone(),
             module_file_index_by_identity: ctx.module_file_index_by_identity.clone(),
             module_scope_by_file: ctx.module_scope_by_file.clone(),
@@ -865,7 +935,7 @@ impl CheckerContext {
             utility_diagnostic_keys: HashSet::default(),
             utility_diagnostic_keys_baseline: None,
             symbols: data.symbols.clone(),
-            type_declarations: data.type_declarations.clone(),
+            type_declarations: data.type_declarations.as_ref().clone(),
             type_declaration_scope: data.type_declaration_scope.clone(),
             program_type_store: data.program_type_store.clone(),
             substitution_store: data.substitution_store.clone(),

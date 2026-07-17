@@ -98,6 +98,22 @@ impl SymbolTable {
         with_type_copy_reason(reason, || self.clone())
     }
 
+    /// Clone for a declaration-environment capture: shares the symbol map (and
+    /// parent) but drops the declaration-span / function-implementation maps.
+    /// Environment-recovered contexts only resolve types — they never run the
+    /// duplicate-declaration checks that read those maps — and capturing the
+    /// span map would both retain a snapshot per environment and force the live
+    /// table's next `record_declaration_span` into a full copy-on-write copy.
+    pub(crate) fn clone_for_environment_capture(&self) -> Self {
+        record_symbol_table_clone_count();
+        Self {
+            symbols: Arc::clone(&self.symbols),
+            declaration_spans: Arc::new(HashMap::default()),
+            function_implementations: Arc::new(HashSet::default()),
+            parent: self.parent.clone(),
+        }
+    }
+
     /// Build a lookup-only scope whose own map is empty and whose misses fall
     /// through to `parent`. See the `parent` field. Used for function-body roots.
     pub(crate) fn with_parent(parent: Arc<SymbolTable>) -> Self {
@@ -207,6 +223,27 @@ impl SymbolTable {
 
     pub(crate) fn iter_shared(&self) -> impl Iterator<Item = (&Arc<str>, &SymbolInfoHandle)> {
         self.iter_handles()
+    }
+
+    /// Census-only identity/footprint probes. Addresses identify the shared
+    /// copy-on-write maps so pointer-deduplicating walks charge each map once.
+    pub(crate) fn symbols_map_address(&self) -> usize {
+        Arc::as_ptr(&self.symbols) as usize
+    }
+
+    pub(crate) fn declaration_spans_map_address(&self) -> usize {
+        Arc::as_ptr(&self.declaration_spans) as usize
+    }
+
+    pub(crate) fn declaration_spans_footprint(&self) -> (u64, u64) {
+        let entries = self.declaration_spans.len() as u64;
+        let bytes = entries
+            * (std::mem::size_of::<Arc<str>>() + std::mem::size_of::<TextSpan>() + 16) as u64;
+        (entries, bytes)
+    }
+
+    pub(crate) fn parent_table(&self) -> Option<&SymbolTable> {
+        self.parent.as_deref()
     }
 
     pub(crate) fn contains_let_or_const(&self, name: &str) -> bool {
