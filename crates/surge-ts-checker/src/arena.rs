@@ -36,8 +36,44 @@ pub(crate) struct CheckerArena {
 struct CheckerArenaInner {
     allocator: Allocator,
     frozen: AtomicBool,
+    /// Destructors for payloads bump-allocated into `allocator`. The bump
+    /// allocator frees its chunks without running `Drop`, which would leak
+    /// every payload's owned heap (declaration name/file strings, the
+    /// `Arc<InterfaceBody>`/`Arc<TypeAliasBody>` refcounts, resolution-scope
+    /// `Arc`s) for the process lifetime. Each payload registers its typed
+    /// `drop_in_place` here; they run exactly once, when the last arena handle
+    /// drops — the same point the payload memory itself is released, and
+    /// after which no `TypeDeclarationHandle` can exist by the safety model.
+    pending_drops: std::sync::Mutex<Vec<PendingDrop>>,
     #[cfg(debug_assertions)]
     owner: std::thread::ThreadId,
+}
+
+struct PendingDrop {
+    ptr: *mut (),
+    drop_fn: unsafe fn(*mut ()),
+}
+
+// Registered pointers target arena payloads whose types are `Send` (checker
+// declaration payloads); the list is only drained on the final handle drop.
+unsafe impl Send for PendingDrop {}
+
+impl Drop for CheckerArenaInner {
+    fn drop(&mut self) {
+        let pending = std::mem::take(
+            self.pending_drops
+                .get_mut()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+        for entry in pending {
+            // Safety: each pointer was registered by
+            // `alloc_type_declaration_payload` for a fully-initialized payload
+            // in this arena, is dropped exactly once, and the arena memory it
+            // points into is still alive until this struct's `allocator` field
+            // drops after this loop.
+            unsafe { (entry.drop_fn)(entry.ptr) }
+        }
+    }
 }
 
 unsafe impl Send for CheckerArenaInner {}
@@ -49,6 +85,7 @@ impl CheckerArena {
             allocator: Arc::new(CheckerArenaInner {
                 allocator: Allocator::default(),
                 frozen: AtomicBool::new(false),
+                pending_drops: std::sync::Mutex::new(Vec::new()),
                 #[cfg(debug_assertions)]
                 owner: std::thread::current().id(),
             }),
@@ -89,12 +126,26 @@ impl CheckerArena {
         self.allocator.allocator.alloc_str(value)
     }
 
-    pub(crate) fn alloc_type_declaration_payload<T>(&self, value: T) -> &T {
+    pub(crate) fn alloc_type_declaration_payload<T: Send>(&self, value: T) -> &T {
         self.assert_allocatable();
         record_checker_arena_alloc_count();
         record_arena_type_declaration_payload_alloc_count();
         let value = self.allocator.allocator.alloc(MaybeUninit::new(value));
-        unsafe { &*value.as_ptr() }
+        let ptr = value.as_mut_ptr();
+        if std::mem::needs_drop::<T>() {
+            unsafe fn drop_payload<T>(ptr: *mut ()) {
+                unsafe { std::ptr::drop_in_place(ptr.cast::<T>()) }
+            }
+            self.allocator
+                .pending_drops
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(PendingDrop {
+                    ptr: ptr.cast(),
+                    drop_fn: drop_payload::<T>,
+                });
+        }
+        unsafe { &*ptr }
     }
 }
 
