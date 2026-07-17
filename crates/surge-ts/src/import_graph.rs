@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,8 +18,8 @@ use crate::specifier_scan::ModuleSpecifierScanner;
 /// loop re-enters the expansion.
 #[derive(Default)]
 pub struct ImportGraphState {
-    known_files: HashSet<String>,
-    probe_cache: HashMap<String, bool>,
+    known_files: surge_ts_types::fx::FxHashSet<String>,
+    probe_cache: surge_ts_types::fx::FxHashMap<String, bool>,
     next_source_index: usize,
     synced_inputs: usize,
 }
@@ -107,7 +106,7 @@ pub fn expand_project_inputs(
 fn resolve_relative_candidate(
     importer_file: &Path,
     specifier: &str,
-    probe_cache: &mut HashMap<String, bool>,
+    probe_cache: &mut surge_ts_types::fx::FxHashMap<String, bool>,
 ) -> Option<PathBuf> {
     let importer_dir = importer_file.parent().unwrap_or_else(|| Path::new(""));
     let normalized_specifier = normalize_path_string(specifier);
@@ -136,7 +135,7 @@ fn resolve_paths_alias_candidate(
     paths: &[PathMapping],
     base_url: Option<&Path>,
     root_dir: &Path,
-    probe_cache: &mut HashMap<String, bool>,
+    probe_cache: &mut surge_ts_types::fx::FxHashMap<String, bool>,
 ) -> Option<PathBuf> {
     // `paths` substitutions and the bare-import fallback resolve against
     // `baseUrl` when set, else the config directory (tsc ≥4.4 allows `paths`
@@ -165,7 +164,7 @@ fn resolve_paths_alias_candidate(
 
 fn probe_loadable_candidates(
     target: &str,
-    probe_cache: &mut HashMap<String, bool>,
+    probe_cache: &mut surge_ts_types::fx::FxHashMap<String, bool>,
 ) -> Option<PathBuf> {
     for candidate in mapped_target_candidates(target) {
         let candidate = PathBuf::from(candidate);
@@ -187,7 +186,10 @@ fn probe_loadable_candidates(
 // A single `metadata` call answers both, and most extensionless specifiers fan
 // out to ~15 candidate paths, so caching by path collapses repeated probes for
 // modules imported from many files.
-fn candidate_is_existing_file(candidate: &Path, cache: &mut HashMap<String, bool>) -> bool {
+fn candidate_is_existing_file(
+    candidate: &Path,
+    cache: &mut surge_ts_types::fx::FxHashMap<String, bool>,
+) -> bool {
     let key = candidate.to_string_lossy();
     if let Some(&hit) = cache.get(key.as_ref()) {
         return hit;

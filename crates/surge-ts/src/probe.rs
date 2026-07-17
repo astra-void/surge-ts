@@ -9,11 +9,11 @@
 //! answer.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::Path;
+use surge_ts_types::fx::FxHashMap;
 
 thread_local! {
-    static PROBE_CACHE: RefCell<HashMap<Box<[u8]>, bool>> = RefCell::new(HashMap::new());
+    static PROBE_CACHE: RefCell<FxHashMap<Box<[u8]>, bool>> = RefCell::new(FxHashMap::default());
 }
 
 pub(crate) fn clear_probe_cache() {

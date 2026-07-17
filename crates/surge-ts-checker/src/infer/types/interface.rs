@@ -394,13 +394,19 @@ pub(crate) fn resolve_interface_declaration(
         match resolved_base.ty.peeled() {
             Type::Object(object_type) => {
                 for (name, property) in object_type.properties.iter() {
+                    // Derived members shadow inherited ones; probe before
+                    // cloning so an already-present name costs no key or
+                    // property copy.
+                    if properties.contains_key(name) {
+                        continue;
+                    }
                     let reason = if matches!(property.ty, Type::Function(_)) {
                         crate::program::DtsExpansionReason::InheritedMethodMerge
                     } else {
                         crate::program::DtsExpansionReason::InheritedPropertyMerge
                     };
                     crate::program::with_dts_expansion_reason(reason, || {
-                        properties.entry(name.clone()).or_insert(property.clone());
+                        properties.insert(name.clone(), property.clone());
                     });
                 }
                 if let Some(declaration) = interface_declaration {
