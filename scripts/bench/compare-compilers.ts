@@ -2,12 +2,26 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { performance } from 'node:perf_hooks';
 
-import { renderBenchmarkSvg, renderBenchmarkHtml, toolDisplayLabel } from './report.js';
+import {
+  renderBenchmarkSvg,
+  renderBenchmarkHtml,
+  normalizeBenchReport,
+  speedupVsTsc,
+  formatSpeedup,
+  formatBytes,
+  toolDisplayLabel,
+  type BenchMemoryStats,
+  type BenchReportDocument,
+  type BenchReportMeta,
+  type BenchReportResult,
+} from './report.js';
+
+import { runMeasuredCommand } from '../real-projects/measure-project.js';
 
 import {
   resolveProjectPresetOrPath,
@@ -43,6 +57,7 @@ type BenchResult = {
   project: string;
   rustJobs: RustJobs;
   stats: Record<Tool, RunStats | null>;
+  memory: Record<Tool, BenchMemoryStats | null>;
   drift: Record<Tool, string>;
 };
 
@@ -85,20 +100,20 @@ function main(argv = process.argv.slice(2)): void {
   const args = parseArgs(argv);
 
   if (args.fromJson) {
-    const data = JSON.parse(readFileSync(args.fromJson, 'utf8'));
+    const doc = normalizeBenchReport(JSON.parse(readFileSync(args.fromJson, 'utf8')));
     let printed = false;
     if (args.chart) {
       mkdirSync(path.dirname(args.chart), { recursive: true });
-      writeFileSync(args.chart, renderBenchmarkSvg(data));
+      writeFileSync(args.chart, renderBenchmarkSvg(doc));
       printed = true;
     }
     if (args.html) {
       mkdirSync(path.dirname(args.html), { recursive: true });
-      writeFileSync(args.html, renderBenchmarkHtml(data));
+      writeFileSync(args.html, renderBenchmarkHtml(doc));
       printed = true;
     }
     if (!printed) {
-      printResults(data);
+      printResults(doc.results);
     }
     return;
   }
@@ -121,8 +136,14 @@ function main(argv = process.argv.slice(2)): void {
       ? projectInput
       : resolveProjectLocally(projectInput);
 
-    // Guard against ignoreDeprecations in committed fixtures
-    if (!resolvedTsconfig.includes('.bench/generated') && !resolvedTsconfig.includes('target/bench')) {
+    // Guard against ignoreDeprecations in committed fixtures. Local project
+    // checkouts (.local-projects, external paths) are not ours to police.
+    if (
+      !resolvedTsconfig.includes('.bench/generated') &&
+      !resolvedTsconfig.includes('target/bench') &&
+      !resolvedTsconfig.includes('.local-projects') &&
+      resolvedTsconfig.startsWith(workspaceRoot)
+    ) {
       const content = readFileSync(resolvedTsconfig, 'utf8');
       if (content.includes('ignoreDeprecations')) {
         console.error(`Error: Committed fixture ${resolvedTsconfig} contains ignoreDeprecations.`);
@@ -142,6 +163,7 @@ function main(argv = process.argv.slice(2)): void {
       project: projectName,
       rustJobs: args.rustJobs,
       stats: { tsc: null, tsgo: null, 'tsgo-singleThreaded': null, 'surge-ts': null },
+      memory: { tsc: null, tsgo: null, 'tsgo-singleThreaded': null, 'surge-ts': null },
       drift: { tsc: 'baseline', tsgo: 'skipped', 'tsgo-singleThreaded': 'skipped', 'surge-ts': 'not compared' },
     };
 
@@ -153,7 +175,8 @@ function main(argv = process.argv.slice(2)): void {
     const tscDiagnostics = parseTypeScriptDiagnostics(`${tscOutput.stdout}${tscOutput.stderr}`, path.dirname(resolvedTsconfig));
     
     // Benchmark TSC
-    benchRes.stats.tsc = runBenchmark('tsc', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
+    ({ stats: benchRes.stats.tsc, memory: benchRes.memory.tsc } =
+      runBenchmark('tsc', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs));
 
     // 2. tsgo (if available)
     if (args.includeTsgo && tsgoAvailable) {
@@ -162,14 +185,16 @@ function main(argv = process.argv.slice(2)): void {
       const tsgoDiagnostics = parseTypeScriptDiagnostics(`${tsgoOutput.stdout}${tsgoOutput.stderr}`, path.dirname(resolvedTsconfig));
       const tsgoDrift = compareDrift(tscDiagnostics, tsgoDiagnostics, 'tsgo');
       benchRes.drift.tsgo = tsgoDrift;
-      benchRes.stats.tsgo = runBenchmark('tsgo', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
+      ({ stats: benchRes.stats.tsgo, memory: benchRes.memory.tsgo } =
+        runBenchmark('tsgo', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs));
 
       // singleThreaded tsgo (optional)
       const tsgoStOutput = runTool('tsgo-singleThreaded', resolvedTsconfig, 1, 0, args.rustJobs);
       if (tsgoStOutput.exitCode !== null && !tsgoStOutput.stderr.includes('Unknown option')) {
         const tsgoStDiagnostics = parseTypeScriptDiagnostics(`${tsgoStOutput.stdout}${tsgoStOutput.stderr}`, path.dirname(resolvedTsconfig));
         benchRes.drift['tsgo-singleThreaded'] = compareDrift(tscDiagnostics, tsgoStDiagnostics, 'tsgo-singleThreaded');
-        benchRes.stats['tsgo-singleThreaded'] = runBenchmark('tsgo-singleThreaded', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
+        ({ stats: benchRes.stats['tsgo-singleThreaded'], memory: benchRes.memory['tsgo-singleThreaded'] } =
+          runBenchmark('tsgo-singleThreaded', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs));
       } else {
          benchRes.drift['tsgo-singleThreaded'] = 'skipped';
       }
@@ -193,25 +218,51 @@ function main(argv = process.argv.slice(2)): void {
       benchRes.drift['surge-ts'] = 'parse failed';
     }
 
-    benchRes.stats['surge-ts'] = runBenchmark('surge-ts', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs);
+    ({ stats: benchRes.stats['surge-ts'], memory: benchRes.memory['surge-ts'] } =
+      runBenchmark('surge-ts', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs));
 
     results.push(benchRes);
   }
 
   printResults(results);
 
+  const doc: BenchReportDocument = { meta: collectRunMeta(args), results };
+
   if (args.json) {
     mkdirSync(path.dirname(args.json), { recursive: true });
-    writeFileSync(args.json, JSON.stringify(results, null, 2));
+    writeFileSync(args.json, JSON.stringify(doc, null, 2));
   }
   if (args.chart) {
     mkdirSync(path.dirname(args.chart), { recursive: true });
-    writeFileSync(args.chart, renderBenchmarkSvg(results));
+    writeFileSync(args.chart, renderBenchmarkSvg(doc));
   }
   if (args.html) {
     mkdirSync(path.dirname(args.html), { recursive: true });
-    writeFileSync(args.html, renderBenchmarkHtml(results));
+    writeFileSync(args.html, renderBenchmarkHtml(doc));
   }
+}
+
+function collectRunMeta(args: ParsedArgs): BenchReportMeta {
+  const meta: BenchReportMeta = {
+    timestamp: new Date().toISOString(),
+    platform: `${os.platform()} ${os.arch()}`,
+    nodeVersion: process.version,
+    iterations: args.iterations,
+    warmup: args.warmup,
+  };
+  const cpus = os.cpus();
+  if (cpus.length > 0) {
+    meta.cpu = cpus[0].model.trim();
+    meta.cores = cpus.length;
+  }
+  const git = (gitArgs: string[]): string | undefined => {
+    const res = spawnSync('git', gitArgs, { cwd: workspaceRoot, encoding: 'utf8' });
+    const out = res.status === 0 ? res.stdout.trim() : '';
+    return out.length > 0 ? out : undefined;
+  };
+  meta.gitCommit = git(['rev-parse', '--short', 'HEAD']);
+  meta.gitBranch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  return meta;
 }
 
 function resolveProjectLocally(input: string) {
@@ -233,51 +284,103 @@ function checkTsgo(): boolean {
   }
 }
 
-function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rustJobs: RustJobs): { exitCode: number | null, stdout: string, stderr: string, times: number[] } {
-  const times: number[] = [];
-  let lastOutput = { exitCode: 0 as number | null, stdout: '', stderr: '' };
-  
-  for (let i = 0; i < runs + warmup; i++) {
-    const start = performance.now();
-    let res;
-    
-    if (tool === 'tsc') {
-      res = spawnSync(process.execPath, [tsc6BinPath, '--noEmit', '--pretty', 'false', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
-    } else if (tool === 'tsgo') {
-      res = spawnSync(process.execPath, [tsc7BinPath, '--noEmit', '--pretty', 'false', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
-    } else if (tool === 'tsgo-singleThreaded') {
-      res = spawnSync(process.execPath, [tsc7BinPath, '--noEmit', '--pretty', 'false', '--singleThreaded', '--project', tsconfig], { cwd: workspaceRoot, encoding: 'utf8' });
-    } else if (tool === 'surge-ts') {
-      let exePath = path.join(workspaceRoot, 'target/release/surge');
-      if (process.platform === 'win32') exePath += '.exe';
-      if (!existsSync(exePath)) {
-        console.error(`Missing release binary: target/release/surge${process.platform === 'win32' ? '.exe' : ''}`);
-        console.error(`Run: cargo build --release -p surge-ts-cli`);
-        process.exit(1);
-      }
-      res = spawnSync(exePath, ['--project', tsconfig, '--format', 'json', '--maxDiagnostics', '10000', '--jobs', String(rustJobs)], { cwd: workspaceRoot, encoding: 'utf8' });
-    } else {
-      throw new Error(`Unknown tool ${tool}`);
-    }
-
-    const end = performance.now();
-    
-    if (i >= warmup) {
-      times.push(end - start);
-    }
-    lastOutput = { exitCode: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
+function toolInvocation(tool: Tool, tsconfig: string, rustJobs: RustJobs): { command: string; args: string[] } {
+  if (tool === 'tsc') {
+    return { command: process.execPath, args: [tsc6BinPath, '--noEmit', '--pretty', 'false', '--project', tsconfig] };
   }
-  
-  return { ...lastOutput, times };
+  if (tool === 'tsgo') {
+    return { command: process.execPath, args: [tsc7BinPath, '--noEmit', '--pretty', 'false', '--project', tsconfig] };
+  }
+  if (tool === 'tsgo-singleThreaded') {
+    return { command: process.execPath, args: [tsc7BinPath, '--noEmit', '--pretty', 'false', '--singleThreaded', '--project', tsconfig] };
+  }
+  if (tool === 'surge-ts') {
+    let exePath = path.join(workspaceRoot, 'target/release/surge');
+    if (process.platform === 'win32') exePath += '.exe';
+    if (!existsSync(exePath)) {
+      console.error(`Missing release binary: target/release/surge${process.platform === 'win32' ? '.exe' : ''}`);
+      console.error(`Run: cargo build --release -p surge-ts-cli`);
+      process.exit(1);
+    }
+    return { command: exePath, args: ['--project', tsconfig, '--format', 'json', '--maxDiagnostics', '10000', '--jobs', String(rustJobs)] };
+  }
+  throw new Error(`Unknown tool ${tool}`);
 }
 
-function runBenchmark(tool: Tool, tsconfig: string, iterations: number, warmup: number, rustJobs: RustJobs): RunStats {
-  const { times } = runTool(tool, tsconfig, iterations, warmup, rustJobs);
+type ToolRunOutput = {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  times: number[];
+  footprint: Array<number | null>;
+  rss: Array<number | null>;
+  rssSource: string;
+};
+
+/// Each run goes through the same `/usr/bin/time` wrapper as measure-project,
+/// so wall time and peak memory come from the same invocation. When peak
+/// memory is unmeasurable the run still executes and the sample is null.
+function runTool(tool: Tool, tsconfig: string, runs: number, warmup: number, rustJobs: RustJobs): ToolRunOutput {
+  const { command, args } = toolInvocation(tool, tsconfig, rustJobs);
+  const times: number[] = [];
+  const footprint: Array<number | null> = [];
+  const rss: Array<number | null> = [];
+  let rssSource = 'unavailable';
+  let lastOutput = { exitCode: 0 as number | null, stdout: '', stderr: '' };
+
+  for (let i = 0; i < runs + warmup; i++) {
+    const res = runMeasuredCommand(command, args, { cwd: workspaceRoot });
+    if (i >= warmup) {
+      times.push(res.durationMs);
+      footprint.push(res.peakFootprintBytes);
+      rss.push(res.peakRssBytes);
+      if (res.peakRssSource !== 'unavailable') {
+        rssSource = res.peakRssSource;
+      }
+    }
+    lastOutput = { exitCode: res.status, stdout: res.stdout, stderr: res.stderr };
+  }
+
+  return { ...lastOutput, times, footprint, rss, rssSource };
+}
+
+function memoryStats(samples: number[], source: string): BenchMemoryStats {
+  const sorted = [...samples].sort((a, b) => a - b);
+  return {
+    medianBytes: sorted[Math.floor(sorted.length / 2)],
+    minBytes: sorted[0],
+    maxBytes: sorted[sorted.length - 1],
+    runs: sorted.length,
+    source,
+  };
+}
+
+function runBenchmark(
+  tool: Tool,
+  tsconfig: string,
+  iterations: number,
+  warmup: number,
+  rustJobs: RustJobs,
+): { stats: RunStats; memory: BenchMemoryStats | null } {
+  const { times, footprint, rss, rssSource } = runTool(tool, tsconfig, iterations, warmup, rustJobs);
   times.sort((a, b) => a - b);
   const median = times[Math.floor(times.length / 2)] / 1000;
   const min = times[0] / 1000;
   const max = times[times.length - 1] / 1000;
-  return { median, min, max, runs: iterations };
+
+  // Prefer phys_footprint (macOS, Activity-Monitor-comparable) over max RSS.
+  const nonNull = (samples: Array<number | null>) =>
+    samples.filter((sample): sample is number => sample !== null);
+  const footprintSamples = nonNull(footprint);
+  const rssSamples = nonNull(rss);
+  const memory: BenchMemoryStats | null =
+    footprintSamples.length > 0
+      ? memoryStats(footprintSamples, 'phys_footprint')
+      : rssSamples.length > 0
+        ? memoryStats(rssSamples, `max_rss (${rssSource})`)
+        : null;
+
+  return { stats: { median, min, max, runs: iterations }, memory };
 }
 
 function compareDrift(base: NormalizedDiagnostic[], curr: NormalizedDiagnostic[], tool: string): string {
@@ -323,15 +426,37 @@ function generateScaleFixture(name: string, numFiles: number, numSymbols: number
   return path.join(dir, 'tsconfig.json');
 }
 
-function printResults(results: BenchResult[]) {
+function printResults(results: BenchReportResult[]) {
   console.log('\nPerformance:');
-  console.log(`${`project`.padEnd(30) + `tool`.padEnd(25) + `median`.padEnd(10) + `min`.padEnd(10) + `max`.padEnd(10)}runs`);
+  console.log(
+    `project`.padEnd(30) +
+      `tool`.padEnd(25) +
+      `median`.padEnd(10) +
+      `min`.padEnd(10) +
+      `max`.padEnd(10) +
+      `runs`.padEnd(7) +
+      `vs tsc`.padEnd(9) +
+      `peak mem`,
+  );
   for (const r of results) {
     for (const tool of ['tsc', 'tsgo', 'tsgo-singleThreaded', 'surge-ts'] as Tool[]) {
       if (r.stats[tool]) {
         const s = r.stats[tool]!;
         const toolLabel = tool === 'surge-ts' ? `${toolDisplayLabel(tool)} (jobs=${r.rustJobs})` : toolDisplayLabel(tool);
-        console.log(`${`${r.project.padEnd(30)}${toolLabel.padEnd(25)}${s.median.toFixed(2)}s`.padEnd(65) + `${s.min.toFixed(2)}s`.padEnd(10) + `${s.max.toFixed(2)}s`.padEnd(10)}${s.runs}`);
+        const speedup = speedupVsTsc(r, tool);
+        const speedupLabel = speedup === null ? '—' : formatSpeedup(speedup).replace(' vs tsc', '');
+        const memory = r.memory?.[tool];
+        const rssLabel = memory ? formatBytes(memory.medianBytes) : '—';
+        console.log(
+          r.project.padEnd(30) +
+            toolLabel.padEnd(25) +
+            `${s.median.toFixed(2)}s`.padEnd(10) +
+            `${s.min.toFixed(2)}s`.padEnd(10) +
+            `${s.max.toFixed(2)}s`.padEnd(10) +
+            String(s.runs).padEnd(7) +
+            speedupLabel.padEnd(9) +
+            rssLabel,
+        );
       }
     }
   }

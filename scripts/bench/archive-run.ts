@@ -149,11 +149,17 @@ export function buildPlan(
 }
 
 export function extractBenchMedians(benchJson: unknown): BenchMedians[] {
-  if (!Array.isArray(benchJson)) {
+  // Accepts both the `{ meta, results }` document and the legacy bare array.
+  const entries = Array.isArray(benchJson)
+    ? benchJson
+    : benchJson && typeof benchJson === 'object' && Array.isArray((benchJson as { results?: unknown }).results)
+      ? ((benchJson as { results: unknown[] }).results)
+      : null;
+  if (entries === null) {
     return [];
   }
   const out: BenchMedians[] = [];
-  for (const entry of benchJson) {
+  for (const entry of entries) {
     if (!entry || typeof entry !== 'object') continue;
     const record = entry as { project?: unknown; stats?: Record<string, unknown> };
     const project = typeof record.project === 'string' ? record.project : 'unknown';

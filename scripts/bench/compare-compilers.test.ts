@@ -69,8 +69,20 @@ test('bench script generates json output', () => {
   assert.strictEqual(result.status, 0, `Script failed: ${result.stderr}\n${result.stdout}`);
   assert.ok(existsSync(tempJson), 'Should create JSON file');
   const data = JSON.parse(readFileSync(tempJson, 'utf8'));
-  assert.ok(Array.isArray(data), 'JSON should be an array of results');
-  assert.ok(data.some((entry: { rustJobs?: number }) => entry.rustJobs === 4), 'JSON should include the Rust job count');
+  assert.ok(Array.isArray(data.results), 'JSON should contain a results array');
+  assert.ok(data.results.some((entry: { rustJobs?: number }) => entry.rustJobs === 4), 'JSON should include the Rust job count');
+  assert.ok(typeof data.meta?.timestamp === 'string', 'JSON should record the run timestamp');
+  assert.ok(typeof data.meta?.platform === 'string', 'JSON should record the platform');
+  assert.strictEqual(data.meta?.iterations, 1, 'JSON should record the iteration count');
+  const first = data.results[0];
+  assert.ok(first.memory && typeof first.memory === 'object', 'results should include a memory record');
+  if (process.platform === 'darwin' || process.platform === 'linux') {
+    assert.ok(first.memory.tsc && first.memory.tsc.medianBytes > 0, 'tsc peak memory should be sampled');
+    assert.ok(first.memory['surge-ts'] && first.memory['surge-ts'].medianBytes > 0, 'surge-ts peak memory should be sampled');
+  }
+  if (process.platform === 'darwin') {
+    assert.strictEqual(first.memory.tsc.source, 'phys_footprint', 'macOS should measure phys_footprint');
+  }
 });
 
 test('bench script fromJson generates chart and html', () => {
@@ -110,4 +122,31 @@ test('bench script fromJson generates chart and html', () => {
   assert.ok(htmlContent.includes('<svg'), 'HTML should embed SVG tag');
   assert.ok(htmlContent.includes('jobs=4'), 'HTML should label the Rust job count');
   assert.ok(htmlContent.includes('local-machine-relative'), 'HTML should contain disclaimer');
+});
+
+test('bench script fromJson accepts legacy array-shaped JSON', () => {
+  const legacyJson = path.join(workspaceRoot, '.bench', 'test-output-legacy.json');
+  const legacyChart = path.join(workspaceRoot, '.bench', 'test-output-legacy.svg');
+
+  writeFileSync(legacyJson, JSON.stringify([{
+    project: "legacy-dummy",
+    rustJobs: 2,
+    stats: {
+      tsc: { median: 2, min: 2, max: 2, runs: 1 },
+      'surge-ts': { median: 1, min: 1, max: 1, runs: 1 }
+    },
+    drift: { tsc: "baseline", 'surge-ts': "exact vs tsc" }
+  }]));
+
+  const result = spawnSync(packageManagerExecutable, [...packageManagerArgsPrefix, benchScript, '--fromJson', legacyJson, '--chart', legacyChart], {
+    cwd: workspaceRoot,
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+  });
+
+  if (result.error) throw result.error;
+  assert.strictEqual(result.status, 0, `Script failed: ${result.stderr}\n${result.stdout}`);
+  const chartContent = readFileSync(legacyChart, 'utf8');
+  assert.ok(chartContent.includes('legacy-dummy'), 'Chart should render legacy results');
+  assert.ok(chartContent.includes('jobs=2'), 'Chart should label the Rust job count');
 });

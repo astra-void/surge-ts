@@ -14,7 +14,7 @@ import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { toolDisplayLabel } from '../bench/report.js';
+import { toolDisplayLabel, formatBytes, type BenchMemoryStats } from '../bench/report.js';
 
 export type DiagnosticFingerprint = {
   fileName: string;
@@ -83,6 +83,7 @@ export type BenchResult = {
   project: string;
   rustJobs?: RustJobValue;
   stats: Record<string, BenchStats | null>;
+  memory?: Record<string, BenchMemoryStats | null>;
   drift: Record<string, string>;
 };
 
@@ -844,7 +845,10 @@ function releaseBinaryPath(): string {
 }
 
 function readBenchResult(filename: string): BenchResult {
-  return JSON.parse(readFileSync(filename, 'utf8'))[0] as BenchResult;
+  // The bench JSON is `{ meta, results }`; legacy files are a bare array.
+  const parsed = JSON.parse(readFileSync(filename, 'utf8'));
+  const results = Array.isArray(parsed) ? parsed : parsed.results;
+  return results[0] as BenchResult;
 }
 
 type MemoryModeMeta = Pick<
@@ -1087,12 +1091,14 @@ function renderMeasurementMarkdown(input: {
     lines.push(
       '',
       `### rustJobs=${jobs}`,
-      '| tool | median | drift |',
-      '| --- | ---: | --- |',
+      '| tool | median | peak memory | drift |',
+      '| --- | ---: | ---: | --- |',
       ...tools.map((tool) => {
         const stat = result.stats[tool];
+        const memory = result.memory?.[tool];
+        const rss = memory ? formatBytes(memory.medianBytes) : 'n/a';
         const drift = result.drift[tool] ?? '';
-        return `| ${toolDisplayLabel(tool)} | ${formatSeconds(stat)} | ${drift} |`;
+        return `| ${toolDisplayLabel(tool)} | ${formatSeconds(stat)} | ${rss} | ${drift} |`;
       }),
     );
   }

@@ -101,6 +101,23 @@ test('extractBenchMedians handles non-array input gracefully', () => {
   assert.deepStrictEqual(extractBenchMedians({}), []);
 });
 
+test('extractBenchMedians accepts the { meta, results } document shape', () => {
+  const medians = extractBenchMedians({
+    meta: { timestamp: '2026-07-17T00:00:00.000Z' },
+    results: [
+      {
+        project: 'demo',
+        stats: {
+          tsc: { median: 1.5, min: 1, max: 2, runs: 3 },
+        },
+      },
+    ],
+  });
+  assert.strictEqual(medians.length, 1);
+  assert.strictEqual(medians[0].project, 'demo');
+  assert.strictEqual(medians[0].medians.tsc, 1.5);
+});
+
 test('extractAuthKitCounts parses measurement markdown', () => {
   const md = [
     '## Raw Totals',
