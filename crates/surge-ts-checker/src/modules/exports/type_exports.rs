@@ -127,13 +127,15 @@ pub(crate) fn copy_qualified_type_exports(
 ) -> bool {
     let prefix = format!("{imported_name}.");
     let mut copied_any = false;
-    for (key, declaration) in export_table.type_declarations.iter() {
+    for (key, _) in export_table.type_declarations.iter() {
         if let Some(member) = key.as_str().strip_prefix(&prefix) {
             copied_any = true;
             let local_key = format!("{local_name}.{member}");
-            if type_declarations.get(&local_key).is_none() {
-                let _ = type_declarations.insert(local_key.as_str(), declaration.clone());
-            }
+            let _ = type_declarations.insert_shared_from(
+                &local_key,
+                &export_table.type_declarations,
+                key.as_str(),
+            );
         }
     }
     copied_any

@@ -501,6 +501,10 @@ pub(crate) fn resolve_module_export_table(
 
         let resolved_type_declarations =
             Arc::make_mut(&mut resolved_export_table.type_declarations);
+        // Payload sharing (`insert_shared_from`) was tried here and reverted:
+        // collapsing the re-exported clone into the source payload changes
+        // which first-wins expansion later consumers observe (zod message
+        // drift). Re-export entries keep their per-table copies.
         for (name, declaration) in target_export_table.type_declarations.iter() {
             if resolved_type_declarations.get(name.as_ref()).is_none() {
                 let _ = resolved_type_declarations.insert(name.clone(), declaration.clone());

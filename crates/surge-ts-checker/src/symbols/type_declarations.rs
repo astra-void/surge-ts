@@ -100,7 +100,10 @@ pub(crate) struct InterfaceBody {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct InterfaceDeclarationFragmentId {
-    pub(crate) file_name: String,
+    /// Shared: every member fragment of one declaration points at the same
+    /// file string (a per-member owned copy multiplied a path across every
+    /// interface member of every dependency `.d.ts`).
+    pub(crate) file_name: Arc<str>,
     pub(crate) declaration_start: usize,
 }
 
@@ -147,7 +150,7 @@ impl InterfaceInfo {
         resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ) -> Self {
         let declaration_fragment = InterfaceDeclarationFragmentId {
-            file_name: file_name.clone(),
+            file_name: Arc::from(file_name.as_str()),
             declaration_start: name_span.map_or(0, |span| span.start),
         };
         let member_fragments = vec![declaration_fragment.clone(); members.len()];
@@ -346,7 +349,7 @@ pub(crate) fn merge_shared_arena_table_into(
     enum Action {
         Merge(Box<InterfaceInfo>),
         KeepFirst,
-        CopyPayload(usize),
+        CopyPayload(usize, Option<CheckerArena>),
     }
 
     for (name, id) in source.declarations.iter() {
@@ -358,13 +361,18 @@ pub(crate) fn merge_shared_arena_table_into(
                 TypeDeclarationInfo::Interface(incoming),
             ) => Action::Merge(Box::new(merge_interface_infos(existing, incoming))),
             (Some(_), _) => Action::KeepFirst,
-            (None, _) => Action::CopyPayload(source.payload_ptr(*id)),
+            (None, _) => Action::CopyPayload(
+                source.payload_ptr(*id),
+                source.foreign_payload_arenas.get(&id.0).cloned(),
+            ),
         };
 
         match action {
             Action::Merge(merged) => dest.upsert(name_ref, TypeDeclarationInfo::Interface(*merged)),
             Action::KeepFirst => {}
-            Action::CopyPayload(payload_ptr) => dest.push_shared_payload(name_ref, payload_ptr),
+            Action::CopyPayload(payload_ptr, foreign_arena) => {
+                dest.push_shared_payload_with_arena(name_ref, payload_ptr, foreign_arena)
+            }
         }
     }
 }
@@ -572,7 +580,7 @@ impl TypeDeclarationScope {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 /// Shared top-level type-declaration namespace for aliases and interfaces.
 ///
 /// The first declaration wins; later duplicates are reported by the caller and
@@ -581,6 +589,50 @@ pub(crate) struct TypeDeclarationTable {
     arena: CheckerArena,
     declarations: surge_ts_types::fx::FxHashMap<ArenaStr, TypeDeclarationId>,
     payloads: Vec<usize>,
+    /// Payload index → owning arena, for payloads shared from another table's
+    /// arena (see [`Self::insert_shared_from`]). Only foreign payloads have an
+    /// entry; everything else lives in `self.arena`. Keeping the owning arena
+    /// per payload makes `get_handle` hand out handles that genuinely keep
+    /// their payload alive.
+    foreign_payload_arenas: surge_ts_types::fx::FxHashMap<u32, CheckerArena>,
+    /// Instance identity + mutation counter. `(instance_id, version)` equality
+    /// proves this exact table instance is bytewise-unchanged since a previous
+    /// observation, letting the declaration-environment capture reuse one
+    /// immutable snapshot across the many environments interned between
+    /// mutations. Clones get a fresh identity (they diverge independently).
+    instance_id: u64,
+    version: u64,
+}
+
+fn next_table_instance_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Default for TypeDeclarationTable {
+    fn default() -> Self {
+        Self {
+            arena: CheckerArena::default(),
+            declarations: Default::default(),
+            payloads: Vec::new(),
+            foreign_payload_arenas: Default::default(),
+            instance_id: next_table_instance_id(),
+            version: 0,
+        }
+    }
+}
+
+impl Clone for TypeDeclarationTable {
+    fn clone(&self) -> Self {
+        Self {
+            arena: self.arena.clone(),
+            declarations: self.declarations.clone(),
+            payloads: self.payloads.clone(),
+            foreign_payload_arenas: self.foreign_payload_arenas.clone(),
+            instance_id: next_table_instance_id(),
+            version: 0,
+        }
+    }
 }
 
 impl TypeDeclarationTable {
@@ -596,7 +648,15 @@ impl TypeDeclarationTable {
             arena,
             declarations: Default::default(),
             payloads: Vec::new(),
+            foreign_payload_arenas: Default::default(),
+            instance_id: next_table_instance_id(),
+            version: 0,
         }
+    }
+
+    /// See the `instance_id` field: equal pairs prove an unchanged instance.
+    pub(crate) fn snapshot_identity(&self) -> (u64, u64) {
+        (self.instance_id, self.version)
     }
 
     pub(crate) fn arena_handle(&self) -> CheckerArena {
@@ -634,13 +694,33 @@ impl TypeDeclarationTable {
             .expect("type declaration id must point to a stored payload")
             as *const TypeDeclarationInfo;
         Some(TypeDeclarationHandle {
-            _arena: self.arena.clone(),
+            _arena: self
+                .foreign_payload_arenas
+                .get(&id.0)
+                .cloned()
+                .unwrap_or_else(|| self.arena.clone()),
             ptr,
         })
     }
 
     pub(crate) fn len(&self) -> usize {
         self.declarations.len()
+    }
+
+    /// Census-only identity for this table *instance* (each clone owns its own
+    /// index memory, so per-instance identity is the honest unit for charging
+    /// index bytes; the arena payloads behind it are deduplicated separately by
+    /// payload address).
+    pub(crate) fn identity_address(&self) -> usize {
+        self.payloads.as_ptr() as usize
+    }
+
+    /// Census-only estimate of this instance's owned index memory (the
+    /// declarations map and payload-pointer vector; arena payloads excluded).
+    pub(crate) fn index_heap_bytes(&self) -> u64 {
+        (self.declarations.capacity()
+            * (std::mem::size_of::<ArenaStr>() + std::mem::size_of::<TypeDeclarationId>() + 16)
+            + self.payloads.capacity() * std::mem::size_of::<usize>()) as u64
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&ArenaStr, &TypeDeclarationInfo)> + '_ {
@@ -662,6 +742,7 @@ impl TypeDeclarationTable {
         let declaration_id = self.alloc_declaration_payload(declaration);
         let key = ArenaStr::new(name_ref, &self.arena);
         self.declarations.insert(key, declaration_id);
+        self.version += 1;
         None
     }
 
@@ -681,6 +762,7 @@ impl TypeDeclarationTable {
             let key = ArenaStr::new(name_ref, &self.arena);
             self.declarations.insert(key, declaration_id);
         }
+        self.version += 1;
     }
 
     fn payload_ptr(&self, id: TypeDeclarationId) -> usize {
@@ -694,13 +776,58 @@ impl TypeDeclarationTable {
     /// first-wins. The pointer must originate from the same arena as `self`;
     /// callers guarantee this via [`merge_shared_arena_table_into`].
     fn push_shared_payload(&mut self, name: &str, payload_ptr: usize) {
+        self.push_shared_payload_with_arena(name, payload_ptr, None);
+    }
+
+    /// [`Self::push_shared_payload`] for a payload owned by another table's
+    /// arena; `owning_arena` is retained so handles to the entry stay valid.
+    fn push_shared_payload_with_arena(
+        &mut self,
+        name: &str,
+        payload_ptr: usize,
+        owning_arena: Option<CheckerArena>,
+    ) {
         if self.declarations.contains_key(name) {
             return;
         }
         let id = TypeDeclarationId(self.payloads.len() as u32);
+        if let Some(arena) = owning_arena
+            && !arena.ptr_eq(&self.arena)
+        {
+            self.foreign_payload_arenas.insert(id.0, arena);
+        }
         self.payloads.push(payload_ptr);
         let key = ArenaStr::new(name, &self.arena);
         self.declarations.insert(key, id);
+        self.version += 1;
+    }
+
+    /// Share `source`'s payload for `source_name` under `name`, first-wins,
+    /// without cloning the declaration: the payload pointer is adopted and the
+    /// payload's owning arena is retained so the entry (and handles to it)
+    /// stay valid for this table's lifetime. This is the per-importer
+    /// qualified-namespace binding path, where the declaration content is
+    /// byte-identical for every importer.
+    pub(crate) fn insert_shared_from(
+        &mut self,
+        name: &str,
+        source: &TypeDeclarationTable,
+        source_name: &str,
+    ) -> bool {
+        if self.declarations.contains_key(name) {
+            return false;
+        }
+        let Some(source_id) = source.declarations.get(source_name).copied() else {
+            return false;
+        };
+        let payload_ptr = source.payload_ptr(source_id);
+        let owning_arena = source
+            .foreign_payload_arenas
+            .get(&source_id.0)
+            .cloned()
+            .unwrap_or_else(|| source.arena.clone());
+        self.push_shared_payload_with_arena(name, payload_ptr, Some(owning_arena));
+        true
     }
 
     fn alloc_declaration_payload(&mut self, declaration: TypeDeclarationInfo) -> TypeDeclarationId {
