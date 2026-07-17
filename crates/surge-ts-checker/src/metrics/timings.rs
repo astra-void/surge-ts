@@ -134,6 +134,33 @@ pub(crate) fn record_rss_stage(
     if let Ok(mut guard) = timings.lock() {
         guard.rss_stages.push(sample);
     }
+    pause_if_requested(label);
+}
+
+/// Opt-in heap-profiling hook: `SURGE_PAUSE_AT_STAGE=<label>` stops the process
+/// with SIGSTOP at that stage boundary so external tools (`malloc_history`,
+/// `heap`, `footprint`) can attribute the live heap at a deterministic point.
+/// Resume with `kill -CONT`. Diagnostics-only; never active without the env var.
+fn pause_if_requested(label: &str) {
+    static PAUSE_AT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let Some(requested) = PAUSE_AT.get_or_init(|| std::env::var("SURGE_PAUSE_AT_STAGE").ok())
+    else {
+        return;
+    };
+    if requested != label {
+        return;
+    }
+    let pid = std::process::id();
+    eprintln!(
+        "SURGE_PAUSE_AT_STAGE: pausing at '{label}' (pid {pid}); resume with kill -CONT {pid}"
+    );
+    #[cfg(target_os = "macos")]
+    unsafe {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        kill(pid as i32, 17); // SIGSTOP on macOS
+    }
 }
 
 pub(crate) fn record_program_file_timing(

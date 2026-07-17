@@ -1,0 +1,916 @@
+//! Full retained-heap census (`SURGE_RETENTION_CENSUS=1`).
+//!
+//! Unlike the cache-focused `type_graph_census`, this walks every structure the
+//! program actually retains at a stage boundary — module analyses (symbol
+//! tables, export tables, declaration tables), import bindings, resolution
+//! scopes, globals, the checker caches, and the canonical type store — and
+//! attributes estimated live bytes to named owner groups. All shared payloads
+//! (`Arc`s, arena tables, property maps) are pointer-deduplicated so a payload
+//! reachable from several owners is charged once, to the first group that
+//! reaches it. Estimates are shallow-struct plus owned-heap models, not
+//! allocator ground truth; compare group deltas, not absolute totals.
+
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::mem::size_of;
+use std::sync::Arc;
+
+use surge_ts_syntax::{
+    ParsedFunctionType, ParsedInterfaceMember, ParsedNamedType, ParsedType, ParsedTypeParameter,
+};
+use surge_ts_types::fx::FxHashMap;
+use surge_ts_types::{FunctionType, FunctionTypePayload, ObjectType, Type, TypeReference};
+
+use crate::context::{CheckerContext, DeclarationResolutionState};
+use crate::modules::{ModuleExportTable, ModuleImportBindings};
+use crate::symbols::{
+    SymbolInfo, SymbolTable, TypeDeclarationInfo, TypeDeclarationScope, TypeDeclarationTable,
+};
+
+pub(crate) fn retention_census_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_RETENTION_CENSUS").is_some())
+}
+
+/// Everything the program pipeline retains that the census should attribute.
+/// All fields are optional so call sites can report whatever exists at their
+/// stage.
+#[derive(Default)]
+pub(crate) struct RetentionCensusView<'a> {
+    pub(crate) module_analyses: Option<&'a [Option<crate::program::ModuleAnalysis>]>,
+    pub(crate) preliminary_module_analyses: Option<&'a [Option<crate::program::ModuleAnalysis>]>,
+    pub(crate) module_import_bindings: Option<&'a [Option<ModuleImportBindings>]>,
+    pub(crate) preliminary_module_import_bindings: Option<&'a [Option<ModuleImportBindings>]>,
+    pub(crate) module_resolution_scopes: Option<&'a [Option<Arc<TypeDeclarationScope>>]>,
+    pub(crate) global_symbols: Option<&'a SymbolTable>,
+    pub(crate) function_signatures: Option<&'a [&'a surge_ts_types::FunctionType]>,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+struct GroupTally {
+    bytes: u64,
+    items: u64,
+}
+
+#[derive(Default)]
+struct FallbackClassCounts {
+    unknown_containing: u64,
+    context_retaining_reference: u64,
+    over_budget: u64,
+    internable: u64,
+}
+
+struct Walker {
+    // Pointer-dedup sets. usize keys are payload addresses.
+    seen_symbol_infos: FxHashMap<usize, ()>,
+    seen_function_payloads: FxHashMap<usize, ()>,
+    seen_parameter_lists: FxHashMap<usize, ()>,
+    seen_property_maps: FxHashMap<usize, ()>,
+    seen_union_payloads: FxHashMap<usize, ()>,
+    seen_resolvers: FxHashMap<usize, ()>,
+    seen_decl_tables: FxHashMap<usize, ()>,
+    seen_decl_payloads: FxHashMap<usize, ()>,
+    seen_decl_bodies: FxHashMap<usize, ()>,
+    seen_symbol_maps: FxHashMap<usize, ()>,
+    seen_span_maps: FxHashMap<usize, ()>,
+    seen_scopes: FxHashMap<usize, ()>,
+    seen_shared_captures: FxHashMap<usize, ()>,
+    seen_resolved_memos: FxHashMap<usize, ()>,
+    groups: HashMap<&'static str, GroupTally>,
+    current_group: &'static str,
+    // Global tallies independent of groups.
+    canonical_function_payloads: u64,
+    fallback_function_payloads: u64,
+    fallback_function_bytes: u64,
+    fallback_classes: FallbackClassCounts,
+    reference_count: u64,
+    reference_argument_slots: u64,
+    resolver_count: u64,
+    resolver_own_bytes: u64,
+    resolver_shared_bytes: u64,
+    environment_count: u64,
+    environment_index_bytes: u64,
+    declaration_table_instances: u64,
+    declaration_index_bytes: u64,
+    symbol_count: u64,
+    parsed_signature_bytes: u64,
+    declaration_entries: u64,
+    declaration_parsed_bytes: u64,
+    span_map_entries: u64,
+    span_map_bytes: u64,
+}
+
+impl Walker {
+    fn new() -> Self {
+        Self {
+            seen_symbol_infos: FxHashMap::default(),
+            seen_function_payloads: FxHashMap::default(),
+            seen_parameter_lists: FxHashMap::default(),
+            seen_property_maps: FxHashMap::default(),
+            seen_union_payloads: FxHashMap::default(),
+            seen_resolvers: FxHashMap::default(),
+            seen_decl_tables: FxHashMap::default(),
+            seen_decl_payloads: FxHashMap::default(),
+            seen_decl_bodies: FxHashMap::default(),
+            seen_symbol_maps: FxHashMap::default(),
+            seen_span_maps: FxHashMap::default(),
+            seen_scopes: FxHashMap::default(),
+            seen_shared_captures: FxHashMap::default(),
+            seen_resolved_memos: FxHashMap::default(),
+            groups: HashMap::new(),
+            current_group: "unattributed",
+            canonical_function_payloads: 0,
+            fallback_function_payloads: 0,
+            fallback_function_bytes: 0,
+            fallback_classes: FallbackClassCounts::default(),
+            reference_count: 0,
+            reference_argument_slots: 0,
+            resolver_count: 0,
+            resolver_own_bytes: 0,
+            resolver_shared_bytes: 0,
+            environment_count: 0,
+            environment_index_bytes: 0,
+            declaration_table_instances: 0,
+            declaration_index_bytes: 0,
+            symbol_count: 0,
+            parsed_signature_bytes: 0,
+            declaration_entries: 0,
+            declaration_parsed_bytes: 0,
+            span_map_entries: 0,
+            span_map_bytes: 0,
+        }
+    }
+
+    fn add(&mut self, bytes: u64) {
+        let tally = self.groups.entry(self.current_group).or_default();
+        tally.bytes += bytes;
+    }
+
+    fn add_item(&mut self) {
+        let tally = self.groups.entry(self.current_group).or_default();
+        tally.items += 1;
+    }
+
+    fn first_visit(map: &mut FxHashMap<usize, ()>, address: usize) -> bool {
+        match map.entry(address) {
+            Entry::Vacant(entry) => {
+                entry.insert(());
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
+    }
+
+    fn walk_symbol_table(&mut self, table: &SymbolTable) {
+        let map_address = table.symbols_map_address();
+        if Walker::first_visit(&mut self.seen_symbol_maps, map_address) {
+            for (name, symbol) in table.iter_shared() {
+                self.add((size_of::<Arc<str>>() + name.len() + size_of::<usize>() * 2) as u64);
+                self.walk_symbol_info(symbol);
+            }
+        }
+        let span_map_address = table.declaration_spans_map_address();
+        if Walker::first_visit(&mut self.seen_span_maps, span_map_address) {
+            let (entries, bytes) = table.declaration_spans_footprint();
+            self.span_map_entries += entries;
+            self.span_map_bytes += bytes;
+            self.add(bytes);
+        }
+        if let Some(parent) = table.parent_table() {
+            self.walk_symbol_table(parent);
+        }
+    }
+
+    fn walk_symbol_info(&mut self, symbol: &Arc<SymbolInfo>) {
+        if !Walker::first_visit(&mut self.seen_symbol_infos, Arc::as_ptr(symbol) as usize) {
+            return;
+        }
+        self.symbol_count += 1;
+        self.add_item();
+        self.add(size_of::<SymbolInfo>() as u64);
+        if let Some(signature) = symbol.function_signature.as_ref() {
+            let mut bytes = 0u64;
+            for parameter in &signature.type_parameters {
+                bytes += parsed_type_parameter_bytes(parameter);
+            }
+            for parameter in &signature.parameter_types {
+                bytes += size_of::<Option<ParsedType>>() as u64;
+                if let Some(ty) = parameter {
+                    bytes += parsed_type_bytes(ty);
+                }
+            }
+            if let Some(return_type) = signature.return_type.as_ref() {
+                bytes += parsed_type_bytes(return_type);
+            }
+            bytes += signature.declaring_file.as_ref().map_or(0, |file| {
+                file.capacity() as u64 + size_of::<String>() as u64
+            });
+            self.parsed_signature_bytes += bytes;
+            self.add(bytes);
+        }
+        self.walk_type(&symbol.ty);
+    }
+
+    fn walk_type(&mut self, ty: &Type) {
+        match ty {
+            Type::Function(function) => self.walk_function(function),
+            Type::Object(object) => self.walk_object(object),
+            Type::Array(element) => {
+                self.add(size_of::<Type>() as u64);
+                self.walk_type(element);
+            }
+            Type::Tuple(elements) => {
+                self.add((elements.len() * size_of::<Type>()) as u64);
+                for element in elements {
+                    self.walk_type(element);
+                }
+            }
+            Type::Union(union) => {
+                if Walker::first_visit(&mut self.seen_union_payloads, union.payload_address()) {
+                    self.add(
+                        (size_of::<surge_ts_types::UnionTypePayload>()
+                            + union.types().len() * size_of::<Type>())
+                            as u64,
+                    );
+                    for member in union.types() {
+                        self.walk_type(member);
+                    }
+                }
+            }
+            Type::Reference(reference) => self.walk_reference(reference),
+            Type::StringLiteral(value) => self.add(value.capacity() as u64),
+            Type::NumberLiteral(value) => self.add(value.value.capacity() as u64),
+            _ => {}
+        }
+    }
+
+    fn walk_function(&mut self, function: &FunctionType) {
+        let payload_address = function.payload_address();
+        if !Walker::first_visit(&mut self.seen_function_payloads, payload_address) {
+            return;
+        }
+        let is_fallback = function.id().is_none();
+        let payload_bytes = size_of::<FunctionTypePayload>() as u64;
+        self.add(payload_bytes);
+        if is_fallback {
+            self.fallback_function_payloads += 1;
+        } else {
+            self.canonical_function_payloads += 1;
+        }
+        let parameters = function.parameters();
+        let list_bytes = (parameters.len() * size_of::<Type>()) as u64;
+        if Walker::first_visit(
+            &mut self.seen_parameter_lists,
+            function.parameter_list_address(),
+        ) {
+            self.add(list_bytes);
+            for parameter in parameters {
+                self.walk_type(parameter);
+            }
+        }
+        if is_fallback {
+            self.fallback_function_bytes += payload_bytes + list_bytes;
+            match classify_fallback(function) {
+                FallbackClass::UnknownContaining => {
+                    self.fallback_classes.unknown_containing += 1;
+                }
+                FallbackClass::ContextRetainingReference => {
+                    self.fallback_classes.context_retaining_reference += 1;
+                }
+                FallbackClass::OverBudget => self.fallback_classes.over_budget += 1,
+                FallbackClass::Internable => self.fallback_classes.internable += 1,
+            }
+        }
+        self.walk_type(function.return_type());
+    }
+
+    fn walk_object(&mut self, object: &ObjectType) {
+        self.add(size_of::<ObjectType>() as u64);
+        if Walker::first_visit(
+            &mut self.seen_property_maps,
+            Arc::as_ptr(&object.properties) as usize,
+        ) {
+            for (name, property) in object.properties.iter() {
+                self.add(
+                    (size_of::<String>() + name.capacity()) as u64
+                        + size_of::<surge_ts_types::ObjectProperty>() as u64,
+                );
+                self.walk_type(&property.ty);
+            }
+        }
+        if let Some(index) = object.string_index_type.as_deref() {
+            self.walk_type(index);
+        }
+        if let Some(call) = object.call_signature() {
+            self.walk_function(call);
+        }
+        if let Some(construct) = object.construct_signature() {
+            self.walk_function(construct);
+        }
+    }
+
+    fn walk_reference(&mut self, reference: &TypeReference) {
+        self.reference_count += 1;
+        self.reference_argument_slots += reference.arguments.len() as u64;
+        self.add(
+            (size_of::<TypeReference>()
+                + reference.arguments.len() * size_of::<Type>()
+                + reference.id.len()
+                + reference.display.len()) as u64,
+        );
+        for argument in reference.arguments.iter() {
+            self.walk_type(argument);
+        }
+        if Walker::first_visit(&mut self.seen_resolvers, reference.resolver_address()) {
+            self.resolver_count += 1;
+            let census = reference.captured_census();
+            self.resolver_own_bytes += census.own_bytes;
+            self.add(census.own_bytes);
+            for (address, bytes) in census.shared_captures {
+                if Walker::first_visit(&mut self.seen_shared_captures, address) {
+                    self.resolver_shared_bytes += bytes;
+                    self.add(bytes);
+                }
+            }
+            if let Some(resolved) = reference.peek_resolved()
+                && Walker::first_visit(
+                    &mut self.seen_resolved_memos,
+                    Arc::as_ptr(&resolved) as usize,
+                )
+            {
+                self.walk_type(&resolved);
+            }
+        }
+    }
+
+    fn walk_declaration_table(&mut self, table: &TypeDeclarationTable) {
+        let address = table.identity_address();
+        if !Walker::first_visit(&mut self.seen_decl_tables, address) {
+            return;
+        }
+        self.declaration_table_instances += 1;
+        self.declaration_index_bytes += table.index_heap_bytes();
+        self.add(table.index_heap_bytes());
+        for (_, declaration) in table.iter() {
+            self.walk_declaration_info(declaration);
+        }
+    }
+
+    fn walk_declaration_info(&mut self, declaration: &TypeDeclarationInfo) {
+        // Table clones share arena payloads by raw pointer; charge each payload
+        // once no matter how many table instances index it.
+        if !Walker::first_visit(
+            &mut self.seen_decl_payloads,
+            declaration as *const TypeDeclarationInfo as usize,
+        ) {
+            return;
+        }
+        self.declaration_entries += 1;
+        match declaration {
+            TypeDeclarationInfo::Alias(info) => {
+                self.add(
+                    (info.name.capacity()
+                        + info.file_name.capacity()
+                        + info
+                            .declared_name
+                            .as_ref()
+                            .map_or(0, |declared_name| declared_name.capacity())
+                        + size_of::<TypeDeclarationInfo>()) as u64,
+                );
+                if let Some(scope) = info.resolution_scope.as_ref() {
+                    self.walk_scope(scope);
+                }
+                if Walker::first_visit(&mut self.seen_decl_bodies, Arc::as_ptr(&info.body) as usize)
+                {
+                    let mut bytes = 0u64;
+                    for parameter in &info.body.type_parameters {
+                        bytes += parsed_type_parameter_bytes(parameter);
+                    }
+                    bytes += parsed_type_bytes(&info.body.ty);
+                    self.declaration_parsed_bytes += bytes;
+                    self.add(bytes);
+                }
+            }
+            TypeDeclarationInfo::Interface(info) => {
+                self.add(
+                    (info.name.capacity()
+                        + info.file_name.capacity()
+                        + info
+                            .declared_name
+                            .as_ref()
+                            .map_or(0, |declared_name| declared_name.capacity())
+                        + size_of::<TypeDeclarationInfo>()) as u64,
+                );
+                if let Some(scope) = info.resolution_scope.as_ref() {
+                    self.walk_scope(scope);
+                }
+                if Walker::first_visit(&mut self.seen_decl_bodies, Arc::as_ptr(&info.body) as usize)
+                {
+                    let mut bytes = 0u64;
+                    for parameter in &info.body.type_parameters {
+                        bytes += parsed_type_parameter_bytes(parameter);
+                    }
+                    for extend in &info.body.extends {
+                        bytes += parsed_named_type_bytes(extend);
+                    }
+                    for member in &info.body.members {
+                        bytes += parsed_interface_member_bytes(member);
+                    }
+                    if let Some(index) = info.body.string_index_type.as_ref() {
+                        bytes += parsed_type_bytes(index);
+                    }
+                    for call in info.body.call_signature.iter() {
+                        bytes += parsed_function_type_bytes(call);
+                    }
+                    for construct in &info.body.construct_signatures {
+                        bytes += parsed_function_type_bytes(construct);
+                    }
+                    let fragment_count =
+                        info.body.declaration_fragments.len() + info.body.member_fragments.len();
+                    bytes += (fragment_count * size_of::<usize>() * 5) as u64;
+                    self.declaration_parsed_bytes += bytes;
+                    self.add(bytes);
+                }
+            }
+        }
+    }
+
+    fn walk_scope(&mut self, scope: &Arc<TypeDeclarationScope>) {
+        if !Walker::first_visit(&mut self.seen_scopes, Arc::as_ptr(scope) as usize) {
+            return;
+        }
+        for layer in scope.layers() {
+            self.walk_declaration_table(layer);
+        }
+    }
+
+    fn walk_export_table(&mut self, table: &ModuleExportTable) {
+        self.walk_declaration_table(&table.type_declarations);
+        self.walk_symbol_table(&table.symbols);
+        if let Some(symbol) = table.default_symbol.as_ref() {
+            self.walk_symbol_info(symbol);
+        }
+        if let Some(symbol) = table.export_assignment_symbol.as_ref() {
+            self.walk_symbol_info(symbol);
+        }
+        if let Some(ty) = table.namespace_export_object_type.as_ref() {
+            self.walk_type(ty);
+        }
+    }
+}
+
+enum FallbackClass {
+    UnknownContaining,
+    ContextRetainingReference,
+    OverBudget,
+    Internable,
+}
+
+fn classify_fallback(function: &FunctionType) -> FallbackClass {
+    let mut nodes = 0usize;
+    let mut found_unknown = false;
+    let mut found_context_reference = false;
+    let mut over_budget = false;
+    fn visit(
+        ty: &Type,
+        depth: usize,
+        nodes: &mut usize,
+        found_unknown: &mut bool,
+        found_context_reference: &mut bool,
+        over_budget: &mut bool,
+    ) {
+        *nodes += 1;
+        if *nodes > 128 || depth >= 16 {
+            *over_budget = true;
+            return;
+        }
+        match ty {
+            Type::Unknown => *found_unknown = true,
+            Type::Function(function) => {
+                for parameter in function.parameters() {
+                    visit(
+                        parameter,
+                        depth + 1,
+                        nodes,
+                        found_unknown,
+                        found_context_reference,
+                        over_budget,
+                    );
+                }
+                visit(
+                    function.return_type(),
+                    depth + 1,
+                    nodes,
+                    found_unknown,
+                    found_context_reference,
+                    over_budget,
+                );
+            }
+            Type::Object(object) => {
+                for (_, property) in object.properties.iter() {
+                    visit(
+                        &property.ty,
+                        depth + 1,
+                        nodes,
+                        found_unknown,
+                        found_context_reference,
+                        over_budget,
+                    );
+                }
+            }
+            Type::Array(element) => visit(
+                element,
+                depth + 1,
+                nodes,
+                found_unknown,
+                found_context_reference,
+                over_budget,
+            ),
+            Type::Tuple(elements) => {
+                for element in elements {
+                    visit(
+                        element,
+                        depth + 1,
+                        nodes,
+                        found_unknown,
+                        found_context_reference,
+                        over_budget,
+                    );
+                }
+            }
+            Type::Union(union) => {
+                for member in union.types() {
+                    visit(
+                        member,
+                        depth + 1,
+                        nodes,
+                        found_unknown,
+                        found_context_reference,
+                        over_budget,
+                    );
+                }
+            }
+            Type::Reference(reference) => {
+                if reference.retains_resolution_context()
+                    || !reference.supports_program_canonicalization()
+                {
+                    *found_context_reference = true;
+                }
+                for argument in reference.arguments.iter() {
+                    visit(
+                        argument,
+                        depth + 1,
+                        nodes,
+                        found_unknown,
+                        found_context_reference,
+                        over_budget,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    for parameter in function.parameters() {
+        visit(
+            parameter,
+            0,
+            &mut nodes,
+            &mut found_unknown,
+            &mut found_context_reference,
+            &mut over_budget,
+        );
+    }
+    visit(
+        function.return_type(),
+        0,
+        &mut nodes,
+        &mut found_unknown,
+        &mut found_context_reference,
+        &mut over_budget,
+    );
+    if found_unknown {
+        FallbackClass::UnknownContaining
+    } else if found_context_reference {
+        FallbackClass::ContextRetainingReference
+    } else if over_budget {
+        FallbackClass::OverBudget
+    } else {
+        FallbackClass::Internable
+    }
+}
+
+fn parsed_type_parameter_bytes(parameter: &ParsedTypeParameter) -> u64 {
+    let mut bytes = (size_of::<ParsedTypeParameter>() + parameter.name.capacity()) as u64;
+    if let Some(constraint) = parameter.constraint.as_ref() {
+        bytes += parsed_type_bytes(constraint);
+    }
+    if let Some(default_type) = parameter.default_type.as_ref() {
+        bytes += parsed_type_bytes(default_type);
+    }
+    bytes
+}
+
+fn parsed_named_type_bytes(named: &ParsedNamedType) -> u64 {
+    let mut bytes = (size_of::<ParsedNamedType>() + named.name.capacity()) as u64;
+    for argument in &named.type_arguments {
+        bytes += parsed_type_bytes(argument);
+    }
+    bytes
+}
+
+fn parsed_interface_member_bytes(member: &ParsedInterfaceMember) -> u64 {
+    (size_of::<ParsedInterfaceMember>() + member.name.capacity()) as u64
+        + parsed_type_bytes(&member.ty)
+}
+
+fn parsed_function_type_bytes(function: &ParsedFunctionType) -> u64 {
+    let mut bytes = size_of::<ParsedFunctionType>() as u64;
+    for parameter in &function.parameters {
+        bytes += size_of::<surge_ts_syntax::ParsedFunctionTypeParameter>() as u64;
+        bytes += parameter
+            .name
+            .as_ref()
+            .map_or(0, |name| name.capacity() as u64);
+        bytes += parsed_type_bytes(&parameter.ty);
+    }
+    bytes += parsed_type_bytes(&function.return_type);
+    for parameter in &function.type_parameters {
+        bytes += parsed_type_parameter_bytes(parameter);
+    }
+    bytes
+}
+
+fn parsed_type_bytes(ty: &ParsedType) -> u64 {
+    let own = size_of::<ParsedType>() as u64;
+    own + match ty {
+        ParsedType::StringLiteral(value) | ParsedType::NumberLiteral(value) => {
+            value.capacity() as u64
+        }
+        ParsedType::Object(object) => {
+            let mut bytes = 0u64;
+            for property in &object.properties {
+                bytes += property.name.capacity() as u64
+                    + size_of::<surge_ts_syntax::ParsedObjectTypeProperty>() as u64
+                    + parsed_type_bytes(&property.ty);
+            }
+            if let Some(call) = object.call_signature.as_ref() {
+                bytes += parsed_function_type_bytes(call);
+            }
+            bytes
+        }
+        ParsedType::Array(element) | ParsedType::KeyOf(element) => parsed_type_bytes(element),
+        ParsedType::Tuple(elements)
+        | ParsedType::Union(elements)
+        | ParsedType::Intersection(elements) => elements.iter().map(parsed_type_bytes).sum::<u64>(),
+        ParsedType::Function(function) => parsed_function_type_bytes(function),
+        ParsedType::Named(named) => parsed_named_type_bytes(named),
+        ParsedType::TypeOf(type_of) => {
+            type_of.name.capacity() as u64
+                + type_of
+                    .members
+                    .iter()
+                    .map(|member| member.capacity() as u64 + size_of::<String>() as u64)
+                    .sum::<u64>()
+        }
+        ParsedType::IndexedAccess(indexed) => {
+            parsed_type_bytes(&indexed.object_type) + parsed_type_bytes(&indexed.index_type)
+        }
+        ParsedType::Mapped(mapped) => {
+            mapped.key_name.capacity() as u64
+                + parsed_type_bytes(&mapped.constraint)
+                + parsed_type_bytes(&mapped.value_type)
+        }
+        ParsedType::Conditional(conditional) => {
+            parsed_type_bytes(&conditional.check_type)
+                + parsed_type_bytes(&conditional.extends_type)
+                + parsed_type_bytes(&conditional.true_type)
+                + parsed_type_bytes(&conditional.false_type)
+        }
+        ParsedType::TemplateLiteral(template) => {
+            template
+                .quasis
+                .iter()
+                .map(|quasi| quasi.capacity() as u64 + size_of::<String>() as u64)
+                .sum::<u64>()
+                + template
+                    .interpolations
+                    .iter()
+                    .map(parsed_type_bytes)
+                    .sum::<u64>()
+        }
+        ParsedType::Infer(name) => name.capacity() as u64,
+        _ => 0,
+    }
+}
+
+pub(crate) fn emit_retention_census(
+    stage: &str,
+    ctx: Option<&CheckerContext>,
+    store: &Arc<surge_ts_types::ProgramTypeStore>,
+    view: RetentionCensusView<'_>,
+) {
+    if !retention_census_enabled() {
+        return;
+    }
+
+    let mut walker = Walker::new();
+
+    if let Some(analyses) = view.module_analyses {
+        walker.current_group = "module_analyses.local_symbols";
+        for analysis in analyses.iter().flatten() {
+            walker.walk_symbol_table(analysis.local_symbols());
+        }
+        walker.current_group = "module_analyses.export_tables";
+        for analysis in analyses.iter().flatten() {
+            walker.walk_export_table(analysis.local_export_table());
+        }
+        walker.current_group = "module_analyses.decl_tables";
+        for analysis in analyses.iter().flatten() {
+            walker.walk_declaration_table(analysis.local_type_declarations());
+        }
+    }
+    if let Some(analyses) = view.preliminary_module_analyses {
+        walker.current_group = "preliminary_analyses";
+        for analysis in analyses.iter().flatten() {
+            walker.walk_symbol_table(analysis.local_symbols());
+            walker.walk_export_table(analysis.local_export_table());
+            walker.walk_declaration_table(analysis.local_type_declarations());
+        }
+    }
+    if let Some(bindings) = view.module_import_bindings {
+        walker.current_group = "import_bindings";
+        for binding in bindings.iter().flatten() {
+            walker.walk_declaration_table(&binding.type_declarations);
+            walker.walk_symbol_table(&binding.symbols);
+            for layer in &binding.namespace_alias_layers {
+                walker.walk_declaration_table(layer);
+            }
+        }
+    }
+    if let Some(bindings) = view.preliminary_module_import_bindings {
+        walker.current_group = "preliminary_import_bindings";
+        for binding in bindings.iter().flatten() {
+            walker.walk_declaration_table(&binding.type_declarations);
+            walker.walk_symbol_table(&binding.symbols);
+            for layer in &binding.namespace_alias_layers {
+                walker.walk_declaration_table(layer);
+            }
+        }
+    }
+    if let Some(scopes) = view.module_resolution_scopes {
+        walker.current_group = "resolution_scopes";
+        for scope in scopes.iter().flatten() {
+            walker.walk_scope(scope);
+        }
+    }
+    if let Some(globals) = view.global_symbols {
+        walker.current_group = "global_symbols";
+        walker.walk_symbol_table(globals);
+    }
+    if let Some(signatures) = view.function_signatures {
+        walker.current_group = "global_function_signatures";
+        for function in signatures {
+            walker.walk_function(function);
+        }
+    }
+
+    if let Some(ctx) = ctx {
+        walker.current_group = "ctx.ambient_globals";
+        walker.walk_symbol_table(&ctx.ambient_global_symbols);
+        walker.walk_declaration_table(&ctx.type_declarations);
+        walker.walk_declaration_table(&ctx.ambient_global_type_declarations);
+        walker.current_group = "ctx.ambient_modules";
+        for table in ctx.ambient_modules.values() {
+            walker.walk_export_table(table);
+        }
+        for table in ctx.module_augmentations.values() {
+            walker.walk_export_table(table);
+        }
+        walker.current_group = "ctx.module_scope_by_file";
+        for scope in ctx.module_scope_by_file.values() {
+            walker.walk_scope(scope);
+        }
+        walker.current_group = "ctx.module_local_values";
+        for table in ctx.module_local_values_by_file.values() {
+            walker.walk_symbol_table(table);
+        }
+        walker.current_group = "declaration_environments";
+        ctx.declaration_environment_store.census_environments(
+            &mut |file_name, symbols, type_declarations, scope, type_parameter_entries| {
+                walker.environment_count += 1;
+                let own_bytes = file_name.len() as u64 + 512 + (type_parameter_entries * 64) as u64;
+                walker.environment_index_bytes += own_bytes;
+                walker.add(own_bytes);
+                walker.walk_symbol_table(symbols);
+                walker.walk_declaration_table(type_declarations);
+                if let Some(scope) = scope {
+                    walker.walk_scope(scope);
+                }
+            },
+        );
+        walker.current_group = "ctx.resolved_named_types";
+        if let Ok(cache) = ctx.resolved_named_types.lock() {
+            for state in cache.values() {
+                if let DeclarationResolutionState::Resolved { ty, .. } = state {
+                    walker.walk_type(ty);
+                }
+            }
+        }
+        walker.current_group = "ctx.instantiation_caches";
+        if let Ok(cache) = ctx.program_instantiations.lock() {
+            for bucket in cache.values() {
+                for entry in bucket {
+                    for argument in &entry.arguments {
+                        walker.walk_type(argument);
+                    }
+                    walker.walk_type(&entry.resolved);
+                }
+            }
+        }
+        if let Ok(cache) = ctx.program_resolved_generic_types.lock() {
+            for bucket in cache.values() {
+                for entry in bucket {
+                    for argument in &entry.arguments {
+                        walker.walk_type(argument);
+                    }
+                    walker.walk_type(&entry.ty);
+                }
+            }
+        }
+        walker.current_group = "ctx.physical_interface_caches";
+        if let Ok(cache) = ctx.physical_interface_instantiations.lock() {
+            for ty in cache.values() {
+                walker.walk_type(ty);
+            }
+        }
+        if let Ok(cache) = ctx.physical_interface_method_instantiations.lock() {
+            for function in cache.values() {
+                walker.walk_function(function);
+            }
+        }
+        if let Ok(cache) = ctx.physical_interface_overload_instantiations.lock() {
+            for function in cache.values() {
+                walker.walk_function(function);
+            }
+        }
+    }
+
+    // Walk store-owned payloads not already reached from live owners so the
+    // store's full retention is visible.
+    walker.current_group = "canonical_store_unreached";
+    let store_census = store.retained_census();
+    store.for_each_retained_type(&mut |ty| walker.walk_type(ty));
+
+    let mut groups: Vec<(&'static str, GroupTally)> =
+        walker.groups.iter().map(|(k, v)| (*k, *v)).collect();
+    groups.sort_by_key(|(_, tally)| std::cmp::Reverse(tally.bytes));
+    let footprint = super::current_footprint_bytes();
+    eprintln!(
+        "RETENTION CENSUS stage={stage} footprint={} store_functions={} store_parameter_elements={} store_union_members={} store_property_entries={}",
+        footprint.map_or_else(
+            || "n/a".into(),
+            |b| format!("{:.2}GB", b as f64 / (1 << 30) as f64)
+        ),
+        store_census.function_payloads,
+        store_census.parameter_list_elements,
+        store_census.union_member_elements,
+        store_census.property_map_entries,
+    );
+    for (name, tally) in &groups {
+        eprintln!(
+            "  group {name:<38} bytes={:>12} items={}",
+            tally.bytes, tally.items
+        );
+    }
+    eprintln!(
+        "  functions: canonical={} fallback={} fallback_bytes={} classes: unknown={} ctx_ref={} over_budget={} internable={}",
+        walker.canonical_function_payloads,
+        walker.fallback_function_payloads,
+        walker.fallback_function_bytes,
+        walker.fallback_classes.unknown_containing,
+        walker.fallback_classes.context_retaining_reference,
+        walker.fallback_classes.over_budget,
+        walker.fallback_classes.internable,
+    );
+    eprintln!(
+        "  symbols={} parsed_signature_bytes={} declarations={} declaration_parsed_bytes={} span_map_entries={} span_map_bytes={} references={} reference_argument_slots={}",
+        walker.symbol_count,
+        walker.parsed_signature_bytes,
+        walker.declaration_entries,
+        walker.declaration_parsed_bytes,
+        walker.span_map_entries,
+        walker.span_map_bytes,
+        walker.reference_count,
+        walker.reference_argument_slots,
+    );
+    eprintln!(
+        "  resolvers={} resolver_own_bytes={} resolver_shared_bytes={} environments={} environment_own_bytes={} decl_table_instances={} decl_index_bytes={}",
+        walker.resolver_count,
+        walker.resolver_own_bytes,
+        walker.resolver_shared_bytes,
+        walker.environment_count,
+        walker.environment_index_bytes,
+        walker.declaration_table_instances,
+        walker.declaration_index_bytes,
+    );
+}

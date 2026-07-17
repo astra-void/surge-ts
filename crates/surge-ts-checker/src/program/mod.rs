@@ -101,6 +101,20 @@ pub(crate) struct ModuleAnalysis {
     local_export_table: ModuleExportTable,
 }
 
+impl ModuleAnalysis {
+    pub(crate) fn local_type_declarations(&self) -> &Arc<TypeDeclarationTable> {
+        &self.local_type_declarations
+    }
+
+    pub(crate) fn local_symbols(&self) -> &SymbolTable {
+        &self.local_symbols
+    }
+
+    pub(crate) fn local_export_table(&self) -> &ModuleExportTable {
+        &self.local_export_table
+    }
+}
+
 // --- Temporary SURGE_EQ_STATS probe: measures how many files' preliminary and
 // final module analyses are already output-equal (the ceiling for any
 // equality-based final-round skip) and how much preliminary time they carry.
@@ -639,6 +653,17 @@ fn check_program_with_stats_and_jobs_inner(
         &store,
         census_external,
     );
+    crate::metrics::emit_retention_census(
+        "after_preliminary_analysis",
+        Some(&ctx),
+        &store,
+        crate::metrics::RetentionCensusView {
+            preliminary_module_analyses: Some(&preliminary_module_analyses),
+            preliminary_module_import_bindings: Some(&preliminary_module_import_bindings),
+            global_symbols: Some(&global_symbols),
+            ..Default::default()
+        },
+    );
 
     let module_binding_start = Instant::now();
     let export_resolution_start = Instant::now();
@@ -978,6 +1003,25 @@ fn check_program_with_stats_and_jobs_inner(
         "module_local_values",
         program_start.elapsed(),
     );
+    if crate::metrics::retention_census_enabled() {
+        let signature_refs = shared_state
+            .function_signatures
+            .values()
+            .collect::<Vec<_>>();
+        crate::metrics::emit_retention_census(
+            "before_check_phase",
+            Some(&ctx),
+            &store,
+            crate::metrics::RetentionCensusView {
+                module_analyses: Some(&shared_state.module_analyses),
+                module_import_bindings: Some(&shared_state.module_import_bindings),
+                module_resolution_scopes: Some(&shared_state.module_resolution_scopes),
+                global_symbols: Some(&shared_state.global_symbols),
+                function_signatures: Some(&signature_refs),
+                ..Default::default()
+            },
+        );
+    }
 
     // All cross-file program state now lives in `shared_state`; the per-file check
     // phase receives only the current file plus `shared_state`, never the file
@@ -1029,6 +1073,25 @@ fn check_program_with_stats_and_jobs_inner(
             result.stats.suppressed_declaration_diagnostics_total;
         ctx.stats.suppressed_rust_only_diagnostics_total +=
             result.stats.suppressed_rust_only_diagnostics_total;
+    }
+    if crate::metrics::retention_census_enabled() {
+        let signature_refs = shared_state
+            .function_signatures
+            .values()
+            .collect::<Vec<_>>();
+        crate::metrics::emit_retention_census(
+            "after_check_phase",
+            Some(&ctx),
+            &store,
+            crate::metrics::RetentionCensusView {
+                module_analyses: Some(&shared_state.module_analyses),
+                module_import_bindings: Some(&shared_state.module_import_bindings),
+                module_resolution_scopes: Some(&shared_state.module_resolution_scopes),
+                global_symbols: Some(&shared_state.global_symbols),
+                function_signatures: Some(&signature_refs),
+                ..Default::default()
+            },
+        );
     }
     // Checking is complete and the diagnostics are extracted: the cross-file
     // program state and every remaining parse tree are dead. Dropping them here

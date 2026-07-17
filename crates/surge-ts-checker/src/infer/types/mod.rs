@@ -29,6 +29,32 @@ impl TypeParameterSubstitution {
     pub(crate) fn clone_with_reason(&self, reason: TypeCopyReason) -> Self {
         with_type_copy_reason(reason, || self.clone())
     }
+
+    /// Census-only `(address, bytes)` pairs for the `Arc`-shared capture maps,
+    /// so retention walks charge each shared map once.
+    pub(crate) fn census_shared_captures(&self) -> Vec<(usize, u64)> {
+        let mut captures = Vec::new();
+        if let Some(values) = &self.values {
+            let bytes = values
+                .iter()
+                .map(|(name, _)| {
+                    (name.capacity()
+                        + std::mem::size_of::<String>()
+                        + std::mem::size_of::<Type>()
+                        + 32) as u64
+                })
+                .sum();
+            captures.push((Arc::as_ptr(values) as *const () as usize, bytes));
+        }
+        if let Some(placeholders) = &self.placeholders {
+            let bytes = placeholders
+                .iter()
+                .map(|name| (name.capacity() + std::mem::size_of::<String>() + 16) as u64)
+                .sum();
+            captures.push((Arc::as_ptr(placeholders) as *const () as usize, bytes));
+        }
+        captures
+    }
 }
 
 impl TypeParameterSubstitution {

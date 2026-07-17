@@ -194,6 +194,10 @@ impl ResolveReference for InternedInstantiation {
     fn resolve_arc(&self) -> Arc<Type> {
         self.resolved.clone()
     }
+
+    fn peek_resolved(&self) -> Option<Arc<Type>> {
+        Some(self.resolved.clone())
+    }
 }
 
 /// Maximum nesting of in-flight lazy peels before a deeper one degrades to
@@ -347,6 +351,33 @@ impl ResolveReference for LazyDeclarationAnnotation {
 
     fn program_canonicalization_discriminator(&self) -> u64 {
         self.environment.canonicalization_discriminator()
+    }
+
+    fn captured_census(&self) -> surge_ts_types::ResolverCaptureCensus {
+        let mut own_bytes = std::mem::size_of::<Self>() as u64
+            + self.annotation.estimated_heap_bytes()
+            + self.key.name.capacity() as u64;
+        let mut shared_captures = Vec::new();
+        if let Some(environment) = &self.signature_environment {
+            shared_captures.push((
+                environment.type_parameters.as_ptr() as usize,
+                environment
+                    .type_parameters
+                    .iter()
+                    .map(surge_ts_syntax::ParsedTypeParameter::estimated_heap_bytes)
+                    .sum(),
+            ));
+            shared_captures.extend(environment.substitution.census_shared_captures());
+            own_bytes += std::mem::size_of::<LazySignatureEnvironment>() as u64;
+        }
+        surge_ts_types::ResolverCaptureCensus {
+            own_bytes,
+            shared_captures,
+        }
+    }
+
+    fn peek_resolved(&self) -> Option<Arc<Type>> {
+        self.memo.get().and_then(std::sync::Weak::upgrade)
     }
 }
 
@@ -683,6 +714,25 @@ fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType) -> String
 impl ResolveReference for LazyInstantiation {
     fn resolve(&self) -> Type {
         (*self.resolve_arc()).clone()
+    }
+
+    fn captured_census(&self) -> surge_ts_types::ResolverCaptureCensus {
+        let own_bytes = std::mem::size_of::<Self>() as u64
+            + self
+                .type_arguments
+                .iter()
+                .map(surge_ts_syntax::ParsedType::estimated_heap_bytes)
+                .sum::<u64>()
+            + (self.resolved_arguments.len() * std::mem::size_of::<Type>()) as u64
+            + self.decl_key.name.capacity() as u64;
+        surge_ts_types::ResolverCaptureCensus {
+            own_bytes,
+            shared_captures: self.substitution.census_shared_captures(),
+        }
+    }
+
+    fn peek_resolved(&self) -> Option<Arc<Type>> {
+        self.memo.get().and_then(std::sync::Weak::upgrade)
     }
 
     fn resolve_arc(&self) -> Arc<Type> {

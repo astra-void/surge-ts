@@ -6,12 +6,14 @@
 
 mod counters;
 mod dts_expansion;
+mod retention_census;
 pub(crate) mod rss;
 mod timings;
 mod type_graph_census;
 
 pub(crate) use counters::*;
 pub(crate) use dts_expansion::*;
+pub(crate) use retention_census::*;
 pub(crate) use rss::{current_footprint_bytes, peak_footprint_bytes};
 pub(crate) use timings::*;
 pub(crate) use type_graph_census::*;

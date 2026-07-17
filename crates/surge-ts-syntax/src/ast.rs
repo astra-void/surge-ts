@@ -988,3 +988,121 @@ pub struct ParsedArrayElement {
     pub expression: ParsedExpression,
     pub span: Option<TextSpan>,
 }
+
+/// Census-only estimated owned-heap size of a parsed type tree, used by the
+/// retained-memory instrumentation to attribute parsed-annotation retention.
+/// Shallow-struct sizes plus owned string/vec heap; not allocator ground truth.
+impl ParsedType {
+    pub fn estimated_heap_bytes(&self) -> u64 {
+        let own = std::mem::size_of::<ParsedType>() as u64;
+        own + match self {
+            ParsedType::StringLiteral(value) | ParsedType::NumberLiteral(value) => {
+                value.capacity() as u64
+            }
+            ParsedType::Object(object) => {
+                let mut bytes = 0u64;
+                for property in &object.properties {
+                    bytes += property.name.capacity() as u64
+                        + std::mem::size_of::<ParsedObjectTypeProperty>() as u64
+                        + property.ty.estimated_heap_bytes();
+                }
+                if let Some(call) = object.call_signature.as_ref() {
+                    bytes += call.estimated_heap_bytes();
+                }
+                bytes
+            }
+            ParsedType::Array(element) | ParsedType::KeyOf(element) => {
+                element.estimated_heap_bytes()
+            }
+            ParsedType::Tuple(elements)
+            | ParsedType::Union(elements)
+            | ParsedType::Intersection(elements) => elements
+                .iter()
+                .map(ParsedType::estimated_heap_bytes)
+                .sum::<u64>(),
+            ParsedType::Function(function) => function.estimated_heap_bytes(),
+            ParsedType::Named(named) => named.estimated_heap_bytes(),
+            ParsedType::TypeOf(type_of) => {
+                type_of.name.capacity() as u64
+                    + type_of
+                        .members
+                        .iter()
+                        .map(|member| {
+                            member.capacity() as u64 + std::mem::size_of::<String>() as u64
+                        })
+                        .sum::<u64>()
+            }
+            ParsedType::IndexedAccess(indexed) => {
+                indexed.object_type.estimated_heap_bytes()
+                    + indexed.index_type.estimated_heap_bytes()
+            }
+            ParsedType::Mapped(mapped) => {
+                mapped.key_name.capacity() as u64
+                    + mapped.constraint.estimated_heap_bytes()
+                    + mapped.value_type.estimated_heap_bytes()
+            }
+            ParsedType::Conditional(conditional) => {
+                conditional.check_type.estimated_heap_bytes()
+                    + conditional.extends_type.estimated_heap_bytes()
+                    + conditional.true_type.estimated_heap_bytes()
+                    + conditional.false_type.estimated_heap_bytes()
+            }
+            ParsedType::TemplateLiteral(template) => {
+                template
+                    .quasis
+                    .iter()
+                    .map(|quasi| quasi.capacity() as u64 + std::mem::size_of::<String>() as u64)
+                    .sum::<u64>()
+                    + template
+                        .interpolations
+                        .iter()
+                        .map(ParsedType::estimated_heap_bytes)
+                        .sum::<u64>()
+            }
+            ParsedType::Infer(name) => name.capacity() as u64,
+            _ => 0,
+        }
+    }
+}
+
+impl ParsedFunctionType {
+    pub fn estimated_heap_bytes(&self) -> u64 {
+        let mut bytes = std::mem::size_of::<ParsedFunctionType>() as u64;
+        for parameter in &self.parameters {
+            bytes += std::mem::size_of::<ParsedFunctionTypeParameter>() as u64;
+            bytes += parameter
+                .name
+                .as_ref()
+                .map_or(0, |name| name.capacity() as u64);
+            bytes += parameter.ty.estimated_heap_bytes();
+        }
+        bytes += self.return_type.estimated_heap_bytes();
+        for parameter in &self.type_parameters {
+            bytes += parameter.estimated_heap_bytes();
+        }
+        bytes
+    }
+}
+
+impl ParsedTypeParameter {
+    pub fn estimated_heap_bytes(&self) -> u64 {
+        let mut bytes = (std::mem::size_of::<ParsedTypeParameter>() + self.name.capacity()) as u64;
+        if let Some(constraint) = self.constraint.as_ref() {
+            bytes += constraint.estimated_heap_bytes();
+        }
+        if let Some(default_type) = self.default_type.as_ref() {
+            bytes += default_type.estimated_heap_bytes();
+        }
+        bytes
+    }
+}
+
+impl ParsedNamedType {
+    pub fn estimated_heap_bytes(&self) -> u64 {
+        let mut bytes = (std::mem::size_of::<ParsedNamedType>() + self.name.capacity()) as u64;
+        for argument in &self.type_arguments {
+            bytes += argument.estimated_heap_bytes();
+        }
+        bytes
+    }
+}

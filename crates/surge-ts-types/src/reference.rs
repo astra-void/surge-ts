@@ -10,11 +10,35 @@ use crate::Type;
 /// Implementations are expected to memoize program-wide (one structural
 /// instantiation per unique declaration + type-argument tuple) so repeated
 /// `resolve` calls are cheap.
+/// Census-only estimate of the state a lazy resolver captures. `own_bytes` is
+/// the resolver's uniquely-owned heap (parsed annotations, resolved argument
+/// vectors, key strings); `shared_captures` lists `(address, bytes)` pairs for
+/// `Arc`-shared captures (substitution maps) so a walker can charge each shared
+/// payload once.
+#[derive(Debug, Default)]
+pub struct ResolverCaptureCensus {
+    pub own_bytes: u64,
+    pub shared_captures: Vec<(usize, u64)>,
+}
+
 pub trait ResolveReference: Send + Sync {
     fn resolve(&self) -> Type;
 
     fn retains_resolution_context(&self) -> bool {
         false
+    }
+
+    /// Census-only capture estimate; see [`ResolverCaptureCensus`]. The default
+    /// covers resolvers with no interesting captured state.
+    fn captured_census(&self) -> ResolverCaptureCensus {
+        ResolverCaptureCensus::default()
+    }
+
+    /// The memoized structural expansion, if one already exists, without
+    /// forcing resolution. Census walks use this to reach retained expansion
+    /// graphs; implementations must never compute a new expansion here.
+    fn peek_resolved(&self) -> Option<Arc<Type>> {
+        None
     }
 
     fn supports_program_canonicalization(&self) -> bool {
@@ -101,6 +125,17 @@ impl TypeReference {
 
     pub fn resolver_address(&self) -> usize {
         Arc::as_ptr(&self.resolver) as *const () as usize
+    }
+
+    /// Census-only capture estimate of the resolver. See
+    /// [`ResolveReference::captured_census`].
+    pub fn captured_census(&self) -> ResolverCaptureCensus {
+        self.resolver.captured_census()
+    }
+
+    /// The already-memoized expansion, if any, without forcing resolution.
+    pub fn peek_resolved(&self) -> Option<Arc<Type>> {
+        self.resolver.peek_resolved()
     }
 
     /// Nominal identity test: same declaration and same type arguments.
