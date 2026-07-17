@@ -34,6 +34,17 @@ store_id!(UnionTypeId);
 store_id!(PropertyMapId);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramTypeStoreRetainedCensus {
+    pub function_payloads: u64,
+    pub parameter_lists: u64,
+    pub parameter_list_elements: u64,
+    pub union_payloads: u64,
+    pub union_member_elements: u64,
+    pub property_maps: u64,
+    pub property_map_entries: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramTypeStoreStats {
     pub parameter_list_requests: u64,
     pub parameter_list_hits: u64,
@@ -59,28 +70,36 @@ pub struct ProgramTypeStoreStats {
     pub interner_lock_contentions: u64,
 }
 
+// Bucket entries hold `Weak` payload references so an interned payload lives
+// exactly as long as its consumers: a canonical type produced by a transient
+// pass (preliminary analysis, per-file inference) frees with that pass instead
+// of accumulating in the store for the whole program. Dead entries are swept
+// from a bucket whenever the bucket is next scanned. IDs are monotonic and
+// never reused, so a re-interned equal payload getting a fresh ID cannot
+// collide with identity fast-paths that compared the dead one — no live value
+// can hold a dead ID.
 #[derive(Debug)]
 struct ListEntry {
     id: TypeListId,
-    value: Arc<[Type]>,
+    value: Weak<[Type]>,
 }
 
 #[derive(Debug)]
 struct FunctionEntry {
     id: FunctionTypeId,
-    value: Arc<FunctionTypePayload>,
+    value: Weak<FunctionTypePayload>,
 }
 
 #[derive(Debug)]
 struct UnionEntry {
     id: UnionTypeId,
-    value: Arc<UnionTypePayload>,
+    value: Weak<UnionTypePayload>,
 }
 
 #[derive(Debug)]
 struct PropertyMapEntry {
     id: PropertyMapId,
-    value: Arc<PropertyMap>,
+    value: Weak<PropertyMap>,
 }
 
 #[derive(Debug, Default)]
@@ -172,16 +191,26 @@ impl ProgramTypeStore {
         ));
         let mut functions = self.lock_shard(&self.functions[shard_index(key)]);
         let bucket = functions.entry(key).or_default();
-        for entry in bucket.iter() {
-            let existing = &entry.value;
+        let mut hit = None;
+        bucket.retain(|entry| {
+            if hit.is_some() {
+                return true;
+            }
+            let Some(existing) = entry.value.upgrade() else {
+                return false;
+            };
             if canonical_type_lists_equal(existing.parameters.as_ref(), parameters.as_ref())
                 && canonical_types_equal(&existing.return_type, &return_type)
                 && existing.is_variadic == is_variadic
                 && existing.required_parameter_count == required_parameter_count
             {
-                self.counters.function_hits.fetch_add(1, Ordering::Relaxed);
-                return Ok((existing.clone(), entry.id));
+                hit = Some((existing, entry.id));
             }
+            true
+        });
+        if let Some((existing, id)) = hit {
+            self.counters.function_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok((existing, id));
         }
 
         let id = FunctionTypeId::new(
@@ -198,7 +227,7 @@ impl ProgramTypeStore {
         record_function_type_payload_alloc_count();
         bucket.push(FunctionEntry {
             id,
-            value: payload.clone(),
+            value: Arc::downgrade(&payload),
         });
         self.counters
             .function_misses
@@ -273,17 +302,27 @@ impl ProgramTypeStore {
             .fetch_add(parameters.len() as u64, Ordering::Relaxed);
         let mut lists = self.lock_shard(&self.parameter_lists[shard_index(key)]);
         let bucket = lists.entry(key).or_default();
-        for entry in bucket.iter() {
-            let existing = &entry.value;
-            if canonical_type_lists_equal(existing.as_ref(), parameters.as_slice()) {
-                self.counters
-                    .parameter_list_hits
-                    .fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .parameter_list_elements_avoided
-                    .fetch_add(parameters.len() as u64, Ordering::Relaxed);
-                return (existing.clone(), entry.id);
+        let mut hit = None;
+        bucket.retain(|entry| {
+            if hit.is_some() {
+                return true;
             }
+            let Some(existing) = entry.value.upgrade() else {
+                return false;
+            };
+            if canonical_type_lists_equal(existing.as_ref(), parameters.as_slice()) {
+                hit = Some((existing, entry.id));
+            }
+            true
+        });
+        if let Some((existing, id)) = hit {
+            self.counters
+                .parameter_list_hits
+                .fetch_add(1, Ordering::Relaxed);
+            self.counters
+                .parameter_list_elements_avoided
+                .fetch_add(parameters.len() as u64, Ordering::Relaxed);
+            return (existing, id);
         }
 
         let id = TypeListId::new(
@@ -293,7 +332,7 @@ impl ProgramTypeStore {
         let value: Arc<[Type]> = parameters.into();
         bucket.push(ListEntry {
             id,
-            value: value.clone(),
+            value: Arc::downgrade(&value),
         });
         self.counters
             .parameter_list_misses
@@ -315,15 +354,25 @@ impl ProgramTypeStore {
         };
         let mut unions = self.lock_shard(&self.unions[shard_index(key)]);
         let bucket = unions.entry(key).or_default();
-        for entry in bucket.iter() {
-            let existing = &entry.value;
-            if canonical_type_lists_equal(existing.types.as_ref(), types.as_slice()) {
-                self.counters.union_hits.fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .union_member_elements_avoided
-                    .fetch_add(types.len() as u64, Ordering::Relaxed);
-                return Ok((existing.clone(), entry.id));
+        let mut hit = None;
+        bucket.retain(|entry| {
+            if hit.is_some() {
+                return true;
             }
+            let Some(existing) = entry.value.upgrade() else {
+                return false;
+            };
+            if canonical_type_lists_equal(existing.types.as_ref(), types.as_slice()) {
+                hit = Some((existing, entry.id));
+            }
+            true
+        });
+        if let Some((existing, id)) = hit {
+            self.counters.union_hits.fetch_add(1, Ordering::Relaxed);
+            self.counters
+                .union_member_elements_avoided
+                .fetch_add(types.len() as u64, Ordering::Relaxed);
+            return Ok((existing, id));
         }
 
         let id = UnionTypeId::new(self.owner, self.next_union.fetch_add(1, Ordering::Relaxed));
@@ -334,7 +383,7 @@ impl ProgramTypeStore {
         record_union_type_payload_alloc_count();
         bucket.push(UnionEntry {
             id,
-            value: payload.clone(),
+            value: Arc::downgrade(&payload),
         });
         self.counters.union_misses.fetch_add(1, Ordering::Relaxed);
         Ok((payload, id))
@@ -351,8 +400,14 @@ impl ProgramTypeStore {
         let key = fingerprint_borrowed_types(types, &mut budget)?;
         let mut unions = self.lock_shard(&self.unions[shard_index(key)]);
         let bucket = unions.entry(key).or_default();
-        for entry in bucket.iter() {
-            let existing = &entry.value;
+        let mut hit = None;
+        bucket.retain(|entry| {
+            if hit.is_some() {
+                return true;
+            }
+            let Some(existing) = entry.value.upgrade() else {
+                return false;
+            };
             if existing.types.len() == types.len()
                 && existing
                     .types
@@ -360,13 +415,17 @@ impl ProgramTypeStore {
                     .zip(types.iter())
                     .all(|(left, right)| canonical_types_equal(left, right))
             {
-                self.counters.union_requests.fetch_add(1, Ordering::Relaxed);
-                self.counters.union_hits.fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .union_member_elements_avoided
-                    .fetch_add(types.len() as u64, Ordering::Relaxed);
-                return Some((existing.clone(), entry.id));
+                hit = Some((existing, entry.id));
             }
+            true
+        });
+        if let Some((existing, id)) = hit {
+            self.counters.union_requests.fetch_add(1, Ordering::Relaxed);
+            self.counters.union_hits.fetch_add(1, Ordering::Relaxed);
+            self.counters
+                .union_member_elements_avoided
+                .fetch_add(types.len() as u64, Ordering::Relaxed);
+            return Some((existing, id));
         }
         None
     }
@@ -392,17 +451,27 @@ impl ProgramTypeStore {
         let key = hasher.finish();
         let mut maps = self.lock_shard(&self.property_maps[shard_index(key)]);
         let bucket = maps.entry(key).or_default();
-        for entry in bucket.iter() {
-            let existing = &entry.value;
-            if ordered_property_maps_equal(&existing, &properties) {
-                self.counters
-                    .property_map_hits
-                    .fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .property_entries_avoided
-                    .fetch_add(properties.len() as u64, Ordering::Relaxed);
-                return Ok((existing.clone(), entry.id));
+        let mut hit = None;
+        bucket.retain(|entry| {
+            if hit.is_some() {
+                return true;
             }
+            let Some(existing) = entry.value.upgrade() else {
+                return false;
+            };
+            if ordered_property_maps_equal(&existing, &properties) {
+                hit = Some((existing, entry.id));
+            }
+            true
+        });
+        if let Some((existing, id)) = hit {
+            self.counters
+                .property_map_hits
+                .fetch_add(1, Ordering::Relaxed);
+            self.counters
+                .property_entries_avoided
+                .fetch_add(properties.len() as u64, Ordering::Relaxed);
+            return Ok((existing, id));
         }
 
         let id = PropertyMapId::new(
@@ -412,12 +481,101 @@ impl ProgramTypeStore {
         let value = Arc::new(properties);
         bucket.push(PropertyMapEntry {
             id,
-            value: value.clone(),
+            value: Arc::downgrade(&value),
         });
         self.counters
             .property_map_misses
             .fetch_add(1, Ordering::Relaxed);
         Ok((value, id))
+    }
+
+    /// Iterates every retained canonical payload (function parameter/return
+    /// types, union members, property-map values) for census walks. Diagnostics
+    /// only; takes each shard lock briefly.
+    pub fn for_each_retained_type(&self, f: &mut dyn FnMut(&Type)) {
+        for shard in &self.functions {
+            for bucket in self.lock_shard(shard).values() {
+                for entry in bucket {
+                    let Some(value) = entry.value.upgrade() else {
+                        continue;
+                    };
+                    for parameter in value.parameters.iter() {
+                        f(parameter);
+                    }
+                    f(&value.return_type);
+                }
+            }
+        }
+        for shard in &self.unions {
+            for bucket in self.lock_shard(shard).values() {
+                for entry in bucket {
+                    let Some(value) = entry.value.upgrade() else {
+                        continue;
+                    };
+                    for member in value.types.iter() {
+                        f(member);
+                    }
+                }
+            }
+        }
+        for shard in &self.property_maps {
+            for bucket in self.lock_shard(shard).values() {
+                for entry in bucket {
+                    let Some(value) = entry.value.upgrade() else {
+                        continue;
+                    };
+                    for (_, property) in value.iter() {
+                        f(&property.ty);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Entry counts of the retained (still-live) canonical payloads, for census
+    /// reporting.
+    pub fn retained_census(&self) -> ProgramTypeStoreRetainedCensus {
+        let mut census = ProgramTypeStoreRetainedCensus::default();
+        for shard in &self.functions {
+            for bucket in self.lock_shard(shard).values() {
+                census.function_payloads +=
+                    bucket.iter().filter(|e| e.value.strong_count() > 0).count() as u64;
+            }
+        }
+        for shard in &self.parameter_lists {
+            for bucket in self.lock_shard(shard).values() {
+                for entry in bucket {
+                    let Some(value) = entry.value.upgrade() else {
+                        continue;
+                    };
+                    census.parameter_lists += 1;
+                    census.parameter_list_elements += value.len() as u64;
+                }
+            }
+        }
+        for shard in &self.unions {
+            for bucket in self.lock_shard(shard).values() {
+                for entry in bucket {
+                    let Some(value) = entry.value.upgrade() else {
+                        continue;
+                    };
+                    census.union_payloads += 1;
+                    census.union_member_elements += value.types.len() as u64;
+                }
+            }
+        }
+        for shard in &self.property_maps {
+            for bucket in self.lock_shard(shard).values() {
+                for entry in bucket {
+                    let Some(value) = entry.value.upgrade() else {
+                        continue;
+                    };
+                    census.property_maps += 1;
+                    census.property_map_entries += value.len() as u64;
+                }
+            }
+        }
+        census
     }
 
     pub fn stats(&self) -> ProgramTypeStoreStats {
@@ -848,16 +1006,31 @@ mod tests {
     }
 
     #[test]
-    fn canonical_store_releases_payloads_on_cleanup() {
+    fn canonical_store_does_not_retain_dead_payloads() {
         let store = ProgramTypeStore::new();
-        let weak = with_program_type_store(store.clone(), || {
+        with_program_type_store(store.clone(), || {
             let function = FunctionType::new(vec![Type::String], Type::Number, false, 1);
-            Arc::downgrade(&function.payload)
-        });
+            let first_id = function.id();
+            let weak = Arc::downgrade(&function.payload);
+            assert!(weak.upgrade().is_some());
 
-        assert!(weak.upgrade().is_some());
+            // Entries are weak: a payload lives exactly as long as its
+            // consumers, not until store cleanup.
+            drop(function);
+            assert!(weak.upgrade().is_none());
+
+            // A later equal intern re-creates the payload under a fresh,
+            // never-reused id.
+            let reinterned = FunctionType::new(vec![Type::String], Type::Number, false, 1);
+            assert!(reinterned.id().is_some());
+            assert_ne!(reinterned.id(), first_id);
+
+            // Two live equal values still unify on one payload.
+            let same = FunctionType::new(vec![Type::String], Type::Number, false, 1);
+            assert_eq!(same.id(), reinterned.id());
+            assert!(Arc::ptr_eq(&same.payload, &reinterned.payload));
+        });
         store.clear();
-        assert!(weak.upgrade().is_none());
     }
 
     #[test]
