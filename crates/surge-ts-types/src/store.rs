@@ -753,8 +753,14 @@ fn canonical_type_lists_equal(left: &[Type], right: &[Type]) -> bool {
 
 fn canonical_types_equal(left: &Type, right: &Type) -> bool {
     match (left, right) {
+        // Display fields participate in canonical identity: an intern hit
+        // substitutes the stored payload wholesale, so display-differing
+        // variants of structurally-equal content must intern separately or
+        // rendered diagnostic text becomes a function of intern order — which
+        // is thread-schedule-dependent under parallel analysis.
         (Type::Reference(left), Type::Reference(right)) => {
             left.id == right.id
+                && left.display == right.display
                 && left.program_canonicalization_discriminator()
                     == right.program_canonicalization_discriminator()
                 && canonical_type_lists_equal(&left.arguments, &right.arguments)
@@ -768,7 +774,9 @@ fn canonical_types_equal(left: &Type, right: &Type) -> bool {
             left.payload_address() == right.payload_address()
         }
         (Type::Object(left), Type::Object(right)) => {
-            Arc::ptr_eq(&left.properties, &right.properties)
+            left.alias_name == right.alias_name
+                && left.alias_id == right.alias_id
+                && Arc::ptr_eq(&left.properties, &right.properties)
                 && match (
                     left.string_index_type.as_deref(),
                     right.string_index_type.as_deref(),
