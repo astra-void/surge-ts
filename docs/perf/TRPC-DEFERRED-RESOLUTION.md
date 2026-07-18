@@ -129,32 +129,58 @@ But it still does not beat the serial recheck. Two reasons, both measured:
   the 8 cores — the same ceiling the [ordered-delta report](TRPC-ORDERED-DELTA-REPLAY.md)
   measured. commit_phase: defer ≈1.88 s vs serial ≈1.81 s (interleaved).
 
+### Latest-dependency scheduling was tried — it is worse
+
+The natural "cut stale replays" lever — schedule each conflict at its latest
+worker-log dependency (`compute_submit_schedule(clean_only=false)`) instead of
+eagerly at frontier 0 — was implemented and measured. It is **byte-identical**
+and drives the structural metric hard: **inline rechecks 64 → ~1**,
+**pool-committed replays 75 → ~126** (nearly every conflict now commits via the
+pool). But it is **slower**, not faster: interleaved same-window A/B,
+**commit_phase defer ≈2.31 s vs serial ≈1.71 s (+35 %)**, and stale replays rose
+(80 → ~91). Reverted.
+
+Why routing everything to the pool loses: the coordinator blocks at each frontier
+position waiting for that position's replay (`take`), and the deep
+conflict-dependency chain (max level ~35) serializes the frontier — a position
+cannot commit until its predecessors do. So the pool cannot overlap the chain;
+it only adds queueing + stale-re-run overhead on top of an inherently serial
+walk. The serial recheck does the same heavy work inline without the
+pool-coordination overhead, so it wins.
+
 ## The blocker, precisely
 
 The value dependency between conflicts is shallow (~6 truly-divergent conflicts),
-but the *digest* dependency DAG is deep (max level ~35). The over-recursion
-representation is now handled safely, yet the tail does not get faster because
-the residual cost is **scheduling**, not resolution: stale conflict-dependent
-replays and pool/coordinator contention. The remaining levers are orthogonal to
-deferred resolution:
+but the *digest* dependency DAG is deep (max level ~35) and — the decisive point,
+now confirmed by the latest-dep experiment — **fundamentally serial at the
+frontier**. The over-recursion representation is now handled safely, and inline
+rechecks can be driven to ~0, yet the tail does not get faster: the frontier
+advances at the rate of the dependency chain regardless of how the replays are
+scheduled, and moving work onto the pool only adds coordination + stale-re-run
+cost. This is the same ceiling the
+[ordered-delta report](TRPC-ORDERED-DELTA-REPLAY.md) measured, now isolated to
+the frontier serialization rather than the over-recursion.
 
-### Next concrete changes
+### Remaining levers (all orthogonal to deferred resolution)
 
-* **Cut stale replays.** Schedule conflict-dependent replays at their latest
-  worker-log dependency (drop the eager-at-0 submit) so fewer run against an
-  incomplete view; or reserve on the *replay's real* miss set rather than the
-  worker log.
-* **Make the short-circuit terminal without re-expanding.** Return a nominal that
-  resolves to a cached structural placeholder (not Unknown) so a forced deferred
-  nominal never over-recurses even once — removing the defer-once expansion cost.
-* **Address the contention ceiling** (separate, measured): the pool + coordinator
-  on 8 cores. Until that moves, a faster tail is unlikely regardless of how cheap
-  the deferred replays become.
+* **Break the frontier serialization** — the real bottleneck. The coordinator's
+  strict in-order `take` at every position is what serializes the walk;
+  committing independent chain-heads out of order (while preserving serial
+  *publication* semantics) is the only thing that could parallelize the tail, and
+  it is a much larger change to the commit walk.
+* **Shorten the digest DAG** — reserve on the replay's *real* committed-view miss
+  set rather than the worker log, so fewer conflicts are digest-dependent in the
+  first place.
+* **Make the short-circuit terminal** — a nominal that resolves to a cached
+  structural placeholder (not `Unknown`) so a forced deferred nominal never
+  over-recurses even once (removes the defer-once expansion cost). A micro-lever;
+  it cannot beat the frontier ceiling alone.
 
-Until then the serial recheck remains the fastest correct tail for tRPC. The
-reservation table, the measurement, and the requeue substrate are kept as the
-validated, non-regressing foundation (opt-in `SURGE_DEFER`; the shipping default
-is untouched).
+Until the frontier serialization is broken, the serial recheck remains the
+fastest correct tail for tRPC. The reservation table, the measurement, the
+requeue substrate, and the safe short-circuit are kept as the validated,
+non-regressing foundation (opt-in `SURGE_DEFER`; the shipping default is
+untouched).
 
 ## Validation
 
