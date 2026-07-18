@@ -183,6 +183,26 @@ pub(crate) fn collect_global_augmentations_from_statements(
     for_each_global_augmentation_block(statements, ctx, lower_global_augmentation_values);
 }
 
+/// Whether any statement carries a `declare global` block (directly or nested
+/// in a `declare module "x"`). Modules for which this is true publish global
+/// values first-wins in the final analysis pass, which is order-sensitive and
+/// must stay on the serial coordinator path.
+pub(crate) fn has_global_augmentation_block(statements: &[ParsedStatement]) -> bool {
+    statements.iter().any(|statement| {
+        let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
+            return false;
+        };
+        module.module_specifier == "global"
+            || module.statements.iter().any(|nested| {
+                matches!(
+                    nested,
+                    ParsedStatement::DeclareModuleDeclaration(inner)
+                        if inner.module_specifier == "global"
+                )
+            })
+    })
+}
+
 fn for_each_global_augmentation_block(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,

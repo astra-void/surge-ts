@@ -564,6 +564,18 @@ fn check_program_with_stats_and_jobs_inner(
         timings.parsing += parse_start.elapsed()
     });
     record_rss_stage(timings.as_ref(), "parsing", program_start.elapsed());
+    if let Some(path) = std::env::var_os("SURGE_FILE_ORDER_DUMP") {
+        let mut out = String::new();
+        for (index, file) in parsed_files.iter().enumerate() {
+            use std::fmt::Write;
+            let _ = writeln!(
+                out,
+                "{index}\t{:?}\t{}\t{}",
+                file.file_kind, file.is_module, file.file_name
+            );
+        }
+        let _ = std::fs::write(path, out);
+    }
     let module_file_index_by_identity = parsed_files
         .iter()
         .enumerate()
@@ -675,6 +687,7 @@ fn check_program_with_stats_and_jobs_inner(
             &parsed_files,
             &local_type_declarations_by_module,
             &preliminary_module_import_bindings,
+            false,
             &mut ctx,
             timings.as_ref(),
             analysis_worker_count,
@@ -833,14 +846,28 @@ fn check_program_with_stats_and_jobs_inner(
     ));
     let augmentation_insertions_before_final = augmentation_value_insertion_count();
     let type_collection_start = Instant::now();
-    let module_analyses = collect_module_analyses_with_bindings(
-        &parsed_files,
-        &local_type_declarations_by_module,
-        &module_import_bindings,
-        true,
-        &mut ctx,
-        timings.as_ref(),
-    );
+    let final_analysis_parallel = analysis_worker_count > 1
+        && std::env::var("SURGE_PARALLEL_ANALYSIS_FINAL").as_deref() != Ok("0");
+    let module_analyses = if final_analysis_parallel {
+        collect_module_analyses_with_bindings_parallel(
+            &parsed_files,
+            &local_type_declarations_by_module,
+            &module_import_bindings,
+            true,
+            &mut ctx,
+            timings.as_ref(),
+            analysis_worker_count,
+        )
+    } else {
+        collect_module_analyses_with_bindings(
+            &parsed_files,
+            &local_type_declarations_by_module,
+            &module_import_bindings,
+            true,
+            &mut ctx,
+            timings.as_ref(),
+        )
+    };
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_analysis_collection += type_collection_start.elapsed()
     });

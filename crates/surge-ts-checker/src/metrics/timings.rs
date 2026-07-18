@@ -119,7 +119,20 @@ pub(crate) fn record_rss_stage(
     label: &'static str,
     elapsed: Duration,
 ) {
+    // `SURGE_STAGE_TIMES=1`: stage timeline without the per-file
+    // instrumentation `SURGE_TIMINGS` enables — that per-file mutex traffic
+    // serializes parallel phases badly enough to invert their measurements.
+    static STAGE_TIMES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *STAGE_TIMES.get_or_init(|| std::env::var_os("SURGE_STAGE_TIMES").is_some()) {
+        eprintln!(
+            "[stage] {label} t={:.1}ms fp={:.1}MB fp_peak={:.1}MB",
+            elapsed.as_secs_f64() * 1e3,
+            current_footprint_bytes().unwrap_or(0) as f64 / 1e6,
+            peak_footprint_bytes().unwrap_or(0) as f64 / 1e6,
+        );
+    }
     let Some(timings) = timings else {
+        pause_if_requested(label);
         return;
     };
 

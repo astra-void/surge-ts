@@ -213,6 +213,134 @@ impl FileCacheLog {
             other.join(",")
         )
     }
+
+    /// Debug probe: the file's observed-miss digests, for regime diffing.
+    pub(crate) fn debug_miss_lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .misses
+            .iter()
+            .map(|digest| format!("x{digest:x}"))
+            .collect();
+        lines.sort_unstable();
+        lines
+    }
+
+    /// Debug probe: one line per insertion with a display-sensitive value
+    /// fingerprint, for regime-divergence hunts (which committed value differs
+    /// between the speculative and serial computation of the same module).
+    pub(crate) fn debug_value_lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .generic_inserts
+            .iter()
+            .map(|(key, entry, digest)| {
+                let mut key_debug = format!("{key:?}");
+                key_debug.truncate(220);
+                format!(
+                    "g{digest:x}=v{:x} key={key_debug}",
+                    display_type_fingerprint(&entry.ty)
+                )
+            })
+            .chain(
+                self.instantiation_inserts
+                    .iter()
+                    .map(|(key, entry, digest)| {
+                        let mut key_debug = format!("{key:?}");
+                        key_debug.truncate(220);
+                        format!(
+                            "i{digest:x}=v{:x} key={key_debug}",
+                            display_type_fingerprint(&entry.resolved)
+                        )
+                    }),
+            )
+            .chain(self.physical_inserts.iter().map(|(_, resolved, digest)| {
+                format!("p{digest:x}=v{:x}", display_type_fingerprint(resolved))
+            }))
+            .chain(self.method_inserts.iter().map(|(_, function, digest)| {
+                format!("m{digest:x}=v{:x}", display_function_fingerprint(function))
+            }))
+            .chain(self.overload_inserts.iter().map(|(_, function, digest)| {
+                format!("o{digest:x}=v{:x}", display_function_fingerprint(function))
+            }))
+            .collect();
+        lines.sort_unstable();
+        lines
+    }
+}
+
+/// Display-sensitive, sharing-insensitive fingerprint of a type's rendered
+/// prefix: hashes discriminants, literals, reference display names, object
+/// alias/property names — everything diagnostic text can show — over a
+/// budget-bounded tree walk (no pointer memo, so two equal-display values hash
+/// equal regardless of internal Arc sharing).
+pub(crate) fn display_type_fingerprint(ty: &Type) -> u64 {
+    let mut hasher = FxHasher::default();
+    let mut budget = 500_000usize;
+    display_fingerprint_walk(ty, &mut hasher, &mut budget);
+    hasher.finish()
+}
+
+pub(crate) fn display_function_fingerprint(function: &FunctionType) -> u64 {
+    let mut hasher = FxHasher::default();
+    let mut budget = 500_000usize;
+    display_fingerprint_function(function, &mut hasher, &mut budget);
+    hasher.finish()
+}
+
+fn display_fingerprint_walk(ty: &Type, hasher: &mut impl Hasher, budget: &mut usize) {
+    if *budget == 0 {
+        return;
+    }
+    *budget -= 1;
+    std::mem::discriminant(ty).hash(hasher);
+    match ty {
+        Type::StringLiteral(value) => value.hash(hasher),
+        Type::NumberLiteral(value) => value.value.hash(hasher),
+        Type::BooleanLiteral(value) => value.hash(hasher),
+        Type::Array(element) => display_fingerprint_walk(element, hasher, budget),
+        Type::Tuple(elements) => {
+            for element in elements {
+                display_fingerprint_walk(element, hasher, budget);
+            }
+        }
+        Type::Union(union) => {
+            for member in union.types() {
+                display_fingerprint_walk(member, hasher, budget);
+            }
+        }
+        Type::Function(function) => display_fingerprint_function(function, hasher, budget),
+        Type::Object(object) => {
+            object.alias_name.hash(hasher);
+            for (name, property) in object.properties.iter() {
+                name.hash(hasher);
+                property.is_optional().hash(hasher);
+                display_fingerprint_walk(&property.ty, hasher, budget);
+                if *budget == 0 {
+                    return;
+                }
+            }
+        }
+        Type::Reference(reference) => {
+            reference.display.hash(hasher);
+            for argument in reference.arguments.iter() {
+                display_fingerprint_walk(argument, hasher, budget);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn display_fingerprint_function(
+    function: &FunctionType,
+    hasher: &mut impl Hasher,
+    budget: &mut usize,
+) {
+    for parameter in function.parameters() {
+        display_fingerprint_walk(parameter, hasher, budget);
+        if *budget == 0 {
+            return;
+        }
+    }
+    display_fingerprint_walk(function.return_type(), hasher, budget);
 }
 
 struct WorkerOverlay {
