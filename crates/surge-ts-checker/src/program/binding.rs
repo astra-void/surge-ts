@@ -721,6 +721,10 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
 
     let worker_phase = worker_phase_start.elapsed();
     let commit_phase_start = Instant::now();
+    // The fan-out snapshot is only read through worker sessions; every session
+    // is gone once the scope joins, so release the six cloned maps before the
+    // commit walk instead of holding them across it.
+    drop(base);
     let mut analyses: Vec<Option<ModuleAnalysis>> = (0..parsed_files.len()).map(|_| None).collect();
     let mut slots: Vec<Option<WorkerModuleOutcome>> =
         (0..parsed_files.len()).map(|_| None).collect();
@@ -971,6 +975,12 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
             );
         }
         analyses[file_index] = outcome_analysis;
+        // The committed file's log (insert-value clones) is dead now; release
+        // it progressively rather than holding every file's inserts across the
+        // whole walk.
+        if product_probe.is_none() && !probe_all {
+            logs_by_index[file_index] = None;
+        }
         if probed(file_index) {
             if let Some(log) = logs_by_index[file_index].as_ref() {
                 for line in log.debug_value_lines() {

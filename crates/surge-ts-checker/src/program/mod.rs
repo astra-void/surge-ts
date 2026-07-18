@@ -1804,6 +1804,9 @@ fn check_program_files_parallel(
 
     let worker_phase = stc_phase_start.elapsed();
     let commit_phase_start = Instant::now();
+    // The fan-out snapshot is only read through worker sessions, all gone once
+    // the scope joins; release the six cloned maps before the commit walk.
+    drop(base);
     let mut slots: Vec<Option<FileCheckResult>> = (0..parsed_files.len()).map(|_| None).collect();
     let mut logs = Vec::with_capacity(parsed_files.len());
     for (worker_results, worker_logs) in results {
@@ -1814,17 +1817,25 @@ fn check_program_files_parallel(
         logs.extend(worker_logs);
     }
     logs.sort_by_key(|log| log.file_index);
+    let total_misses: usize = logs
+        .iter()
+        .map(crate::speculative::FileCacheLog::miss_count)
+        .sum();
 
     // Deterministic commit: file order, independent of worker completion order.
+    // Each file's log is released as soon as it is committed (or discarded on
+    // conflict, before the recheck) so the walk doesn't retain every worker's
+    // insert-value clones to its end.
     let cap = crate::infer::types::cache::generic_instantiation_bucket_cap();
     let mut published = surge_ts_types::fx::FxHashSet::default();
     let mut dirty = surge_ts_types::fx::FxHashSet::default();
     let mut stats = crate::speculative::StcCommitStats::default();
     let mut recheck_ctx: Option<CheckerContext> = None;
-    for log in &logs {
+    for slot in &mut logs {
+        let log = std::mem::take(slot);
         match crate::speculative::commit_file_log(
             &live,
-            log,
+            &log,
             &mut published,
             &dirty,
             cap,
@@ -1835,6 +1846,7 @@ fn check_program_files_parallel(
             | crate::speculative::CommitVerdict::DependencyConflict => {
                 let file_index = log.file_index;
                 dirty.insert(file_index);
+                drop(log);
                 let local_ctx = recheck_ctx.get_or_insert_with(|| {
                     let mut local_ctx = ctx.clone();
                     local_ctx.diagnostics.clear();
@@ -1878,10 +1890,6 @@ fn check_program_files_parallel(
         }
     }
     if std::env::var_os("SURGE_STC_STATS").is_some() {
-        let total_misses: usize = logs
-            .iter()
-            .map(crate::speculative::FileCacheLog::miss_count)
-            .sum();
         eprintln!(
             "[stc] files={} clean={} miss_conflicts={} dep_conflicts={} published={} \
              skipped_existing={} cap_blocked={} total_misses={} worker_phase={:.2}s \
