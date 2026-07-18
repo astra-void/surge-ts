@@ -17,12 +17,16 @@ readme = "README.md"
 name = "surge"
 path = "src/main.rs"
 
-# Optional global-allocator selection for the `surge` binary only. The system
-# allocator is the default; at most one feature may be enabled (enforced by
-# `compile_error!` guards in `src/global_alloc.rs`). Library crates must never
-# declare a global allocator, so these dependencies live only in this crate.
+# Optional global-allocator selection for the `surge` binary only. mimalloc
+# is the default: on the pinned tRPC fixture it takes the serial full check
+# from ~14.2s to ~11.0s wall at equal-or-better peak physical footprint
+# (1.96 vs 2.08 GB), byte-identical diagnostics (interleaved A/B, 2026-07-18).
+# At most one allocator feature may be enabled (enforced by `compile_error!`
+# guards in `src/global_alloc.rs`). Library crates must never declare a global
+# allocator, so these dependencies live only in this crate. Build with
+# `--no-default-features` for the system allocator.
 [features]
-default = []
+default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
 jemalloc = ["dep:tikv-jemallocator"]
 snmalloc = ["dep:snmalloc-rs"]
