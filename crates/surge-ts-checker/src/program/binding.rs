@@ -486,6 +486,7 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
     parsed_files: &[ParsedProgramFile],
     local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
     preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
+    lower_global_augmentation_values: bool,
     ctx: &mut CheckerContext,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
     worker_count: usize,
@@ -497,40 +498,120 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
     let analysis_round = next_analysis_round();
     let live = crate::speculative::LiveCacheHandles::capture(ctx);
     let base = Arc::new(crate::speculative::CacheSnapshots::capture(&live));
+    // Divergence-bisection probe: `SURGE_ANALYSIS_PAR_RANGE=lo:hi` restricts
+    // worker dispatch to modules with `lo <= file_index < hi`; everything else
+    // takes the serial-only commit path (the exact serial regime).
+    let par_range: Option<(usize, usize)> = std::env::var("SURGE_ANALYSIS_PAR_RANGE")
+        .ok()
+        .and_then(|spec| {
+            let (lo, hi) = spec.split_once(':')?;
+            Some((lo.parse().ok()?, hi.parse().ok()?))
+        });
+    let per_module_sessions = std::env::var_os("SURGE_ANALYSIS_MODULE_SESSIONS").is_some();
+    let declarations_serial = std::env::var_os("SURGE_ANALYSIS_DECL_SERIAL").is_some();
+    // Divergence-bisection probe: `SURGE_ANALYSIS_FRESH_RANGE=lo:hi` analyzes
+    // serial-path modules in the range on a fresh pass-start context clone
+    // (live cache view), separating context-instance effects from
+    // snapshot-view effects during hunts.
+    let fresh_range: Option<(usize, usize)> = std::env::var("SURGE_ANALYSIS_FRESH_RANGE")
+        .ok()
+        .and_then(|spec| {
+            let (lo, hi) = spec.split_once(':')?;
+            Some((lo.parse().ok()?, hi.parse().ok()?))
+        });
+    // Divergence-hunt probe: `SURGE_ANALYSIS_PRODUCT_PROBE=<file_index>` dumps
+    // the module's committed analysis-product fingerprints and per-insert
+    // value fingerprints, for diffing regimes.
+    let product_probe_env = std::env::var("SURGE_ANALYSIS_PRODUCT_PROBE").ok();
+    let probe_all = product_probe_env.as_deref() == Some("all");
+    let product_probe: Option<usize> = product_probe_env.and_then(|value| value.parse().ok());
+    let probed = |file_index: usize| probe_all || product_probe == Some(file_index);
 
     struct WorkerModuleOutcome {
         file_index: usize,
         analysis: Option<ModuleAnalysis>,
         diagnostics: Vec<Diagnostic>,
-        /// The module's post-analysis named-resolution memo. Serial analysis
-        /// leaves the last module's memo on the rolling context and later
-        /// stages observably resolve through it, so the commit walk installs
-        /// the last committed module's memo on the main context.
-        resolved_named_types: Arc<
-            Mutex<
-                surge_ts_types::fx::FxHashMap<
-                    crate::context::DeclarationResolutionKey,
-                    crate::context::DeclarationResolutionState,
+        /// Utility-diagnostic keys this module's analysis recorded
+        /// (`push_utility_diagnostic_once`). Serial analysis accumulates these
+        /// on the rolling context — including keys whose diagnostics were
+        /// truncated — and later phases consult them for suppression, so a
+        /// clean commit must merge them and a key another module already
+        /// published must invalidate the speculation (the worker emitted a
+        /// diagnostic serial suppression would have swallowed).
+        utility_key_additions: std::collections::HashSet<
+            crate::context::UtilityDiagnosticKey,
+            surge_ts_types::fx::FxBuildHasher,
+        >,
+        /// The module's post-analysis named-resolution memo, captured only for
+        /// the last analyzed module: serial analysis leaves the last module's
+        /// memo on the rolling context and later stages observably resolve
+        /// through it. Earlier modules' memos are never observable (every
+        /// analysis replaces the memo at entry) and retaining them would keep
+        /// speculative intermediate expansions alive in the weak canonical
+        /// store.
+        resolved_named_types: Option<
+            Arc<
+                Mutex<
+                    surge_ts_types::fx::FxHashMap<
+                        crate::context::DeclarationResolutionKey,
+                        crate::context::DeclarationResolutionState,
+                    >,
                 >,
             >,
         >,
         resolved_named_types_identity: crate::context::EnvironmentMapIdentity,
     }
 
+    // The worker seed carries the pass-start utility keys as a shared
+    // baseline: per-module clones then start with an empty overlay whose
+    // post-analysis content is exactly the module's own key additions, and the
+    // clone stops deep-copying the accumulated key set per module.
+    let worker_seed = {
+        let mut seed = ctx.clone();
+        seed.diagnostics.clear();
+        seed.clear_diagnostic_keys();
+        // `analyze_module` replaces `type_declarations` with the module's own
+        // table before any read, so the seed doesn't carry the rolling table —
+        // every per-module clone would deep-copy it for nothing.
+        seed.type_declarations = TypeDeclarationTable::new();
+        seed.snapshot_utility_keys_into_baseline();
+        seed
+    };
+    // Only the LAST analyzed module's named-resolution memo is observable
+    // after the pass (later stages resolve through the rolling context's memo;
+    // every earlier module's memo is replaced before anything reads it), so
+    // only that outcome captures its memo. Retaining every module's memo until
+    // its commit both bloats the walk's footprint and — worse — keeps each
+    // speculative attempt's intermediate expansions strongly alive, so a
+    // serial recheck can intern-hit a discarded display variant in the weak
+    // canonical store instead of computing the serial display form.
+    let last_module_index = parsed_files
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, file)| file.is_module || file.file_kind == FileKind::DependencyDeclaration)
+        .map(|(index, _)| index);
     let next_index = AtomicUsize::new(0);
+    let worker_phase_start = Instant::now();
     let worker_outputs = std::thread::scope(|scope| {
         let next_index = &next_index;
+        let worker_seed = &worker_seed;
         let mut handles = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
-            let seed_ctx = ctx.clone();
+            let seed_ctx = worker_seed.clone();
             let session = Arc::new(crate::speculative::CheckSession::new(
                 live.clone(),
                 base.clone(),
             ));
+            let live_for_workers = live.clone();
+            let base = base.clone();
             handles.push(scope.spawn(move || {
                 let type_store = seed_ctx.program_type_store.clone();
+                let mut module_logs = Vec::new();
+                let module_logs_ref = &mut module_logs;
                 let outcomes = with_program_type_store(type_store, || {
                     crate::speculative::with_check_session(session.clone(), || {
+                        let module_logs = module_logs_ref;
                         let mut outcomes = Vec::new();
                         loop {
                             // Ascending dispatch keeps each worker's overlay a
@@ -545,18 +626,23 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                             {
                                 continue;
                             }
-                            // Declaration modules are serial-only: their heavy
-                            // interface resolution goes through the
-                            // environment-identity-keyed physical caches, whose
-                            // pointer-derived keys are not stable across
-                            // context instances — a fresh worker context flips
-                            // hit/miss on entries whose values are
-                            // context-sensitive (observed as 5 divergent
-                            // node_modules .d.ts modules on tRPC). They run on
-                            // the coordinator's rolling context at their
-                            // file-order position instead — the exact serial
-                            // regime.
-                            if parsed_file.file_kind.is_declaration() {
+                            if declarations_serial && parsed_file.file_kind.is_declaration() {
+                                continue;
+                            }
+                            if let Some((lo, hi)) = par_range
+                                && !(lo..hi).contains(&file_index)
+                            {
+                                continue;
+                            }
+                            // Final pass: a module with a `declare global`
+                            // block publishes global values first-wins, which
+                            // is order-sensitive — it runs on the serial
+                            // coordinator path at its file-order position.
+                            if lower_global_augmentation_values
+                                && crate::driver::has_global_augmentation_block(
+                                    &parsed_file.statements,
+                                )
+                            {
                                 continue;
                             }
                             // A fresh per-module context: unlike the check
@@ -567,24 +653,49 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                             // a schedule-dependent way.
                             let mut local_ctx = seed_ctx.clone();
                             local_ctx.diagnostics.clear();
-                            session.begin_file(file_index);
-                            let analysis = analyze_module(
-                                file_index,
-                                parsed_file,
-                                local_type_declarations_by_module,
-                                preliminary_module_import_bindings,
-                                false,
-                                analysis_round,
-                                memory_trace_threshold,
-                                &mut local_ctx,
-                                timings,
+                            // Probe (`SURGE_ANALYSIS_MODULE_SESSIONS=1`): give
+                            // the module a private session with no worker
+                            // overlay, isolating overlay-visibility effects
+                            // from fresh-context effects during divergence
+                            // hunts.
+                            let module_session = per_module_sessions.then(|| {
+                                Arc::new(crate::speculative::CheckSession::new(
+                                    live_for_workers.clone(),
+                                    base.clone(),
+                                ))
+                            });
+                            let active_session = module_session.as_ref().unwrap_or(&session);
+                            active_session.begin_file(file_index);
+                            let analysis = crate::speculative::with_check_session(
+                                active_session.clone(),
+                                || {
+                                    analyze_module(
+                                        file_index,
+                                        parsed_file,
+                                        local_type_declarations_by_module,
+                                        preliminary_module_import_bindings,
+                                        false,
+                                        analysis_round,
+                                        memory_trace_threshold,
+                                        &mut local_ctx,
+                                        timings,
+                                    )
+                                },
                             );
+                            if let Some(module_session) = module_session {
+                                module_logs.extend(module_session.take_file_logs());
+                            }
                             let diagnostics = std::mem::take(&mut local_ctx.diagnostics);
+                            let utility_key_additions =
+                                std::mem::take(&mut local_ctx.utility_diagnostic_keys);
+                            let capture_memo = Some(file_index) == last_module_index;
                             outcomes.push(WorkerModuleOutcome {
                                 file_index,
                                 analysis,
                                 diagnostics,
-                                resolved_named_types: local_ctx.resolved_named_types.clone(),
+                                utility_key_additions,
+                                resolved_named_types: capture_memo
+                                    .then(|| local_ctx.resolved_named_types.clone()),
                                 resolved_named_types_identity: local_ctx
                                     .resolved_named_types_identity
                                     .clone(),
@@ -593,7 +704,9 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                         outcomes
                     })
                 });
-                (outcomes, session.take_file_logs())
+                let mut logs = session.take_file_logs();
+                logs.extend(module_logs);
+                (outcomes, logs)
             }));
         }
         handles
@@ -606,6 +719,8 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
             .collect::<Vec<_>>()
     });
 
+    let worker_phase = worker_phase_start.elapsed();
+    let commit_phase_start = Instant::now();
     let mut analyses: Vec<Option<ModuleAnalysis>> = (0..parsed_files.len()).map(|_| None).collect();
     let mut slots: Vec<Option<WorkerModuleOutcome>> =
         (0..parsed_files.len()).map(|_| None).collect();
@@ -653,7 +768,36 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
             continue;
         }
         let mut outcome_analysis;
+        let had_speculative_attempt = logs_by_index[file_index].is_some();
+        // A key this module recorded that an earlier-committed module also
+        // recorded means serial suppression would have swallowed the worker's
+        // emission: the speculation is invalid even though every cache
+        // observation validated. Checked against the rolling overlay, which at
+        // this point holds exactly the earlier modules' merged additions plus
+        // the pass-start keys (which worker baselines also contained, so they
+        // can never appear among a worker's additions).
+        let utility_conflict = slots[file_index].as_ref().is_some_and(|outcome| {
+            outcome
+                .utility_key_additions
+                .iter()
+                .any(|key| ctx.utility_diagnostic_keys.contains(key))
+        });
+        if product_probe == Some(file_index) {
+            let mut lines: Vec<String> = published
+                .iter()
+                .map(|digest| format!("x{digest:x}"))
+                .collect();
+            lines.sort_unstable();
+            for line in lines {
+                eprintln!("[probe-published] {line}");
+            }
+        }
         let verdict = match logs_by_index[file_index].as_ref() {
+            Some(_) if utility_conflict => {
+                stats.files += 1;
+                stats.miss_conflicts += 1;
+                crate::speculative::CommitVerdict::MissConflict
+            }
             Some(log) => crate::speculative::commit_file_log(
                 &live,
                 log,
@@ -678,46 +822,137 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                 for diagnostic in outcome.diagnostics {
                     ctx.push_collected(diagnostic);
                 }
+                ctx.utility_diagnostic_keys
+                    .extend(outcome.utility_key_additions);
                 // Reproduce the serial carry: after the pass, the rolling
                 // context holds the last analyzed module's memo, which later
                 // stages observably resolve through.
-                ctx.resolved_named_types = outcome.resolved_named_types;
-                ctx.resolved_named_types_identity = outcome.resolved_named_types_identity;
+                if let Some(memo) = outcome.resolved_named_types {
+                    ctx.resolved_named_types = memo;
+                    ctx.resolved_named_types_identity = outcome.resolved_named_types_identity;
+                }
             }
             crate::speculative::CommitVerdict::MissConflict
             | crate::speculative::CommitVerdict::DependencyConflict => {
                 dirty.insert(file_index);
+                // Drop the discarded attempt's outcome AND its log before
+                // re-analyzing: the log's insert entries hold the attempt's
+                // computed types strongly, which keeps their weak canonical-
+                // store entries alive — the recheck would then intern-hit the
+                // discarded attempt's display variants instead of computing
+                // the serial display forms.
                 slots[file_index] = None;
+                logs_by_index[file_index] = None;
                 let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
                     live.clone(),
                 ));
-                // Recheck environments must not dedup with the discarded
-                // speculative attempt's (their memo maps differ semantically).
-                ctx.environment_attempt = 1;
-                outcome_analysis = crate::speculative::with_check_session(session.clone(), || {
-                    session.begin_file(file_index);
-                    analyze_module(
-                        file_index,
-                        parsed_file,
-                        local_type_declarations_by_module,
-                        preliminary_module_import_bindings,
-                        false,
-                        analysis_round,
-                        memory_trace_threshold,
-                        ctx,
-                        timings,
-                    )
-                });
-                ctx.environment_attempt = 0;
-                for recheck_log in session.take_file_logs() {
-                    let complete = crate::speculative::apply_file_log(
-                        &live,
-                        &recheck_log,
-                        &mut published,
-                        cap,
-                        &mut stats,
-                    );
-                    debug_assert!(complete, "re-analysis publication must be complete");
+                let fresh_serial =
+                    fresh_range.is_some_and(|(lo, hi)| (lo..hi).contains(&file_index));
+                if fresh_serial {
+                    let mut fresh_ctx = worker_seed.clone();
+                    if std::env::var_os("SURGE_ANALYSIS_FRESH_STORE").is_some() {
+                        fresh_ctx.program_type_store = surge_ts_types::ProgramTypeStore::new();
+                    }
+                    let fresh_store = fresh_ctx.program_type_store.clone();
+                    outcome_analysis = with_program_type_store(fresh_store, || {
+                        crate::speculative::with_check_session(session.clone(), || {
+                            session.begin_file(file_index);
+                            analyze_module(
+                                file_index,
+                                parsed_file,
+                                local_type_declarations_by_module,
+                                preliminary_module_import_bindings,
+                                lower_global_augmentation_values,
+                                analysis_round,
+                                memory_trace_threshold,
+                                &mut fresh_ctx,
+                                timings,
+                            )
+                        })
+                    });
+                    for diagnostic in std::mem::take(&mut fresh_ctx.diagnostics) {
+                        ctx.push_collected(diagnostic);
+                    }
+                    ctx.utility_diagnostic_keys
+                        .extend(std::mem::take(&mut fresh_ctx.utility_diagnostic_keys));
+                    ctx.resolved_named_types = fresh_ctx.resolved_named_types.clone();
+                    ctx.resolved_named_types_identity =
+                        fresh_ctx.resolved_named_types_identity.clone();
+                    if let Some(analysis) = outcome_analysis.as_ref() {
+                        analysis
+                            .local_export_table
+                            .type_declarations
+                            .arena_handle()
+                            .adopt_current_thread_as_owner();
+                        analysis
+                            .local_type_declarations
+                            .arena_handle()
+                            .adopt_current_thread_as_owner();
+                    }
+                    for fresh_log in session.take_file_logs() {
+                        if probed(file_index) {
+                            for line in fresh_log.debug_value_lines() {
+                                eprintln!("[probe-insert-fresh] f{file_index} {line}");
+                            }
+                            for line in fresh_log.debug_miss_lines() {
+                                eprintln!("[probe-miss-fresh] f{file_index} {line}");
+                            }
+                        }
+                        crate::speculative::apply_file_log(
+                            &live,
+                            &fresh_log,
+                            &mut published,
+                            cap,
+                            &mut stats,
+                        );
+                    }
+                } else {
+                    // The recheck keeps attempt 0: its environment identities
+                    // (and every downstream cache key formed from them, e.g.
+                    // by the final pass reading prelim-created environments)
+                    // must match the serial regime exactly, or later passes
+                    // key the same logical entries differently and cleanly
+                    // commit divergent display variants. Colliding with the
+                    // discarded speculative attempt's identities is harmless:
+                    // the discarded attempt's cache insertions are never
+                    // published, and interned environments only attach
+                    // content-stamped table snapshots.
+                    let _ = had_speculative_attempt;
+                    ctx.environment_attempt = 0;
+                    outcome_analysis =
+                        crate::speculative::with_check_session(session.clone(), || {
+                            session.begin_file(file_index);
+                            analyze_module(
+                                file_index,
+                                parsed_file,
+                                local_type_declarations_by_module,
+                                preliminary_module_import_bindings,
+                                lower_global_augmentation_values,
+                                analysis_round,
+                                memory_trace_threshold,
+                                ctx,
+                                timings,
+                            )
+                        });
+                    ctx.environment_attempt = 0;
+                    for recheck_log in session.take_file_logs() {
+                        if probed(file_index) {
+                            for line in recheck_log.debug_value_lines() {
+                                eprintln!("[probe-insert-serial] f{file_index} {line}");
+                            }
+                            for line in recheck_log.debug_miss_lines() {
+                                eprintln!("[probe-miss-serial] f{file_index} {line}");
+                            }
+                        }
+                        let complete = crate::speculative::apply_file_log(
+                            &live,
+                            &recheck_log,
+                            &mut published,
+                            cap,
+                            &mut stats,
+                        );
+                        debug_assert!(complete, "re-analysis publication must be complete");
+                    }
                 }
             }
         }
@@ -736,15 +971,59 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
             );
         }
         analyses[file_index] = outcome_analysis;
+        if probed(file_index) {
+            if let Some(log) = logs_by_index[file_index].as_ref() {
+                for line in log.debug_value_lines() {
+                    eprintln!("[probe-insert-worker] f{file_index} {line}");
+                }
+                for line in log.debug_miss_lines() {
+                    eprintln!("[probe-miss-worker] f{file_index} {line}");
+                }
+            }
+            if let Some(analysis) = analyses[file_index].as_ref() {
+                let mut lines = Vec::new();
+                for (name, symbol) in analysis.local_symbols.iter_shared() {
+                    lines.push(format!(
+                        "sym {name}=v{:x}",
+                        crate::speculative::display_type_fingerprint(&symbol.ty)
+                    ));
+                }
+                for (name, symbol) in analysis.local_export_table.symbols.iter_shared() {
+                    lines.push(format!(
+                        "exp {name}=v{:x}",
+                        crate::speculative::display_type_fingerprint(&symbol.ty)
+                    ));
+                }
+                if let Some(symbol) = &analysis.local_export_table.default_symbol {
+                    lines.push(format!(
+                        "exp default=v{:x}",
+                        crate::speculative::display_type_fingerprint(&symbol.ty)
+                    ));
+                }
+                if let Some(symbol) = &analysis.local_export_table.export_assignment_symbol {
+                    lines.push(format!(
+                        "exp assign=v{:x}",
+                        crate::speculative::display_type_fingerprint(&symbol.ty)
+                    ));
+                }
+                lines.sort_unstable();
+                for line in lines {
+                    eprintln!("[probe-product] f{file_index} {line}");
+                }
+            }
+        }
     }
     if std::env::var_os("SURGE_STC_STATS").is_some() {
         eprintln!(
-            "[stc-analysis] modules={} clean={} miss_conflicts={} dep_conflicts={} published={}",
+            "[stc-analysis] modules={} clean={} miss_conflicts={} dep_conflicts={} published={} \
+             worker_phase={:.2}s commit_phase={:.2}s",
             stats.files,
             stats.clean_commits,
             stats.miss_conflicts,
             stats.dependency_conflicts,
             stats.published_entries,
+            worker_phase.as_secs_f64(),
+            commit_phase_start.elapsed().as_secs_f64(),
         );
     }
     crate::metrics::release_free_memory();

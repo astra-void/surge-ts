@@ -1328,6 +1328,31 @@ impl CheckerContext {
         self.utility_diagnostic_keys_baseline = None;
     }
 
+    /// Moves the inherited utility-key overlay into the shared baseline (the
+    /// same split [`Self::begin_file_check`] performs on its first call), so a
+    /// per-module speculative clone starts with an empty overlay: suppression
+    /// still consults the full inherited set, and after the module's analysis
+    /// the overlay holds exactly that module's key additions.
+    /// Drops the push-dedup index (it lazily rebuilds from `diagnostics` on
+    /// the next deduplicated push), so cheap clones don't deep-copy a stale
+    /// key set.
+    pub(crate) fn clear_diagnostic_keys(&mut self) {
+        self.diagnostic_keys = HashSet::default();
+        self.diagnostic_keys_len = 0;
+    }
+
+    pub(crate) fn snapshot_utility_keys_into_baseline(&mut self) {
+        let inherited = std::mem::take(&mut self.utility_diagnostic_keys);
+        self.utility_diagnostic_keys_baseline = match self.utility_diagnostic_keys_baseline.take() {
+            None => Some(Arc::new(inherited)),
+            Some(existing) => {
+                let mut merged = (*existing).clone();
+                merged.extend(inherited);
+                Some(Arc::new(merged))
+            }
+        };
+    }
+
     pub(crate) fn set_symbols(&mut self, symbols: SymbolTable) {
         self.symbols = symbols;
         self.declaration_environment_generation =
