@@ -756,6 +756,7 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
         let file_index = log.file_index;
         logs_by_index[file_index] = Some(log);
     }
+    crate::speculative::report_conflict_dag(&logs_by_index);
 
     // Deterministic commit in file order. Declaration-file type dedup runs here
     // (not in workers): its shared cache picks pointer-identity representatives,

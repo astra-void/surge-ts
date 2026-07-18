@@ -1807,88 +1807,191 @@ fn check_program_files_parallel(
     // The fan-out snapshot is only read through worker sessions, all gone once
     // the scope joins; release the six cloned maps before the commit walk.
     drop(base);
-    let mut slots: Vec<Option<FileCheckResult>> = (0..parsed_files.len()).map(|_| None).collect();
-    let mut logs = Vec::with_capacity(parsed_files.len());
-    for (worker_results, worker_logs) in results {
+    let n = parsed_files.len();
+    let mut slots: Vec<Option<FileCheckResult>> = (0..n).map(|_| None).collect();
+    let mut worker_logs: Vec<Option<crate::speculative::FileCacheLog>> =
+        (0..n).map(|_| None).collect();
+    for (worker_results, logs) in results {
         for result in worker_results {
             let file_index = result.file_index;
             slots[file_index] = Some(result);
         }
-        logs.extend(worker_logs);
+        for log in logs {
+            let file_index = log.file_index;
+            worker_logs[file_index] = Some(log);
+        }
     }
-    logs.sort_by_key(|log| log.file_index);
-    let total_misses: usize = logs
+    let total_misses: usize = worker_logs
         .iter()
+        .flatten()
         .map(crate::speculative::FileCacheLog::miss_count)
         .sum();
+    crate::speculative::report_conflict_dag(&worker_logs);
+    // `SURGE_REPLAY_OFF=1` disables pre-replay (every conflict resolves inline —
+    // the serial recheck), for interleaved A/B measurement of the pipeline.
+    let submit_at = if std::env::var_os("SURGE_REPLAY_OFF").is_some() {
+        vec![usize::MAX; n]
+    } else {
+        crate::speculative::compute_submit_schedule(&worker_logs)
+    };
 
-    // Deterministic commit: file order, independent of worker completion order.
-    // Each file's log is released as soon as it is committed (or discarded on
-    // conflict, before the recheck) so the walk doesn't retain every worker's
-    // insert-value clones to its end.
+    // Pipelined ordered-delta replay: publish in strict serial order (the
+    // frontier) while a background pool recomputes predicted-conflict files
+    // against the live committed store, each launched exactly when its last
+    // dependency commits (dependency-driven schedule). A replay that is still
+    // stale, or absent, falls back to the inline recheck — the exact old serial
+    // behavior, guaranteed valid. See `crate::replay` for the soundness
+    // argument (in-order publication makes hit-validation structural).
     let cap = crate::infer::types::cache::generic_instantiation_bucket_cap();
     let mut published = surge_ts_types::fx::FxHashSet::default();
     let mut dirty = surge_ts_types::fx::FxHashSet::default();
     let mut stats = crate::speculative::StcCommitStats::default();
     let mut recheck_ctx: Option<CheckerContext> = None;
-    for slot in &mut logs {
-        let log = std::mem::take(slot);
-        match crate::speculative::commit_file_log(
-            &live,
-            &log,
-            &mut published,
-            &dirty,
-            cap,
-            &mut stats,
-        ) {
-            crate::speculative::CommitVerdict::Clean => {}
-            crate::speculative::CommitVerdict::MissConflict
-            | crate::speculative::CommitVerdict::DependencyConflict => {
-                let file_index = log.file_index;
-                dirty.insert(file_index);
-                drop(log);
-                let local_ctx = recheck_ctx.get_or_insert_with(|| {
-                    let mut local_ctx = ctx.clone();
-                    local_ctx.diagnostics.clear();
-                    local_ctx.stats = CompatibilityStats::default();
-                    // Recheck environments must not dedup with the discarded
-                    // speculative attempt's (their memo maps differ).
-                    local_ctx.environment_attempt = 1;
-                    local_ctx
-                });
-                // Re-check against the now-committed cache state; by induction
-                // this is exactly what a serial run would have observed at this
-                // position, and the recheck's own insertions cannot conflict
-                // (its base view already contains everything published). The
-                // session reads the live maps directly — the commit pass is
-                // single-threaded, so no snapshot clone is needed.
-                let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
-                    live.clone(),
-                ));
-                let result = crate::speculative::with_check_session(session.clone(), || {
+    let mut replay_committed = 0u64;
+    let mut replay_stale = 0u64;
+    let mut inline_only = 0u64;
+
+    struct CheckReplayShared<'a> {
+        parsed_files: &'a [ParsedProgramFile],
+        shared_state: &'a ProgramCheckSharedState,
+        live: crate::speculative::LiveCacheHandles,
+        ctx: &'a CheckerContext,
+        timings: Option<Arc<Mutex<ProgramTimings>>>,
+    }
+    struct CheckThreadState {
+        ctx: CheckerContext,
+        store: Arc<surge_ts_types::ProgramTypeStore>,
+    }
+    struct CheckReplay {
+        result: FileCheckResult,
+        log: crate::speculative::FileCacheLog,
+    }
+
+    let shared = CheckReplayShared {
+        parsed_files,
+        shared_state,
+        live: live.clone(),
+        ctx,
+        timings: timings.clone(),
+    };
+
+    let replay_stats = crate::replay::run_frontier_pipeline(
+        crate::replay::PipelineConfig { n, worker_count },
+        &submit_at,
+        &shared,
+        || {
+            let mut ctx = shared.ctx.clone();
+            ctx.diagnostics.clear();
+            ctx.stats = CompatibilityStats::default();
+            let store = ctx.program_type_store.clone();
+            CheckThreadState { ctx, store }
+        },
+        |shared, thread_state, file_index| {
+            // A fresh live-reading session and a unique attempt stamp so the
+            // replay recomputes correct values instead of dedup-hitting the
+            // discarded worker attempt's environments in the weak store.
+            let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
+                shared.live.clone(),
+            ));
+            thread_state.ctx.environment_attempt = crate::replay::next_replay_attempt();
+            let result = with_program_type_store(thread_state.store.clone(), || {
+                crate::speculative::with_check_session(session.clone(), || {
                     session.begin_file(file_index);
                     check_program_file(
                         file_index,
-                        &parsed_files[file_index],
-                        shared_state,
-                        local_ctx,
-                        timings.as_ref(),
+                        &shared.parsed_files[file_index],
+                        shared.shared_state,
+                        &mut thread_state.ctx,
+                        shared.timings.as_ref(),
                     )
-                });
-                slots[file_index] = Some(result);
-                for recheck_log in session.take_file_logs() {
-                    let complete = crate::speculative::apply_file_log(
+                })
+            });
+            let log = session.take_file_logs().pop().unwrap_or_default();
+            CheckReplay { result, log }
+        },
+        |_file_index| true,
+        |file_index, replay: Option<CheckReplay>, is_final| {
+            if let Some(log) = worker_logs[file_index].take() {
+                if matches!(
+                    crate::speculative::commit_file_log(
                         &live,
-                        &recheck_log,
+                        &log,
                         &mut published,
+                        &dirty,
                         cap,
                         &mut stats,
-                    );
-                    debug_assert!(complete, "recheck publication must be complete");
+                    ),
+                    crate::speculative::CommitVerdict::Clean
+                ) {
+                    // The worker's speculative result stands (slots already holds it).
+                    return crate::replay::CommitOutcome::Committed;
                 }
+                // The worker log conflicted and is now consumed; a retry uses the
+                // freshly re-submitted replay rather than re-validating it.
             }
-        }
-    }
+            dirty.insert(file_index);
+            let had_replay = replay.is_some();
+            if let Some(replay) = replay
+                && crate::speculative::commit_replay_log(
+                    &live,
+                    &replay.log,
+                    &mut published,
+                    cap,
+                    &mut stats,
+                )
+            {
+                worker_logs[file_index] = None;
+                replay_committed += 1;
+                slots[file_index] = Some(replay.result);
+                return crate::replay::CommitOutcome::Committed;
+            }
+            // Stale or absent replay: recompute inline against the exact
+            // committed<file_index. (Conflict-dependent positions are not
+            // pre-replayed — see `compute_submit_schedule` — so they arrive here
+            // with no replay; a clean-dependent position that is nonetheless
+            // stale is rare and also lands here. The `is_final` retry path exists
+            // for the shared orchestrator but the check tail never defers.)
+            let _ = is_final;
+            if had_replay {
+                replay_stale += 1;
+            } else {
+                inline_only += 1;
+            }
+            worker_logs[file_index] = None;
+            let local_ctx = recheck_ctx.get_or_insert_with(|| {
+                let mut local_ctx = ctx.clone();
+                local_ctx.diagnostics.clear();
+                local_ctx.stats = CompatibilityStats::default();
+                local_ctx.environment_attempt = 1;
+                local_ctx
+            });
+            let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
+                live.clone(),
+            ));
+            let result = crate::speculative::with_check_session(session.clone(), || {
+                session.begin_file(file_index);
+                check_program_file(
+                    file_index,
+                    &parsed_files[file_index],
+                    shared_state,
+                    local_ctx,
+                    timings.as_ref(),
+                )
+            });
+            slots[file_index] = Some(result);
+            for recheck_log in session.take_file_logs() {
+                crate::speculative::apply_file_log(
+                    &live,
+                    &recheck_log,
+                    &mut published,
+                    cap,
+                    &mut stats,
+                );
+            }
+            crate::replay::CommitOutcome::Committed
+        },
+    );
+
     if std::env::var_os("SURGE_STC_STATS").is_some() {
         eprintln!(
             "[stc] files={} clean={} miss_conflicts={} dep_conflicts={} published={} \
@@ -1904,6 +2007,11 @@ fn check_program_files_parallel(
             total_misses,
             worker_phase.as_secs_f64(),
             commit_phase_start.elapsed().as_secs_f64(),
+        );
+        eprintln!(
+            "[stc-replay] submitted={} replay_committed={replay_committed} stale={replay_stale} \
+             inline_only={inline_only} wasted={} peak_in_flight={}",
+            replay_stats.submitted, replay_stats.wasted, replay_stats.peak_in_flight,
         );
     }
 

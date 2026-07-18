@@ -62,25 +62,27 @@ pub(crate) struct PipelineConfig {
     pub(crate) n: usize,
     /// Background replay threads.
     pub(crate) worker_count: usize,
-    /// How far ahead of the frontier predicted conflicts are pre-submitted. A
-    /// larger window exposes more parallelism but makes replays read a
-    /// staler committed view (more re-runs); see [`run_frontier_pipeline`].
-    pub(crate) window: usize,
 }
 
-/// Live counters for one pipelined commit walk (opt-in reporting).
+/// What the coordinator did with a position: committed it, or needs a fresh
+/// replay (the current one was stale or absent). On `NeedsReplay` the
+/// orchestrator re-submits the position to the pool; since the frontier is
+/// parked at that position, the re-replay reads the complete `committed<k` and
+/// is guaranteed valid — moving the heavy recompute onto a pool thread instead
+/// of the coordinator, so it never contends with the pool's look-ahead work.
+pub(crate) enum CommitOutcome {
+    Committed,
+    NeedsReplay,
+}
+
+/// Scheduling counters the orchestrator itself tracks (phase-specific
+/// commit/validate counts are tracked by the coordinator closure).
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ReplayStats {
-    /// Positions committed straight from the worker's speculative result.
-    pub(crate) clean_worker: u64,
-    /// Conflicts resolved by a valid pre-computed replay.
-    pub(crate) replay_hit: u64,
-    /// Conflicts whose pre-computed replay was stale (re-run inline).
-    pub(crate) replay_stale: u64,
-    /// Conflicts recomputed inline with no pre-computed replay available.
-    pub(crate) inline_only: u64,
     /// Replay tasks dispatched to the pool.
     pub(crate) submitted: u64,
+    /// Positions re-submitted because the pre-computed replay was stale.
+    pub(crate) resubmitted: u64,
     /// Replay results the coordinator never consumed (over-prediction).
     pub(crate) wasted: u64,
     /// Max positions submitted-but-not-yet-consumed at any instant (pending
@@ -120,6 +122,16 @@ impl<R> Pool<R> {
     fn submit(&self, position: usize) {
         let mut inner = self.inner.lock().expect("replay pool poisoned");
         inner.queue.push_back(position);
+        drop(inner);
+        self.task_ready.notify_one();
+    }
+
+    /// Submit to the *front* of the queue — used for a re-submit the coordinator
+    /// is actively blocked on, so a pool thread picks it up ahead of speculative
+    /// look-ahead work rather than after it.
+    fn submit_front(&self, position: usize) {
+        let mut inner = self.inner.lock().expect("replay pool poisoned");
+        inner.queue.push_front(position);
         drop(inner);
         self.task_ready.notify_one();
     }
@@ -181,23 +193,28 @@ impl<R> Pool<R> {
 /// * `replay_one` — recomputes position `k` on a pool thread against the live
 ///   committed store, returning the outcome `R` the coordinator will validate.
 /// * `is_active` — whether a position participates (non-modules are skipped).
-/// * `is_predicted` — whether a position is worth pre-replaying (a scheduling
-///   hint only; correctness never depends on it).
-/// * `commit_position` — coordinator step: given `k` and an optional
-///   pre-computed replay (`None` if the position was not pre-submitted), commit
-///   the worker result if it validates, else the replay if it validates, else
-///   recompute inline. The closure owns all committing.
+/// * `submit_at` — per position, the frontier index at which the pool should
+///   start its replay, or `usize::MAX` to never pre-replay it. Dependency-driven
+///   scheduling ([`compute_submit_schedule`]) launches each predicted conflict
+///   exactly when its last dependency has committed, so the replay reads a
+///   committed view already containing everything it depends on and validates on
+///   the first try — no wasted over-recursion against a stale view. Purely a
+///   scheduling hint; correctness never depends on it (a stale or absent replay
+///   falls back to the inline recompute in `commit_position`).
+/// * `commit_position` — coordinator step: given `k` and an optional pre-computed
+///   replay (`None` if not pre-submitted), commit the worker result if it
+///   validates, else the replay if it validates, else recompute inline.
 ///
 /// Returns the accumulated [`ReplayStats`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_frontier_pipeline<S, T, R>(
     config: PipelineConfig,
+    submit_at: &[usize],
     shared: &S,
     make_thread: impl Fn() -> T + Sync,
     replay_one: impl Fn(&S, &mut T, usize) -> R + Sync,
     is_active: impl Fn(usize) -> bool,
-    is_predicted: impl Fn(usize) -> bool,
-    mut commit_position: impl FnMut(usize, Option<R>),
+    mut commit_position: impl FnMut(usize, Option<R>, bool) -> CommitOutcome,
 ) -> ReplayStats
 where
     S: Sync,
@@ -208,6 +225,14 @@ where
     let pool = Pool::<R>::new();
     let pool_ref = &pool;
     let mut stats = ReplayStats::default();
+
+    // Bucket positions by the frontier index at which they become submittable.
+    let mut submit_buckets: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
+    for (position, &at) in submit_at.iter().enumerate().take(n) {
+        if at != usize::MAX {
+            submit_buckets[at.min(n)].push(position);
+        }
+    }
 
     std::thread::scope(|scope| {
         for _ in 0..config.worker_count.max(1) {
@@ -222,39 +247,49 @@ where
             });
         }
 
-        let mut submit_cursor = 0usize;
         let mut submitted = vec![false; n];
         let mut in_flight = 0i64;
         for frontier in 0..n {
-            if !is_active(frontier) {
-                continue;
-            }
-            // Pre-submit predicted conflicts within the look-ahead window so the
-            // pool computes them against a committed view close to their true
-            // serial position.
-            let horizon = frontier.saturating_add(config.window).min(n.saturating_sub(1));
-            while submit_cursor <= horizon {
-                if is_active(submit_cursor)
-                    && is_predicted(submit_cursor)
-                    && !submitted[submit_cursor]
-                {
-                    submitted[submit_cursor] = true;
-                    pool_ref.submit(submit_cursor);
+            // Submit everything whose last dependency finalized before this
+            // frontier (its dependencies are now in the committed store).
+            for &position in &submit_buckets[frontier] {
+                if !submitted[position] {
+                    submitted[position] = true;
+                    pool_ref.submit(position);
                     stats.submitted += 1;
                     in_flight += 1;
                     stats.peak_in_flight = stats.peak_in_flight.max(in_flight as u64);
                 }
-                submit_cursor += 1;
             }
-
-            let replay = if submitted[frontier] {
+            if !is_active(frontier) {
+                continue;
+            }
+            let mut replay = if submitted[frontier] {
                 let result = pool_ref.take(frontier);
                 in_flight -= 1;
                 Some(result)
             } else {
                 None
             };
-            commit_position(frontier, replay);
+            // At most one re-submit: the retry reads the complete committed<k
+            // (the frontier is parked here) and validates, so `is_final = true`
+            // on the retry, and the coordinator's own inline recompute is only
+            // ever reached on a repeated (pathological) stale — never on the
+            // happy path.
+            const MAX_RETRIES: u32 = 1;
+            let mut attempt = 0;
+            loop {
+                let is_final = attempt == MAX_RETRIES;
+                match commit_position(frontier, replay.take(), is_final) {
+                    CommitOutcome::Committed => break,
+                    CommitOutcome::NeedsReplay => {
+                        pool_ref.submit_front(frontier);
+                        stats.resubmitted += 1;
+                        replay = Some(pool_ref.take(frontier));
+                        attempt += 1;
+                    }
+                }
+            }
         }
         pool_ref.shutdown();
         stats.wasted = pool_ref.pending_results() as u64;
@@ -296,7 +331,9 @@ mod tests {
     }
 
     fn value_of(position: usize, key: u64) -> u64 {
-        (position as u64).wrapping_mul(1_000_003).wrapping_add(key.wrapping_mul(97))
+        (position as u64)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(key.wrapping_mul(97))
     }
 
     struct AbstractProgram {
@@ -394,10 +431,18 @@ mod tests {
     }
 
     /// A single-file replay: base = committed, fresh empty overlay (no deps).
-    fn compute_replay(program: &AbstractProgram, position: usize, base: &Cache, delay: bool) -> Observed {
+    fn compute_replay(
+        program: &AbstractProgram,
+        position: usize,
+        base: &Cache,
+        delay: bool,
+    ) -> Observed {
         let mut overlay = FxHashMap::default();
         let obs = compute(program, position, base, &mut overlay, delay);
-        debug_assert!(obs.overlay_deps.is_empty(), "replay overlay must be private");
+        debug_assert!(
+            obs.overlay_deps.is_empty(),
+            "replay overlay must be private"
+        );
         obs
     }
 
@@ -426,7 +471,16 @@ mod tests {
 
     /// Runs the orchestrator over the abstract program and asserts per-position
     /// outputs and final committed values exactly match the serial oracle.
-    fn run_and_assert_impl(program: AbstractProgram, worker_count: usize, window: usize, delay: bool) {
+    /// `submit_mode` selects how the schedule is derived, so both the
+    /// dependency-driven schedule and the degenerate submit-everything-at-0
+    /// schedule (which maximizes stale replays and inline fallbacks) are
+    /// exercised for the same programs.
+    fn run_and_assert_impl(
+        program: AbstractProgram,
+        worker_count: usize,
+        submit_mode: SubmitMode,
+        delay: bool,
+    ) {
         let (oracle_outputs, oracle_cache) = serial_oracle(&program);
         let n = program.positions.len();
         let worker_logs = worker_pass(&program, worker_count);
@@ -444,6 +498,37 @@ mod tests {
                 earlier.insert(program.digest(key));
             }
         }
+
+        // Dependency-driven submit schedule (mirrors
+        // `speculative::compute_submit_schedule` on the abstract model).
+        let submit_at = match submit_mode {
+            SubmitMode::Immediate => (0..n)
+                .map(|p| if predicted[p] { 0 } else { usize::MAX })
+                .collect::<Vec<_>>(),
+            SubmitMode::DependencyDriven => {
+                let mut first_writer: FxHashMap<u64, usize> = FxHashMap::default();
+                let mut schedule = vec![usize::MAX; n];
+                for position in 0..n {
+                    let log = &worker_logs[position];
+                    if predicted[position] {
+                        let mut latest = None;
+                        for d in &log.misses {
+                            if let Some(&producer) = first_writer.get(d) {
+                                if producer < position {
+                                    latest =
+                                        Some(latest.map_or(producer, |c: usize| c.max(producer)));
+                                }
+                            }
+                        }
+                        schedule[position] = latest.map_or(0, |p| p + 1);
+                    }
+                    for &(key, _) in &log.inserts {
+                        first_writer.entry(program.digest(key)).or_insert(position);
+                    }
+                }
+                schedule
+            }
+        };
 
         let shared = Shared {
             program,
@@ -468,7 +553,8 @@ mod tests {
         };
 
         run_frontier_pipeline(
-            PipelineConfig { n, worker_count, window },
+            PipelineConfig { n, worker_count },
+            &submit_at,
             &shared,
             || (),
             |shared: &Shared, _: &mut (), position: usize| {
@@ -476,28 +562,33 @@ mod tests {
                 compute_replay(&shared.program, position, &view, shared.delay)
             },
             |_position| true,
-            |position| predicted[position],
-            |position, replay| {
-                let worker = &worker_logs[position];
-                let worker_clean = worker.misses.is_disjoint(&published)
-                    && !worker.overlay_deps.iter().any(|f| replayed.contains(f));
-                if worker_clean {
-                    apply(&shared.committed, &mut published, position, worker);
-                    outputs[position] = Some(worker.output.clone());
-                    return;
+            |position, replay, is_final| {
+                if !replayed.contains(&position) {
+                    let worker = &worker_logs[position];
+                    let worker_clean = worker.misses.is_disjoint(&published)
+                        && !worker.overlay_deps.iter().any(|f| replayed.contains(f));
+                    if worker_clean {
+                        apply(&shared.committed, &mut published, position, worker);
+                        outputs[position] = Some(worker.output.clone());
+                        return CommitOutcome::Committed;
+                    }
+                    replayed.insert(position);
                 }
-                replayed.insert(position);
                 if let Some(replay) = replay {
                     if replay.misses.is_disjoint(&published) {
                         apply(&shared.committed, &mut published, position, &replay);
                         outputs[position] = Some(replay.output.clone());
-                        return;
+                        return CommitOutcome::Committed;
                     }
+                }
+                if !is_final {
+                    return CommitOutcome::NeedsReplay;
                 }
                 let view = shared.committed.lock().unwrap().clone();
                 let obs = compute_replay(&shared.program, position, &view, false);
                 apply(&shared.committed, &mut published, position, &obs);
                 outputs[position] = Some(obs.output);
+                CommitOutcome::Committed
             },
         );
 
@@ -506,22 +597,54 @@ mod tests {
             assert_eq!(
                 outputs[position].as_ref().unwrap(),
                 &oracle_outputs[position],
-                "output divergence at position {position} (workers={worker_count}, window={window})"
+                "output divergence at position {position} (workers={worker_count})"
             );
         }
-        let final_values: FxHashMap<u64, u64> =
-            final_cache.entries.iter().map(|(&k, &(_, v))| (k, v)).collect();
-        let oracle_values: FxHashMap<u64, u64> =
-            oracle_cache.entries.iter().map(|(&k, &(_, v))| (k, v)).collect();
+        let final_values: FxHashMap<u64, u64> = final_cache
+            .entries
+            .iter()
+            .map(|(&k, &(_, v))| (k, v))
+            .collect();
+        let oracle_values: FxHashMap<u64, u64> = oracle_cache
+            .entries
+            .iter()
+            .map(|(&k, &(_, v))| (k, v))
+            .collect();
         assert_eq!(final_values, oracle_values, "committed cache divergence");
     }
 
-    fn run_and_assert(program: AbstractProgram, worker_count: usize, window: usize) {
-        run_and_assert_impl(program, worker_count, window, false);
+    #[derive(Clone, Copy)]
+    enum SubmitMode {
+        /// Submit every predicted conflict at frontier 0 — maximizes stale
+        /// replays and inline fallbacks, stressing the fallback path.
+        Immediate,
+        /// Dependency-driven: submit each conflict when its last dependency
+        /// commits (the production schedule).
+        DependencyDriven,
+    }
+
+    fn clone_program(program: &AbstractProgram) -> AbstractProgram {
+        AbstractProgram {
+            positions: program.positions.clone(),
+            digest_modulus: program.digest_modulus,
+        }
+    }
+
+    fn run_and_assert(program: AbstractProgram, worker_count: usize, _window: usize) {
+        // Every program is checked under both schedules.
+        run_and_assert_impl(
+            clone_program(&program),
+            worker_count,
+            SubmitMode::Immediate,
+            false,
+        );
+        run_and_assert_impl(program, worker_count, SubmitMode::DependencyDriven, false);
     }
 
     fn pos(reads: &[u64]) -> Position {
-        Position { reads: reads.to_vec() }
+        Position {
+            reads: reads.to_vec(),
+        }
     }
 
     // Scenario 1: future hit — a replay of k must never observe j>k's insert.
@@ -530,7 +653,14 @@ mod tests {
         let mut positions = vec![pos(&[]); 6];
         positions[0] = pos(&[7]);
         positions[5] = pos(&[7]);
-        run_and_assert(AbstractProgram { positions, digest_modulus: 1_000 }, 4, 8);
+        run_and_assert(
+            AbstractProgram {
+                positions,
+                digest_modulus: 1_000,
+            },
+            4,
+            8,
+        );
     }
 
     // Scenario 2: miss becomes an earlier hit.
@@ -539,36 +669,72 @@ mod tests {
         let mut positions = vec![pos(&[]); 5];
         positions[2] = pos(&[3]);
         positions[4] = pos(&[3]);
-        run_and_assert(AbstractProgram { positions, digest_modulus: 1_000 }, 4, 8);
+        run_and_assert(
+            AbstractProgram {
+                positions,
+                digest_modulus: 1_000,
+            },
+            4,
+            8,
+        );
     }
 
     // Scenario 3: earlier conflicted publisher invalidates a later validated file.
     #[test]
     fn earlier_conflicted_publisher_invalidates_later() {
         let positions = vec![pos(&[]), pos(&[10]), pos(&[10]), pos(&[10])];
-        run_and_assert(AbstractProgram { positions, digest_modulus: 1_000 }, 4, 8);
+        run_and_assert(
+            AbstractProgram {
+                positions,
+                digest_modulus: 1_000,
+            },
+            4,
+            8,
+        );
     }
 
     // Scenario 4: transitive chain k -> j -> m.
     #[test]
     fn transitive_invalidation_chain() {
         let positions = vec![pos(&[100]), pos(&[100, 200]), pos(&[200, 300]), pos(&[300])];
-        run_and_assert(AbstractProgram { positions, digest_modulus: 1_000 }, 4, 8);
+        run_and_assert(
+            AbstractProgram {
+                positions,
+                digest_modulus: 1_000,
+            },
+            4,
+            8,
+        );
     }
 
     // Scenario 5: same key read by many positions -> all see first publisher.
     #[test]
     fn same_key_repeated_reads() {
         let positions: Vec<Position> = (0..20).map(|_| pos(&[42])).collect();
-        run_and_assert(AbstractProgram { positions, digest_modulus: 1_000 }, 4, 6);
+        run_and_assert(
+            AbstractProgram {
+                positions,
+                digest_modulus: 1_000,
+            },
+            4,
+            6,
+        );
     }
 
     // Scenario 6: digest collisions -> conservative (never-wrong) replay.
     #[test]
     fn digest_collisions_stay_correct() {
-        let positions: Vec<Position> =
-            (0..40).map(|i| pos(&[(i as u64) * 7 + 1, (i as u64) % 5])).collect();
-        run_and_assert(AbstractProgram { positions, digest_modulus: 4 }, 4, 10);
+        let positions: Vec<Position> = (0..40)
+            .map(|i| pos(&[(i as u64) * 7 + 1, (i as u64) % 5]))
+            .collect();
+        run_and_assert(
+            AbstractProgram {
+                positions,
+                digest_modulus: 4,
+            },
+            4,
+            10,
+        );
     }
 
     // Scenario 7: consumed speculative overlay — a conflicted producer must
@@ -585,7 +751,14 @@ mod tests {
         // and 1 (between them) also reads 5 forcing ordering checks.
         let positions = vec![pos(&[5, 9]), pos(&[5]), pos(&[5, 9])];
         // Force worker assignment 0->w0, 1->w1, 2->w0 by using 2 workers.
-        run_and_assert(AbstractProgram { positions, digest_modulus: 1_000 }, 2, 8);
+        run_and_assert(
+            AbstractProgram {
+                positions,
+                digest_modulus: 1_000,
+            },
+            2,
+            8,
+        );
     }
 
     // Scenario 8: dense dependency chain -> inline fallback, no livelock.
@@ -595,7 +768,14 @@ mod tests {
         for i in 1..60u64 {
             positions.push(pos(&[i - 1, i]));
         }
-        run_and_assert(AbstractProgram { positions, digest_modulus: 1_000 }, 8, 32);
+        run_and_assert(
+            AbstractProgram {
+                positions,
+                digest_modulus: 1_000,
+            },
+            8,
+            32,
+        );
     }
 
     // Scenario 9: injected delays / many worker counts stay deterministic.
@@ -606,12 +786,24 @@ mod tests {
                 .map(|i| pos(&[i % 13, (i * 7) % 30, i]))
                 .collect::<Vec<_>>()
         };
-        for &(workers, window) in &[(2usize, 4usize), (4, 8), (8, 16), (3, 1), (5, 64)] {
+        for &workers in &[2usize, 4, 8, 3, 5] {
             for _ in 0..10 {
                 run_and_assert_impl(
-                    AbstractProgram { positions: make(), digest_modulus: 7 },
+                    AbstractProgram {
+                        positions: make(),
+                        digest_modulus: 7,
+                    },
                     workers,
-                    window,
+                    SubmitMode::Immediate,
+                    true,
+                );
+                run_and_assert_impl(
+                    AbstractProgram {
+                        positions: make(),
+                        digest_modulus: 7,
+                    },
+                    workers,
+                    SubmitMode::DependencyDriven,
                     true,
                 );
             }
@@ -621,9 +813,19 @@ mod tests {
     // Degenerate sizes must not hang.
     #[test]
     fn empty_and_singleton() {
-        run_and_assert(AbstractProgram { positions: vec![], digest_modulus: 10 }, 4, 8);
         run_and_assert(
-            AbstractProgram { positions: vec![pos(&[1, 2, 3])], digest_modulus: 10 },
+            AbstractProgram {
+                positions: vec![],
+                digest_modulus: 10,
+            },
+            4,
+            8,
+        );
+        run_and_assert(
+            AbstractProgram {
+                positions: vec![pos(&[1, 2, 3])],
+                digest_modulus: 10,
+            },
             4,
             8,
         );

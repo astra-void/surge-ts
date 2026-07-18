@@ -973,9 +973,205 @@ pub(crate) enum CommitVerdict {
     DependencyConflict,
 }
 
+/// Predicts which positions will conflict during the commit walk, as a
+/// scheduling hint for pipelined replay. Over-prediction only wastes a replay
+/// and under-prediction only triggers an inline recompute, so correctness never
+/// depends on this — it merely decides which positions the pool pre-replays.
+///
+/// A position likely conflicts if a key it observed missing was inserted by an
+/// earlier position, or it consumed the worker overlay of an earlier position
+/// that is itself predicted to conflict. Dispatch is ascending per worker, so a
+/// position's overlay producers are always earlier and already classified.
+pub(crate) fn predict_conflicts(logs: &[Option<FileCacheLog>]) -> Vec<bool> {
+    let mut predicted = vec![false; logs.len()];
+    let mut earlier_inserts: FxHashSet<u64> = FxHashSet::default();
+    for (index, log) in logs.iter().enumerate() {
+        let Some(log) = log else { continue };
+        let miss_conflict = !log.misses.is_disjoint(&earlier_inserts);
+        let dep_conflict = log.overlay_deps.iter().any(|&file| predicted[file]);
+        predicted[index] = miss_conflict || dep_conflict;
+        for (_, _, digest) in &log.generic_inserts {
+            earlier_inserts.insert(*digest);
+        }
+        for (_, _, digest) in &log.instantiation_inserts {
+            earlier_inserts.insert(*digest);
+        }
+        for (_, _, digest) in &log.physical_inserts {
+            earlier_inserts.insert(*digest);
+        }
+        for (_, _, digest) in &log.template_inserts {
+            earlier_inserts.insert(*digest);
+        }
+        for (_, _, digest) in &log.method_inserts {
+            earlier_inserts.insert(*digest);
+        }
+        for (_, _, digest) in &log.overload_inserts {
+            earlier_inserts.insert(*digest);
+        }
+    }
+    predicted
+}
+
+/// Dependency-driven submit schedule for the replay pipeline: for each
+/// predicted-conflict position, the frontier index at which its replay should
+/// start (`usize::MAX` for positions that are not pre-replayed).
+///
+/// A conflict `k` reads the committed store correctly only once every position
+/// that publishes a key `k` observed missing has committed. The last such
+/// publisher (by first-writer position, since first-writer-wins) is `k`'s
+/// binding dependency; launching `k`'s replay the moment that publisher's
+/// position finalizes means the replay reads a committed view already containing
+/// all of `k`'s dependencies, so it does not over-recurse against a stale view
+/// and validates on the first try. A conflict with no earlier publisher among
+/// its misses is submittable from the start (index 0).
+///
+/// This only schedules; `commit_position` still validates and falls back to an
+/// inline recompute, so an imprecise schedule costs at most a wasted replay or
+/// an inline recompute, never correctness.
+pub(crate) fn compute_submit_schedule(logs: &[Option<FileCacheLog>]) -> Vec<usize> {
+    let predicted = predict_conflicts(logs);
+    let n = logs.len();
+    let mut submit_at = vec![usize::MAX; n];
+    // First position (in serial order) that inserts each digest — the publisher
+    // whose commit makes that key visible — and whether that publisher is itself
+    // a predicted conflict.
+    let mut first_writer: FxHashMap<u64, usize> = FxHashMap::default();
+    for (index, log) in logs.iter().enumerate() {
+        let Some(log) = log else { continue };
+        if predicted[index] {
+            let mut latest_dep: Option<usize> = None;
+            // Pre-replay only conflicts whose every dependency is a *clean* file.
+            // A replay reads the committed store rather than the worker's fan-out
+            // snapshot, so its exact dependency set can differ from the worker
+            // log; when a dependency is another conflict, that imprecision makes
+            // the replay prone to staleness (the conflict's eventual committed
+            // inserts need not match its worker log), and a stale replay
+            // over-recurses expensively for nothing. Clean-dependent conflicts,
+            // by contrast, depend only on files that commit deterministically and
+            // early, so their replay reads a complete-enough view and validates.
+            // Conflict-dependent positions fall to the inline recheck.
+            let mut depends_on_conflict = false;
+            for digest in &log.misses {
+                if let Some(&producer) = first_writer.get(digest)
+                    && producer < index
+                {
+                    latest_dep = Some(latest_dep.map_or(producer, |cur| cur.max(producer)));
+                    if predicted[producer] {
+                        depends_on_conflict = true;
+                    }
+                }
+            }
+            // A worker overlay-hit means the replay (which has no overlay) will
+            // re-read that key from the committed store, so it depends on the
+            // overlay producer having committed.
+            for &producer in &log.overlay_deps {
+                if producer < index {
+                    latest_dep = Some(latest_dep.map_or(producer, |cur| cur.max(producer)));
+                    if predicted[producer] {
+                        depends_on_conflict = true;
+                    }
+                }
+            }
+            if !depends_on_conflict {
+                // Submit after the last dependency's position finalizes (index
+                // `producer + 1`); no dependency ⇒ submittable immediately.
+                submit_at[index] = latest_dep.map_or(0, |producer| producer + 1);
+            }
+        }
+        let mut record = |digest: u64| {
+            first_writer.entry(digest).or_insert(index);
+        };
+        for (_, _, d) in &log.generic_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.instantiation_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.physical_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.template_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.method_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.overload_inserts {
+            record(*d);
+        }
+    }
+    submit_at
+}
+
+/// Diagnostic (`SURGE_REPLAY_DAG=1`): estimates the conflict dependency DAG's
+/// parallel-round ceiling. A conflict's level is `1 + max level of an earlier
+/// conflict whose published insert it misses`; the max level is the number of
+/// serial rounds an idealized round-based replay would need.
+pub(crate) fn report_conflict_dag(logs: &[Option<FileCacheLog>]) {
+    if std::env::var_os("SURGE_REPLAY_DAG").is_none() {
+        return;
+    }
+    let predicted = predict_conflicts(logs);
+    let mut digest_level: FxHashMap<u64, u32> = FxHashMap::default();
+    let mut histogram: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    let mut max_level = 0u32;
+    let mut conflicts = 0u32;
+    for (index, log) in logs.iter().enumerate() {
+        let Some(log) = log else { continue };
+        if !predicted[index] {
+            continue;
+        }
+        conflicts += 1;
+        let mut level = 1u32;
+        for digest in &log.misses {
+            if let Some(&producer_level) = digest_level.get(digest) {
+                level = level.max(producer_level + 1);
+            }
+        }
+        max_level = max_level.max(level);
+        *histogram.entry(level).or_default() += 1;
+        let mut publish = |digest: u64| {
+            let entry = digest_level.entry(digest).or_insert(level);
+            *entry = (*entry).max(level);
+        };
+        for (_, _, d) in &log.generic_inserts {
+            publish(*d);
+        }
+        for (_, _, d) in &log.instantiation_inserts {
+            publish(*d);
+        }
+        for (_, _, d) in &log.physical_inserts {
+            publish(*d);
+        }
+        for (_, _, d) in &log.template_inserts {
+            publish(*d);
+        }
+        for (_, _, d) in &log.method_inserts {
+            publish(*d);
+        }
+        for (_, _, d) in &log.overload_inserts {
+            publish(*d);
+        }
+    }
+    eprintln!(
+        "[stc-dag] conflicts={conflicts} max_level(round_ceiling)={max_level} level_hist={histogram:?}"
+    );
+}
+
 /// Validates one file's log against everything published so far. On a clean
 /// verdict the file's insertions are published into the live maps (in the
 /// file's own insertion order) and their digests join `published`.
+///
+/// Validation is by digest presence (equality-consistent structural digests).
+/// A value-based refinement — commit clean when a colliding miss's value equals
+/// the published value — was investigated and rejected as unsound: a worker
+/// computing against the incomplete fan-out snapshot over-recurses on keys
+/// serial would hit and interns spurious sub-instantiations, which pollute the
+/// committed cache for later files even when the worker's own diagnostics match
+/// serial (and are invisible to a value check, being new keys that never
+/// collide). Only a computation reading the *complete* committed state at its
+/// position avoids over-recursion — the inline recheck or a validated replay
+/// (`crate::replay`). See `docs/perf/TRPC-ORDERED-DELTA-REPLAY.md`.
 pub(crate) fn commit_file_log(
     live: &LiveCacheHandles,
     log: &FileCacheLog,
@@ -1000,6 +1196,33 @@ pub(crate) fn commit_file_log(
     apply_file_log(live, log, published, cap, stats);
     stats.clean_commits += 1;
     CommitVerdict::Clean
+}
+
+/// Validates a single-file *replay* log (produced by a pool thread reading the
+/// live committed store) against the published-digest set, and publishes its
+/// insertions if valid. Returns whether it was applied.
+///
+/// A replay reads only the committed store and its own private overlay, so its
+/// log never carries overlay dependencies — validation is purely
+/// `misses ∩ published == ∅`. Under strict in-order publication a valid replay
+/// matches the serial run at its position exactly (see `crate::replay`): a miss
+/// disjoint from `published` proves the replay did not over-recurse on any key
+/// serial published before this position, so its cache insertions match serial.
+/// Unlike an inline recheck, a cap-blocked or already-present insertion is not
+/// an error: a position between the replay's read and the frontier may have
+/// grown a bucket to the cap, which serial would see identically here.
+pub(crate) fn commit_replay_log(
+    live: &LiveCacheHandles,
+    log: &FileCacheLog,
+    published: &mut FxHashSet<u64>,
+    cap: usize,
+    stats: &mut StcCommitStats,
+) -> bool {
+    if !log.misses.is_disjoint(published) {
+        return false;
+    }
+    apply_file_log(live, log, published, cap, stats);
+    true
 }
 
 /// Publishes a validated (or rechecked) file's insertions into the live maps
