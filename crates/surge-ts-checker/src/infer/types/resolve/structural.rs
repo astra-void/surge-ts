@@ -27,7 +27,7 @@ pub(crate) fn resolve_tuple_type(
 }
 
 pub(crate) fn resolve_function_type(
-    function_type: ParsedFunctionType,
+    function_type: std::sync::Arc<ParsedFunctionType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
@@ -74,7 +74,7 @@ pub(crate) fn resolve_function_type(
     }
 
     let return_type = resolve_parsed_type(
-        *function_type.return_type,
+        (*function_type.return_type).clone(),
         ctx,
         resolving,
         &local_substitution,
@@ -147,13 +147,13 @@ pub(crate) fn resolve_object_type(
             ObjectProperty::required(property_type.ty)
         };
 
-        properties.insert(property.name, object_property);
+        properties.insert(property.name.into(), object_property);
     }
 
     let mut resolved_object = alloc_object_type(properties, None);
     if let Some(call_signature) = object_type.call_signature {
         let resolved = resolve_parsed_type(
-            ParsedType::Function(*call_signature),
+            ParsedType::Function(std::sync::Arc::new(*call_signature)),
             ctx,
             resolving,
             substitution,

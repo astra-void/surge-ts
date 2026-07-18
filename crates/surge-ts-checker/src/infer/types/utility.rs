@@ -345,7 +345,7 @@ pub(crate) fn resolve_record_utility_type(
     let mut properties = PropertyMap::default();
 
     for key in keys {
-        properties.insert(key, ObjectProperty::required(value_type.clone()));
+        properties.insert(key.into(), ObjectProperty::required(value_type.clone()));
     }
 
     ResolvedType {
@@ -389,7 +389,7 @@ pub(crate) fn resolve_pick_utility_type(
 
     let mut properties = PropertyMap::default();
     for key in keys {
-        let Some(property) = object_type.properties.get(&key) else {
+        let Some(property) = object_type.properties.get(key.as_str()) else {
             let key_type_name = key_type.name();
             let constraint_name = format!("keyof {}", Type::Object(object_type.clone()).name());
             let mut diagnostic =
@@ -404,7 +404,7 @@ pub(crate) fn resolve_pick_utility_type(
             };
         };
 
-        properties.insert(key, property.clone());
+        properties.insert(key.into(), property.clone());
     }
 
     ResolvedType {
@@ -445,7 +445,7 @@ pub(crate) fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution
     let keys: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
     let mut properties = PropertyMap::default();
     for (key, property) in object_type.properties.iter() {
-        if keys.contains(key.as_str()) {
+        if keys.contains(key.as_ref()) {
             continue;
         }
 
@@ -528,8 +528,8 @@ mod tests {
 
     fn optional_object() -> Type {
         let mut props = PropertyMap::default();
-        props.insert("a".to_string(), ObjectProperty::optional(Type::Number));
-        props.insert("b".to_string(), ObjectProperty::optional(Type::String));
+        props.insert("a".into(), ObjectProperty::optional(Type::Number));
+        props.insert("b".into(), ObjectProperty::optional(Type::String));
         Type::Object(ObjectType::new(props, None))
     }
 

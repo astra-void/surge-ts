@@ -166,7 +166,7 @@ pub(crate) fn fill_namespace_value_properties(
         match inner {
             ParsedStatement::FunctionDeclaration(function) => {
                 properties.insert(
-                    function.name.clone(),
+                    function.name.as_str().into(),
                     ObjectProperty::required(Type::Function(FunctionType::new(
                         vec![],
                         Type::Any,
@@ -176,14 +176,20 @@ pub(crate) fn fill_namespace_value_properties(
                 );
             }
             ParsedStatement::VariableDeclaration(variable) => {
-                properties.insert(variable.name.clone(), ObjectProperty::required(Type::Any));
+                properties.insert(
+                    variable.name.as_str().into(),
+                    ObjectProperty::required(Type::Any),
+                );
             }
             ParsedStatement::ClassDeclaration(class) => {
-                properties.insert(class.name.clone(), ObjectProperty::required(Type::Any));
+                properties.insert(
+                    class.name.as_str().into(),
+                    ObjectProperty::required(Type::Any),
+                );
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
                 properties.insert(
-                    inner_namespace.name.clone(),
+                    inner_namespace.name.as_str().into(),
                     ObjectProperty::required(namespace_value_object_type(inner_namespace)),
                 );
             }

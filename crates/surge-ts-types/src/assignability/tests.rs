@@ -18,7 +18,7 @@ fn function_type(
 
 fn name_target() -> Type {
     let mut properties = PropertyMap::default();
-    properties.insert("name".to_string(), ObjectProperty::required(Type::String));
+    properties.insert("name".into(), ObjectProperty::required(Type::String));
     Type::Object(ObjectType::new(properties, None))
 }
 
@@ -46,8 +46,8 @@ fn function_assignable_to_name_object() {
 #[test]
 fn function_not_assignable_to_object_with_extra_required_member() {
     let mut properties = PropertyMap::default();
-    properties.insert("name".to_string(), ObjectProperty::required(Type::String));
-    properties.insert("nope".to_string(), ObjectProperty::required(Type::Number));
+    properties.insert("name".into(), ObjectProperty::required(Type::String));
+    properties.insert("nope".into(), ObjectProperty::required(Type::Number));
     let target = Type::Object(ObjectType::new(properties, None));
     let function = function_type(vec![], Type::Void, false, 0);
     assert!(!is_assignable_to(&function, &target));
@@ -78,8 +78,8 @@ fn function_assignable_to_function_interface() {
         }
     }
     let mut members = PropertyMap::default();
-    members.insert("prototype".to_string(), ObjectProperty::required(Type::Any));
-    members.insert("arguments".to_string(), ObjectProperty::required(Type::Any));
+    members.insert("prototype".into(), ObjectProperty::required(Type::Any));
+    members.insert("arguments".into(), ObjectProperty::required(Type::Any));
     let function_interface = Type::Reference(crate::TypeReference::new(
         "lib.es5.d.ts\u{0}Function",
         "Function",
@@ -140,7 +140,7 @@ fn opaque_generic(id: &str, display: &str, argument: Type) -> Type {
     impl crate::ResolveReference for Opaque {
         fn resolve(&self) -> Type {
             let mut members = PropertyMap::default();
-            members.insert(self.0.clone(), ObjectProperty::required(Type::Never));
+            members.insert(self.0.as_str().into(), ObjectProperty::required(Type::Never));
             Type::Object(ObjectType::new(members, None))
         }
     }
@@ -269,12 +269,12 @@ fn literal_union_assignability() {
 fn literal_object_assignability() {
     let mut source_properties = PropertyMap::default();
     source_properties.insert(
-        "kind".to_string(),
+        "kind".into(),
         ObjectProperty::required(Type::StringLiteral("click".to_string())),
     );
 
     let mut target_properties = PropertyMap::default();
-    target_properties.insert("kind".to_string(), ObjectProperty::required(Type::String));
+    target_properties.insert("kind".into(), ObjectProperty::required(Type::String));
 
     assert!(is_assignable_to(
         &Type::Object(ObjectType::new(source_properties, None)),
@@ -619,7 +619,7 @@ fn tuple_type_name_function_element() {
 #[test]
 fn tuple_type_name_object_element() {
     let mut properties = PropertyMap::default();
-    properties.insert("name".to_string(), ObjectProperty::required(Type::String));
+    properties.insert("name".into(), ObjectProperty::required(Type::String));
 
     assert_eq!(
         Type::Tuple(vec![
@@ -767,7 +767,7 @@ fn tuple_union_assignability_mismatch() {
 fn plain_object(entries: Vec<(&str, Type)>) -> Type {
     let mut properties = PropertyMap::default();
     for (name, ty) in entries {
-        properties.insert(name.to_string(), ObjectProperty::required(ty));
+        properties.insert(name.into(), ObjectProperty::required(ty));
     }
     Type::Object(ObjectType {
         properties: Arc::new(properties),

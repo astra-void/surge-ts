@@ -143,17 +143,35 @@ pub(crate) fn resolve_parsed_type(
             resolve_object_type(object_type, ctx, resolving, substitution)
         }
         ParsedType::Array(element_type) => {
-            let resolved_element = resolve_parsed_type(*element_type, ctx, resolving, substitution);
+            let resolved_element = resolve_parsed_type(
+                std::sync::Arc::unwrap_or_clone(element_type),
+                ctx,
+                resolving,
+                substitution,
+            );
             ResolvedType {
                 ty: Type::Array(Box::new(resolved_element.ty)),
                 had_error: resolved_element.had_error,
             }
         }
-        ParsedType::Tuple(elements) => resolve_tuple_type(elements, ctx, resolving, substitution),
-        ParsedType::Union(types) => resolve_union_type(types, ctx, resolving, substitution),
-        ParsedType::Intersection(types) => {
-            resolve_intersection_type(types, ctx, resolving, substitution)
-        }
+        ParsedType::Tuple(elements) => resolve_tuple_type(
+            std::sync::Arc::unwrap_or_clone(elements),
+            ctx,
+            resolving,
+            substitution,
+        ),
+        ParsedType::Union(types) => resolve_union_type(
+            std::sync::Arc::unwrap_or_clone(types),
+            ctx,
+            resolving,
+            substitution,
+        ),
+        ParsedType::Intersection(types) => resolve_intersection_type(
+            std::sync::Arc::unwrap_or_clone(types),
+            ctx,
+            resolving,
+            substitution,
+        ),
         ParsedType::Function(function_type) => {
             resolve_function_type(function_type, ctx, resolving, substitution)
         }
@@ -238,13 +256,18 @@ pub(crate) fn resolve_parsed_type(
             }
         }
         ParsedType::KeyOf(inner) => {
-            let resolved_inner = resolve_parsed_type(*inner, ctx, resolving, substitution);
+            let resolved_inner = resolve_parsed_type(
+                std::sync::Arc::unwrap_or_clone(inner),
+                ctx,
+                resolving,
+                substitution,
+            );
             let mut keys = Vec::new();
             // Peel a nominal reference (`keyof User`) to read the named type's keys.
             match &resolved_inner.ty.peeled() {
                 Type::Object(object_type) => {
                     for key in object_type.properties.keys() {
-                        keys.push(Type::StringLiteral(key.clone()));
+                        keys.push(Type::StringLiteral(key.to_string()));
                     }
                 }
                 _ => {

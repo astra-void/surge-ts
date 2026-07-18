@@ -11,7 +11,16 @@ use crate::{FunctionType, PropertyMapId, Type, union_type};
 /// structural comparisons and type caching are unaffected.
 // Insertion-ordered like any IndexMap (iteration order is hasher-independent),
 // with the fast workspace hasher for the per-lookup cost.
-pub type PropertyMap = IndexMap<String, ObjectProperty, crate::fx::FxBuildHasher>;
+//
+// Keys are `Arc<str>`, not `String`: a derived interface inherits its bases'
+// members by cloning the base map's keys (interface member merge), and the base
+// maps are `Arc`-shared and reused across every derived type, so an `Arc<str>`
+// key makes each inherited-member clone a refcount bump and lets all derived
+// types share one allocation per base member name. Equality is by str content
+// (order-independent, as before) and `Arc<str>: Hash` matches `String::hash`
+// byte-for-byte, so structural comparison, the dedup fingerprint, and the
+// canonical property-map store are unchanged.
+pub type PropertyMap = IndexMap<Arc<str>, ObjectProperty, crate::fx::FxBuildHasher>;
 
 #[derive(Debug)]
 pub struct ObjectType {
@@ -193,11 +202,11 @@ impl ObjectType {
         self.string_index_type.is_some()
     }
 
-    pub fn required_properties(&self) -> impl Iterator<Item = (&String, &ObjectProperty)> + '_ {
+    pub fn required_properties(&self) -> impl Iterator<Item = (&Arc<str>, &ObjectProperty)> + '_ {
         self.properties.iter().filter(|entry| entry.1.is_required())
     }
 
-    pub fn optional_properties(&self) -> impl Iterator<Item = (&String, &ObjectProperty)> + '_ {
+    pub fn optional_properties(&self) -> impl Iterator<Item = (&Arc<str>, &ObjectProperty)> + '_ {
         self.properties.iter().filter(|entry| entry.1.is_optional())
     }
 }

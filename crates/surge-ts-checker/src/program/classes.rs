@@ -129,7 +129,7 @@ fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
 }
 
 fn method_function_type(method: &ParsedClassMethod) -> ParsedType {
-    ParsedType::Function(ParsedFunctionType {
+    ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
         parameters: method
             .parameters
             .iter()
@@ -137,7 +137,7 @@ fn method_function_type(method: &ParsedClassMethod) -> ParsedType {
             .collect(),
         return_type: Box::new(method.return_type.clone().unwrap_or(ParsedType::Any)),
         type_parameters: method.type_parameters.clone(),
-    })
+    }))
 }
 
 fn parameter_to_type_parameter(parameter: &ParsedFunctionParameter) -> ParsedFunctionTypeParameter {
@@ -187,7 +187,7 @@ pub(crate) fn build_class_value_symbol(
                 } else {
                     ObjectProperty::required(property_type)
                 };
-                properties.insert(property.name.clone(), object_property);
+                properties.insert(property.name.as_str().into(), object_property);
             }
             ParsedClassMember::Method(method) if method.is_static => {
                 let function_type = map_function_signature(
@@ -198,14 +198,14 @@ pub(crate) fn build_class_value_symbol(
                     ctx,
                 );
                 properties.insert(
-                    method.name.clone(),
+                    method.name.as_str().into(),
                     ObjectProperty::required(Type::Function(function_type)),
                 );
             }
             ParsedClassMember::Accessor(accessor) if accessor.is_static => {
                 let property_type = map_parsed_type(accessor_property_type(accessor), ctx);
                 properties.insert(
-                    accessor.name.clone(),
+                    accessor.name.as_str().into(),
                     ObjectProperty::required(property_type),
                 );
             }
@@ -233,11 +233,11 @@ fn static_property_type(property: &ParsedClassProperty, ctx: &mut CheckerContext
 
 fn class_instance_type(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) -> Type {
     map_parsed_type(
-        ParsedType::Named(ParsedNamedType {
+        ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
             name: class.name.clone(),
             span: class.name_span,
             type_arguments: Vec::new(),
-        }),
+        })),
         ctx,
     )
 }
@@ -247,11 +247,11 @@ fn class_construct_signature(
     instance_type: Type,
     ctx: &mut CheckerContext,
 ) -> FunctionType {
-    let named_instance = ParsedType::Named(ParsedNamedType {
+    let named_instance = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
         name: class.name.clone(),
         span: class.name_span,
         type_arguments: Vec::new(),
-    });
+    }));
 
     for member in &class.members {
         if let ParsedClassMember::Constructor(constructor) = member {

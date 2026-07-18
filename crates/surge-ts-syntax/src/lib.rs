@@ -1,6 +1,7 @@
 //! Parsed TypeScript syntax and parser entrypoint.
 
 mod ast;
+pub mod clone_census;
 mod parser;
 
 pub use ast::*;

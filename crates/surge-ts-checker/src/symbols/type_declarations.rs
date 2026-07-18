@@ -45,6 +45,16 @@ pub(crate) struct TypeAliasInfo {
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
     pub(crate) body: Arc<TypeAliasBody>,
+    /// Memoized resolution-cache key (canonical file name + declared name).
+    /// Built on first request — key construction canonicalizes the path and
+    /// allocates, and resolution asks for it millions of times per run. Carried
+    /// across clones (the key is a pure function of `file_name`/`name`) and
+    /// reset by `rename_type_declaration`, the only place that rewrites `name`.
+    pub(crate) cached_resolution_key: std::sync::OnceLock<crate::context::DeclarationResolutionKey>,
+    /// Memoized nominal reference id (`"{canonical file}\0{name}"`), the other
+    /// per-resolution allocation on the named-type hot path. Same lifecycle as
+    /// [`Self::cached_resolution_key`].
+    pub(crate) cached_alias_id: std::sync::OnceLock<Arc<str>>,
 }
 
 impl TypeAliasInfo {
@@ -66,6 +76,8 @@ impl TypeAliasInfo {
                 type_parameters,
                 ty,
             }),
+            cached_resolution_key: std::sync::OnceLock::new(),
+            cached_alias_id: std::sync::OnceLock::new(),
         }
     }
 }
@@ -80,6 +92,8 @@ impl Clone for TypeAliasInfo {
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
             body: self.body.clone(),
+            cached_resolution_key: self.cached_resolution_key.clone(),
+            cached_alias_id: self.cached_alias_id.clone(),
         }
     }
 }
@@ -133,6 +147,10 @@ pub(crate) struct InterfaceInfo {
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
     pub(crate) body: Arc<InterfaceBody>,
+    /// See [`TypeAliasInfo::cached_resolution_key`].
+    pub(crate) cached_resolution_key: std::sync::OnceLock<crate::context::DeclarationResolutionKey>,
+    /// See [`TypeAliasInfo::cached_alias_id`].
+    pub(crate) cached_alias_id: std::sync::OnceLock<Arc<str>>,
 }
 
 impl InterfaceInfo {
@@ -170,6 +188,8 @@ impl InterfaceInfo {
                 declaration_fragments: vec![declaration_fragment],
                 member_fragments,
             }),
+            cached_resolution_key: std::sync::OnceLock::new(),
+            cached_alias_id: std::sync::OnceLock::new(),
         }
     }
 }
@@ -184,6 +204,8 @@ impl Clone for InterfaceInfo {
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
             body: self.body.clone(),
+            cached_resolution_key: self.cached_resolution_key.clone(),
+            cached_alias_id: self.cached_alias_id.clone(),
         }
     }
 }

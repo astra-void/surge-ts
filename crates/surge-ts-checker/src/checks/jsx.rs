@@ -202,11 +202,11 @@ fn resolve_intrinsic_props_type(
         }
     };
 
-    let named = ParsedType::Named(ParsedNamedType {
+    let named = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
         name: intrinsic_elements,
         span: None,
         type_arguments: Vec::new(),
-    });
+    }));
     let intrinsic_type = match declarer_scope {
         Some(scope) => crate::infer::with_type_declaration_scope(&Some(scope), ctx, |ctx| {
             map_parsed_type(named, ctx)
@@ -300,7 +300,9 @@ fn check_attributes(
                                 spreads.opaque = true;
                             }
                             for (name, property) in object.properties.iter() {
-                                spreads.properties.insert(name.clone(), property.clone());
+                                spreads
+                                    .properties
+                                    .insert(name.to_string(), property.clone());
                             }
                         }
                         _ => spreads.opaque = true,
@@ -450,15 +452,15 @@ fn check_missing_required_props(
     }
 
     let missing = props_object.required_properties().find(|(name, _)| {
-        if name.as_str() == "children" && children_provided {
+        if name.as_ref() == "children" && children_provided {
             return false;
         }
-        if spreads.properties.contains_key(name.as_str()) {
+        if spreads.properties.contains_key(name.as_ref()) {
             return false;
         }
         !attributes
             .iter()
-            .any(|attribute| attribute.name == name.as_str())
+            .any(|attribute| attribute.name == name.as_ref())
     });
 
     let Some((property_name, _)) = missing else {
@@ -556,7 +558,7 @@ fn source_object_name(attribute_types: &BTreeMap<String, Type>) -> String {
                 Type::BooleanLiteral(_) => Type::Boolean,
                 other => other.clone(),
             };
-            (name.clone(), ObjectProperty::required(display_ty))
+            (name.as_str().into(), ObjectProperty::required(display_ty))
         })
         .collect::<PropertyMap>();
     Type::Object(alloc_object_type(properties, None)).name()
@@ -572,14 +574,14 @@ fn present_attribute_object_name(
     let properties = spreads
         .properties
         .iter()
-        .map(|(name, property)| (name.clone(), property.clone()))
+        .map(|(name, property)| (name.as_str().into(), property.clone()))
         .chain(
             attributes
                 .iter()
                 .filter(|attribute| !attribute.name.is_empty())
                 .map(|attribute| {
                     (
-                        attribute.name.clone(),
+                        attribute.name.as_str().into(),
                         ObjectProperty::required(Type::Unknown),
                     )
                 }),

@@ -447,7 +447,7 @@ pub(crate) enum DeclarationNamespace {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DeclarationResolutionKey {
     pub(crate) file_name: Arc<str>,
-    pub(crate) name: String,
+    pub(crate) name: Arc<str>,
     pub(crate) namespace: DeclarationNamespace,
 }
 
@@ -715,12 +715,14 @@ pub(crate) struct CheckerContext {
     /// recorded since the last `begin_file_check`. Keys inherited from before
     /// the check phase live in the shared baseline below, so the per-file
     /// reset is an O(overlay) clear instead of a full-set clone.
-    pub(crate) utility_diagnostic_keys: HashSet<UtilityDiagnosticKey>,
+    pub(crate) utility_diagnostic_keys:
+        HashSet<UtilityDiagnosticKey, surge_ts_types::fx::FxBuildHasher>,
     /// The utility-key set this worker context entered the check phase with,
     /// captured (not cloned) on the first `begin_file_check`. Suppression
     /// consults baseline then overlay, which is exactly the pre-region
     /// semantics where both lived in one set. See [`Self::begin_file_check`].
-    utility_diagnostic_keys_baseline: Option<Arc<HashSet<UtilityDiagnosticKey>>>,
+    utility_diagnostic_keys_baseline:
+        Option<Arc<HashSet<UtilityDiagnosticKey, surge_ts_types::fx::FxBuildHasher>>>,
     pub(crate) symbols: SymbolTable,
     pub(crate) type_declarations: TypeDeclarationTable,
     pub(crate) type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
@@ -1166,7 +1168,7 @@ impl CheckerContext {
         } else if self.utility_diagnostic_keys.capacity()
             > Self::UTILITY_KEY_OVERLAY_RETAINED_CAPACITY
         {
-            self.utility_diagnostic_keys = HashSet::new();
+            self.utility_diagnostic_keys = HashSet::default();
         } else {
             self.utility_diagnostic_keys.clear();
         }

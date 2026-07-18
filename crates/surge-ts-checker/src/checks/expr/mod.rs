@@ -82,7 +82,7 @@ pub(crate) fn evaluate_const_expression(
                     _ => Type::Unknown,
                 };
                 props.insert(
-                    property.name.clone(),
+                    property.name.as_str().into(),
                     surge_ts_types::ObjectProperty {
                         ty,
                         optional: false,

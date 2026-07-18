@@ -1138,6 +1138,16 @@ fn check_program_with_stats_and_jobs_inner(
         }
     }
 
+    if std::env::var_os("SURGE_ALLOCATION_CENSUS").is_some() {
+        eprintln!("ParsedType clone census:");
+        let census = surge_ts_syntax::clone_census::parsed_type_clone_census();
+        let total: u64 = census.iter().map(|(_, count)| count).sum();
+        for (name, count) in census {
+            eprintln!("  {name}: {count}");
+        }
+        eprintln!("  total: {total}");
+    }
+
     ProgramCheckResult { diagnostics, stats }
 }
 
@@ -1412,8 +1422,51 @@ fn check_program_files_serial(
     local_ctx.diagnostics.clear();
     local_ctx.stats = CompatibilityStats::default();
 
+    // SURGE_CHECK_CACHE_ISOLATION=1: restore the program-wide resolution caches
+    // to their pre-file state after every file, so each file observes exactly
+    // the analysis-end cache contents. Measures whether any diagnostic depends
+    // on cache entries seeded by earlier files' checking (the blocker for
+    // deterministic parallel checking). Experiment probe — not a production
+    // mode.
+    let cache_isolation = std::env::var_os("SURGE_CHECK_CACHE_ISOLATION").is_some();
+
     let file_count = parsed_files.len();
     for file_index in 0..file_count {
+        let cache_snapshot = (cache_isolation && !parsed_files[file_index].statements.is_empty())
+            .then(|| {
+                (
+                    local_ctx
+                        .program_resolved_generic_types
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .program_instantiations
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .physical_interface_instantiations
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .physical_interface_declaration_templates
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .physical_interface_method_instantiations
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .physical_interface_overload_instantiations
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                )
+            });
         let result = check_program_file(
             file_index,
             &parsed_files[file_index],
@@ -1421,6 +1474,42 @@ fn check_program_files_serial(
             &mut local_ctx,
             timings.as_ref(),
         );
+        if let Some(snapshot) = cache_snapshot {
+            if let (Some(saved), Ok(mut live)) =
+                (snapshot.0, local_ctx.program_resolved_generic_types.lock())
+            {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) =
+                (snapshot.1, local_ctx.program_instantiations.lock())
+            {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) = (
+                snapshot.2,
+                local_ctx.physical_interface_instantiations.lock(),
+            ) {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) = (
+                snapshot.3,
+                local_ctx.physical_interface_declaration_templates.lock(),
+            ) {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) = (
+                snapshot.4,
+                local_ctx.physical_interface_method_instantiations.lock(),
+            ) {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) = (
+                snapshot.5,
+                local_ctx.physical_interface_overload_instantiations.lock(),
+            ) {
+                *live = saved;
+            }
+        }
         results.push(result);
         // The file is fully checked, and per-file program state is only ever
         // read under the file's own index (checking never consults another
@@ -1467,16 +1556,15 @@ fn resolve_worker_count(jobs: usize, parsed_files: &[ParsedProgramFile]) -> usiz
         return 1;
     }
 
-    let requested = if jobs == AUTO_JOBS {
-        let cores = thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
-        let work_units: usize = parsed_files.iter().map(|file| file.statements.len()).sum();
-        let by_work = (work_units / MIN_STATEMENTS_PER_WORKER).max(1);
-        cores.min(by_work)
-    } else {
-        jobs
-    };
+    // AUTO keeps the check phase serial. Checking is coupled to the shared
+    // resolution caches in an order-visible way: whether a file's resolution
+    // hits an entry seeded by an *earlier-checked* file decides between the
+    // nominal (`ReadonlyArray<Auth>`) and structural (`Auth[]`) display of the
+    // same type in ~28 tRPC messages (measured via SURGE_CHECK_CACHE_ISOLATION),
+    // so any true concurrency here changes rendered bytes between jobs=1 and
+    // jobs=auto. An explicit `--jobs N` keeps today's parallel path (and its
+    // documented display divergence) for users who opt in.
+    let requested = if jobs == AUTO_JOBS { 1 } else { jobs };
 
     requested.max(1).min(file_count)
 }

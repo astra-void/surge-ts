@@ -22,24 +22,35 @@ pub(crate) fn type_declaration_resolution_key(
     declaration: &TypeDeclarationInfo,
 ) -> DeclarationResolutionKey {
     match declaration {
-        TypeDeclarationInfo::Alias(alias) => DeclarationResolutionKey {
-            file_name: canonical_declaration_file_name(&alias.file_name),
-            name: alias.name.clone(),
-            namespace: DeclarationNamespace::Type,
-        },
-        TypeDeclarationInfo::Interface(interface) => DeclarationResolutionKey {
-            file_name: canonical_declaration_file_name(&interface.file_name),
-            name: interface.name.clone(),
-            namespace: DeclarationNamespace::Type,
-        },
+        TypeDeclarationInfo::Alias(alias) => alias
+            .cached_resolution_key
+            .get_or_init(|| declaration_resolution_key(&alias.file_name, &alias.name))
+            .clone(),
+        TypeDeclarationInfo::Interface(interface) => interface
+            .cached_resolution_key
+            .get_or_init(|| declaration_resolution_key(&interface.file_name, &interface.name))
+            .clone(),
     }
 }
 
 pub(crate) fn declaration_resolution_key(file_name: &str, name: &str) -> DeclarationResolutionKey {
     DeclarationResolutionKey {
         file_name: canonical_declaration_file_name(file_name),
-        name: name.to_string(),
+        name: Arc::from(name),
         namespace: DeclarationNamespace::Type,
+    }
+}
+
+pub(crate) fn type_declaration_alias_id(
+    declaration: &TypeDeclarationInfo,
+    key: &DeclarationResolutionKey,
+) -> Arc<str> {
+    let build = || Arc::from(format!("{}\u{0}{}", key.file_name, key.name));
+    match declaration {
+        TypeDeclarationInfo::Alias(alias) => alias.cached_alias_id.get_or_init(build).clone(),
+        TypeDeclarationInfo::Interface(interface) => {
+            interface.cached_alias_id.get_or_init(build).clone()
+        }
     }
 }
 
@@ -356,7 +367,7 @@ impl ResolveReference for LazyDeclarationAnnotation {
     fn captured_census(&self) -> surge_ts_types::ResolverCaptureCensus {
         let mut own_bytes = std::mem::size_of::<Self>() as u64
             + self.annotation.estimated_heap_bytes()
-            + self.key.name.capacity() as u64;
+            + self.key.name.len() as u64;
         let mut shared_captures = Vec::new();
         if let Some(environment) = &self.signature_environment {
             shared_captures.push((
@@ -489,7 +500,9 @@ pub(crate) fn make_lazy_signature_annotation_reference(
     let component_identity = component.identity();
     let key = DeclarationResolutionKey {
         file_name: canonical_declaration_file_name(&ctx.file_name),
-        name: format!("signature {declaration_name}@{declaration_start}:{component_identity}"),
+        name: Arc::from(format!(
+            "signature {declaration_name}@{declaration_start}:{component_identity}"
+        )),
         namespace: DeclarationNamespace::Type,
     };
     crate::program::record_lazy_reference_created(&key);
@@ -673,7 +686,7 @@ fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType) -> String
                 .collect::<Vec<_>>();
             if let Some(call) = &object.call_signature {
                 members.push(parsed_annotation_display(&ParsedType::Function(
-                    call.as_ref().clone(),
+                    std::sync::Arc::new(call.as_ref().clone()),
                 )));
             }
             format!("{{ {} }}", members.join("; "))
@@ -724,7 +737,7 @@ impl ResolveReference for LazyInstantiation {
                 .map(surge_ts_syntax::ParsedType::estimated_heap_bytes)
                 .sum::<u64>()
             + (self.resolved_arguments.len() * std::mem::size_of::<Type>()) as u64
-            + self.decl_key.name.capacity() as u64;
+            + self.decl_key.name.len() as u64;
         surge_ts_types::ResolverCaptureCensus {
             own_bytes,
             shared_captures: self.substitution.census_shared_captures(),
@@ -1629,11 +1642,11 @@ mod physical_interface_cache_tests {
                 }),
                 optional: false,
                 is_abstract: false,
-                ty: ParsedType::Function(ParsedFunctionType {
+                ty: ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
                     parameters: Vec::new(),
                     return_type: Box::new(ParsedType::String),
                     type_parameters: Vec::new(),
-                }),
+                })),
             })
             .collect();
         body.member_fragments = vec![body.declaration_fragments[0].clone(); body.members.len()];
@@ -1810,7 +1823,7 @@ mod physical_interface_cache_tests {
         ));
         let mut properties = PropertyMap::default();
         properties.insert(
-            "method".to_string(),
+            "method".into(),
             ObjectProperty::required(union_type(vec![first_overload, second_overload])),
         );
         let object = ObjectType::new(properties, Some(Type::String))

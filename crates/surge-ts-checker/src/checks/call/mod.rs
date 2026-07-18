@@ -348,11 +348,11 @@ pub(crate) fn check_new_like(
             } else {
                 type_arguments.to_vec()
             };
-            let named = ParsedType::Named(ParsedNamedType {
+            let named = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
                 name: name.clone(),
                 span: None,
                 type_arguments,
-            });
+            }));
             return Some(crate::infer::map_parsed_type(named, ctx));
         }
     }

@@ -486,7 +486,7 @@ fn evaluate_object_literal_with_expected_type(
                 .find(|(property_name, _)| {
                     !properties
                         .iter()
-                        .any(|property| property.name == property_name.as_str())
+                        .any(|property| property.name == property_name.as_ref())
                 })
         })
         .flatten()
@@ -560,7 +560,7 @@ fn object_literal_source_type_name(
                 .get(&property.name)
                 .cloned()
                 .unwrap_or(Type::Unknown);
-            (property.name.clone(), ObjectProperty::required(ty))
+            (property.name.as_str().into(), ObjectProperty::required(ty))
         })
         .collect::<surge_ts_types::PropertyMap>();
 

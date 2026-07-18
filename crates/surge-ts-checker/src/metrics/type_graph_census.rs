@@ -122,7 +122,7 @@ impl TypeGraphCensus {
             self.property_map_bytes += size_of::<PropertyMap>() as u64;
             for (name, property) in object.properties.iter() {
                 self.property_map_bytes +=
-                    (size_of::<String>() + name.capacity() + size_of::<ObjectProperty>()) as u64;
+                    (size_of::<Arc<str>>() + name.len() + size_of::<ObjectProperty>()) as u64;
                 self.walk_type(&property.ty);
             }
         }

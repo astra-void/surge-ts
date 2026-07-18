@@ -18,7 +18,7 @@ fn defer_concrete_library_aliases() -> bool {
 }
 
 pub(crate) fn resolve_named_type(
-    named_type: ParsedNamedType,
+    named_type: std::sync::Arc<ParsedNamedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
@@ -82,7 +82,7 @@ pub(crate) fn resolve_named_type(
         if matches!(declaration, TypeDeclarationInfo::Interface(_))
             && declaration_file_is_library_scoped(declaration, ctx)
         {
-            let alias_id = format!("{}\u{0}{}", cache_key.file_name, cache_key.name);
+            let alias_id = type_declaration_alias_id(declaration, &cache_key);
             let display = named_type.name.clone();
             let resolved = ResolvedType {
                 ty: make_lazy_type_reference(
@@ -91,7 +91,7 @@ pub(crate) fn resolve_named_type(
                     &display,
                     handle,
                     cache_key.clone(),
-                    named_type.type_arguments,
+                    named_type.type_arguments.clone(),
                     Vec::new(),
                     substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
                 ),
@@ -106,7 +106,7 @@ pub(crate) fn resolve_named_type(
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
                 alias,
                 handle.clone(),
-                named_type.type_arguments,
+                named_type.type_arguments.clone(),
                 named_type.span,
                 ctx,
                 resolving,
@@ -116,7 +116,7 @@ pub(crate) fn resolve_named_type(
             TypeDeclarationInfo::Interface(interface) => resolve_interface(
                 interface,
                 handle.clone(),
-                named_type.type_arguments,
+                named_type.type_arguments.clone(),
                 ctx,
                 resolving,
                 substitution,
@@ -127,7 +127,7 @@ pub(crate) fn resolve_named_type(
         // diagnostics (e.g. `'StrictObj'`, not the structural expansion), and
         // treats it nominally: the qualified `file::name` identity lets
         // assignability recognise two resolutions of the same declaration.
-        let alias_id = format!("{}\u{0}{}", cache_key.file_name, cache_key.name);
+        let alias_id = type_declaration_alias_id(declaration, &cache_key);
         let resolved = attach_object_alias_name(resolved, &named_type.name, &alias_id);
         // Wrap the named object in a lazy nominal reference. A non-generic
         // declaration is concrete and context-independent, so its expansion is
@@ -150,10 +150,10 @@ pub(crate) fn resolve_named_type(
     // `lowest_cycle_target_index`) so a cached value matches a standalone
     // resolution and never depends on what an enclosing frame had on the stack.
     let library_scoped = declaration_file_is_library_scoped(declaration, ctx);
-    let library_cache_key = library_scoped.then(|| type_declaration_resolution_key(declaration));
     let decl_key = type_declaration_resolution_key(declaration);
+    let library_cache_key = library_scoped.then(|| decl_key.clone());
     crate::program::record_generic_instantiation(&decl_key);
-    let reference_id = format!("{}\u{0}{}", decl_key.file_name, decl_key.name);
+    let reference_id = type_declaration_alias_id(declaration, &decl_key);
     // Resolve the type arguments once. The result is reused for the library cache
     // key, the nominal reference identity, AND — via `pre_resolved` below — the
     // authoritative `bind_type_arguments`, so a generic instantiation resolves its
@@ -289,7 +289,7 @@ pub(crate) fn resolve_named_type(
                 display,
                 handle,
                 decl_key.clone(),
-                named_type.type_arguments,
+                named_type.type_arguments.clone(),
                 arguments.clone(),
                 substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
             ),
@@ -316,7 +316,7 @@ pub(crate) fn resolve_named_type(
                 display,
                 handle,
                 decl_key.clone(),
-                named_type.type_arguments,
+                named_type.type_arguments.clone(),
                 arguments.clone(),
                 substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
             ),
@@ -341,7 +341,7 @@ pub(crate) fn resolve_named_type(
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
             alias,
             handle.clone(),
-            named_type.type_arguments,
+            named_type.type_arguments.clone(),
             named_type.span,
             ctx,
             resolving,
@@ -351,7 +351,7 @@ pub(crate) fn resolve_named_type(
         TypeDeclarationInfo::Interface(interface) => resolve_interface(
             interface,
             handle.clone(),
-            named_type.type_arguments,
+            named_type.type_arguments.clone(),
             ctx,
             resolving,
             substitution,
@@ -537,6 +537,11 @@ fn declaration_file_is_library_scoped(
     declaration: &TypeDeclarationInfo,
     ctx: &CheckerContext,
 ) -> bool {
+    // NOT memoizable on the declaration: `is_library_scoped_file` consults
+    // `ctx.file_kinds`, which differs between the program context and the
+    // synthetic contexts lazy resolvers run under, so the same declaration
+    // legitimately gets different answers per consumer (measured 467k
+    // divergences on tRPC when a per-declaration memo was attempted).
     let file_name = match declaration {
         TypeDeclarationInfo::Alias(alias) => alias.file_name.as_str(),
         TypeDeclarationInfo::Interface(interface) => interface.file_name.as_str(),

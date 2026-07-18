@@ -24,6 +24,8 @@ mod io_stats;
 mod package_declarations;
 mod package_resolution;
 mod path_mapping;
+mod probe;
+mod specifier_scan;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -199,6 +201,8 @@ impl Project {
             });
         }
 
+        probe::clear_probe_cache();
+
         let file_discovery_start = Instant::now();
         let read_workers = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -294,6 +298,9 @@ impl Project {
             &loaded.compiler_options.type_roots,
         );
 
+        let mut specifier_scanner = specifier_scan::ModuleSpecifierScanner::new();
+        let mut import_graph_state = import_graph::ImportGraphState::default();
+
         loop {
             let files_before = inputs.len();
 
@@ -305,6 +312,7 @@ impl Project {
                     &loaded.root_dir,
                     &resolver_options,
                     &mut package_resolution_cache,
+                    &mut specifier_scanner,
                 );
             if collect {
                 timings.package_declaration_discovery += package_start.elapsed();
@@ -324,6 +332,8 @@ impl Project {
 
             let import_graph_start = Instant::now();
             let graph_loaded = import_graph::expand_project_inputs(
+                &mut import_graph_state,
+                &mut specifier_scanner,
                 &mut inputs,
                 &mut sources,
                 &loaded.root_dir,
@@ -380,6 +390,13 @@ impl Project {
         }
 
         let reference_type_resolution = reference_type_resolver.into_resolution();
+
+        // The scan caches (parser arena, per-file specifier lists, probe and
+        // known-file sets) are loader-lifetime only; release them before the
+        // checker's peak so they never count against the program footprint.
+        drop(specifier_scanner);
+        drop(import_graph_state);
+        probe::clear_probe_cache();
 
         let mut checker_types = type_package_resolution.effective_type_names.clone();
         for name in &reference_type_resolution.effective_type_names {

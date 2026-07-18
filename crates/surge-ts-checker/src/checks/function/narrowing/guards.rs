@@ -186,7 +186,7 @@ pub(crate) fn narrow_discriminant_symbol_table(
             let Type::Object(object_type) = &symbol_ty else {
                 return None;
             };
-            let base_property_type = object_type.properties.get(base_property)?;
+            let base_property_type = object_type.properties.get(base_property.as_str())?;
             let narrowed_property = narrow_union_by_discriminant(
                 &base_property_type.ty,
                 property,
@@ -197,7 +197,7 @@ pub(crate) fn narrow_discriminant_symbol_table(
             let mut new_object = object_type.clone();
             let properties = std::sync::Arc::make_mut(&mut new_object.properties);
             properties.insert(
-                base_property.clone(),
+                base_property.as_str().into(),
                 surge_ts_types::ObjectProperty {
                     ty: narrowed_property,
                     optional: base_property_type.optional,

@@ -657,8 +657,7 @@ pub(super) fn resolve_declaration_or_runtime_candidate(
 
 pub(super) fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
     for candidate in runtime_javascript_candidates(path.to_path_buf()) {
-        crate::io_stats::record_existence_probe();
-        if candidate.exists() && candidate.is_file() {
+        if crate::probe::is_existing_file(&candidate) {
             return Some(PackageEntrypointResolution {
                 path: candidate,
                 kind: PackageEntrypointKind::RuntimeOnly,
@@ -677,16 +676,12 @@ pub(super) fn types_package_name(package_name: &str) -> String {
 }
 
 pub(super) fn resolve_declaration_candidate(path: &Path) -> Option<PathBuf> {
-    if is_declaration_file_path(path) {
-        crate::io_stats::record_existence_probe();
-        if path.exists() && path.is_file() {
-            return Some(path.to_path_buf());
-        }
+    if is_declaration_file_path(path) && crate::probe::is_existing_file(path) {
+        return Some(path.to_path_buf());
     }
 
     for candidate in declaration_candidates(path.to_path_buf()) {
-        crate::io_stats::record_existence_probe();
-        if candidate.exists() && candidate.is_file() {
+        if crate::probe::is_existing_file(&candidate) {
             return Some(candidate);
         }
     }
@@ -787,8 +782,7 @@ pub(super) fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
 }
 
 pub(super) fn extract_packages_from_source(
-    parser: &mut surge_ts_syntax::ParserWorker,
-    source_text: &str,
+    specifiers: &[String],
     file_name: &str,
     importer_dir: &Path,
     opts: &ResolverOptions,
@@ -796,32 +790,9 @@ pub(super) fn extract_packages_from_source(
     queued_specifiers: &mut HashSet<(String, String)>,
 ) {
     let importer_file = PathBuf::from(file_name);
-    let parsed = parser.parse(source_text, file_name);
-    for statement in parsed.statements {
-        let specifier = match statement {
-            ParsedStatement::ImportDeclaration(import) => Some(import.module_specifier),
-            ParsedStatement::ExportDeclaration(export) => match *export {
-                ParsedExportDeclaration::Named {
-                    module_specifier: Some(module_specifier),
-                    ..
-                }
-                | ParsedExportDeclaration::All {
-                    module_specifier, ..
-                }
-                | ParsedExportDeclaration::Namespace {
-                    module_specifier, ..
-                } => Some(module_specifier),
-                _ => None,
-            },
-            _ => None,
-        };
-
-        let Some(specifier) = specifier else {
-            continue;
-        };
-
+    for specifier in specifiers {
         queue_specifier(
-            &specifier,
+            specifier,
             importer_dir,
             &importer_file,
             opts,

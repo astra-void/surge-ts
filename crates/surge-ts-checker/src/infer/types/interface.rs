@@ -373,7 +373,14 @@ pub(crate) fn resolve_interface_declaration(
     for base in extends {
         let resolved_base = crate::program::with_dts_expansion_reason(
             crate::program::DtsExpansionReason::InterfaceHeritageResolution,
-            || resolve_named_type(base.clone(), ctx, resolving, substitution),
+            || {
+                resolve_named_type(
+                    std::sync::Arc::new(base.clone()),
+                    ctx,
+                    resolving,
+                    substitution,
+                )
+            },
         );
         had_error |= resolved_base.had_error;
         // A base that resolved with errors may be missing members surge could
@@ -387,13 +394,19 @@ pub(crate) fn resolve_interface_declaration(
         match resolved_base.ty.peeled() {
             Type::Object(object_type) => {
                 for (name, property) in object_type.properties.iter() {
+                    // Derived members shadow inherited ones; probe before
+                    // cloning so an already-present name costs no key or
+                    // property copy.
+                    if properties.contains_key(name) {
+                        continue;
+                    }
                     let reason = if matches!(property.ty, Type::Function(_)) {
                         crate::program::DtsExpansionReason::InheritedMethodMerge
                     } else {
                         crate::program::DtsExpansionReason::InheritedPropertyMerge
                     };
                     crate::program::with_dts_expansion_reason(reason, || {
-                        properties.entry(name.clone()).or_insert(property.clone());
+                        properties.insert(name.clone(), property.clone());
                     });
                 }
                 if let Some(declaration) = interface_declaration {
@@ -591,7 +604,7 @@ pub(crate) fn resolve_interface_declaration(
         if is_method {
             let inherited_function = !own_method_group_contaminated.contains_key(&member.name)
                 && properties
-                    .get(&member.name)
+                    .get(member.name.as_str())
                     .is_some_and(|property| matches!(property.ty, Type::Function(_)));
             own_method_group_contaminated
                 .entry(member.name.clone())
@@ -608,7 +621,7 @@ pub(crate) fn resolve_interface_declaration(
         // permissive signature so a call matching any overload's arity is
         // accepted, rather than last-wins dropping every overload but one.
         if let (Some(existing), Type::Function(incoming)) =
-            (properties.get(&member.name), &property_type.ty)
+            (properties.get(member.name.as_str()), &property_type.ty)
             && let Type::Function(existing_fn) = &existing.ty
         {
             let overload_key = member_template
@@ -680,7 +693,7 @@ pub(crate) fn resolve_interface_declaration(
             };
             let optional = existing.optional && member.optional;
             properties.insert(
-                member.name.clone(),
+                member.name.as_str().into(),
                 if optional {
                     ObjectProperty::optional(Type::Function(merged))
                 } else {
@@ -696,7 +709,7 @@ pub(crate) fn resolve_interface_declaration(
             ObjectProperty::required(property_type.ty)
         };
 
-        properties.insert(member.name.clone(), object_property);
+        properties.insert(member.name.as_str().into(), object_property);
     }
 
     // An own index signature takes precedence; otherwise inherit one from a
@@ -719,7 +732,7 @@ pub(crate) fn resolve_interface_declaration(
             crate::program::DtsExpansionReason::InterfaceCallSignatureMapping,
             || {
                 resolve_parsed_type(
-                    ParsedType::Function(call_signature.clone()),
+                    ParsedType::Function(std::sync::Arc::new(call_signature.clone())),
                     ctx,
                     resolving,
                     substitution,
@@ -744,7 +757,7 @@ pub(crate) fn resolve_interface_declaration(
             crate::program::DtsExpansionReason::InterfaceConstructSignatureMapping,
             || {
                 resolve_parsed_type(
-                    ParsedType::Function(construct_signature.clone()),
+                    ParsedType::Function(std::sync::Arc::new(construct_signature.clone())),
                     ctx,
                     resolving,
                     substitution,
@@ -861,7 +874,7 @@ fn is_declaration_file_name(file_name: &str) -> bool {
 pub(crate) fn generated_default_lib_map_instance_type() -> Type {
     let mut properties = PropertyMap::default();
     properties.insert(
-        "get".to_string(),
+        "get".into(),
         ObjectProperty::required(Type::Function(alloc_function_type(
             vec![Type::Any],
             Type::Any,
@@ -870,7 +883,7 @@ pub(crate) fn generated_default_lib_map_instance_type() -> Type {
         ))),
     );
     properties.insert(
-        "set".to_string(),
+        "set".into(),
         ObjectProperty::required(Type::Function(alloc_function_type(
             vec![Type::Any, Type::Any],
             Type::Any,
@@ -879,7 +892,7 @@ pub(crate) fn generated_default_lib_map_instance_type() -> Type {
         ))),
     );
     properties.insert(
-        "has".to_string(),
+        "has".into(),
         ObjectProperty::required(Type::Function(alloc_function_type(
             vec![Type::Any],
             Type::Boolean,
@@ -888,7 +901,7 @@ pub(crate) fn generated_default_lib_map_instance_type() -> Type {
         ))),
     );
     properties.insert(
-        "delete".to_string(),
+        "delete".into(),
         ObjectProperty::required(Type::Function(alloc_function_type(
             vec![Type::Any],
             Type::Boolean,
@@ -897,7 +910,7 @@ pub(crate) fn generated_default_lib_map_instance_type() -> Type {
         ))),
     );
     properties.insert(
-        "clear".to_string(),
+        "clear".into(),
         ObjectProperty::required(Type::Function(alloc_function_type(
             vec![],
             Type::Void,
@@ -905,7 +918,7 @@ pub(crate) fn generated_default_lib_map_instance_type() -> Type {
             0,
         ))),
     );
-    properties.insert("size".to_string(), ObjectProperty::required(Type::Number));
+    properties.insert("size".into(), ObjectProperty::required(Type::Number));
 
     Type::Object(alloc_object_type(properties, None))
 }

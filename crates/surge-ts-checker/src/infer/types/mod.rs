@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use surge_ts_diagnostics::Diagnostic;
@@ -19,10 +19,17 @@ pub(crate) use diagnostics::*;
 pub(crate) use interface::*;
 pub(crate) use resolve::*;
 pub(crate) use utility::*;
+/// Type-parameter bindings for one resolution context.
+///
+/// Substitutions are tiny (one entry per type parameter of the declaration
+/// being instantiated) but cloned constantly — every lazy reference captures
+/// one — so the maps are name-sorted `Arc`-shared vectors: a clone is two
+/// refcount bumps, a copy-on-write is a single allocation of small pairs, and
+/// iteration order matches the previous `BTreeMap` exactly (sorted by name).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TypeParameterSubstitution {
-    values: Option<Arc<BTreeMap<String, Type>>>,
-    placeholders: Option<Arc<HashSet<String>>>,
+    values: Option<Arc<Vec<(Arc<str>, Type)>>>,
+    placeholders: Option<Arc<Vec<Arc<str>>>>,
 }
 
 impl TypeParameterSubstitution {
@@ -38,8 +45,8 @@ impl TypeParameterSubstitution {
             let bytes = values
                 .iter()
                 .map(|(name, _)| {
-                    (name.capacity()
-                        + std::mem::size_of::<String>()
+                    (name.len()
+                        + std::mem::size_of::<Arc<str>>()
                         + std::mem::size_of::<Type>()
                         + 32) as u64
                 })
@@ -49,7 +56,7 @@ impl TypeParameterSubstitution {
         if let Some(placeholders) = &self.placeholders {
             let bytes = placeholders
                 .iter()
-                .map(|name| (name.capacity() + std::mem::size_of::<String>() + 16) as u64)
+                .map(|name| (name.len() + std::mem::size_of::<Arc<str>>() + 16) as u64)
                 .sum();
             captures.push((Arc::as_ptr(placeholders) as *const () as usize, bytes));
         }
@@ -63,16 +70,28 @@ impl TypeParameterSubstitution {
     }
 
     pub(crate) fn set(&mut self, name: String, ty: Type, placeholder: bool) {
-        Arc::make_mut(self.values.get_or_insert_with(|| Arc::new(BTreeMap::new())))
-            .insert(name.clone(), ty);
+        let name: Arc<str> = Arc::from(name.as_str());
+        let values = Arc::make_mut(self.values.get_or_insert_with(|| Arc::new(Vec::new())));
+        match values.binary_search_by(|(existing, _)| existing.as_ref().cmp(&*name)) {
+            Ok(index) => values[index].1 = ty,
+            Err(index) => values.insert(index, (name.clone(), ty)),
+        }
         if placeholder {
-            Arc::make_mut(
+            let placeholders = Arc::make_mut(
                 self.placeholders
-                    .get_or_insert_with(|| Arc::new(HashSet::new())),
-            )
-            .insert(name);
+                    .get_or_insert_with(|| Arc::new(Vec::new())),
+            );
+            if let Err(index) =
+                placeholders.binary_search_by(|existing| existing.as_ref().cmp(&*name))
+            {
+                placeholders.insert(index, name);
+            }
         } else if let Some(placeholders) = self.placeholders.as_mut() {
-            Arc::make_mut(placeholders).remove(&name);
+            if let Ok(index) =
+                placeholders.binary_search_by(|existing| existing.as_ref().cmp(&*name))
+            {
+                Arc::make_mut(placeholders).remove(index);
+            }
         }
     }
 
@@ -85,17 +104,25 @@ impl TypeParameterSubstitution {
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&Type> {
-        self.values.as_deref()?.get(name)
+        let values = self.values.as_deref()?;
+        values
+            .binary_search_by(|(existing, _)| existing.as_ref().cmp(name))
+            .ok()
+            .map(|index| &values[index].1)
     }
 
     pub(crate) fn is_placeholder(&self, name: &str) -> bool {
-        self.placeholders
-            .as_deref()
-            .is_some_and(|placeholders| placeholders.contains(name))
+        self.placeholders.as_deref().is_some_and(|placeholders| {
+            placeholders
+                .binary_search_by(|existing| existing.as_ref().cmp(name))
+                .is_ok()
+        })
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &Type)> {
-        self.values.iter().flat_map(|values| values.iter())
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Arc<str>, &Type)> {
+        self.values
+            .iter()
+            .flat_map(|values| values.iter().map(|(name, ty)| (name, ty)))
     }
 
     pub(crate) fn extend(&mut self, other: Self) {
@@ -114,11 +141,10 @@ impl TypeParameterSubstitution {
             .unwrap_or_default();
 
         for (name, ty) in values {
-            if placeholders.contains(&name) {
-                self.insert_placeholder(name, ty);
-            } else {
-                self.insert(name, ty);
-            }
+            let is_placeholder = placeholders
+                .binary_search_by(|existing| existing.as_ref().cmp(&*name))
+                .is_ok();
+            self.set(name.as_ref().to_string(), ty, is_placeholder);
         }
     }
 }

@@ -376,9 +376,9 @@ pub(crate) fn infer_expression(
 /// does not resolve the `JSX` namespace.
 pub(crate) fn jsx_element_type() -> Type {
     let mut properties = PropertyMap::default();
-    properties.insert("type".to_string(), ObjectProperty::required(Type::Any));
-    properties.insert("props".to_string(), ObjectProperty::required(Type::Any));
-    properties.insert("key".to_string(), ObjectProperty::required(Type::Any));
+    properties.insert("type".into(), ObjectProperty::required(Type::Any));
+    properties.insert("props".into(), ObjectProperty::required(Type::Any));
+    properties.insert("key".into(), ObjectProperty::required(Type::Any));
     Type::Object(ObjectType::new(properties, None).with_alias_name("Element"))
 }
 
