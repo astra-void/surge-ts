@@ -18,18 +18,24 @@ conflicts. The proposed fix was **publisher-stamped pending reservations** plus 
 **resolution-deferred** result so a replay defers (and is requeued) instead of
 over-recursing.
 
-**Outcome:** the mechanism is built, byte-safe, and measured. It **does not
-reduce tRPC wall time.** Honoring deferral is byte-identical and moves the
-structural conflict metric (inline rechecks 153 → 64), but the requeue overhead
-plus pool/coordinator contention leave the check tail no faster (1.45 → 1.66 s);
-the CPU-saving piece — a mid-resolution short-circuit that returns the nominal
-form instead of over-recursing — is the **unsafe frontier**: it panicked
-intermittently on a pool thread (poisoning a mutex and aborting the run) and,
-even when it did not, was slower still (2.05 s). Per the mission's fallback
-clause this is delivered as a blocker report; the reservation primitive, the
-deferral measurement, and the byte-safe requeue substrate are kept (opt-in
-behind `SURGE_DEFER`, the shipping default fully unchanged), and the unsafe
-short-circuit is reverted.
+**Outcome:** the full mechanism is built, byte-safe, and measured — including
+the mid-resolution short-circuit, now implemented as a **safe tri-state probe**
+that no longer panics. It **still does not reduce tRPC wall time.** Honoring
+deferral is byte-identical and moves the structural conflict metric (inline
+rechecks 153 → 64), but neither the requeue alone (check tail 1.45 → 1.66 s) nor
+the requeue plus short-circuit (≈1.88 s, within noise of the 1.81 s serial
+recheck) beats the serial recheck: the ceiling is pool/coordinator contention
+plus stale-replay churn (~80 stale replays fall back to inline), not the
+over-recursion representation, which is now safely handled. All of it is kept,
+opt-in behind `SURGE_DEFER`, the shipping default fully unchanged.
+
+An earlier short-circuit variant *did* panic intermittently (empty output,
+aborted run). Root cause: `Type::peeled` is `reference.resolve().peeled()`, so a
+deferred nominal that re-deferred when re-forced made peeling recurse forever →
+stack overflow. Fixed by deferring each key **at most once per attempt**
+(`WorkerOverlay::deferred_once`): a second lookup of the same key resolves as a
+normal miss and terminates the peel. The attempt is discarded and requeued
+regardless, so this only bounds work, never changes the committed result.
 
 The **shipping `--jobs auto` default is unchanged** (SHA
 `4d69a2d5…5ee59`, 2,190 diagnostics): auto runs the serial check path and the
@@ -63,6 +69,12 @@ whole deferral mechanism is behind an opt-in env flag.
    replay oracle tests are extended to model deferral against serial
    first-writers and pass under both the eager and dependency-driven schedules.
 
+4. **Safe short-circuit** (`InstantiationProbe::{Hit,Miss,Deferred}`). On a
+   deferred interner miss the lazy peel returns the nominal reference (via
+   `make_recursive_cycle_reference`) instead of expanding, with the defer-once
+   guard that keeps `Type::peeled` terminating. Byte-identical on all four
+   corpora; no thread-local, no panic.
+
 ## Measured results (tRPC, `--jobs 8`)
 
 ### Deferral fires, and the requeue moves the structural metric
@@ -93,46 +105,51 @@ the pool threads plus the coordinator oversubscribe the 8 cores, so the parallel
 replays do not beat the serial recheck. The requeue is byte-safe and precise, but
 it reschedules the same over-recursion rather than eliminating it.
 
-### The short-circuit is the unsafe frontier
+### The short-circuit (now safe) and why it still does not win
 
 To make a deferred replay *cheap*, the lazy instantiation peel must, on a
 deferred interner miss, return the **nominal reference un-memoized** instead of
-expanding the declaration body. This is genuine mid-resolution control flow out
-of `ResolveReference::resolve_arc(&self) -> Arc<Type>`, a **total** trait method
-with no error channel. The implemented version — a thread-local signal set by the
-session lookup, read-and-cleared by the peel, returning a fresh nominal
-`Type::Reference` — **panicked intermittently on a pool thread** (2 of 3 runs
-produced empty output; the surviving run was byte-identical but slower at
-2.05 s). A panic mid-resolution poisons one of the resolution-path mutexes and
-cascades to an aborted run. Proving that return path clean to a byte-identical
-standard (no poisoned lock, no half-updated `LAZY_PEEL_STACK`, no once-guard or
-canonical/substitution-store divergence) is the open work; the crashing variant
-is reverted.
+expanding the declaration body — genuine mid-resolution control flow out of
+`ResolveReference::resolve_arc(&self) -> Arc<Type>`, a **total** trait method
+with no error channel. The safe implementation is a private tri-state probe
+(`InstantiationProbe::{Hit,Miss,Deferred}`) at the peel entry: `Deferred` →
+nominal reference (via `make_recursive_cycle_reference`), `Miss` → expand, with
+the defer-once guard that keeps `Type::peeled` terminating. No thread-local, no
+panic, no poisoned lock; nextest green and byte-identical on all four corpora.
+
+But it still does not beat the serial recheck. Two reasons, both measured:
+
+* **Defer-once limits the savings.** A deferred nominal that is later *forced*
+  (peeled) expands the key once anyway (over-recursing once, to terminate the
+  peel). Only never-forced nominals save their expansion, so much of the
+  over-recursion still happens.
+* **Contention + stale churn dominate.** ~80 replays still come back stale (their
+  real committed-view misses diverge from the worker-log reservations) and fall
+  to the inline recheck, and the pool threads plus the coordinator oversubscribe
+  the 8 cores — the same ceiling the [ordered-delta report](TRPC-ORDERED-DELTA-REPLAY.md)
+  measured. commit_phase: defer ≈1.88 s vs serial ≈1.81 s (interleaved).
 
 ## The blocker, precisely
 
 The value dependency between conflicts is shallow (~6 truly-divergent conflicts),
-but the *digest* dependency DAG is deep (max level ~35). A replay follows the
-digest DAG unless it can resolve a not-yet-committed dependency **without
-over-recursing**. The requeue substrate lets it defer *at the file level*
-(discard + re-run), which is byte-safe but reschedules the full over-recursion.
-Collapsing the deep digest DAG to the shallow value DAG needs the *sub-file*
-short-circuit — the nominal return — and that return must be produced without a
-non-local escape that poisons the resolver. That is the remaining, genuinely hard
-piece.
+but the *digest* dependency DAG is deep (max level ~35). The over-recursion
+representation is now handled safely, yet the tail does not get faster because
+the residual cost is **scheduling**, not resolution: stale conflict-dependent
+replays and pool/coordinator contention. The remaining levers are orthogonal to
+deferred resolution:
 
-### Next concrete change
+### Next concrete changes
 
-Make the deferred nominal return **safe** rather than a panic/return hack:
-
-* Give the six lazy resolvers a private tri-state return
-  (`Ok(Type)` / `Err(ResolutionDeferred)`) threaded only through the
-  instantiation-peel call chain (`LazyInstantiation` / `LazyDeclarationAnnotation`
-  → `resolve_type_alias` / `resolve_interface`), converting `Err` to the nominal
-  reference at the peel boundary — no thread-local, no panic, no poisoned lock.
-* Only then is the deferred replay cheap enough that requeue against the *shallow*
-  value DAG can beat the serial recheck — if pool/coordinator contention (a
-  separate, measured ceiling) permits.
+* **Cut stale replays.** Schedule conflict-dependent replays at their latest
+  worker-log dependency (drop the eager-at-0 submit) so fewer run against an
+  incomplete view; or reserve on the *replay's real* miss set rather than the
+  worker log.
+* **Make the short-circuit terminal without re-expanding.** Return a nominal that
+  resolves to a cached structural placeholder (not Unknown) so a forced deferred
+  nominal never over-recurses even once — removing the defer-once expansion cost.
+* **Address the contention ceiling** (separate, measured): the pool + coordinator
+  on 8 cores. Until that moves, a faster tail is unlikely regardless of how cheap
+  the deferred replays become.
 
 Until then the serial recheck remains the fastest correct tail for tRPC. The
 reservation table, the measurement, and the requeue substrate are kept as the
@@ -145,8 +162,10 @@ is untouched).
 * `cargo nextest run --workspace`: green (incl. 13 reservation tests + 10 replay
   oracle tests extended for deferral).
 * tRPC `--jobs auto` (shipping default) SHA `4d69a2d5…5ee59`, 2,190 diagnostics —
-  unchanged. `SURGE_DEFER=1` byte-identical across 5 consecutive runs (no crash
-  after the short-circuit revert).
+  unchanged. `SURGE_DEFER=1` byte-identical across 8 consecutive runs, no crash
+  (with the safe tri-state short-circuit).
+* zod / ky / ofetch: `--jobs auto` == `SURGE_DEFER=1 --jobs 8` == plain
+  `--jobs 8`, all byte-identical.
 * Default path bytes are unchanged, so oracle parity is preserved by
   construction.
 
