@@ -168,3 +168,17 @@ the memory gate needs (5) besides.
 `SURGE_ANALYSIS_MODULE_SESSIONS`, `SURGE_ANALYSIS_DECL_SERIAL`,
 `SURGE_ANALYSIS_PRODUCT_PROBE` (=index or `all`), plus
 worker/commit-phase timing on `SURGE_STC_STATS` for the analysis drivers.
+
+## Follow-up: ordered-delta pipelined replay (blocker)
+
+The "ordered-delta pipelined replay" of the three commit tails — the lever
+named as item (1) above — was implemented and validated in a later session
+(`a7d9a6b`, `8c5822f`). It is sound and byte-identical but **does not reduce
+tRPC wall time**: the conflicts form deep digest-dependency chains (levels up
+to 42) and a replay reading an incomplete committed view over-recurses, so only
+clean-dependent conflicts replay reliably and the serial conflict chain
+dominates. Full analysis, the variants tried, and the concrete cache-
+representation change needed to unblock it (publisher-stamped versioned entries
++ a resolution-deferred sentinel) are in
+[TRPC-ORDERED-DELTA-REPLAY.md](TRPC-ORDERED-DELTA-REPLAY.md). The shipping
+`--jobs auto` default is unchanged (serial check, ~10.3 s median, 1.97 GB).
