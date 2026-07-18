@@ -28,6 +28,7 @@ mod metrics;
 mod modules;
 mod paths;
 mod program;
+mod replay;
 mod spans;
 mod speculative;
 mod symbols;
