@@ -141,42 +141,65 @@ pool). But it is **slower**, not faster: interleaved same-window A/B,
 (80 → ~91). Reverted.
 
 Why routing everything to the pool loses: the coordinator blocks at each frontier
-position waiting for that position's replay (`take`), and the deep
-conflict-dependency chain (max level ~35) serializes the frontier — a position
-cannot commit until its predecessors do. So the pool cannot overlap the chain;
-it only adds queueing + stale-re-run overhead on top of an inherently serial
-walk. The serial recheck does the same heavy work inline without the
-pool-coordination overhead, so it wins.
+position waiting for that position's replay (`take`), and with ~90 stale replays
+it repeatedly waits on pool round-trips (behind a queue of mostly-wasted
+look-ahead work) instead of computing inline. The lost time is coordination +
+stale churn, not an inherently serial chain — the critical-path measurement below
+shows the tail *is* parallelizable; the stale replays are what prevent exploiting
+it.
+
+### The critical-path ceiling — the tail *is* parallelizable
+
+`SURGE_CRITPATH=1` times each conflict's serial inline recompute and computes the
+longest *weighted* dependency chain (the bound even a perfect topological,
+unbounded-parallel commit could not beat):
+
+```
+conflicts≈220  serial_sum≈1.7s  critical_path≈0.46s  critical_chain_len=6–8
+speedup_ceiling ≈ 3.65–4.2x
+```
+
+This overturns the earlier "fundamentally serial" reading. The DAG's *unweighted*
+depth is ~35, but the *weighted* critical path is only **6–8 conflicts / ~0.46 s**
+— the deep chains are made of *cheap* conflicts, and the expensive conflicts are
+largely independent. So an ideal parallel commit could take the tail from ~1.7 s
+to ~0.46 s (~1.2 s, ~3.65x). The tail is not inherently serial.
+
+### Out-of-order commit was tried — worse, and it isolates the real blocker
+
+Moving stale/absent recomputes off the coordinator onto the pool (return
+`NeedsReplay` → re-submit, so pool threads overlap the recomputes) is
+**byte-identical** and drives **inline rechecks to 0** — but it is ~2x *slower*:
+interleaved A/B **commit_phase ≈3.0 s vs serial ≈1.7 s**. The coordinator blocks
+on each re-submitted position's pool round-trip behind a queue of (mostly wasted)
+look-ahead work; the round-trip + queue + contention cost dwarfs an inline
+recompute. Reverted.
 
 ## The blocker, precisely
 
-The value dependency between conflicts is shallow (~6 truly-divergent conflicts),
-but the *digest* dependency DAG is deep (max level ~35) and — the decisive point,
-now confirmed by the latest-dep experiment — **fundamentally serial at the
-frontier**. The over-recursion representation is now handled safely, and inline
-rechecks can be driven to ~0, yet the tail does not get faster: the frontier
-advances at the rate of the dependency chain regardless of how the replays are
-scheduled, and moving work onto the pool only adds coordination + stale-re-run
-cost. This is the same ceiling the
-[ordered-delta report](TRPC-ORDERED-DELTA-REPLAY.md) measured, now isolated to
-the frontier serialization rather than the over-recursion.
+The ceiling (~0.46 s) is real, but reaching it requires the coordinator to only
+ever *validate precomputed-ready* results, never block on a heavy recompute. The
+one thing standing in the way is the **~84 stale replays**: a pre-replay that
+read the committed store before some earlier position it depends on had
+committed. Each stale replay forces the coordinator to either recompute inline
+(serial, ~1.7 s total) or block on a pool re-run (~3.0 s) — both lose. Stale
+replays exist because reservations are seeded from the **worker logs**, whose
+miss/insert sets differ from a replay's *real* committed-view sets, so the
+deferral does not fire on every key an earlier position will publish.
 
-### Remaining levers (all orthogonal to deferred resolution)
+### The one lever that matters: eliminate stale replays
 
-* **Break the frontier serialization** — the real bottleneck. The coordinator's
-  strict in-order `take` at every position is what serializes the walk;
-  committing independent chain-heads out of order (while preserving serial
-  *publication* semantics) is the only thing that could parallelize the tail, and
-  it is a much larger change to the commit walk.
-* **Shorten the digest DAG** — reserve on the replay's *real* committed-view miss
-  set rather than the worker log, so fewer conflicts are digest-dependent in the
-  first place.
-* **Make the short-circuit terminal** — a nominal that resolves to a cached
-  structural placeholder (not `Unknown`) so a forced deferred nominal never
-  over-recurses even once (removes the defer-once expansion cost). A micro-lever;
-  it cannot beat the frontier ceiling alone.
+Complete reservations ⇒ every pre-replay reads a complete-enough view ⇒ 0 stale ⇒
+the coordinator's walk is cheap validate+publish and the pool hits the ~0.46 s
+critical path. Concretely:
 
-Until the frontier serialization is broken, the serial recheck remains the
+* **Reserve on the replay's *real* miss/insert set, not the worker log** — e.g. a
+  first cheap pass that records each conflict's committed-view dependencies, then
+  a topological wave commit. This is the substantive next change.
+* A terminal short-circuit nominal (no defer-once re-expansion) is a secondary
+  micro-lever; it cannot eliminate stale on its own.
+
+Until stale replays are eliminated, the serial recheck remains the
 fastest correct tail for tRPC. The reservation table, the measurement, the
 requeue substrate, and the safe short-circuit are kept as the validated,
 non-regressing foundation (opt-in `SURGE_DEFER`; the shipping default is

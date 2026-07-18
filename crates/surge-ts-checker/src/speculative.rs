@@ -1328,6 +1328,119 @@ pub(crate) fn report_conflict_dag(logs: &[Option<FileCacheLog>]) {
     );
 }
 
+/// Per predicted-conflict position, its conflict-DAG dependency positions (the
+/// first-writers of keys it missed, plus its overlay producers, all `< index`).
+/// Computed before the commit walk consumes the logs. Non-conflicts get an empty
+/// list. Feeds [`report_critical_path`].
+pub(crate) fn compute_conflict_deps(logs: &[Option<FileCacheLog>]) -> Vec<Vec<usize>> {
+    let predicted = predict_conflicts(logs);
+    let n = logs.len();
+    let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut first_writer: FxHashMap<u64, usize> = FxHashMap::default();
+    for (index, log) in logs.iter().enumerate() {
+        let Some(log) = log else { continue };
+        if predicted[index] {
+            let mut set: FxHashSet<usize> = FxHashSet::default();
+            for digest in &log.misses {
+                if let Some(&producer) = first_writer.get(digest)
+                    && producer < index
+                {
+                    set.insert(producer);
+                }
+            }
+            for &producer in &log.overlay_deps {
+                if producer < index {
+                    set.insert(producer);
+                }
+            }
+            deps[index] = set.into_iter().collect();
+        }
+        let mut record = |digest: u64| {
+            first_writer.entry(digest).or_insert(index);
+        };
+        for (_, _, d) in &log.generic_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.instantiation_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.physical_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.template_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.method_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.overload_inserts {
+            record(*d);
+        }
+    }
+    deps
+}
+
+/// Diagnostic (`SURGE_CRITPATH=1`): the out-of-order-commit ceiling. Given each
+/// conflict position's measured recompute time (`micros[k]`) and the conflict
+/// DAG (`deps`), computes the longest *weighted* dependency chain — the critical
+/// path that even a perfect topological, unbounded-parallel commit could not
+/// beat — alongside the serial sum. If `critical_path ≈ serial_sum` the
+/// conflicts form one long chain and out-of-order commit cannot help; if
+/// `critical_path ≪ serial_sum` there is parallelism to exploit.
+pub(crate) fn report_critical_path(deps: &[Vec<usize>], micros: &FxHashMap<usize, u128>) {
+    if std::env::var_os("SURGE_CRITPATH").is_none() {
+        return;
+    }
+    let n = deps.len();
+    let mut finish: Vec<u128> = vec![0; n];
+    let mut prev: Vec<Option<usize>> = vec![None; n];
+    let mut serial_sum: u128 = 0;
+    let mut critical_path: u128 = 0;
+    let mut best_end: Option<usize> = None;
+    let mut conflicts = 0u32;
+    // Positions are already in ascending serial order and every dependency is
+    // `< index`, so a single forward pass is a valid topological DP.
+    for index in 0..n {
+        let weight = *micros.get(&index).unwrap_or(&0);
+        if deps[index].is_empty() && weight == 0 {
+            continue;
+        }
+        conflicts += 1;
+        serial_sum += weight;
+        let mut dep_finish: u128 = 0;
+        let mut dep_prev: Option<usize> = None;
+        for &producer in &deps[index] {
+            if finish[producer] > dep_finish {
+                dep_finish = finish[producer];
+                dep_prev = Some(producer);
+            }
+        }
+        finish[index] = dep_finish + weight;
+        prev[index] = dep_prev;
+        if finish[index] > critical_path {
+            critical_path = finish[index];
+            best_end = Some(index);
+        }
+    }
+    let mut chain_len = 0u32;
+    let mut cursor = best_end;
+    while let Some(k) = cursor {
+        chain_len += 1;
+        cursor = prev[k];
+    }
+    let ideal_8 = (serial_sum / 8).max(critical_path);
+    eprintln!(
+        "[stc-critpath] conflicts={conflicts} serial_sum={:.0}ms critical_path={:.0}ms \
+         ideal_parallel(8core)={:.0}ms critical_chain_len={chain_len} speedup_ceiling(inf)={:.2}x \
+         speedup_ceiling(8core)={:.2}x",
+        serial_sum as f64 / 1000.0,
+        critical_path as f64 / 1000.0,
+        ideal_8 as f64 / 1000.0,
+        serial_sum as f64 / critical_path.max(1) as f64,
+        serial_sum as f64 / ideal_8.max(1) as f64,
+    );
+}
+
 /// Validates one file's log against everything published so far. On a clean
 /// verdict the file's insertions are published into the live maps (in the
 /// file's own insertion order) and their digests join `published`.
