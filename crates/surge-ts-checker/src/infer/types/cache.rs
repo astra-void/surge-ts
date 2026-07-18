@@ -777,10 +777,38 @@ impl ResolveReference for LazyInstantiation {
             return Arc::new(Type::Unknown);
         };
         // A peel of the same instantiation elsewhere may have already interned it.
-        if let Some(entry) = lookup_instantiation(&ctx, &self.decl_key, &self.resolved_arguments) {
-            crate::program::record_program_counter(|c| c.lazy_reference_interner_hit_count += 1);
-            let _ = self.memo.set(Arc::downgrade(&entry.resolved));
-            return entry.resolved;
+        match lookup_instantiation_probe(&ctx, &self.decl_key, &self.resolved_arguments) {
+            crate::speculative::InstantiationProbe::Hit(entry) => {
+                crate::program::record_program_counter(|c| {
+                    c.lazy_reference_interner_hit_count += 1
+                });
+                let _ = self.memo.set(Arc::downgrade(&entry.resolved));
+                return entry.resolved;
+            }
+            // Resolution-deferred: this instantiation is owned by an earlier
+            // not-yet-committed serial position (a replay reservation). Serial
+            // checking here would have *hit* that publisher's interned expansion,
+            // so expanding the body now would over-recurse and intern a spurious
+            // structural sub-instantiation. Return the nominal reference instead —
+            // un-memoized, before touching the peel stack — and let the replay's
+            // file-check attempt be discarded and requeued once the publisher
+            // commits (see `crate::replay`). The deferral is control flow, not a
+            // `Type`: the probe returns `Deferred` at most once per key per attempt
+            // (`WorkerOverlay::deferred_once`), so forcing this nominal later
+            // resolves the key as a normal miss and terminates `Type::peeled`.
+            crate::speculative::InstantiationProbe::Deferred => {
+                let mut ctx = ctx;
+                return Arc::new(make_recursive_cycle_reference(
+                    &mut ctx,
+                    &self.display,
+                    self.decl.clone(),
+                    self.decl_key.clone(),
+                    self.type_arguments.clone(),
+                    Some(&self.resolved_arguments),
+                    &self.substitution,
+                ));
+            }
+            crate::speculative::InstantiationProbe::Miss => {}
         }
 
         let guard_key = (self.decl_key.clone(), self.resolved_arguments.clone());
@@ -1034,6 +1062,33 @@ pub(crate) fn lookup_instantiation(
         .iter()
         .find(|entry| entry.arguments == arguments)
         .cloned()
+}
+
+/// Deferral-aware instantiation lookup for the lazy peel: distinguishes a
+/// genuine miss from a deferral (the key is owned by an earlier not-yet-committed
+/// replay publisher). Only a live deferring replay session ever returns
+/// `Deferred`; every other context sees `Hit`/`Miss` exactly as
+/// [`lookup_instantiation`].
+pub(crate) fn lookup_instantiation_probe(
+    ctx: &CheckerContext,
+    key: &DeclarationResolutionKey,
+    arguments: &[Type],
+) -> crate::speculative::InstantiationProbe {
+    use crate::speculative::InstantiationProbe;
+    if let Some(session) = crate::speculative::active_check_session()
+        .filter(|session| session.owns_instantiations(&ctx.program_instantiations))
+    {
+        return session.instantiation_probe(key, arguments);
+    }
+    match ctx.program_instantiations.lock().ok().and_then(|cache| {
+        cache
+            .get(key)
+            .and_then(|bucket| bucket.iter().find(|entry| entry.arguments == arguments))
+            .cloned()
+    }) {
+        Some(entry) => InstantiationProbe::Hit(entry),
+        None => InstantiationProbe::Miss,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

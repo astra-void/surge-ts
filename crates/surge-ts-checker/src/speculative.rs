@@ -379,6 +379,15 @@ struct WorkerOverlay {
     templates: FxHashMap<StableInterfaceDeclarationId, (usize, Arc<InterfaceDeclarationTemplate>)>,
     methods: FxHashMap<InterfaceMemberInstantiationKey, (usize, FunctionType)>,
     overloads: FxHashMap<InterfaceOverloadInstantiationKey, (usize, FunctionType)>,
+    /// Instantiation digests this attempt has already deferred once. A deferred
+    /// key must defer at most once per attempt: the nominal reference the peel
+    /// returns re-enters resolution when it is later forced (`Type::peeled` is
+    /// `reference.resolve().peeled()`), and a second deferral would hand back
+    /// another deferring nominal, so peeling would recurse forever. On the
+    /// second lookup the key resolves as a normal miss (expands to a concrete
+    /// type), terminating the peel. The attempt is discarded and requeued
+    /// regardless, so this only bounds work, never changes the committed result.
+    deferred_once: FxHashSet<u64>,
     current: FileCacheLog,
     current_active: bool,
     finished: Vec<FileCacheLog>,
@@ -393,6 +402,7 @@ impl WorkerOverlay {
             templates: FxHashMap::default(),
             methods: FxHashMap::default(),
             overloads: FxHashMap::default(),
+            deferred_once: FxHashSet::default(),
             current: FileCacheLog::default(),
             current_active: false,
             finished: Vec::new(),
@@ -435,7 +445,13 @@ struct DeferralContext {
 }
 
 impl DeferralContext {
-    fn note(&self, query: impl FnOnce(&ReservationTable, usize) -> ReservationLookup) {
+    /// Queries the reservation table for this position, records the deferral in
+    /// the stats and the attempt's `max_deferred`, and returns the blocking
+    /// publisher if the key is owned by an earlier not-yet-committed position.
+    fn check(
+        &self,
+        query: impl FnOnce(&ReservationTable, usize) -> ReservationLookup,
+    ) -> Option<usize> {
         use std::sync::atomic::Ordering::Relaxed;
         self.stats.queried.fetch_add(1, Relaxed);
         if let Ok(table) = self.table.read()
@@ -443,8 +459,19 @@ impl DeferralContext {
         {
             self.stats.deferred.fetch_add(1, Relaxed);
             self.max_deferred.fetch_max(publisher as i64, Relaxed);
+            return Some(publisher);
         }
+        None
     }
+}
+
+/// Outcome of a deferral-aware instantiation probe. `Deferred` is control flow —
+/// never a `Type` — converted to a nominal reference only at the lazy-peel
+/// boundary; every other caller treats it as a miss.
+pub(crate) enum InstantiationProbe {
+    Hit(InstantiationCacheEntry),
+    Miss,
+    Deferred,
 }
 
 /// Atomic counters shared across the replay pool for the deferral measurement.
@@ -722,7 +749,7 @@ impl CheckSession {
         let digest = digest_bucket(TAG_GENERIC, key, arguments);
         state.current.misses.insert(digest);
         if let Some(defer) = &self.defer {
-            defer.note(|table, k| table.query_generic(key, arguments, k));
+            defer.check(|table, k| table.query_generic(key, arguments, k));
         }
         None
     }
@@ -828,8 +855,24 @@ impl CheckSession {
         key: &DeclarationResolutionKey,
         arguments: &[Type],
     ) -> Option<InstantiationCacheEntry> {
+        match self.instantiation_probe(key, arguments) {
+            InstantiationProbe::Hit(entry) => Some(entry),
+            InstantiationProbe::Miss | InstantiationProbe::Deferred => None,
+        }
+    }
+
+    /// Deferral-aware instantiation lookup used by the lazy peel: a miss whose
+    /// key is owned by an earlier not-yet-committed publisher returns `Deferred`
+    /// (at most once per key per attempt — see `WorkerOverlay::deferred_once`)
+    /// instead of `Miss`, so the peel can return the nominal form rather than
+    /// over-recursing into a declaration the earlier position will publish.
+    pub(crate) fn instantiation_probe(
+        &self,
+        key: &DeclarationResolutionKey,
+        arguments: &[Type],
+    ) -> InstantiationProbe {
         if let Some(entry) = self.base_instantiation_entry(key, arguments) {
-            return Some(entry);
+            return InstantiationProbe::Hit(entry);
         }
         let mut state = self.state.lock().expect("check session poisoned");
         if let Some((file, entry)) = state.instantiations.get(key).and_then(|bucket| {
@@ -839,14 +882,20 @@ impl CheckSession {
                 .cloned()
         }) {
             state.record_dep(file);
-            return Some(entry);
+            return InstantiationProbe::Hit(entry);
         }
         let digest = digest_bucket(TAG_INSTANTIATION, key, arguments);
         state.current.misses.insert(digest);
-        if let Some(defer) = &self.defer {
-            defer.note(|table, k| table.query_instantiation(key, arguments, k));
+        if let Some(defer) = &self.defer
+            && !state.deferred_once.contains(&digest)
+            && defer
+                .check(|table, k| table.query_instantiation(key, arguments, k))
+                .is_some()
+        {
+            state.deferred_once.insert(digest);
+            return InstantiationProbe::Deferred;
         }
-        None
+        InstantiationProbe::Miss
     }
 
     pub(crate) fn physical_lookup(&self, key: &InterfaceInstantiationKey) -> Option<Arc<Type>> {
@@ -861,7 +910,7 @@ impl CheckSession {
         let digest = digest_flat(TAG_PHYSICAL, key);
         state.current.misses.insert(digest);
         if let Some(defer) = &self.defer {
-            defer.note(|table, k| table.query_physical(key, k));
+            defer.check(|table, k| table.query_physical(key, k));
         }
         None
     }
@@ -913,7 +962,7 @@ impl CheckSession {
         let digest = digest_flat(TAG_TEMPLATE, key);
         state.current.misses.insert(digest);
         if let Some(defer) = &self.defer {
-            defer.note(|table, k| table.query_template(key, k));
+            defer.check(|table, k| table.query_template(key, k));
         }
         None
     }
@@ -962,7 +1011,7 @@ impl CheckSession {
         let digest = digest_flat(TAG_METHOD, key);
         state.current.misses.insert(digest);
         if let Some(defer) = &self.defer {
-            defer.note(|table, k| table.query_method(key, k));
+            defer.check(|table, k| table.query_method(key, k));
         }
         None
     }
@@ -1013,7 +1062,7 @@ impl CheckSession {
         let digest = digest_flat(TAG_OVERLOAD, key);
         state.current.misses.insert(digest);
         if let Some(defer) = &self.defer {
-            defer.note(|table, k| table.query_overload(key, k));
+            defer.check(|table, k| table.query_overload(key, k));
         }
         None
     }
