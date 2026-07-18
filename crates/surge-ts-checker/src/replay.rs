@@ -90,6 +90,17 @@ pub(crate) struct ReplayStats {
     pub(crate) peak_in_flight: u64,
 }
 
+/// A replay's delivered outcome: a computed result the coordinator can validate,
+/// or a deferral — the replay read a key an earlier not-yet-committed position
+/// (`publisher`) will publish, so it ran against an incomplete view and must be
+/// re-run once that publisher commits. The deferred attempt's output is
+/// discarded (it is one more discarded speculative attempt, exactly like a stale
+/// replay), so no result value is carried.
+enum Delivered<R> {
+    Valid(R),
+    Deferred { publisher: usize },
+}
+
 /// A minimal FIFO task queue + result map shared between the coordinator and
 /// the replay pool. Ascending submission order + FIFO dispatch means the
 /// smallest outstanding position (the one the frontier needs next) is computed
@@ -102,7 +113,10 @@ struct Pool<R> {
 
 struct PoolInner<R> {
     queue: VecDeque<usize>,
-    results: FxHashMap<usize, R>,
+    results: FxHashMap<usize, Delivered<R>>,
+    /// `(position, blocking publisher)` for each deferral delivered since the
+    /// coordinator last drained — the requeue worklist.
+    newly_deferred: Vec<(usize, usize)>,
     shutdown: bool,
 }
 
@@ -112,6 +126,7 @@ impl<R> Pool<R> {
             inner: Mutex::new(PoolInner {
                 queue: VecDeque::new(),
                 results: FxHashMap::default(),
+                newly_deferred: Vec::new(),
                 shutdown: false,
             }),
             task_ready: Condvar::new(),
@@ -122,16 +137,6 @@ impl<R> Pool<R> {
     fn submit(&self, position: usize) {
         let mut inner = self.inner.lock().expect("replay pool poisoned");
         inner.queue.push_back(position);
-        drop(inner);
-        self.task_ready.notify_one();
-    }
-
-    /// Submit to the *front* of the queue — used for a re-submit the coordinator
-    /// is actively blocked on, so a pool thread picks it up ahead of speculative
-    /// look-ahead work rather than after it.
-    fn submit_front(&self, position: usize) {
-        let mut inner = self.inner.lock().expect("replay pool poisoned");
-        inner.queue.push_front(position);
         drop(inner);
         self.task_ready.notify_one();
     }
@@ -150,15 +155,19 @@ impl<R> Pool<R> {
         }
     }
 
-    fn deliver(&self, position: usize, result: R) {
+    fn deliver(&self, position: usize, delivered: Delivered<R>) {
         let mut inner = self.inner.lock().expect("replay pool poisoned");
-        inner.results.insert(position, result);
+        if let Delivered::Deferred { publisher } = &delivered {
+            inner.newly_deferred.push((position, *publisher));
+        }
+        inner.results.insert(position, delivered);
         drop(inner);
         self.result_ready.notify_all();
     }
 
-    /// Blocks until `position`'s replay result is delivered.
-    fn take(&self, position: usize) -> R {
+    /// Blocks until a delivery for `position` is available (the latest wins if
+    /// the position was re-submitted).
+    fn take(&self, position: usize) -> Delivered<R> {
         let mut inner = self.inner.lock().expect("replay pool poisoned");
         loop {
             if let Some(result) = inner.results.remove(&position) {
@@ -166,6 +175,12 @@ impl<R> Pool<R> {
             }
             inner = self.result_ready.wait(inner).expect("replay pool poisoned");
         }
+    }
+
+    /// Non-blocking: takes the accumulated deferral worklist.
+    fn drain_newly_deferred(&self) -> Vec<(usize, usize)> {
+        let mut inner = self.inner.lock().expect("replay pool poisoned");
+        std::mem::take(&mut inner.newly_deferred)
     }
 
     fn shutdown(&self) {
@@ -191,19 +206,25 @@ impl<R> Pool<R> {
 /// * `make_thread` — builds one replay thread's reusable mutable state (e.g. a
 ///   per-thread `CheckerContext` clone). Called once per pool thread.
 /// * `replay_one` — recomputes position `k` on a pool thread against the live
-///   committed store, returning the outcome `R` the coordinator will validate.
+///   committed store. Returns `(result, deferred_until)`: `deferred_until =
+///   Some(p)` means the replay read a key that an earlier not-yet-committed
+///   position `p` will publish, so it ran against an incomplete view and must be
+///   re-run once `p` commits — its `result` is discarded (one more discarded
+///   speculative attempt, exactly like a stale replay). `None` means it ran to
+///   completion and `result` is the outcome the coordinator will validate.
 /// * `is_active` — whether a position participates (non-modules are skipped).
 /// * `submit_at` — per position, the frontier index at which the pool should
-///   start its replay, or `usize::MAX` to never pre-replay it. Dependency-driven
-///   scheduling ([`compute_submit_schedule`]) launches each predicted conflict
-///   exactly when its last dependency has committed, so the replay reads a
-///   committed view already containing everything it depends on and validates on
-///   the first try — no wasted over-recursion against a stale view. Purely a
-///   scheduling hint; correctness never depends on it (a stale or absent replay
-///   falls back to the inline recompute in `commit_position`).
+///   start its replay, or `usize::MAX` to never pre-replay it. A conflict may be
+///   submitted eagerly (before all its dependencies commit); if it then defers,
+///   the orchestrator requeues it when the blocking publisher commits — so the
+///   schedule is only a hint and correctness never depends on it (a deferred,
+///   stale, or absent replay falls back to the inline recompute in
+///   `commit_position` once the frontier reaches the position, where
+///   `committed<k` is complete).
 /// * `commit_position` — coordinator step: given `k` and an optional pre-computed
-///   replay (`None` if not pre-submitted), commit the worker result if it
-///   validates, else the replay if it validates, else recompute inline.
+///   replay (`None` if not pre-submitted, deferred, or stale), commit the worker
+///   result if it validates, else the replay if it validates, else recompute
+///   inline.
 ///
 /// Returns the accumulated [`ReplayStats`].
 #[allow(clippy::too_many_arguments)]
@@ -212,7 +233,7 @@ pub(crate) fn run_frontier_pipeline<S, T, R>(
     submit_at: &[usize],
     shared: &S,
     make_thread: impl Fn() -> T + Sync,
-    replay_one: impl Fn(&S, &mut T, usize) -> R + Sync,
+    replay_one: impl Fn(&S, &mut T, usize) -> (R, Option<usize>) + Sync,
     is_active: impl Fn(usize) -> bool,
     mut commit_position: impl FnMut(usize, Option<R>, bool) -> CommitOutcome,
 ) -> ReplayStats
@@ -234,6 +255,10 @@ where
         }
     }
 
+    // A replay that deferred too many times stops being requeued and falls to the
+    // inline recheck when the frontier reaches it (bounded fallback, no livelock).
+    const MAX_DEFERS: u32 = 4;
+
     std::thread::scope(|scope| {
         for _ in 0..config.worker_count.max(1) {
             let make_thread = &make_thread;
@@ -241,54 +266,86 @@ where
             scope.spawn(move || {
                 let mut thread_state = make_thread();
                 while let Some(position) = pool_ref.next_task() {
-                    let result = replay_one(shared, &mut thread_state, position);
-                    pool_ref.deliver(position, result);
+                    let (result, deferred_until) = replay_one(shared, &mut thread_state, position);
+                    let delivered = match deferred_until {
+                        Some(publisher) => Delivered::Deferred { publisher },
+                        None => Delivered::Valid(result),
+                    };
+                    pool_ref.deliver(position, delivered);
                 }
             });
         }
 
         let mut submitted = vec![false; n];
-        let mut in_flight = 0i64;
+        let mut defer_count: FxHashMap<usize, u32> = FxHashMap::default();
+        // Positions waiting on a blocking publisher, keyed by that publisher's
+        // position: released (re-submitted) when the frontier commits it.
+        let mut parked: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+
         for frontier in 0..n {
-            // Submit everything whose last dependency finalized before this
-            // frontier (its dependencies are now in the committed store).
+            // 1. Positions whose scheduled submit index is this frontier.
             for &position in &submit_buckets[frontier] {
                 if !submitted[position] {
                     submitted[position] = true;
                     pool_ref.submit(position);
                     stats.submitted += 1;
-                    in_flight += 1;
-                    stats.peak_in_flight = stats.peak_in_flight.max(in_flight as u64);
                 }
             }
+            // 2. Wake replays parked on the publisher that just committed
+            //    (position `frontier - 1` was finalized before this iteration).
+            if frontier > 0
+                && let Some(list) = parked.remove(&(frontier - 1))
+            {
+                for position in list {
+                    if position > frontier {
+                        pool_ref.submit(position);
+                        stats.resubmitted += 1;
+                    }
+                }
+            }
+            // 3. Route deferrals delivered since the last drain: re-submit if the
+            //    blocking publisher already committed, else park until it does.
+            for (position, publisher) in pool_ref.drain_newly_deferred() {
+                if position <= frontier {
+                    continue; // at/behind the frontier — resolved inline
+                }
+                let count = defer_count.entry(position).or_insert(0);
+                *count += 1;
+                if *count > MAX_DEFERS {
+                    continue; // bounded fallback: the frontier will inline it
+                }
+                if publisher < frontier {
+                    pool_ref.submit(position);
+                    stats.resubmitted += 1;
+                } else {
+                    parked.entry(publisher).or_default().push(position);
+                }
+            }
+            stats.peak_in_flight = stats.peak_in_flight.max(pool_ref.pending_results() as u64);
+
             if !is_active(frontier) {
                 continue;
             }
-            let mut replay = if submitted[frontier] {
-                let result = pool_ref.take(frontier);
-                in_flight -= 1;
-                Some(result)
+            // 4. Frontier position: use its latest valid delivery; a deferred or
+            //    absent one falls to the inline recheck in `commit_position`,
+            //    where `committed<frontier` is complete and always validates.
+            let replay = if submitted[frontier] {
+                match pool_ref.take(frontier) {
+                    Delivered::Valid(result) => Some(result),
+                    Delivered::Deferred { .. } => None,
+                }
             } else {
                 None
             };
-            // At most one re-submit: the retry reads the complete committed<k
-            // (the frontier is parked here) and validates, so `is_final = true`
-            // on the retry, and the coordinator's own inline recompute is only
-            // ever reached on a repeated (pathological) stale — never on the
-            // happy path.
-            const MAX_RETRIES: u32 = 1;
-            let mut attempt = 0;
-            loop {
-                let is_final = attempt == MAX_RETRIES;
-                match commit_position(frontier, replay.take(), is_final) {
-                    CommitOutcome::Committed => break,
-                    CommitOutcome::NeedsReplay => {
-                        pool_ref.submit_front(frontier);
-                        stats.resubmitted += 1;
-                        replay = Some(pool_ref.take(frontier));
-                        attempt += 1;
-                    }
-                }
+            if let CommitOutcome::NeedsReplay = commit_position(frontier, replay, false) {
+                // Re-run against the now-complete committed<frontier and finalize.
+                pool_ref.submit(frontier);
+                stats.resubmitted += 1;
+                let replay = match pool_ref.take(frontier) {
+                    Delivered::Valid(result) => Some(result),
+                    Delivered::Deferred { .. } => None,
+                };
+                let _ = commit_position(frontier, replay, true);
             }
         }
         pool_ref.shutdown();
@@ -446,9 +503,36 @@ mod tests {
         obs
     }
 
+    /// A replay plus the reservation-model deferral decision: a key this position
+    /// reads that is not yet committed and whose serial first-writer is an earlier
+    /// position defers to that publisher (the latest such, so the requeued run
+    /// reads the most-committed view). Mirrors the real reservation query.
+    fn compute_replay_deferring(
+        program: &AbstractProgram,
+        position: usize,
+        base: &Cache,
+        first_writer: &FxHashMap<u64, usize>,
+        delay: bool,
+    ) -> (Observed, Option<usize>) {
+        let obs = compute_replay(program, position, base, delay);
+        let mut deferred_until: Option<usize> = None;
+        for &key in &program.positions[position].reads {
+            if base.entries.contains_key(&key) {
+                continue;
+            }
+            if let Some(&writer) = first_writer.get(&key)
+                && writer < position
+            {
+                deferred_until = Some(deferred_until.map_or(writer, |c| c.max(writer)));
+            }
+        }
+        (obs, deferred_until)
+    }
+
     struct Shared {
         program: AbstractProgram,
         committed: StdMutex<Cache>,
+        first_writer: FxHashMap<u64, usize>,
         delay: bool,
     }
 
@@ -530,9 +614,18 @@ mod tests {
             }
         };
 
+        // The serial first-writer of each key = the reservation publisher a
+        // replay defers to when it reads that key before the writer commits.
+        let first_writer: FxHashMap<u64, usize> = oracle_cache
+            .entries
+            .iter()
+            .map(|(&key, &(position, _))| (key, position))
+            .collect();
+
         let shared = Shared {
             program,
             committed: StdMutex::new(Cache::default()),
+            first_writer,
             delay,
         };
         let mut published: FxHashSet<u64> = FxHashSet::default();
@@ -559,7 +652,13 @@ mod tests {
             || (),
             |shared: &Shared, _: &mut (), position: usize| {
                 let view = shared.committed.lock().unwrap().clone();
-                compute_replay(&shared.program, position, &view, shared.delay)
+                compute_replay_deferring(
+                    &shared.program,
+                    position,
+                    &view,
+                    &shared.first_writer,
+                    shared.delay,
+                )
             },
             |_position| true,
             |position, replay, is_final| {

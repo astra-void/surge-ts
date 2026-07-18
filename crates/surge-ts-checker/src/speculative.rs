@@ -428,22 +428,21 @@ struct DeferralContext {
     table: Arc<std::sync::RwLock<ReservationTable>>,
     position: usize,
     stats: Arc<DeferralStats>,
+    /// Latest (largest) blocking publisher this attempt deferred to, or -1 if it
+    /// never deferred. The requeue waits on the latest so the re-run reads the
+    /// most-committed view; `-1` means the replay ran to completion (valid).
+    max_deferred: std::sync::atomic::AtomicI64,
 }
 
 impl DeferralContext {
     fn note(&self, query: impl FnOnce(&ReservationTable, usize) -> ReservationLookup) {
-        self.stats
-            .queried
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        use std::sync::atomic::Ordering::Relaxed;
+        self.stats.queried.fetch_add(1, Relaxed);
         if let Ok(table) = self.table.read()
-            && matches!(
-                query(&table, self.position),
-                ReservationLookup::Deferred { .. }
-            )
+            && let ReservationLookup::Deferred { publisher, .. } = query(&table, self.position)
         {
-            self.stats
-                .deferred
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.stats.deferred.fetch_add(1, Relaxed);
+            self.max_deferred.fetch_max(publisher as i64, Relaxed);
         }
     }
 }
@@ -501,8 +500,21 @@ impl CheckSession {
                 table,
                 position,
                 stats,
+                max_deferred: std::sync::atomic::AtomicI64::new(-1),
             }),
         }
+    }
+
+    /// The blocking publisher this replay deferred to (the latest), or `None` if
+    /// it ran to completion without deferring. Used by the replay pipeline to
+    /// requeue a deferred attempt once that publisher commits.
+    pub(crate) fn deferred_until(&self) -> Option<usize> {
+        self.defer.as_ref().and_then(|defer| {
+            let value = defer
+                .max_deferred
+                .load(std::sync::atomic::Ordering::Relaxed);
+            (value >= 0).then_some(value as usize)
+        })
     }
 
     fn base_generic_hit(
@@ -1624,7 +1636,10 @@ fn reserve_flat<K: Clone + Eq + Hash>(
     peak: &mut usize,
 ) {
     let slot = map.entry(key.clone()).or_default();
-    if slot.iter().any(|reservation| reservation.publisher == publisher) {
+    if slot
+        .iter()
+        .any(|reservation| reservation.publisher == publisher)
+    {
         return;
     }
     slot.push(Reservation {
@@ -1657,8 +1672,7 @@ fn transition_bucketed(
 ) {
     for bucket in map.values_mut() {
         for (_, reservation) in bucket.iter_mut() {
-            if reservation.publisher == publisher
-                && reservation.state == ReservationState::Pending
+            if reservation.publisher == publisher && reservation.state == ReservationState::Pending
             {
                 reservation.state = to;
                 reservation.version = version;
@@ -1677,8 +1691,7 @@ fn transition_flat<K>(
 ) {
     for slot in map.values_mut() {
         for reservation in slot.iter_mut() {
-            if reservation.publisher == publisher
-                && reservation.state == ReservationState::Pending
+            if reservation.publisher == publisher && reservation.state == ReservationState::Pending
             {
                 reservation.state = to;
                 reservation.version = version;
@@ -1868,10 +1881,28 @@ impl ReservationTable {
             version,
             &mut self.pending,
         );
-        transition_flat(&mut self.physical, publisher, to, version, &mut self.pending);
-        transition_flat(&mut self.templates, publisher, to, version, &mut self.pending);
+        transition_flat(
+            &mut self.physical,
+            publisher,
+            to,
+            version,
+            &mut self.pending,
+        );
+        transition_flat(
+            &mut self.templates,
+            publisher,
+            to,
+            version,
+            &mut self.pending,
+        );
         transition_flat(&mut self.methods, publisher, to, version, &mut self.pending);
-        transition_flat(&mut self.overloads, publisher, to, version, &mut self.pending);
+        transition_flat(
+            &mut self.overloads,
+            publisher,
+            to,
+            version,
+            &mut self.pending,
+        );
     }
 
     /// Live Pending reservations — 0 once the walk has finalized/cancelled every
@@ -2140,10 +2171,7 @@ mod reservation_tests {
             merged_fragments: Arc::from(Vec::new()),
         };
         table.reserve_template(&key, 2, 20);
-        assert_eq!(
-            deferred_to(table.query_template(&key, 6)),
-            Some(2)
-        );
+        assert_eq!(deferred_to(table.query_template(&key, 6)), Some(2));
         table.finalize(2, 1);
         assert_eq!(table.query_template(&key, 6), ReservationLookup::None);
         assert_eq!(table.pending_count(), 0);

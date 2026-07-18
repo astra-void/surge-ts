@@ -1828,13 +1828,17 @@ fn check_program_files_parallel(
         .sum();
     crate::speculative::report_conflict_dag(&worker_logs);
 
-    // `SURGE_DEFER_MEASURE=1` (measurement only, byte-identical): seed a
-    // reservation table from the worker logs (each position reserves the keys
-    // it publishes) and, with an eager schedule, count how often an early
-    // replay would defer to an earlier not-yet-committed publisher. Quantifies
-    // the deferral opportunity before an abort-and-requeue mechanism is built.
-    let defer_measure = std::env::var_os("SURGE_DEFER_MEASURE").is_some();
-    let (reservations, defer_stats) = if defer_measure {
+    // `SURGE_DEFER=1` (opt-in): honor deferred resolution. Seed a reservation
+    // table from the worker logs (each position reserves the keys it publishes),
+    // submit conflicts eagerly, and let a replay that reads a key an earlier
+    // not-yet-committed publisher owns *defer* — the pipeline requeues it once
+    // that publisher commits (bounded by the inline recheck at the frontier),
+    // so it re-runs against a committed view instead of over-recursing into a
+    // committed conflict. Byte-identical: a deferred attempt is discarded like a
+    // stale replay. `SURGE_REPLAY_OFF` (serial recheck) takes precedence for A/B.
+    let defer_enabled =
+        std::env::var_os("SURGE_DEFER").is_some() && std::env::var_os("SURGE_REPLAY_OFF").is_none();
+    let (reservations, defer_stats) = if defer_enabled {
         let mut table = crate::speculative::ReservationTable::new();
         for (position, log) in worker_logs.iter().enumerate() {
             if let Some(log) = log {
@@ -1853,11 +1857,11 @@ fn check_program_files_parallel(
     // the serial recheck), for interleaved A/B measurement of the pipeline.
     let submit_at = if std::env::var_os("SURGE_REPLAY_OFF").is_some() {
         vec![usize::MAX; n]
-    } else if defer_measure {
-        // Eager: submit every predicted conflict at frontier 0 so replays run
-        // against maximally-incomplete committed views — the upper bound of the
-        // deferral opportunity (still byte-identical: stale replays fall back to
-        // the inline recheck).
+    } else if defer_enabled {
+        // Eager: submit every predicted conflict at frontier 0. Deferral +
+        // requeue handles the imprecision (a conflict-dependent replay defers on
+        // its pending dep and is re-run when it commits), so the clean-dependent
+        // restriction of `compute_submit_schedule` is not needed.
         let predicted = crate::speculative::predict_conflicts(&worker_logs);
         (0..n)
             .map(|p| if predicted[p] { 0 } else { usize::MAX })
@@ -1927,14 +1931,14 @@ fn check_program_files_parallel(
             // replay recomputes correct values instead of dedup-hitting the
             // discarded worker attempt's environments in the weak store.
             let session = match (&shared.reservations, &shared.defer_stats) {
-                (Some(table), Some(stats)) => {
-                    Arc::new(crate::speculative::CheckSession::new_live_reading_deferring(
+                (Some(table), Some(stats)) => Arc::new(
+                    crate::speculative::CheckSession::new_live_reading_deferring(
                         shared.live.clone(),
                         table.clone(),
                         file_index,
                         stats.clone(),
-                    ))
-                }
+                    ),
+                ),
                 _ => Arc::new(crate::speculative::CheckSession::new_live_reading(
                     shared.live.clone(),
                 )),
@@ -1952,8 +1956,9 @@ fn check_program_files_parallel(
                     )
                 })
             });
+            let deferred_until = session.deferred_until();
             let log = session.take_file_logs().pop().unwrap_or_default();
-            CheckReplay { result, log }
+            (CheckReplay { result, log }, deferred_until)
         },
         |_file_index| true,
         |file_index, replay: Option<CheckReplay>, is_final| {
