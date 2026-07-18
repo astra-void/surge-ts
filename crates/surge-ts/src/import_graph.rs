@@ -79,6 +79,7 @@ pub fn expand_project_inputs(
 
             let canonical = canonicalize_if_exists(&candidate);
             let normalized = canonicalize_if_exists_string(&canonical);
+            record_graph_edge(&file_name, &normalized);
             if !state.known_files.insert(normalized) {
                 continue;
             }
@@ -101,6 +102,26 @@ pub fn expand_project_inputs(
 
     state.synced_inputs = inputs.len();
     added
+}
+
+/// Opt-in module import-edge dump (`SURGE_MODULE_GRAPH_DUMP=<path>`): appends one
+/// tab-separated `importer\timportee` line per resolved relative / `paths` edge,
+/// including back-edges to already-discovered files, so the full cyclic import
+/// graph (not just the discovery tree) can be reconstructed offline for SCC /
+/// critical-path analysis. Off by default and zero-cost when unset.
+fn record_graph_edge(importer: &str, importee: &str) {
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+    static SINK: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+    let sink = SINK.get_or_init(|| {
+        let path = std::env::var_os("SURGE_MODULE_GRAPH_DUMP")?;
+        std::fs::File::create(path).ok().map(Mutex::new)
+    });
+    if let Some(sink) = sink
+        && let Ok(mut file) = sink.lock()
+    {
+        let _ = writeln!(file, "{importer}\t{importee}");
+    }
 }
 
 fn resolve_relative_candidate(

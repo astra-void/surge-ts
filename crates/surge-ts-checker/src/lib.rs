@@ -29,6 +29,7 @@ mod modules;
 mod paths;
 mod program;
 mod spans;
+mod speculative;
 mod symbols;
 
 pub use api::{CheckResult, Checker};

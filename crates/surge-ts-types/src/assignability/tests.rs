@@ -140,7 +140,10 @@ fn opaque_generic(id: &str, display: &str, argument: Type) -> Type {
     impl crate::ResolveReference for Opaque {
         fn resolve(&self) -> Type {
             let mut members = PropertyMap::default();
-            members.insert(self.0.as_str().into(), ObjectProperty::required(Type::Never));
+            members.insert(
+                self.0.as_str().into(),
+                ObjectProperty::required(Type::Never),
+            );
             Type::Object(ObjectType::new(members, None))
         }
     }

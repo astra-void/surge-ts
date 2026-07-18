@@ -15,6 +15,13 @@ pub(crate) fn collect_exportable_value_symbols(
         file_kinds,
     );
     shadow_ctx.timings = ctx.timings.clone();
+    // Environment identity must be content-stable: the shadow inherits the
+    // deterministic stage counter and attempt tag, and its fresh memo map gets
+    // a shadow-window ordinal so its environments never collide with the
+    // module body's (ordinals 0/1).
+    shadow_ctx.resolution_stage_counter = ctx.resolution_stage_counter;
+    shadow_ctx.environment_attempt = ctx.environment_attempt;
+    shadow_ctx.replace_resolved_named_types(2);
     shadow_ctx.physical_interface_instantiations = ctx.physical_interface_instantiations.clone();
     shadow_ctx.physical_interface_declaration_templates =
         ctx.physical_interface_declaration_templates.clone();

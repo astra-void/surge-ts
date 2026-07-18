@@ -45,8 +45,13 @@ struct CheckerArenaInner {
     /// drops — the same point the payload memory itself is released, and
     /// after which no `TypeDeclarationHandle` can exist by the safety model.
     pending_drops: std::sync::Mutex<Vec<PendingDrop>>,
+    /// Debug-only current owner thread. Allocation asserts it; a phase that
+    /// takes over exclusive use of the arena after a thread join (e.g. the
+    /// binding fixpoint inserting into export tables built by parallel
+    /// analysis workers) re-tags it via
+    /// [`CheckerArena::adopt_current_thread_as_owner`].
     #[cfg(debug_assertions)]
-    owner: std::thread::ThreadId,
+    owner: std::sync::Mutex<std::thread::ThreadId>,
 }
 
 struct PendingDrop {
@@ -87,7 +92,7 @@ impl CheckerArena {
                 frozen: AtomicBool::new(false),
                 pending_drops: std::sync::Mutex::new(Vec::new()),
                 #[cfg(debug_assertions)]
-                owner: std::thread::current().id(),
+                owner: std::sync::Mutex::new(std::thread::current().id()),
             }),
         }
     }
@@ -104,6 +109,20 @@ impl CheckerArena {
         self.allocator.frozen.store(true, Ordering::Release);
     }
 
+    /// Re-tags the calling thread as the arena's owner. Sound only at a point
+    /// where the caller has exclusive access with a happens-before edge to all
+    /// prior allocation — e.g. immediately after joining the worker threads
+    /// that built the arena's tables. Debug-only bookkeeping: release builds
+    /// rely on the same exclusivity, guarded by the freeze flag before any
+    /// concurrent read phase.
+    pub(crate) fn adopt_current_thread_as_owner(&self) {
+        #[cfg(debug_assertions)]
+        {
+            *self.allocator.owner.lock().expect("arena owner poisoned") =
+                std::thread::current().id();
+        }
+    }
+
     fn assert_allocatable(&self) {
         assert!(
             !self.allocator.frozen.load(Ordering::Relaxed),
@@ -113,9 +132,10 @@ impl CheckerArena {
         #[cfg(debug_assertions)]
         debug_assert_eq!(
             std::thread::current().id(),
-            self.allocator.owner,
-            "CheckerArena: allocation from a thread other than the creating thread; \
-             the bump allocator is not thread-safe"
+            *self.allocator.owner.lock().expect("arena owner poisoned"),
+            "CheckerArena: allocation from a thread other than the owning thread; \
+             the bump allocator is not thread-safe (transfer ownership at a join \
+             point with adopt_current_thread_as_owner)"
         );
     }
 
