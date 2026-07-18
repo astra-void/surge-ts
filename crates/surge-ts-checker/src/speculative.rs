@@ -171,6 +171,35 @@ impl FileCacheLog {
         self.misses.len()
     }
 
+    /// Reserves every key this file publishes into `table`, stamped with the
+    /// file's serial position (`publisher`). Used to seed the reservation table
+    /// from the worker logs before the replay walk.
+    pub(crate) fn reserve_into(
+        &self,
+        table: &mut ReservationTable,
+        publisher: usize,
+        attempt: u64,
+    ) {
+        for (key, entry, _) in &self.generic_inserts {
+            table.reserve_generic(key, &entry.arguments, publisher, attempt);
+        }
+        for (key, entry, _) in &self.instantiation_inserts {
+            table.reserve_instantiation(key, &entry.arguments, publisher, attempt);
+        }
+        for (key, _, _) in &self.physical_inserts {
+            table.reserve_physical(key, publisher, attempt);
+        }
+        for (key, _, _) in &self.template_inserts {
+            table.reserve_template(key, publisher, attempt);
+        }
+        for (key, _, _) in &self.method_inserts {
+            table.reserve_method(key, publisher, attempt);
+        }
+        for (key, _, _) in &self.overload_inserts {
+            table.reserve_overload(key, publisher, attempt);
+        }
+    }
+
     /// Debug probe: a stable one-line summary of this file's cache insertions
     /// (digests plus degraded flags), for regime-bisection dumps.
     pub(crate) fn debug_insert_line(&self) -> String {
@@ -387,11 +416,51 @@ enum BaseView {
     Live,
 }
 
+/// Measurement-only deferral context (Stage 2). When a replay session reads the
+/// live committed store and misses a key, it consults the reservation table for
+/// this position: a `Deferred` result means an earlier not-yet-committed
+/// position would have published the key, so serial checking would have hit it
+/// and the replay is about to over-recurse. This context only *counts* those
+/// events (behind `SURGE_DEFER_MEASURE`); it never changes resolution, so output
+/// stays byte-identical. It quantifies the deferral opportunity before any
+/// abort-and-requeue mechanism is built.
+struct DeferralContext {
+    table: Arc<std::sync::RwLock<ReservationTable>>,
+    position: usize,
+    stats: Arc<DeferralStats>,
+}
+
+impl DeferralContext {
+    fn note(&self, query: impl FnOnce(&ReservationTable, usize) -> ReservationLookup) {
+        self.stats
+            .queried
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(table) = self.table.read()
+            && matches!(
+                query(&table, self.position),
+                ReservationLookup::Deferred { .. }
+            )
+        {
+            self.stats
+                .deferred
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// Atomic counters shared across the replay pool for the deferral measurement.
+#[derive(Default)]
+pub(crate) struct DeferralStats {
+    pub(crate) queried: std::sync::atomic::AtomicU64,
+    pub(crate) deferred: std::sync::atomic::AtomicU64,
+}
+
 /// One worker's speculative view of the six program caches.
 pub(crate) struct CheckSession {
     live: LiveCacheHandles,
     base: BaseView,
     state: Mutex<WorkerOverlay>,
+    defer: Option<DeferralContext>,
 }
 
 impl CheckSession {
@@ -400,6 +469,7 @@ impl CheckSession {
             live,
             base: BaseView::Snapshot(base),
             state: Mutex::new(WorkerOverlay::new()),
+            defer: None,
         }
     }
 
@@ -411,6 +481,27 @@ impl CheckSession {
             live,
             base: BaseView::Live,
             state: Mutex::new(WorkerOverlay::new()),
+            defer: None,
+        }
+    }
+
+    /// A live-reading session that additionally records (measurement only) how
+    /// often a miss would defer to an earlier pending publisher at `position`.
+    pub(crate) fn new_live_reading_deferring(
+        live: LiveCacheHandles,
+        table: Arc<std::sync::RwLock<ReservationTable>>,
+        position: usize,
+        stats: Arc<DeferralStats>,
+    ) -> Self {
+        Self {
+            live,
+            base: BaseView::Live,
+            state: Mutex::new(WorkerOverlay::new()),
+            defer: Some(DeferralContext {
+                table,
+                position,
+                stats,
+            }),
         }
     }
 
@@ -618,6 +709,9 @@ impl CheckSession {
         }
         let digest = digest_bucket(TAG_GENERIC, key, arguments);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.note(|table, k| table.query_generic(key, arguments, k));
+        }
         None
     }
 
@@ -737,6 +831,9 @@ impl CheckSession {
         }
         let digest = digest_bucket(TAG_INSTANTIATION, key, arguments);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.note(|table, k| table.query_instantiation(key, arguments, k));
+        }
         None
     }
 
@@ -751,6 +848,9 @@ impl CheckSession {
         }
         let digest = digest_flat(TAG_PHYSICAL, key);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.note(|table, k| table.query_physical(key, k));
+        }
         None
     }
 
@@ -800,6 +900,9 @@ impl CheckSession {
         }
         let digest = digest_flat(TAG_TEMPLATE, key);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.note(|table, k| table.query_template(key, k));
+        }
         None
     }
 
@@ -846,6 +949,9 @@ impl CheckSession {
         }
         let digest = digest_flat(TAG_METHOD, key);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.note(|table, k| table.query_method(key, k));
+        }
         None
     }
 
@@ -894,6 +1000,9 @@ impl CheckSession {
         }
         let digest = digest_flat(TAG_OVERLOAD, key);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.note(|table, k| table.query_overload(key, k));
+        }
         None
     }
 
@@ -1390,6 +1499,7 @@ pub(crate) enum ReservationState {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 struct Reservation {
     /// Serial position that owns this reservation.
     publisher: usize,

@@ -1827,10 +1827,41 @@ fn check_program_files_parallel(
         .map(crate::speculative::FileCacheLog::miss_count)
         .sum();
     crate::speculative::report_conflict_dag(&worker_logs);
+
+    // `SURGE_DEFER_MEASURE=1` (measurement only, byte-identical): seed a
+    // reservation table from the worker logs (each position reserves the keys
+    // it publishes) and, with an eager schedule, count how often an early
+    // replay would defer to an earlier not-yet-committed publisher. Quantifies
+    // the deferral opportunity before an abort-and-requeue mechanism is built.
+    let defer_measure = std::env::var_os("SURGE_DEFER_MEASURE").is_some();
+    let (reservations, defer_stats) = if defer_measure {
+        let mut table = crate::speculative::ReservationTable::new();
+        for (position, log) in worker_logs.iter().enumerate() {
+            if let Some(log) = log {
+                log.reserve_into(&mut table, position, 0);
+            }
+        }
+        (
+            Some(Arc::new(std::sync::RwLock::new(table))),
+            Some(Arc::new(crate::speculative::DeferralStats::default())),
+        )
+    } else {
+        (None, None)
+    };
+
     // `SURGE_REPLAY_OFF=1` disables pre-replay (every conflict resolves inline —
     // the serial recheck), for interleaved A/B measurement of the pipeline.
     let submit_at = if std::env::var_os("SURGE_REPLAY_OFF").is_some() {
         vec![usize::MAX; n]
+    } else if defer_measure {
+        // Eager: submit every predicted conflict at frontier 0 so replays run
+        // against maximally-incomplete committed views — the upper bound of the
+        // deferral opportunity (still byte-identical: stale replays fall back to
+        // the inline recheck).
+        let predicted = crate::speculative::predict_conflicts(&worker_logs);
+        (0..n)
+            .map(|p| if predicted[p] { 0 } else { usize::MAX })
+            .collect()
     } else {
         crate::speculative::compute_submit_schedule(&worker_logs)
     };
@@ -1857,6 +1888,8 @@ fn check_program_files_parallel(
         live: crate::speculative::LiveCacheHandles,
         ctx: &'a CheckerContext,
         timings: Option<Arc<Mutex<ProgramTimings>>>,
+        reservations: Option<Arc<std::sync::RwLock<crate::speculative::ReservationTable>>>,
+        defer_stats: Option<Arc<crate::speculative::DeferralStats>>,
     }
     struct CheckThreadState {
         ctx: CheckerContext,
@@ -1873,7 +1906,10 @@ fn check_program_files_parallel(
         live: live.clone(),
         ctx,
         timings: timings.clone(),
+        reservations: reservations.clone(),
+        defer_stats: defer_stats.clone(),
     };
+    let mut finalized_upto = 0usize;
 
     let replay_stats = crate::replay::run_frontier_pipeline(
         crate::replay::PipelineConfig { n, worker_count },
@@ -1890,9 +1926,19 @@ fn check_program_files_parallel(
             // A fresh live-reading session and a unique attempt stamp so the
             // replay recomputes correct values instead of dedup-hitting the
             // discarded worker attempt's environments in the weak store.
-            let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
-                shared.live.clone(),
-            ));
+            let session = match (&shared.reservations, &shared.defer_stats) {
+                (Some(table), Some(stats)) => {
+                    Arc::new(crate::speculative::CheckSession::new_live_reading_deferring(
+                        shared.live.clone(),
+                        table.clone(),
+                        file_index,
+                        stats.clone(),
+                    ))
+                }
+                _ => Arc::new(crate::speculative::CheckSession::new_live_reading(
+                    shared.live.clone(),
+                )),
+            };
             thread_state.ctx.environment_attempt = crate::replay::next_replay_attempt();
             let result = with_program_type_store(thread_state.store.clone(), || {
                 crate::speculative::with_check_session(session.clone(), || {
@@ -1911,6 +1957,16 @@ fn check_program_files_parallel(
         },
         |_file_index| true,
         |file_index, replay: Option<CheckReplay>, is_final| {
+            // Measurement: everything strictly below the frontier is committed,
+            // so finalize those reservations to Ready before this position runs.
+            if let Some(table) = &reservations
+                && let Ok(mut table) = table.write()
+            {
+                while finalized_upto < file_index {
+                    table.finalize(finalized_upto, 1);
+                    finalized_upto += 1;
+                }
+            }
             if let Some(log) = worker_logs[file_index].take() {
                 if matches!(
                     crate::speculative::commit_file_log(
@@ -2012,6 +2068,22 @@ fn check_program_files_parallel(
             "[stc-replay] submitted={} replay_committed={replay_committed} stale={replay_stale} \
              inline_only={inline_only} wasted={} peak_in_flight={}",
             replay_stats.submitted, replay_stats.wasted, replay_stats.peak_in_flight,
+        );
+    }
+
+    if let (Some(table), Some(stats)) = (&reservations, &defer_stats)
+        && let Ok(mut table) = table.write()
+    {
+        for position in finalized_upto..n {
+            table.finalize(position, 1);
+        }
+        use std::sync::atomic::Ordering::Relaxed;
+        eprintln!(
+            "[stc-defer] replay_misses={} would_defer={} pending_leak={} peak_pending={}",
+            stats.queried.load(Relaxed),
+            stats.deferred.load(Relaxed),
+            table.pending_count(),
+            table.peak_pending(),
         );
     }
 
