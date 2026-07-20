@@ -44,52 +44,62 @@ pub fn expand_project_inputs(
 
     let mut added = 0usize;
 
-    scanner.prefetch(sources, state.next_source_index);
+    // Frontier-at-a-time BFS. Resolution stays serial (it mutates the probe
+    // cache and the known-file set), but a wave's file reads are independent,
+    // so they run on a pool and the discovered sources are appended in the
+    // exact order the file-at-a-time loop would have appended them.
     while state.next_source_index < sources.len() {
-        let index = state.next_source_index;
-        state.next_source_index += 1;
+        let wave_end = sources.len();
+        scanner.prefetch(sources, state.next_source_index);
 
-        let (file_path, file_name, source_text) = {
-            let (file_path, file_name, source_text) = &sources[index];
-            (file_path.clone(), file_name.clone(), source_text.clone())
-        };
+        let mut discovered: Vec<PathBuf> = Vec::new();
+        while state.next_source_index < wave_end {
+            let index = state.next_source_index;
+            state.next_source_index += 1;
 
-        for module_specifier in scanner.specifiers(index, &file_name, &source_text).iter() {
-            let candidate = if is_relative_specifier(module_specifier) {
-                resolve_relative_candidate(&file_path, module_specifier, &mut state.probe_cache)
-            } else {
-                resolve_paths_alias_candidate(
-                    module_specifier,
-                    paths,
-                    base_url,
-                    root_dir,
-                    &mut state.probe_cache,
-                )
+            let (file_path, file_name, source_text) = {
+                let (file_path, file_name, source_text) = &sources[index];
+                (file_path.clone(), file_name.clone(), source_text.clone())
             };
 
-            let Some(candidate) = candidate else {
-                continue;
-            };
+            for module_specifier in scanner.specifiers(index, &file_name, &source_text).iter() {
+                let candidate = if is_relative_specifier(module_specifier) {
+                    resolve_relative_candidate(&file_path, module_specifier, &mut state.probe_cache)
+                } else {
+                    resolve_paths_alias_candidate(
+                        module_specifier,
+                        paths,
+                        base_url,
+                        root_dir,
+                        &mut state.probe_cache,
+                    )
+                };
 
-            if is_dependency_javascript_source_file(&candidate)
-                || !is_loadable_graph_file(&candidate)
-            {
-                continue;
+                let Some(candidate) = candidate else {
+                    continue;
+                };
+
+                if is_dependency_javascript_source_file(&candidate)
+                    || !is_loadable_graph_file(&candidate)
+                {
+                    continue;
+                }
+
+                let canonical = canonicalize_if_exists(&candidate);
+                let normalized = canonicalize_if_exists_string(&canonical);
+                record_graph_edge(&file_name, &normalized);
+                if !state.known_files.insert(normalized) {
+                    continue;
+                }
+
+                discovered.push(canonical);
             }
+        }
 
-            let canonical = canonicalize_if_exists(&candidate);
-            let normalized = canonicalize_if_exists_string(&canonical);
-            record_graph_edge(&file_name, &normalized);
-            if !state.known_files.insert(normalized) {
-                continue;
-            }
-
-            let read_start = std::time::Instant::now();
-            let Ok(source_text) = fs::read_to_string(&canonical) else {
+        for (canonical, source_text) in read_discovered_sources(discovered) {
+            let Some(source_text) = source_text else {
                 continue;
             };
-            crate::io_stats::record_expansion_read(source_text.len(), read_start.elapsed());
-
             let file_name = canonical.to_string_lossy().into_owned();
             inputs.push(SourceFileInput {
                 file_name: file_name.clone(),
@@ -102,6 +112,64 @@ pub fn expand_project_inputs(
 
     state.synced_inputs = inputs.len();
     added
+}
+
+/// Read a discovery wave's files, preserving input order. Unreadable files come
+/// back as `None` so the caller skips them exactly as the serial read did.
+fn read_discovered_sources(paths: Vec<PathBuf>) -> Vec<(PathBuf, Option<String>)> {
+    let read_one = |path: &Path| {
+        let read_start = std::time::Instant::now();
+        let text = fs::read_to_string(path).ok();
+        if let Some(text) = &text {
+            crate::io_stats::record_expansion_read(text.len(), read_start.elapsed());
+        }
+        text
+    };
+
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(paths.len());
+    if paths.len() < 8 || workers <= 1 {
+        return paths
+            .into_iter()
+            .map(|path| {
+                let text = read_one(&path);
+                (path, text)
+            })
+            .collect();
+    }
+
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut results: Vec<(usize, Option<String>)> = std::thread::scope(|scope| {
+        let paths = &paths;
+        let next = &next;
+        let read_one = &read_one;
+        let mut handles = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            handles.push(scope.spawn(move || {
+                let mut out = Vec::new();
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if index >= paths.len() {
+                        break;
+                    }
+                    out.push((index, read_one(&paths[index])));
+                }
+                out
+            }));
+        }
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("expansion read worker panicked"))
+            .collect()
+    });
+    results.sort_unstable_by_key(|(index, _)| *index);
+    paths
+        .into_iter()
+        .zip(results)
+        .map(|(path, (_, text))| (path, text))
+        .collect()
 }
 
 /// Opt-in module import-edge dump (`SURGE_MODULE_GRAPH_DUMP=<path>`): appends one
