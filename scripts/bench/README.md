@@ -140,11 +140,14 @@ The `source` field records which metric was used. Where peak memory cannot be
 measured, timing still works and the memory fields are null.
 
 - `--json` writes `{ meta, results }`: `meta` records the timestamp, git
-  branch/commit, CPU model and core count, platform, Node version, and
-  iteration/warmup counts; `results` holds per-project median/min/max/runs,
-  drift, and median/min/max peak memory per tool. Legacy bare-array JSON
-  files are still accepted by `--fromJson`, `bench:archive`, and
-  `measure-project.ts`.
+  branch/commit, CPU model and core count, platform, Node version, the exact
+  `tsc` (TS 6) and `tsgo` (TS 7) package versions, and iteration/warmup
+  counts; `results` holds per-project median/min/max/runs, drift, and
+  median/min/max peak memory per tool. Legacy bare-array JSON files are
+  still accepted by `--fromJson`, `bench:archive`, and `measure-project.ts`.
+- Reports label the tools with their TypeScript major version — `tsc (TS 6)`
+  is the legacy JS baseline, `tsgo (TS 7)` the native compiler — so the slow
+  baseline is never mistaken for current TypeScript.
 - `--chart` renders a single SVG with two stacked panels: wall time (median
   bars on a time axis, min–max whiskers, speed multipliers vs the tsc
   baseline, colored diagnostic-drift badges) and peak memory (median bars on

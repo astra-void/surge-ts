@@ -26,6 +26,8 @@ export type BenchReportMeta = {
   nodeVersion?: string;
   iterations?: number;
   warmup?: number;
+  tscVersion?: string;
+  tsgoVersion?: string;
 };
 
 export type BenchReportDocument = {
@@ -50,8 +52,17 @@ export function normalizeBenchReport(data: unknown): BenchReportDocument {
   throw new Error('Unrecognized benchmark report shape: expected an array or { meta, results }');
 }
 
+/// `tsc` is the legacy JS compiler (TypeScript 6.x baseline) and `tsgo` is
+/// the native TypeScript 7 compiler; label them so readers don't mistake the
+/// slow baseline for current TypeScript.
+const TOOL_LABELS: Record<string, string> = {
+  'tsc': 'tsc (TS 6)',
+  'tsgo': 'tsgo (TS 7)',
+  'tsgo-singleThreaded': 'tsgo-singleThreaded (TS 7)',
+};
+
 export function toolDisplayLabel(tool: string): string {
-  return tool;
+  return TOOL_LABELS[tool] ?? tool;
 }
 
 const TOOLS_ORDER = ['tsc', 'tsgo', 'tsgo-singleThreaded', 'surge-ts'];
@@ -173,6 +184,8 @@ function metaSummaryParts(meta: BenchReportMeta | undefined): string[] {
     const warmup = meta.warmup !== undefined ? `, warmup ${meta.warmup}` : '';
     parts.push(`${meta.iterations} iterations${warmup}`);
   }
+  if (meta.tscVersion) parts.push(`tsc@${meta.tscVersion}`);
+  if (meta.tsgoVersion) parts.push(`tsgo@${meta.tsgoVersion}`);
   if (meta.gitCommit) {
     parts.push(meta.gitBranch ? `${meta.gitBranch}@${meta.gitCommit}` : meta.gitCommit);
   }
@@ -407,6 +420,13 @@ function metaTableHtml(meta: BenchReportMeta | undefined): string {
   if (meta.cpu) rows.push(['CPU', meta.cores ? `${meta.cpu} (${meta.cores} cores)` : meta.cpu]);
   if (meta.platform) rows.push(['Platform', meta.platform]);
   if (meta.nodeVersion) rows.push(['Node', meta.nodeVersion]);
+  if (meta.tscVersion || meta.tsgoVersion) {
+    const compilers = [
+      meta.tscVersion ? `tsc ${meta.tscVersion} (TS 6 baseline)` : null,
+      meta.tsgoVersion ? `tsgo ${meta.tsgoVersion} (TS 7 native)` : null,
+    ].filter(Boolean).join(' · ');
+    rows.push(['Compilers', compilers]);
+  }
   if (meta.iterations !== undefined) {
     rows.push(['Iterations', `${meta.iterations}${meta.warmup !== undefined ? ` (+${meta.warmup} warmup)` : ''}`]);
   }

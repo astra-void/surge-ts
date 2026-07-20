@@ -12,6 +12,7 @@ import {
   formatBytes,
   hasMemoryData,
   niceAxisScale,
+  toolDisplayLabel,
   type BenchReportDocument,
   type BenchReportResult,
 } from './report.js';
@@ -56,6 +57,8 @@ const sampleDoc: BenchReportDocument = {
     nodeVersion: 'v22.0.0',
     iterations: 5,
     warmup: 1,
+    tscVersion: '6.0.3',
+    tsgoVersion: '7.0.2',
   },
   results: [sampleResult],
 };
@@ -91,6 +94,13 @@ test('formatSpeedup uses fewer digits for large ratios', () => {
   assert.strictEqual(formatSpeedup(12.34), '12.3× vs tsc');
 });
 
+test('toolDisplayLabel marks the TypeScript major version per tool', () => {
+  assert.strictEqual(toolDisplayLabel('tsc'), 'tsc (TS 6)');
+  assert.strictEqual(toolDisplayLabel('tsgo'), 'tsgo (TS 7)');
+  assert.strictEqual(toolDisplayLabel('tsgo-singleThreaded'), 'tsgo-singleThreaded (TS 7)');
+  assert.strictEqual(toolDisplayLabel('surge-ts'), 'surge-ts');
+});
+
 test('niceAxisScale rounds up to clean tick steps', () => {
   const scale = niceAxisScale(9.7);
   assert.ok(scale.max >= 9.7);
@@ -104,6 +114,10 @@ test('SVG report includes bars, speedups, drift, and metadata', () => {
   assert.ok(svg.startsWith('<svg'), 'renders an SVG document');
   assert.ok(svg.includes('sample-project'), 'includes the project name');
   assert.ok(svg.includes('jobs=4'), 'labels the Rust job count');
+  assert.ok(svg.includes('tsc (TS 6)'), 'labels tsc as TypeScript 6');
+  assert.ok(svg.includes('tsgo (TS 7)'), 'labels tsgo as TypeScript 7');
+  assert.ok(svg.includes('tsc@6.0.3'), 'includes the tsc version in the header');
+  assert.ok(svg.includes('tsgo@7.0.2'), 'includes the tsgo version in the header');
   assert.ok(svg.includes('5.00× vs tsc'), 'includes the speedup vs tsc');
   assert.ok(svg.includes('exact vs tsc'), 'includes the drift status');
   assert.ok(svg.includes('abc1234'), 'includes the git commit');
@@ -136,6 +150,8 @@ test('HTML report embeds the SVG plus a stats table and metadata', () => {
   assert.ok(html.includes('abc1234'), 'includes the git commit');
   assert.ok(html.includes('v22.0.0'), 'includes the node version');
   assert.ok(html.includes('5 (+1 warmup)'), 'includes iteration counts');
+  assert.ok(html.includes('tsc 6.0.3 (TS 6 baseline)'), 'names the tsc baseline version');
+  assert.ok(html.includes('tsgo 7.0.2 (TS 7 native)'), 'names the tsgo version');
 });
 
 test('memoryRatioVsTsc computes ratio against the tsc peak RSS', () => {

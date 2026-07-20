@@ -262,7 +262,20 @@ function collectRunMeta(args: ParsedArgs): BenchReportMeta {
   };
   meta.gitCommit = git(['rev-parse', '--short', 'HEAD']);
   meta.gitBranch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  meta.tscVersion = packageVersion('typescript-6');
+  meta.tsgoVersion = packageVersion('typescript');
   return meta;
+}
+
+function packageVersion(packageName: string): string | undefined {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(path.join(workspaceRoot, 'node_modules', packageName, 'package.json'), 'utf8'),
+    );
+    return typeof manifest.version === 'string' ? manifest.version : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveProjectLocally(input: string) {
@@ -430,7 +443,7 @@ function printResults(results: BenchReportResult[]) {
   console.log('\nPerformance:');
   console.log(
     `project`.padEnd(30) +
-      `tool`.padEnd(25) +
+      `tool`.padEnd(30) +
       `median`.padEnd(10) +
       `min`.padEnd(10) +
       `max`.padEnd(10) +
@@ -449,7 +462,7 @@ function printResults(results: BenchReportResult[]) {
         const rssLabel = memory ? formatBytes(memory.medianBytes) : '—';
         console.log(
           r.project.padEnd(30) +
-            toolLabel.padEnd(25) +
+            toolLabel.padEnd(30) +
             `${s.median.toFixed(2)}s`.padEnd(10) +
             `${s.min.toFixed(2)}s`.padEnd(10) +
             `${s.max.toFixed(2)}s`.padEnd(10) +
@@ -462,11 +475,11 @@ function printResults(results: BenchReportResult[]) {
   }
 
   console.log('\nDiagnostic drift:');
-  console.log(`${`project`.padEnd(30) + `tool`.padEnd(25)}status`);
+  console.log(`${`project`.padEnd(30) + `tool`.padEnd(30)}status`);
   for (const r of results) {
     for (const tool of ['tsgo', 'tsgo-singleThreaded', 'surge-ts'] as Tool[]) {
       if (r.drift[tool] !== 'skipped') {
-         console.log(`${r.project.padEnd(30)}${toolDisplayLabel(tool).padEnd(25)}${r.drift[tool]}`);
+         console.log(`${r.project.padEnd(30)}${toolDisplayLabel(tool).padEnd(30)}${r.drift[tool]}`);
       }
     }
   }
