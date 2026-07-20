@@ -16,6 +16,7 @@
 		"bench:archive": "tsx scripts/bench/archive-run.ts",
 		"bench:test": "tsx --test scripts/bench/compare-compilers.test.ts scripts/bench/archive-run.test.ts scripts/bench/allocator-bench.test.ts scripts/bench/report.test.ts scripts/bench/complexity-regression.test.ts",
 		"bench:allocators": "tsx scripts/bench/allocator-bench.ts",
+		"bench:auth-kit": "tsx scripts/bench/compare-compilers.ts --project ../../typescript/auth-project/auth-kit --json .bench/compilers/auth-kit.json --chart .bench/compilers/auth-kit.svg --html .bench/compilers/auth-kit.html",
 		"bench:complexity": "tsx scripts/bench/complexity-regression.ts",
 		"bench:ky": "tsx scripts/bench/compare-compilers.ts --project .local-projects/ky --json .bench/compilers/ky.json --chart .bench/compilers/ky.svg --html .bench/compilers/ky.html",
 		"bench:trpc": "tsx scripts/bench/compare-compilers.ts --project .local-projects/trpc --json .bench/compilers/trpc.json --chart .bench/compilers/trpc.svg --html .bench/compilers/trpc.html",
