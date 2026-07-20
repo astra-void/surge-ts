@@ -171,6 +171,35 @@ impl FileCacheLog {
         self.misses.len()
     }
 
+    /// Reserves every key this file publishes into `table`, stamped with the
+    /// file's serial position (`publisher`). Used to seed the reservation table
+    /// from the worker logs before the replay walk.
+    pub(crate) fn reserve_into(
+        &self,
+        table: &mut ReservationTable,
+        publisher: usize,
+        attempt: u64,
+    ) {
+        for (key, entry, _) in &self.generic_inserts {
+            table.reserve_generic(key, &entry.arguments, publisher, attempt);
+        }
+        for (key, entry, _) in &self.instantiation_inserts {
+            table.reserve_instantiation(key, &entry.arguments, publisher, attempt);
+        }
+        for (key, _, _) in &self.physical_inserts {
+            table.reserve_physical(key, publisher, attempt);
+        }
+        for (key, _, _) in &self.template_inserts {
+            table.reserve_template(key, publisher, attempt);
+        }
+        for (key, _, _) in &self.method_inserts {
+            table.reserve_method(key, publisher, attempt);
+        }
+        for (key, _, _) in &self.overload_inserts {
+            table.reserve_overload(key, publisher, attempt);
+        }
+    }
+
     /// Debug probe: a stable one-line summary of this file's cache insertions
     /// (digests plus degraded flags), for regime-bisection dumps.
     pub(crate) fn debug_insert_line(&self) -> String {
@@ -350,6 +379,15 @@ struct WorkerOverlay {
     templates: FxHashMap<StableInterfaceDeclarationId, (usize, Arc<InterfaceDeclarationTemplate>)>,
     methods: FxHashMap<InterfaceMemberInstantiationKey, (usize, FunctionType)>,
     overloads: FxHashMap<InterfaceOverloadInstantiationKey, (usize, FunctionType)>,
+    /// Instantiation digests this attempt has already deferred once. A deferred
+    /// key must defer at most once per attempt: the nominal reference the peel
+    /// returns re-enters resolution when it is later forced (`Type::peeled` is
+    /// `reference.resolve().peeled()`), and a second deferral would hand back
+    /// another deferring nominal, so peeling would recurse forever. On the
+    /// second lookup the key resolves as a normal miss (expands to a concrete
+    /// type), terminating the peel. The attempt is discarded and requeued
+    /// regardless, so this only bounds work, never changes the committed result.
+    deferred_once: FxHashSet<u64>,
     current: FileCacheLog,
     current_active: bool,
     finished: Vec<FileCacheLog>,
@@ -364,6 +402,7 @@ impl WorkerOverlay {
             templates: FxHashMap::default(),
             methods: FxHashMap::default(),
             overloads: FxHashMap::default(),
+            deferred_once: FxHashSet::default(),
             current: FileCacheLog::default(),
             current_active: false,
             finished: Vec::new(),
@@ -387,11 +426,67 @@ enum BaseView {
     Live,
 }
 
+/// Measurement-only deferral context (Stage 2). When a replay session reads the
+/// live committed store and misses a key, it consults the reservation table for
+/// this position: a `Deferred` result means an earlier not-yet-committed
+/// position would have published the key, so serial checking would have hit it
+/// and the replay is about to over-recurse. This context only *counts* those
+/// events (behind `SURGE_DEFER_MEASURE`); it never changes resolution, so output
+/// stays byte-identical. It quantifies the deferral opportunity before any
+/// abort-and-requeue mechanism is built.
+struct DeferralContext {
+    table: Arc<std::sync::RwLock<ReservationTable>>,
+    position: usize,
+    stats: Arc<DeferralStats>,
+    /// Latest (largest) blocking publisher this attempt deferred to, or -1 if it
+    /// never deferred. The requeue waits on the latest so the re-run reads the
+    /// most-committed view; `-1` means the replay ran to completion (valid).
+    max_deferred: std::sync::atomic::AtomicI64,
+}
+
+impl DeferralContext {
+    /// Queries the reservation table for this position, records the deferral in
+    /// the stats and the attempt's `max_deferred`, and returns the blocking
+    /// publisher if the key is owned by an earlier not-yet-committed position.
+    fn check(
+        &self,
+        query: impl FnOnce(&ReservationTable, usize) -> ReservationLookup,
+    ) -> Option<usize> {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.stats.queried.fetch_add(1, Relaxed);
+        if let Ok(table) = self.table.read()
+            && let ReservationLookup::Deferred { publisher, .. } = query(&table, self.position)
+        {
+            self.stats.deferred.fetch_add(1, Relaxed);
+            self.max_deferred.fetch_max(publisher as i64, Relaxed);
+            return Some(publisher);
+        }
+        None
+    }
+}
+
+/// Outcome of a deferral-aware instantiation probe. `Deferred` is control flow —
+/// never a `Type` — converted to a nominal reference only at the lazy-peel
+/// boundary; every other caller treats it as a miss.
+pub(crate) enum InstantiationProbe {
+    Hit(InstantiationCacheEntry),
+    Miss,
+    Deferred,
+}
+
+/// Atomic counters shared across the replay pool for the deferral measurement.
+#[derive(Default)]
+pub(crate) struct DeferralStats {
+    pub(crate) queried: std::sync::atomic::AtomicU64,
+    pub(crate) deferred: std::sync::atomic::AtomicU64,
+}
+
 /// One worker's speculative view of the six program caches.
 pub(crate) struct CheckSession {
     live: LiveCacheHandles,
     base: BaseView,
     state: Mutex<WorkerOverlay>,
+    defer: Option<DeferralContext>,
 }
 
 impl CheckSession {
@@ -400,6 +495,7 @@ impl CheckSession {
             live,
             base: BaseView::Snapshot(base),
             state: Mutex::new(WorkerOverlay::new()),
+            defer: None,
         }
     }
 
@@ -411,7 +507,41 @@ impl CheckSession {
             live,
             base: BaseView::Live,
             state: Mutex::new(WorkerOverlay::new()),
+            defer: None,
         }
+    }
+
+    /// A live-reading session that additionally records (measurement only) how
+    /// often a miss would defer to an earlier pending publisher at `position`.
+    pub(crate) fn new_live_reading_deferring(
+        live: LiveCacheHandles,
+        table: Arc<std::sync::RwLock<ReservationTable>>,
+        position: usize,
+        stats: Arc<DeferralStats>,
+    ) -> Self {
+        Self {
+            live,
+            base: BaseView::Live,
+            state: Mutex::new(WorkerOverlay::new()),
+            defer: Some(DeferralContext {
+                table,
+                position,
+                stats,
+                max_deferred: std::sync::atomic::AtomicI64::new(-1),
+            }),
+        }
+    }
+
+    /// The blocking publisher this replay deferred to (the latest), or `None` if
+    /// it ran to completion without deferring. Used by the replay pipeline to
+    /// requeue a deferred attempt once that publisher commits.
+    pub(crate) fn deferred_until(&self) -> Option<usize> {
+        self.defer.as_ref().and_then(|defer| {
+            let value = defer
+                .max_deferred
+                .load(std::sync::atomic::Ordering::Relaxed);
+            (value >= 0).then_some(value as usize)
+        })
     }
 
     fn base_generic_hit(
@@ -618,6 +748,9 @@ impl CheckSession {
         }
         let digest = digest_bucket(TAG_GENERIC, key, arguments);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.check(|table, k| table.query_generic(key, arguments, k));
+        }
         None
     }
 
@@ -722,8 +855,24 @@ impl CheckSession {
         key: &DeclarationResolutionKey,
         arguments: &[Type],
     ) -> Option<InstantiationCacheEntry> {
+        match self.instantiation_probe(key, arguments) {
+            InstantiationProbe::Hit(entry) => Some(entry),
+            InstantiationProbe::Miss | InstantiationProbe::Deferred => None,
+        }
+    }
+
+    /// Deferral-aware instantiation lookup used by the lazy peel: a miss whose
+    /// key is owned by an earlier not-yet-committed publisher returns `Deferred`
+    /// (at most once per key per attempt — see `WorkerOverlay::deferred_once`)
+    /// instead of `Miss`, so the peel can return the nominal form rather than
+    /// over-recursing into a declaration the earlier position will publish.
+    pub(crate) fn instantiation_probe(
+        &self,
+        key: &DeclarationResolutionKey,
+        arguments: &[Type],
+    ) -> InstantiationProbe {
         if let Some(entry) = self.base_instantiation_entry(key, arguments) {
-            return Some(entry);
+            return InstantiationProbe::Hit(entry);
         }
         let mut state = self.state.lock().expect("check session poisoned");
         if let Some((file, entry)) = state.instantiations.get(key).and_then(|bucket| {
@@ -733,11 +882,20 @@ impl CheckSession {
                 .cloned()
         }) {
             state.record_dep(file);
-            return Some(entry);
+            return InstantiationProbe::Hit(entry);
         }
         let digest = digest_bucket(TAG_INSTANTIATION, key, arguments);
         state.current.misses.insert(digest);
-        None
+        if let Some(defer) = &self.defer
+            && !state.deferred_once.contains(&digest)
+            && defer
+                .check(|table, k| table.query_instantiation(key, arguments, k))
+                .is_some()
+        {
+            state.deferred_once.insert(digest);
+            return InstantiationProbe::Deferred;
+        }
+        InstantiationProbe::Miss
     }
 
     pub(crate) fn physical_lookup(&self, key: &InterfaceInstantiationKey) -> Option<Arc<Type>> {
@@ -751,6 +909,9 @@ impl CheckSession {
         }
         let digest = digest_flat(TAG_PHYSICAL, key);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.check(|table, k| table.query_physical(key, k));
+        }
         None
     }
 
@@ -800,6 +961,9 @@ impl CheckSession {
         }
         let digest = digest_flat(TAG_TEMPLATE, key);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.check(|table, k| table.query_template(key, k));
+        }
         None
     }
 
@@ -846,6 +1010,9 @@ impl CheckSession {
         }
         let digest = digest_flat(TAG_METHOD, key);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.check(|table, k| table.query_method(key, k));
+        }
         None
     }
 
@@ -894,6 +1061,9 @@ impl CheckSession {
         }
         let digest = digest_flat(TAG_OVERLOAD, key);
         state.current.misses.insert(digest);
+        if let Some(defer) = &self.defer {
+            defer.check(|table, k| table.query_overload(key, k));
+        }
         None
     }
 
@@ -1158,6 +1328,119 @@ pub(crate) fn report_conflict_dag(logs: &[Option<FileCacheLog>]) {
     );
 }
 
+/// Per predicted-conflict position, its conflict-DAG dependency positions (the
+/// first-writers of keys it missed, plus its overlay producers, all `< index`).
+/// Computed before the commit walk consumes the logs. Non-conflicts get an empty
+/// list. Feeds [`report_critical_path`].
+pub(crate) fn compute_conflict_deps(logs: &[Option<FileCacheLog>]) -> Vec<Vec<usize>> {
+    let predicted = predict_conflicts(logs);
+    let n = logs.len();
+    let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut first_writer: FxHashMap<u64, usize> = FxHashMap::default();
+    for (index, log) in logs.iter().enumerate() {
+        let Some(log) = log else { continue };
+        if predicted[index] {
+            let mut set: FxHashSet<usize> = FxHashSet::default();
+            for digest in &log.misses {
+                if let Some(&producer) = first_writer.get(digest)
+                    && producer < index
+                {
+                    set.insert(producer);
+                }
+            }
+            for &producer in &log.overlay_deps {
+                if producer < index {
+                    set.insert(producer);
+                }
+            }
+            deps[index] = set.into_iter().collect();
+        }
+        let mut record = |digest: u64| {
+            first_writer.entry(digest).or_insert(index);
+        };
+        for (_, _, d) in &log.generic_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.instantiation_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.physical_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.template_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.method_inserts {
+            record(*d);
+        }
+        for (_, _, d) in &log.overload_inserts {
+            record(*d);
+        }
+    }
+    deps
+}
+
+/// Diagnostic (`SURGE_CRITPATH=1`): the out-of-order-commit ceiling. Given each
+/// conflict position's measured recompute time (`micros[k]`) and the conflict
+/// DAG (`deps`), computes the longest *weighted* dependency chain — the critical
+/// path that even a perfect topological, unbounded-parallel commit could not
+/// beat — alongside the serial sum. If `critical_path ≈ serial_sum` the
+/// conflicts form one long chain and out-of-order commit cannot help; if
+/// `critical_path ≪ serial_sum` there is parallelism to exploit.
+pub(crate) fn report_critical_path(deps: &[Vec<usize>], micros: &FxHashMap<usize, u128>) {
+    if std::env::var_os("SURGE_CRITPATH").is_none() {
+        return;
+    }
+    let n = deps.len();
+    let mut finish: Vec<u128> = vec![0; n];
+    let mut prev: Vec<Option<usize>> = vec![None; n];
+    let mut serial_sum: u128 = 0;
+    let mut critical_path: u128 = 0;
+    let mut best_end: Option<usize> = None;
+    let mut conflicts = 0u32;
+    // Positions are already in ascending serial order and every dependency is
+    // `< index`, so a single forward pass is a valid topological DP.
+    for index in 0..n {
+        let weight = *micros.get(&index).unwrap_or(&0);
+        if deps[index].is_empty() && weight == 0 {
+            continue;
+        }
+        conflicts += 1;
+        serial_sum += weight;
+        let mut dep_finish: u128 = 0;
+        let mut dep_prev: Option<usize> = None;
+        for &producer in &deps[index] {
+            if finish[producer] > dep_finish {
+                dep_finish = finish[producer];
+                dep_prev = Some(producer);
+            }
+        }
+        finish[index] = dep_finish + weight;
+        prev[index] = dep_prev;
+        if finish[index] > critical_path {
+            critical_path = finish[index];
+            best_end = Some(index);
+        }
+    }
+    let mut chain_len = 0u32;
+    let mut cursor = best_end;
+    while let Some(k) = cursor {
+        chain_len += 1;
+        cursor = prev[k];
+    }
+    let ideal_8 = (serial_sum / 8).max(critical_path);
+    eprintln!(
+        "[stc-critpath] conflicts={conflicts} serial_sum={:.0}ms critical_path={:.0}ms \
+         ideal_parallel(8core)={:.0}ms critical_chain_len={chain_len} speedup_ceiling(inf)={:.2}x \
+         speedup_ceiling(8core)={:.2}x",
+        serial_sum as f64 / 1000.0,
+        critical_path as f64 / 1000.0,
+        ideal_8 as f64 / 1000.0,
+        serial_sum as f64 / critical_path.max(1) as f64,
+        serial_sum as f64 / ideal_8.max(1) as f64,
+    );
+}
+
 /// Validates one file's log against everything published so far. On a clean
 /// verdict the file's insertions are published into the live maps (in the
 /// file's own insertion order) and their digests join `published`.
@@ -1343,4 +1626,716 @@ pub(crate) fn apply_file_log(
     }
 
     complete
+}
+
+// ---------------------------------------------------------------------------
+// Publisher-stamped pending reservations
+// ---------------------------------------------------------------------------
+//
+// A replay of position `k` reads the committed store (positions `< frontier`)
+// and its own private overlay. When it misses a key that an *earlier* serial
+// position will publish but has not committed yet, the resolver recomputes the
+// key against an incomplete view — it over-recurses into the declaration body
+// and interns spurious structural sub-instantiations, enlarging the digest
+// dependency graph and manufacturing false conflicts (see
+// `docs/perf/TRPC-ORDERED-DELTA-REPLAY.md` §2).
+//
+// The reservation table lets a lookup distinguish that case from a genuine
+// miss. Before the commit/replay walk, each position reserves — stamped with
+// its serial position — the keys its worker log says it will publish. A replay
+// at `k` that misses a key in the committed store consults the table: a Pending
+// reservation owned by a position `< k` means serial checking would have seen
+// that publisher's value, so the replay must *defer* (and be requeued once the
+// publisher commits) rather than recompute. Reservations owned by `>= k`
+// (future or self) are invisible; a Ready reservation means the value is
+// already committed (the store lookup already hit); a Cancelled reservation
+// means its owner turned out not to publish the key, so it is not a dependency.
+//
+// The schedule is derived from worker logs, so it is only a hint: an
+// over-reservation makes a later replay defer unnecessarily (it re-checks after
+// the publisher commits and finds a hit or a genuine miss — either correct); an
+// under-reservation makes a replay compute a key fresh, which the existing
+// digest-based commit validation catches and falls back to an inline recheck.
+// Imprecision only costs performance, never correctness. Equality is by exact
+// key (and exact arguments for the bucketed caches), never by the 64-bit
+// conflict digest, so a digest collision cannot merge two distinct keys.
+
+/// Lifecycle of one publisher's claim on a cache key.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ReservationState {
+    /// The owning position intends to publish this key but has not committed.
+    Pending,
+    /// The owning position committed; the real value is in the live cache.
+    Ready,
+    /// The owning position's speculative work was discarded without publishing
+    /// this key, so it is not a dependency for any later replay.
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+struct Reservation {
+    /// Serial position that owns this reservation.
+    publisher: usize,
+    /// Attempt/generation that created it, so a stale reservation from a
+    /// discarded attempt is distinguishable from a live one.
+    attempt: u64,
+    state: ReservationState,
+    /// Commit version stamped at finalization (0 while Pending/Cancelled).
+    version: u64,
+}
+
+/// Result of a positional reservation query at replay position `k`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ReservationLookup {
+    /// No earlier-position publisher reserves this key: a genuine miss (serial
+    /// checking at `k` would also miss it), so the caller computes it.
+    None,
+    /// An earlier position holds a Pending reservation on this key: serial
+    /// checking at `k` would observe that publisher's value, so the caller must
+    /// defer until the publisher commits rather than recompute.
+    Deferred { publisher: usize, attempt: u64 },
+}
+
+/// Earliest-Pending-publisher-below-`k` visibility over one key's reservations.
+/// `Ready`/`Cancelled` never create a dependency, and a publisher `>= k`
+/// (a future position, or the querying position itself) is invisible — so a
+/// replay never waits on itself and never observes a future publication.
+fn reservation_visibility(
+    reservations: impl IntoIterator<Item = Reservation>,
+    k: usize,
+) -> ReservationLookup {
+    let mut best: Option<Reservation> = None;
+    for reservation in reservations {
+        if reservation.publisher >= k || reservation.state != ReservationState::Pending {
+            continue;
+        }
+        best = match best {
+            Some(current) if current.publisher <= reservation.publisher => Some(current),
+            _ => Some(reservation),
+        };
+    }
+    match best {
+        Some(reservation) => ReservationLookup::Deferred {
+            publisher: reservation.publisher,
+            attempt: reservation.attempt,
+        },
+        None => ReservationLookup::None,
+    }
+}
+
+/// Exact-key publisher reservations kept alongside the six order-visible caches.
+/// Bucketed caches (generic, instantiation) match on exact argument vectors,
+/// mirroring the caches' own bucket equality; the flat caches key on their
+/// `Hash + Eq` instantiation keys. Reservation values are never stored here —
+/// the committed value lives in the real cache; this table tracks only the
+/// publisher/lifecycle needed to answer the defer-vs-compute question.
+#[derive(Default)]
+pub(crate) struct ReservationTable {
+    generic: FxHashMap<DeclarationResolutionKey, Vec<(Vec<Type>, Reservation)>>,
+    instantiations: FxHashMap<DeclarationResolutionKey, Vec<(Vec<Type>, Reservation)>>,
+    physical: FxHashMap<InterfaceInstantiationKey, Vec<Reservation>>,
+    templates: FxHashMap<StableInterfaceDeclarationId, Vec<Reservation>>,
+    methods: FxHashMap<InterfaceMemberInstantiationKey, Vec<Reservation>>,
+    overloads: FxHashMap<InterfaceOverloadInstantiationKey, Vec<Reservation>>,
+    pending: usize,
+    peak_pending: usize,
+}
+
+fn reserve_bucketed(
+    map: &mut FxHashMap<DeclarationResolutionKey, Vec<(Vec<Type>, Reservation)>>,
+    key: &DeclarationResolutionKey,
+    arguments: &[Type],
+    publisher: usize,
+    attempt: u64,
+    pending: &mut usize,
+    peak: &mut usize,
+) {
+    let bucket = map.entry(key.clone()).or_default();
+    if bucket
+        .iter()
+        .any(|(existing, reservation)| existing == arguments && reservation.publisher == publisher)
+    {
+        return;
+    }
+    bucket.push((
+        arguments.to_vec(),
+        Reservation {
+            publisher,
+            attempt,
+            state: ReservationState::Pending,
+            version: 0,
+        },
+    ));
+    *pending += 1;
+    *peak = (*peak).max(*pending);
+}
+
+fn query_bucketed(
+    map: &FxHashMap<DeclarationResolutionKey, Vec<(Vec<Type>, Reservation)>>,
+    key: &DeclarationResolutionKey,
+    arguments: &[Type],
+    k: usize,
+) -> ReservationLookup {
+    match map.get(key) {
+        None => ReservationLookup::None,
+        Some(bucket) => reservation_visibility(
+            bucket
+                .iter()
+                .filter(|(existing, _)| existing == arguments)
+                .map(|(_, reservation)| *reservation),
+            k,
+        ),
+    }
+}
+
+fn reserve_flat<K: Clone + Eq + Hash>(
+    map: &mut FxHashMap<K, Vec<Reservation>>,
+    key: &K,
+    publisher: usize,
+    attempt: u64,
+    pending: &mut usize,
+    peak: &mut usize,
+) {
+    let slot = map.entry(key.clone()).or_default();
+    if slot
+        .iter()
+        .any(|reservation| reservation.publisher == publisher)
+    {
+        return;
+    }
+    slot.push(Reservation {
+        publisher,
+        attempt,
+        state: ReservationState::Pending,
+        version: 0,
+    });
+    *pending += 1;
+    *peak = (*peak).max(*pending);
+}
+
+fn query_flat<K: Eq + Hash>(
+    map: &FxHashMap<K, Vec<Reservation>>,
+    key: &K,
+    k: usize,
+) -> ReservationLookup {
+    match map.get(key) {
+        None => ReservationLookup::None,
+        Some(slot) => reservation_visibility(slot.iter().copied(), k),
+    }
+}
+
+fn transition_bucketed(
+    map: &mut FxHashMap<DeclarationResolutionKey, Vec<(Vec<Type>, Reservation)>>,
+    publisher: usize,
+    to: ReservationState,
+    version: u64,
+    pending: &mut usize,
+) {
+    for bucket in map.values_mut() {
+        for (_, reservation) in bucket.iter_mut() {
+            if reservation.publisher == publisher && reservation.state == ReservationState::Pending
+            {
+                reservation.state = to;
+                reservation.version = version;
+                *pending = pending.saturating_sub(1);
+            }
+        }
+    }
+}
+
+fn transition_flat<K>(
+    map: &mut FxHashMap<K, Vec<Reservation>>,
+    publisher: usize,
+    to: ReservationState,
+    version: u64,
+    pending: &mut usize,
+) {
+    for slot in map.values_mut() {
+        for reservation in slot.iter_mut() {
+            if reservation.publisher == publisher && reservation.state == ReservationState::Pending
+            {
+                reservation.state = to;
+                reservation.version = version;
+                *pending = pending.saturating_sub(1);
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl ReservationTable {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn reserve_generic(
+        &mut self,
+        key: &DeclarationResolutionKey,
+        arguments: &[Type],
+        publisher: usize,
+        attempt: u64,
+    ) {
+        reserve_bucketed(
+            &mut self.generic,
+            key,
+            arguments,
+            publisher,
+            attempt,
+            &mut self.pending,
+            &mut self.peak_pending,
+        );
+    }
+
+    pub(crate) fn query_generic(
+        &self,
+        key: &DeclarationResolutionKey,
+        arguments: &[Type],
+        k: usize,
+    ) -> ReservationLookup {
+        query_bucketed(&self.generic, key, arguments, k)
+    }
+
+    pub(crate) fn reserve_instantiation(
+        &mut self,
+        key: &DeclarationResolutionKey,
+        arguments: &[Type],
+        publisher: usize,
+        attempt: u64,
+    ) {
+        reserve_bucketed(
+            &mut self.instantiations,
+            key,
+            arguments,
+            publisher,
+            attempt,
+            &mut self.pending,
+            &mut self.peak_pending,
+        );
+    }
+
+    pub(crate) fn query_instantiation(
+        &self,
+        key: &DeclarationResolutionKey,
+        arguments: &[Type],
+        k: usize,
+    ) -> ReservationLookup {
+        query_bucketed(&self.instantiations, key, arguments, k)
+    }
+
+    pub(crate) fn reserve_physical(
+        &mut self,
+        key: &InterfaceInstantiationKey,
+        publisher: usize,
+        attempt: u64,
+    ) {
+        reserve_flat(
+            &mut self.physical,
+            key,
+            publisher,
+            attempt,
+            &mut self.pending,
+            &mut self.peak_pending,
+        );
+    }
+
+    pub(crate) fn query_physical(
+        &self,
+        key: &InterfaceInstantiationKey,
+        k: usize,
+    ) -> ReservationLookup {
+        query_flat(&self.physical, key, k)
+    }
+
+    pub(crate) fn reserve_template(
+        &mut self,
+        key: &StableInterfaceDeclarationId,
+        publisher: usize,
+        attempt: u64,
+    ) {
+        reserve_flat(
+            &mut self.templates,
+            key,
+            publisher,
+            attempt,
+            &mut self.pending,
+            &mut self.peak_pending,
+        );
+    }
+
+    pub(crate) fn query_template(
+        &self,
+        key: &StableInterfaceDeclarationId,
+        k: usize,
+    ) -> ReservationLookup {
+        query_flat(&self.templates, key, k)
+    }
+
+    pub(crate) fn reserve_method(
+        &mut self,
+        key: &InterfaceMemberInstantiationKey,
+        publisher: usize,
+        attempt: u64,
+    ) {
+        reserve_flat(
+            &mut self.methods,
+            key,
+            publisher,
+            attempt,
+            &mut self.pending,
+            &mut self.peak_pending,
+        );
+    }
+
+    pub(crate) fn query_method(
+        &self,
+        key: &InterfaceMemberInstantiationKey,
+        k: usize,
+    ) -> ReservationLookup {
+        query_flat(&self.methods, key, k)
+    }
+
+    pub(crate) fn reserve_overload(
+        &mut self,
+        key: &InterfaceOverloadInstantiationKey,
+        publisher: usize,
+        attempt: u64,
+    ) {
+        reserve_flat(
+            &mut self.overloads,
+            key,
+            publisher,
+            attempt,
+            &mut self.pending,
+            &mut self.peak_pending,
+        );
+    }
+
+    pub(crate) fn query_overload(
+        &self,
+        key: &InterfaceOverloadInstantiationKey,
+        k: usize,
+    ) -> ReservationLookup {
+        query_flat(&self.overloads, key, k)
+    }
+
+    /// Marks every Pending reservation owned by `publisher` as `Ready` (its
+    /// value is now committed). First-writer serial semantics are preserved: an
+    /// earlier publisher's reservation is untouched, and a later query resolves
+    /// the committed value from the store rather than deferring.
+    pub(crate) fn finalize(&mut self, publisher: usize, version: u64) {
+        self.transition(publisher, ReservationState::Ready, version);
+    }
+
+    /// Marks every Pending reservation owned by `publisher` as `Cancelled`
+    /// (its speculative work was discarded without publishing). Dependents that
+    /// deferred on it are no longer bound to it — the requeue layer wakes them.
+    pub(crate) fn cancel(&mut self, publisher: usize) {
+        self.transition(publisher, ReservationState::Cancelled, 0);
+    }
+
+    fn transition(&mut self, publisher: usize, to: ReservationState, version: u64) {
+        transition_bucketed(&mut self.generic, publisher, to, version, &mut self.pending);
+        transition_bucketed(
+            &mut self.instantiations,
+            publisher,
+            to,
+            version,
+            &mut self.pending,
+        );
+        transition_flat(
+            &mut self.physical,
+            publisher,
+            to,
+            version,
+            &mut self.pending,
+        );
+        transition_flat(
+            &mut self.templates,
+            publisher,
+            to,
+            version,
+            &mut self.pending,
+        );
+        transition_flat(&mut self.methods, publisher, to, version, &mut self.pending);
+        transition_flat(
+            &mut self.overloads,
+            publisher,
+            to,
+            version,
+            &mut self.pending,
+        );
+    }
+
+    /// Live Pending reservations — 0 once the walk has finalized/cancelled every
+    /// position (the end-of-run leak assertion).
+    pub(crate) fn pending_count(&self) -> usize {
+        self.pending
+    }
+
+    /// High-water mark of concurrent Pending reservations (peak metadata depth).
+    pub(crate) fn peak_pending(&self) -> usize {
+        self.peak_pending
+    }
+
+    /// Drops all reservation metadata. Pending entries never survive clearing.
+    pub(crate) fn clear(&mut self) {
+        self.generic.clear();
+        self.instantiations.clear();
+        self.physical.clear();
+        self.templates.clear();
+        self.methods.clear();
+        self.overloads.clear();
+        self.pending = 0;
+        self.peak_pending = 0;
+    }
+}
+
+#[cfg(test)]
+mod reservation_tests {
+    use super::*;
+    use crate::context::DeclarationNamespace;
+
+    fn dkey(name: &str) -> DeclarationResolutionKey {
+        DeclarationResolutionKey {
+            file_name: Arc::from("test.ts"),
+            name: Arc::from(name),
+            namespace: DeclarationNamespace::Type,
+        }
+    }
+
+    fn deferred_to(lookup: ReservationLookup) -> Option<usize> {
+        match lookup {
+            ReservationLookup::Deferred { publisher, .. } => Some(publisher),
+            ReservationLookup::None => None,
+        }
+    }
+
+    // Property 1: an earlier Pending reservation returns Deferred.
+    #[test]
+    fn earlier_pending_defers() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 10);
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number], 5),
+            ReservationLookup::Deferred {
+                publisher: 2,
+                attempt: 10
+            }
+        );
+    }
+
+    // Property 2: an earlier Ready reservation is not a defer (its value is in
+    // the committed store, so the store lookup — which runs first — hits).
+    #[test]
+    fn earlier_ready_is_hit_not_defer() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 10);
+        table.finalize(2, 1);
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number], 5),
+            ReservationLookup::None
+        );
+    }
+
+    // Property 3: a future (publisher >= k) Pending reservation is invisible.
+    #[test]
+    fn future_pending_invisible() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 7, 10);
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number], 5),
+            ReservationLookup::None
+        );
+    }
+
+    // Property 4: a future Ready reservation is invisible too.
+    #[test]
+    fn future_ready_invisible() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 7, 10);
+        table.finalize(7, 1);
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number], 5),
+            ReservationLookup::None
+        );
+    }
+
+    // Property 5: a position's own reservation (publisher == k) does not make it
+    // defer on itself.
+    #[test]
+    fn own_reservation_no_deadlock() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 5, 10);
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number], 5),
+            ReservationLookup::None
+        );
+    }
+
+    // Property 6: with several earlier publishers, the earliest serial position
+    // wins.
+    #[test]
+    fn earliest_serial_position_wins() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 4, 40);
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 20);
+        table.reserve_generic(&dkey("A"), &[Type::Number], 3, 30);
+        assert_eq!(
+            deferred_to(table.query_generic(&dkey("A"), &[Type::Number], 6)),
+            Some(2)
+        );
+    }
+
+    // Property 7: cancelling a publisher wakes dependents — the next Pending
+    // publisher (or a genuine miss) governs after cancellation.
+    #[test]
+    fn cancel_wakes_dependents() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 20);
+        table.reserve_generic(&dkey("A"), &[Type::Number], 3, 30);
+        assert_eq!(
+            deferred_to(table.query_generic(&dkey("A"), &[Type::Number], 6)),
+            Some(2)
+        );
+        table.cancel(2);
+        // Owner 2 no longer binds; the next earlier Pending publisher governs.
+        assert_eq!(
+            deferred_to(table.query_generic(&dkey("A"), &[Type::Number], 6)),
+            Some(3)
+        );
+        table.cancel(3);
+        // No Pending publisher left below k -> genuine miss.
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number], 6),
+            ReservationLookup::None
+        );
+    }
+
+    // Property 8: finalization (Ready) preserves first-writer semantics — a
+    // later query resolves from the store (None here), not a defer, and an
+    // unrelated earlier Pending publisher still defers.
+    #[test]
+    fn ready_preserves_first_writer() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 20);
+        table.reserve_generic(&dkey("A"), &[Type::Number], 4, 40);
+        table.finalize(2, 1);
+        // Earliest is now Ready (committed); publisher 4 still Pending but a
+        // query at k=6 sees the committed value via the store, and the table no
+        // longer defers to 2. Publisher 4 is < 6 and Pending, so it defers to 4.
+        assert_eq!(
+            deferred_to(table.query_generic(&dkey("A"), &[Type::Number], 6)),
+            Some(4)
+        );
+        // At k=3, publisher 4 is a future position -> invisible, no defer.
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number], 3),
+            ReservationLookup::None
+        );
+    }
+
+    // Property 9: exact argument vectors distinguish bucket entries — a
+    // reservation on <Number> does not defer a lookup of <String>.
+    #[test]
+    fn exact_arguments_distinguish_bucket_entries() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 20);
+        assert_eq!(
+            deferred_to(table.query_generic(&dkey("A"), &[Type::Number], 6)),
+            Some(2)
+        );
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::String], 6),
+            ReservationLookup::None
+        );
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number, Type::String], 6),
+            ReservationLookup::None
+        );
+    }
+
+    // Property 10: semantic equality is by key/args, never by digest, so keys
+    // that a 64-bit digest would collide do not merge. Distinct declaration keys
+    // are independent regardless of any hashing.
+    #[test]
+    fn distinct_keys_do_not_merge() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 20);
+        // A different declaration key with identical args is a separate entry.
+        assert_eq!(
+            table.query_generic(&dkey("B"), &[Type::Number], 6),
+            ReservationLookup::None
+        );
+        table.reserve_instantiation(&dkey("A"), &[Type::Number], 3, 30);
+        // The generic and instantiation tables are independent caches.
+        assert_eq!(
+            deferred_to(table.query_generic(&dkey("A"), &[Type::Number], 6)),
+            Some(2)
+        );
+        assert_eq!(
+            deferred_to(table.query_instantiation(&dkey("A"), &[Type::Number], 6)),
+            Some(3)
+        );
+    }
+
+    // Property 11: a replay hitting several deferred keys collects distinct
+    // publishers (deduplicated).
+    #[test]
+    fn multiple_dependencies_deduplicate() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 20);
+        table.reserve_generic(&dkey("B"), &[Type::Number], 2, 20);
+        table.reserve_instantiation(&dkey("C"), &[Type::Number], 4, 40);
+        let mut publishers = std::collections::BTreeSet::new();
+        for lookup in [
+            table.query_generic(&dkey("A"), &[Type::Number], 6),
+            table.query_generic(&dkey("B"), &[Type::Number], 6),
+            table.query_instantiation(&dkey("C"), &[Type::Number], 6),
+        ] {
+            if let Some(publisher) = deferred_to(lookup) {
+                publishers.insert(publisher);
+            }
+        }
+        assert_eq!(publishers.into_iter().collect::<Vec<_>>(), vec![2, 4]);
+    }
+
+    // Property 12: clearing removes all reservation metadata, including the
+    // Pending count.
+    #[test]
+    fn clear_removes_all_metadata() {
+        let mut table = ReservationTable::new();
+        table.reserve_generic(&dkey("A"), &[Type::Number], 2, 20);
+        table.reserve_instantiation(&dkey("B"), &[Type::Number], 3, 30);
+        assert!(table.pending_count() > 0);
+        table.clear();
+        assert_eq!(table.pending_count(), 0);
+        assert_eq!(table.peak_pending(), 0);
+        assert_eq!(
+            table.query_generic(&dkey("A"), &[Type::Number], 6),
+            ReservationLookup::None
+        );
+        assert_eq!(
+            table.query_instantiation(&dkey("B"), &[Type::Number], 6),
+            ReservationLookup::None
+        );
+    }
+
+    // Flat-cache smoke: the physical instantiation table shares the visibility
+    // rule (constructed via a template key, which is a plain Hash+Eq key).
+    #[test]
+    fn flat_template_cache_defers_and_finalizes() {
+        let mut table = ReservationTable::new();
+        let key = StableInterfaceDeclarationId {
+            canonical_file: Arc::from("lib.d.ts"),
+            declaration_start: 100,
+            declaration_name: Arc::from("Array"),
+            merged_fragments: Arc::from(Vec::new()),
+        };
+        table.reserve_template(&key, 2, 20);
+        assert_eq!(deferred_to(table.query_template(&key, 6)), Some(2));
+        table.finalize(2, 1);
+        assert_eq!(table.query_template(&key, 6), ReservationLookup::None);
+        assert_eq!(table.pending_count(), 0);
+    }
 }

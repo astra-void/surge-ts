@@ -182,3 +182,18 @@ representation change needed to unblock it (publisher-stamped versioned entries
 + a resolution-deferred sentinel) are in
 [TRPC-ORDERED-DELTA-REPLAY.md](TRPC-ORDERED-DELTA-REPLAY.md). The shipping
 `--jobs auto` default is unchanged (serial check, ~10.3 s median, 1.97 GB).
+
+## Follow-up: publisher-stamped deferred resolution (blocker)
+
+The over-recursion representation change the ordered-delta report proposed was
+attempted: publisher-stamped pending reservations + a resolution-deferred
+result. The reservation primitive, a deferral measurement (≈3 000 deferrals on
+tRPC), and a byte-safe file-level requeue substrate landed (opt-in `SURGE_DEFER`;
+`--jobs auto` unchanged). Honoring deferral moves the structural metric (inline
+rechecks 153 → 64, byte-identical) but does **not** reduce wall time (check tail
+1.45 → 1.66 s): the requeue reschedules the over-recursion rather than
+eliminating it, and the sub-file short-circuit that would make deferred replays
+cheap requires a mid-resolution nominal return out of the total
+`ResolveReference::resolve_arc` — which panicked (poisoned a resolver mutex) and
+is reverted. Full analysis + the safe tri-state next step in
+[TRPC-DEFERRED-RESOLUTION.md](TRPC-DEFERRED-RESOLUTION.md).

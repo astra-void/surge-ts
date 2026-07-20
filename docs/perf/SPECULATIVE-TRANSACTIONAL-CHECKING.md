@@ -199,3 +199,12 @@ bound.
 | 5 | parallel **module analysis** (SCC + per-worker arenas) | pending, gated on 5.0 |
 | 6–7 | adaptive scheduler + contention/memory tuning | pending |
 | 8 | full validation matrix + report | pending |
+
+## Deferred resolution (publisher-stamped reservations)
+
+An opt-in extension (`SURGE_DEFER`) adds a publisher-stamped reservation table
+alongside the six order-visible caches so a replay can *defer* — and be requeued
+— instead of over-recursing on a key an earlier not-yet-committed position will
+publish. It is byte-identical and moves the structural conflict metric but does
+not reduce tRPC wall time; the sub-file short-circuit that would is the open,
+unsafe frontier. See [TRPC-DEFERRED-RESOLUTION.md](TRPC-DEFERRED-RESOLUTION.md).

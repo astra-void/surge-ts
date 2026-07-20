@@ -74,6 +74,8 @@ test('bench script generates json output', () => {
   assert.ok(typeof data.meta?.timestamp === 'string', 'JSON should record the run timestamp');
   assert.ok(typeof data.meta?.platform === 'string', 'JSON should record the platform');
   assert.strictEqual(data.meta?.iterations, 1, 'JSON should record the iteration count');
+  assert.match(data.meta?.tscVersion ?? '', /^6\./, 'tsc baseline should be TypeScript 6');
+  assert.match(data.meta?.tsgoVersion ?? '', /^7\./, 'tsgo should be TypeScript 7');
   const first = data.results[0];
   assert.ok(first.memory && typeof first.memory === 'object', 'results should include a memory record');
   if (process.platform === 'darwin' || process.platform === 'linux') {

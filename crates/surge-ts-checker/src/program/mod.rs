@@ -1827,10 +1827,45 @@ fn check_program_files_parallel(
         .map(crate::speculative::FileCacheLog::miss_count)
         .sum();
     crate::speculative::report_conflict_dag(&worker_logs);
+
+    // `SURGE_DEFER=1` (opt-in): honor deferred resolution. Seed a reservation
+    // table from the worker logs (each position reserves the keys it publishes),
+    // submit conflicts eagerly, and let a replay that reads a key an earlier
+    // not-yet-committed publisher owns *defer* — the pipeline requeues it once
+    // that publisher commits (bounded by the inline recheck at the frontier),
+    // so it re-runs against a committed view instead of over-recursing into a
+    // committed conflict. Byte-identical: a deferred attempt is discarded like a
+    // stale replay. `SURGE_REPLAY_OFF` (serial recheck) takes precedence for A/B.
+    let defer_enabled =
+        std::env::var_os("SURGE_DEFER").is_some() && std::env::var_os("SURGE_REPLAY_OFF").is_none();
+    let (reservations, defer_stats) = if defer_enabled {
+        let mut table = crate::speculative::ReservationTable::new();
+        for (position, log) in worker_logs.iter().enumerate() {
+            if let Some(log) = log {
+                log.reserve_into(&mut table, position, 0);
+            }
+        }
+        (
+            Some(Arc::new(std::sync::RwLock::new(table))),
+            Some(Arc::new(crate::speculative::DeferralStats::default())),
+        )
+    } else {
+        (None, None)
+    };
+
     // `SURGE_REPLAY_OFF=1` disables pre-replay (every conflict resolves inline —
     // the serial recheck), for interleaved A/B measurement of the pipeline.
     let submit_at = if std::env::var_os("SURGE_REPLAY_OFF").is_some() {
         vec![usize::MAX; n]
+    } else if defer_enabled {
+        // Eager: submit every predicted conflict at frontier 0. Deferral +
+        // requeue handles the imprecision (a conflict-dependent replay defers on
+        // its pending dep and is re-run when it commits), so the clean-dependent
+        // restriction of `compute_submit_schedule` is not needed.
+        let predicted = crate::speculative::predict_conflicts(&worker_logs);
+        (0..n)
+            .map(|p| if predicted[p] { 0 } else { usize::MAX })
+            .collect()
     } else {
         crate::speculative::compute_submit_schedule(&worker_logs)
     };
@@ -1857,6 +1892,8 @@ fn check_program_files_parallel(
         live: crate::speculative::LiveCacheHandles,
         ctx: &'a CheckerContext,
         timings: Option<Arc<Mutex<ProgramTimings>>>,
+        reservations: Option<Arc<std::sync::RwLock<crate::speculative::ReservationTable>>>,
+        defer_stats: Option<Arc<crate::speculative::DeferralStats>>,
     }
     struct CheckThreadState {
         ctx: CheckerContext,
@@ -1873,7 +1910,21 @@ fn check_program_files_parallel(
         live: live.clone(),
         ctx,
         timings: timings.clone(),
+        reservations: reservations.clone(),
+        defer_stats: defer_stats.clone(),
     };
+    let mut finalized_upto = 0usize;
+    // `SURGE_CRITPATH=1`: measure the out-of-order-commit ceiling. Capture the
+    // conflict DAG before the walk consumes the logs, and time each inline
+    // recompute; the critical path is reported after the walk. Run with
+    // `SURGE_REPLAY_OFF=1` for clean, uncontended per-conflict weights.
+    let critpath_deps = if std::env::var_os("SURGE_CRITPATH").is_some() {
+        Some(crate::speculative::compute_conflict_deps(&worker_logs))
+    } else {
+        None
+    };
+    let mut conflict_micros: surge_ts_types::fx::FxHashMap<usize, u128> =
+        surge_ts_types::fx::FxHashMap::default();
 
     let replay_stats = crate::replay::run_frontier_pipeline(
         crate::replay::PipelineConfig { n, worker_count },
@@ -1890,9 +1941,19 @@ fn check_program_files_parallel(
             // A fresh live-reading session and a unique attempt stamp so the
             // replay recomputes correct values instead of dedup-hitting the
             // discarded worker attempt's environments in the weak store.
-            let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
-                shared.live.clone(),
-            ));
+            let session = match (&shared.reservations, &shared.defer_stats) {
+                (Some(table), Some(stats)) => Arc::new(
+                    crate::speculative::CheckSession::new_live_reading_deferring(
+                        shared.live.clone(),
+                        table.clone(),
+                        file_index,
+                        stats.clone(),
+                    ),
+                ),
+                _ => Arc::new(crate::speculative::CheckSession::new_live_reading(
+                    shared.live.clone(),
+                )),
+            };
             thread_state.ctx.environment_attempt = crate::replay::next_replay_attempt();
             let result = with_program_type_store(thread_state.store.clone(), || {
                 crate::speculative::with_check_session(session.clone(), || {
@@ -1906,11 +1967,22 @@ fn check_program_files_parallel(
                     )
                 })
             });
+            let deferred_until = session.deferred_until();
             let log = session.take_file_logs().pop().unwrap_or_default();
-            CheckReplay { result, log }
+            (CheckReplay { result, log }, deferred_until)
         },
         |_file_index| true,
         |file_index, replay: Option<CheckReplay>, is_final| {
+            // Measurement: everything strictly below the frontier is committed,
+            // so finalize those reservations to Ready before this position runs.
+            if let Some(table) = &reservations
+                && let Ok(mut table) = table.write()
+            {
+                while finalized_upto < file_index {
+                    table.finalize(finalized_upto, 1);
+                    finalized_upto += 1;
+                }
+            }
             if let Some(log) = worker_logs[file_index].take() {
                 if matches!(
                     crate::speculative::commit_file_log(
@@ -1946,11 +2018,12 @@ fn check_program_files_parallel(
                 return crate::replay::CommitOutcome::Committed;
             }
             // Stale or absent replay: recompute inline against the exact
-            // committed<file_index. (Conflict-dependent positions are not
-            // pre-replayed — see `compute_submit_schedule` — so they arrive here
-            // with no replay; a clean-dependent position that is nonetheless
-            // stale is rare and also lands here. The `is_final` retry path exists
-            // for the shared orchestrator but the check tail never defers.)
+            // committed<file_index. Moving this recompute onto the pool (return
+            // NeedsReplay) was measured *worse* — the coordinator blocks on the
+            // pool round-trip behind a queue of (mostly wasted) look-ahead work,
+            // ~2x slower than inline. Reaching the parallel critical-path ceiling
+            // (SURGE_CRITPATH: ~0.46 s vs ~1.7 s serial) needs the stale replays
+            // eliminated (complete reservations), not the recompute relocated.
             let _ = is_final;
             if had_replay {
                 replay_stale += 1;
@@ -1968,6 +2041,7 @@ fn check_program_files_parallel(
             let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
                 live.clone(),
             ));
+            let recompute_start = critpath_deps.as_ref().map(|_| Instant::now());
             let result = crate::speculative::with_check_session(session.clone(), || {
                 session.begin_file(file_index);
                 check_program_file(
@@ -1978,6 +2052,9 @@ fn check_program_files_parallel(
                     timings.as_ref(),
                 )
             });
+            if let Some(start) = recompute_start {
+                conflict_micros.insert(file_index, start.elapsed().as_micros());
+            }
             slots[file_index] = Some(result);
             for recheck_log in session.take_file_logs() {
                 crate::speculative::apply_file_log(
@@ -2012,6 +2089,26 @@ fn check_program_files_parallel(
             "[stc-replay] submitted={} replay_committed={replay_committed} stale={replay_stale} \
              inline_only={inline_only} wasted={} peak_in_flight={}",
             replay_stats.submitted, replay_stats.wasted, replay_stats.peak_in_flight,
+        );
+    }
+
+    if let Some(deps) = &critpath_deps {
+        crate::speculative::report_critical_path(deps, &conflict_micros);
+    }
+
+    if let (Some(table), Some(stats)) = (&reservations, &defer_stats)
+        && let Ok(mut table) = table.write()
+    {
+        for position in finalized_upto..n {
+            table.finalize(position, 1);
+        }
+        use std::sync::atomic::Ordering::Relaxed;
+        eprintln!(
+            "[stc-defer] replay_misses={} would_defer={} pending_leak={} peak_pending={}",
+            stats.queried.load(Relaxed),
+            stats.deferred.load(Relaxed),
+            table.pending_count(),
+            table.peak_pending(),
         );
     }
 

@@ -180,3 +180,13 @@ as its own mission.
 Until then, the serial recheck remains the fastest correct tail for tRPC, and
 the pipeline is retained as a validated, non-regressing mechanism that benefits
 workloads whose conflicts are more independent.
+
+## Follow-up: the representation change was attempted (blocker)
+
+The "next concrete code change" above (publisher-stamped versioned entries + a
+resolution-deferred sentinel) was implemented and measured. The reservation
+table, deferral measurement, and a byte-safe file-level requeue landed (opt-in
+`SURGE_DEFER`), moving inline rechecks 153 → 64 byte-identically — but wall time
+did not improve, and the sub-file short-circuit needed to make it a win requires
+a mid-resolution nominal return that panicked and was reverted. See
+[TRPC-DEFERRED-RESOLUTION.md](TRPC-DEFERRED-RESOLUTION.md).
