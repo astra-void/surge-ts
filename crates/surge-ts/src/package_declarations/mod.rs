@@ -27,7 +27,7 @@ pub struct PackageDeclarationRequest {
 
 #[derive(Debug, Default)]
 pub(crate) struct PackageDeclarationResolverCache {
-    package_json_cache: HashMap<PathBuf, Option<serde_json::Value>>,
+    package_json_cache: HashMap<PathBuf, Option<std::sync::Arc<serde_json::Value>>>,
     entrypoint_cache: HashMap<PackageEntrypointCacheKey, Option<PackageEntrypointResolution>>,
     /// Count of `sources` entries whose specifiers this resolver has already
     /// queued, so loader fixpoint iterations scan each source exactly once.

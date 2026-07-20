@@ -78,7 +78,7 @@ pub(super) fn is_not_needed_types_package(
     cache: &mut PackageDeclarationResolverCache,
 ) -> bool {
     let pkg_json_path = pkg_dir.join("package.json");
-    if !pkg_json_path.is_file() {
+    if !crate::probe::is_existing_file(&pkg_json_path) {
         return false;
     }
     match read_package_json(&pkg_json_path, cache) {
@@ -167,7 +167,7 @@ pub(super) fn resolve_at_types_package_entrypoint(
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PathBuf> {
     let pkg_json_path = pkg_dir.join("package.json");
-    if pkg_json_path.is_file() {
+    if crate::probe::is_existing_file(&pkg_json_path) {
         if let Some(json) = read_package_json(&pkg_json_path, cache) {
             if let Some(types) = json.get("types").and_then(|t| t.as_str()) {
                 if let Some(path) = resolve_declaration_candidate(&pkg_dir.join(types)) {
@@ -301,7 +301,7 @@ pub(super) fn resolve_package_entrypoint_in_directory(
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PackageEntrypointResolution> {
     let pkg_json_path = pkg_dir.join("package.json");
-    let json = if pkg_json_path.is_file() {
+    let json = if crate::probe::is_existing_file(&pkg_json_path) {
         read_package_json(&pkg_json_path, cache)
     } else {
         None
@@ -531,12 +531,12 @@ pub(super) fn path_is_within(base: &Path, candidate: &Path) -> bool {
 pub(super) fn nearest_package_json(
     start_dir: &Path,
     cache: &mut PackageDeclarationResolverCache,
-) -> Option<(PathBuf, serde_json::Value)> {
+) -> Option<(PathBuf, std::sync::Arc<serde_json::Value>)> {
     let mut current = Some(start_dir.to_path_buf());
     while let Some(dir) = current {
         // Never cross a `node_modules` boundary upward into an unrelated package.
         let pkg_json_path = dir.join("package.json");
-        if pkg_json_path.is_file() {
+        if crate::probe::is_existing_file(&pkg_json_path) {
             if let Some(json) = read_package_json(&pkg_json_path, cache) {
                 return Some((dir, json));
             }
@@ -624,10 +624,13 @@ pub(super) fn resolve_types_package_directory(
     None
 }
 
+// Hits vastly outnumber misses (every candidate spelling of a package re-reads
+// its `package.json`), and a parsed manifest with a large `exports` map is
+// expensive to deep-clone, so the cache hands out shared handles.
 pub(super) fn read_package_json(
     pkg_json_path: &Path,
     cache: &mut PackageDeclarationResolverCache,
-) -> Option<serde_json::Value> {
+) -> Option<std::sync::Arc<serde_json::Value>> {
     if let Some(cached) = cache.package_json_cache.get(pkg_json_path) {
         return cached.clone();
     }
@@ -635,7 +638,8 @@ pub(super) fn read_package_json(
     crate::io_stats::record_package_json_read();
     let parsed = std::fs::read_to_string(pkg_json_path)
         .ok()
-        .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok());
+        .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok())
+        .map(std::sync::Arc::new);
     cache
         .package_json_cache
         .insert(pkg_json_path.to_path_buf(), parsed.clone());
