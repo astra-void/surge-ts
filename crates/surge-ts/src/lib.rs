@@ -97,8 +97,10 @@ pub struct ProjectTimings {
     pub expansion_read_io: Duration,
     pub expansion_files_read: u64,
     pub expansion_bytes_read: u64,
+    pub package_declaration_read_io: Duration,
     pub package_json_reads: u64,
     pub fs_existence_probes: u64,
+    pub fs_existence_probe_io: Duration,
     pub fs_read_dir_count: u64,
 }
 
@@ -365,8 +367,14 @@ impl Project {
                 io.expansion_files_read - io_baseline.expansion_files_read;
             timings.expansion_bytes_read +=
                 io.expansion_bytes_read - io_baseline.expansion_bytes_read;
+            timings.package_declaration_read_io += io
+                .package_declaration_read_io
+                .saturating_sub(io_baseline.package_declaration_read_io);
             timings.package_json_reads += io.package_json_reads - io_baseline.package_json_reads;
             timings.fs_existence_probes += io.fs_existence_probes - io_baseline.fs_existence_probes;
+            timings.fs_existence_probe_io += io
+                .fs_existence_probe_io
+                .saturating_sub(io_baseline.fs_existence_probe_io);
             timings.fs_read_dir_count += io.fs_read_dir_count - io_baseline.fs_read_dir_count;
         }
 

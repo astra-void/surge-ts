@@ -215,10 +215,11 @@ fn candidate_is_existing_file(
     if let Some(&hit) = cache.get(key.as_ref()) {
         return hit;
     }
-    crate::io_stats::record_existence_probe();
+    let probe_start = std::time::Instant::now();
     let is_file = fs::metadata(candidate)
         .map(|metadata| metadata.is_file())
         .unwrap_or(false);
+    crate::io_stats::record_existence_probe(probe_start.elapsed());
     cache.insert(key.into_owned(), is_file);
     is_file
 }

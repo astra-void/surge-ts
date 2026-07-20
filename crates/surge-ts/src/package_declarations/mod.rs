@@ -198,7 +198,10 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                     let Ok(source_text) = std::fs::read_to_string(&path) else {
                         continue;
                     };
-                    crate::io_stats::record_expansion_read(source_text.len(), read_start.elapsed());
+                    crate::io_stats::record_package_declaration_read(
+                        source_text.len(),
+                        read_start.elapsed(),
+                    );
 
                     known_file_names.insert(normalized_file_name.clone());
                     inputs.push(SourceFileInput {

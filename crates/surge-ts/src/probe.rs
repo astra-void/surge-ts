@@ -27,10 +27,11 @@ pub(crate) fn is_existing_file(path: &Path) -> bool {
         if let Some(&hit) = cache.borrow().get(key) {
             return hit;
         }
-        crate::io_stats::record_existence_probe();
+        let probe_start = std::time::Instant::now();
         let is_file = std::fs::metadata(path)
             .map(|metadata| metadata.is_file())
             .unwrap_or(false);
+        crate::io_stats::record_existence_probe(probe_start.elapsed());
         cache.borrow_mut().insert(key.into(), is_file);
         is_file
     })
