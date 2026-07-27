@@ -27,8 +27,15 @@ pub struct PackageDeclarationRequest {
 
 #[derive(Debug, Default)]
 pub(crate) struct PackageDeclarationResolverCache {
-    package_json_cache: HashMap<PathBuf, Option<std::sync::Arc<serde_json::Value>>>,
-    entrypoint_cache: HashMap<PackageEntrypointCacheKey, Option<PackageEntrypointResolution>>,
+    // Fx-hashed: these sit on the per-(importer, specifier) resolution path,
+    // and SipHash over `PathBuf`/multi-`String` keys showed up in profiles.
+    // Neither map is iterated, so the hasher cannot affect output order.
+    package_json_cache:
+        surge_ts_types::fx::FxHashMap<PathBuf, Option<std::sync::Arc<serde_json::Value>>>,
+    entrypoint_cache: surge_ts_types::fx::FxHashMap<
+        PackageEntrypointCacheKey,
+        Option<PackageEntrypointResolution>,
+    >,
     /// Count of `sources` entries whose specifiers this resolver has already
     /// queued, so loader fixpoint iterations scan each source exactly once.
     scanned_sources: usize,

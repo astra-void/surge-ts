@@ -711,12 +711,11 @@ pub(super) fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
     // A runtime-JavaScript target substitutes its own module flavor, source
     // extensions before declarations (tsc probes `.ts`/`.tsx` ahead of `.d.ts`
     // even inside `node_modules`, so a dependency shipping sources gets them).
-    let lower = path.to_string_lossy().to_ascii_lowercase();
     if is_runtime_javascript_file(&path) {
         let stem = path.with_extension("");
-        return if lower.ends_with(".mjs") {
+        return if path_ends_with_ignore_ascii_case(&path, ".mjs") {
             vec![stem.with_extension("mts"), stem.with_extension("d.mts")]
-        } else if lower.ends_with(".cjs") {
+        } else if path_ends_with_ignore_ascii_case(&path, ".cjs") {
             vec![stem.with_extension("cts"), stem.with_extension("d.cts")]
         } else {
             vec![
@@ -742,32 +741,49 @@ pub(super) fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
     ]
 }
 
+// Suffix checks run per candidate in the resolution hot loops; matching on
+// raw bytes avoids the `to_string_lossy().to_ascii_lowercase()` double
+// allocation. Lossy conversion only replaces invalid UTF-8 with U+FFFD
+// (non-ASCII), so an ASCII suffix matches the lossy string iff it matches
+// the raw bytes.
+fn bytes_end_with_ignore_ascii_case(bytes: &[u8], suffix: &str) -> bool {
+    bytes.len() >= suffix.len()
+        && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+}
+
+fn path_ends_with_ignore_ascii_case(path: &Path, suffix: &str) -> bool {
+    bytes_end_with_ignore_ascii_case(path.as_os_str().as_encoded_bytes(), suffix)
+}
+
 pub(super) fn is_declaration_file_path_str(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+    let bytes = path.as_bytes();
+    bytes_end_with_ignore_ascii_case(bytes, ".d.ts")
+        || bytes_end_with_ignore_ascii_case(bytes, ".d.mts")
+        || bytes_end_with_ignore_ascii_case(bytes, ".d.cts")
 }
 
 pub(super) fn is_declaration_file_path(path: &Path) -> bool {
-    is_declaration_file_path_str(&path.to_string_lossy())
+    let bytes = path.as_os_str().as_encoded_bytes();
+    bytes_end_with_ignore_ascii_case(bytes, ".d.ts")
+        || bytes_end_with_ignore_ascii_case(bytes, ".d.mts")
+        || bytes_end_with_ignore_ascii_case(bytes, ".d.cts")
 }
 
 pub(super) fn is_runtime_javascript_file(path: &Path) -> bool {
-    let lower = path.to_string_lossy().to_ascii_lowercase();
-    lower.ends_with(".js")
-        || lower.ends_with(".jsx")
-        || lower.ends_with(".mjs")
-        || lower.ends_with(".cjs")
+    path_ends_with_ignore_ascii_case(path, ".js")
+        || path_ends_with_ignore_ascii_case(path, ".jsx")
+        || path_ends_with_ignore_ascii_case(path, ".mjs")
+        || path_ends_with_ignore_ascii_case(path, ".cjs")
 }
 
 pub(super) fn is_typescript_source_file(path: &Path) -> bool {
     if is_declaration_file_path(path) {
         return false;
     }
-    let lower = path.to_string_lossy().to_ascii_lowercase();
-    lower.ends_with(".ts")
-        || lower.ends_with(".tsx")
-        || lower.ends_with(".mts")
-        || lower.ends_with(".cts")
+    path_ends_with_ignore_ascii_case(path, ".ts")
+        || path_ends_with_ignore_ascii_case(path, ".tsx")
+        || path_ends_with_ignore_ascii_case(path, ".mts")
+        || path_ends_with_ignore_ascii_case(path, ".cts")
 }
 
 pub(super) fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {

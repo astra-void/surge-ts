@@ -292,26 +292,43 @@ fn candidate_is_existing_file(
     is_file
 }
 
+// Byte-level ASCII-case-insensitive matching: these checks run per resolved
+// candidate, and the previous `to_string_lossy().to_ascii_lowercase()` paid
+// two allocations each. Lossy conversion only replaces invalid UTF-8 with
+// U+FFFD (non-ASCII), so ASCII needles match the lossy string iff they match
+// the raw bytes.
+fn path_ends_with_ignore_ascii_case(path: &Path, suffix: &str) -> bool {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    bytes.len() >= suffix.len()
+        && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+}
+
+fn path_contains_ignore_ascii_case(path: &Path, needle: &str) -> bool {
+    path.as_os_str()
+        .as_encoded_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 fn is_loadable_graph_file(path: &Path) -> bool {
-    let lower = path.to_string_lossy().to_ascii_lowercase();
     // TypeScript sources are loadable even under `node_modules`: tsc applies the
     // same extension priority (`.ts` before `.d.ts`) to relative imports inside
     // dependencies, so a package that ships sources (or is resolved through a
     // source `exports` condition) gets its source graph checked, not its
     // declarations.
-    lower.ends_with(".ts")
-        || lower.ends_with(".tsx")
-        || lower.ends_with(".mts")
-        || lower.ends_with(".cts")
+    path_ends_with_ignore_ascii_case(path, ".ts")
+        || path_ends_with_ignore_ascii_case(path, ".tsx")
+        || path_ends_with_ignore_ascii_case(path, ".mts")
+        || path_ends_with_ignore_ascii_case(path, ".cts")
 }
 
 fn is_dependency_javascript_source_file(path: &Path) -> bool {
-    let lower = path.to_string_lossy().to_ascii_lowercase();
-    let is_node_modules = lower.contains("/node_modules/") || lower.contains("\\node_modules\\");
-    let is_javascript_source = lower.ends_with(".js")
-        || lower.ends_with(".jsx")
-        || lower.ends_with(".mjs")
-        || lower.ends_with(".cjs");
+    let is_node_modules = path_contains_ignore_ascii_case(path, "/node_modules/")
+        || path_contains_ignore_ascii_case(path, "\\node_modules\\");
+    let is_javascript_source = path_ends_with_ignore_ascii_case(path, ".js")
+        || path_ends_with_ignore_ascii_case(path, ".jsx")
+        || path_ends_with_ignore_ascii_case(path, ".mjs")
+        || path_ends_with_ignore_ascii_case(path, ".cjs");
 
     is_node_modules && is_javascript_source
 }
