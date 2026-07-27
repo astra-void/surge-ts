@@ -98,6 +98,8 @@ pub struct ProjectTimings {
     pub expansion_files_read: u64,
     pub expansion_bytes_read: u64,
     pub package_declaration_read_io: Duration,
+    pub package_declaration_probes: u64,
+    pub package_declaration_probe_io: Duration,
     pub package_json_reads: u64,
     pub fs_existence_probes: u64,
     pub fs_existence_probe_io: Duration,
@@ -316,6 +318,11 @@ impl Project {
             let files_before = inputs.len();
 
             let package_start = Instant::now();
+            let package_io_before = if collect {
+                io_stats::snapshot()
+            } else {
+                io_stats::IoSnapshot::default()
+            };
             let package_modules =
                 package_declarations::resolve_package_declaration_entrypoints_with_cache(
                     &mut inputs,
@@ -327,6 +334,12 @@ impl Project {
                 );
             if collect {
                 timings.package_declaration_discovery += package_start.elapsed();
+                let package_io = io_stats::snapshot();
+                timings.package_declaration_probes +=
+                    package_io.fs_existence_probes - package_io_before.fs_existence_probes;
+                timings.package_declaration_probe_io += package_io
+                    .fs_existence_probe_io
+                    .saturating_sub(package_io_before.fs_existence_probe_io);
             }
             // Package resolutions are importer-scoped; the flat map keeps the
             // first (BFS-order) resolution per specifier as the project-wide

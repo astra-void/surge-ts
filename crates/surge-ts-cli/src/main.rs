@@ -144,6 +144,8 @@ struct CliTimings {
     expansion_bytes_read: u64,
     package_json_reads: u64,
     package_declaration_read_io: std::time::Duration,
+    package_declaration_probes: u64,
+    package_declaration_probe_io: std::time::Duration,
     fs_existence_probes: u64,
     fs_existence_probe_io: std::time::Duration,
     fs_read_dir_count: u64,
@@ -737,6 +739,8 @@ fn merge_project_timings(timings: &mut CliTimings, project: &ProjectTimings) {
     timings.expansion_bytes_read += project.expansion_bytes_read;
     timings.package_json_reads += project.package_json_reads;
     timings.package_declaration_read_io += project.package_declaration_read_io;
+    timings.package_declaration_probes += project.package_declaration_probes;
+    timings.package_declaration_probe_io += project.package_declaration_probe_io;
     timings.fs_existence_probes += project.fs_existence_probes;
     timings.fs_existence_probe_io += project.fs_existence_probe_io;
     timings.fs_read_dir_count += project.fs_read_dir_count;
@@ -1016,6 +1020,14 @@ fn render_cli_timings(timings: &CliTimings) {
     eprintln!(
         "    package_declaration_read_io: {}",
         format_duration(timings.package_declaration_read_io)
+    );
+    eprintln!(
+        "    package_declaration_probes: {}",
+        timings.package_declaration_probes
+    );
+    eprintln!(
+        "    package_declaration_probe_io: {}",
+        format_duration(timings.package_declaration_probe_io)
     );
     eprintln!("    fs_existence_probes: {}", timings.fs_existence_probes);
     eprintln!(
