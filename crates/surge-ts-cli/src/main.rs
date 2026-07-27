@@ -147,6 +147,9 @@ struct CliTimings {
     fs_existence_probes: u64,
     fs_existence_probe_io: std::time::Duration,
     fs_read_dir_count: u64,
+    canonicalize_memo_misses: u64,
+    canonicalize_full_realpaths: u64,
+    canonicalize_miss_io: std::time::Duration,
 }
 
 #[derive(Debug, Parser)]
@@ -736,6 +739,9 @@ fn merge_project_timings(timings: &mut CliTimings, project: &ProjectTimings) {
     timings.fs_existence_probes += project.fs_existence_probes;
     timings.fs_existence_probe_io += project.fs_existence_probe_io;
     timings.fs_read_dir_count += project.fs_read_dir_count;
+    timings.canonicalize_memo_misses += project.canonicalize_memo_misses;
+    timings.canonicalize_full_realpaths += project.canonicalize_full_realpaths;
+    timings.canonicalize_miss_io += project.canonicalize_miss_io;
 }
 
 /// `0` is the checker's sentinel for automatic worker-count selection, so `auto`
@@ -1015,6 +1021,18 @@ fn render_cli_timings(timings: &CliTimings) {
         format_duration(timings.fs_existence_probe_io)
     );
     eprintln!("    fs_read_dir_count: {}", timings.fs_read_dir_count);
+    eprintln!(
+        "    canonicalize_memo_misses: {}",
+        timings.canonicalize_memo_misses
+    );
+    eprintln!(
+        "    canonicalize_full_realpaths: {}",
+        timings.canonicalize_full_realpaths
+    );
+    eprintln!(
+        "    canonicalize_miss_io: {}",
+        format_duration(timings.canonicalize_miss_io)
+    );
 }
 
 fn format_throughput(bytes: u64, elapsed: std::time::Duration) -> String {

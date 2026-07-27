@@ -2,9 +2,33 @@ use std::{
     cell::RefCell,
     env,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
 
 use surge_ts_types::fx::FxHashMap;
+
+static CANONICALIZE_MEMO_MISSES: AtomicU64 = AtomicU64::new(0);
+static CANONICALIZE_FULL_REALPATHS: AtomicU64 = AtomicU64::new(0);
+static CANONICALIZE_MISS_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Process-global canonicalization counters, mirroring the loader's
+/// `io_stats` pattern: callers snapshot before and after a phase and report
+/// the delta.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CanonicalizeIoSnapshot {
+    pub memo_misses: u64,
+    pub full_realpaths: u64,
+    pub miss_io: Duration,
+}
+
+pub fn canonicalize_io_snapshot() -> CanonicalizeIoSnapshot {
+    CanonicalizeIoSnapshot {
+        memo_misses: CANONICALIZE_MEMO_MISSES.load(Ordering::Relaxed),
+        full_realpaths: CANONICALIZE_FULL_REALPATHS.load(Ordering::Relaxed),
+        miss_io: Duration::from_nanos(CANONICALIZE_MISS_NANOS.load(Ordering::Relaxed)),
+    }
+}
 
 thread_local! {
     // `std::fs::canonicalize` issues a `realpath()` syscall on every call.
@@ -83,11 +107,16 @@ pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
         if let Some(cached) = cache.borrow().get(path) {
             return cached.clone();
         }
+        let miss_start = std::time::Instant::now();
+        CANONICALIZE_MEMO_MISSES.fetch_add(1, Ordering::Relaxed);
+        CANONICALIZE_FULL_REALPATHS.fetch_add(1, Ordering::Relaxed);
         let result = if let Ok(canonical) = std::fs::canonicalize(path) {
             normalize_path_buf(&canonical)
         } else {
             normalize_path_buf(path)
         };
+        CANONICALIZE_MISS_NANOS
+            .fetch_add(miss_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
         cache
             .borrow_mut()
             .insert(path.to_path_buf(), result.clone());

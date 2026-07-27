@@ -102,6 +102,9 @@ pub struct ProjectTimings {
     pub fs_existence_probes: u64,
     pub fs_existence_probe_io: Duration,
     pub fs_read_dir_count: u64,
+    pub canonicalize_memo_misses: u64,
+    pub canonicalize_full_realpaths: u64,
+    pub canonicalize_miss_io: Duration,
 }
 
 /// Outcome of [`Project::check`]: diagnostics, tsc-compatibility stats, the
@@ -191,6 +194,11 @@ impl Project {
             io_stats::snapshot()
         } else {
             io_stats::IoSnapshot::default()
+        };
+        let canonicalize_baseline = if collect {
+            surge_ts_config::canonicalize_io_snapshot()
+        } else {
+            surge_ts_config::CanonicalizeIoSnapshot::default()
         };
 
         if loaded.files.is_empty() {
@@ -376,6 +384,14 @@ impl Project {
                 .fs_existence_probe_io
                 .saturating_sub(io_baseline.fs_existence_probe_io);
             timings.fs_read_dir_count += io.fs_read_dir_count - io_baseline.fs_read_dir_count;
+            let canonicalize = surge_ts_config::canonicalize_io_snapshot();
+            timings.canonicalize_memo_misses +=
+                canonicalize.memo_misses - canonicalize_baseline.memo_misses;
+            timings.canonicalize_full_realpaths +=
+                canonicalize.full_realpaths - canonicalize_baseline.full_realpaths;
+            timings.canonicalize_miss_io += canonicalize
+                .miss_io
+                .saturating_sub(canonicalize_baseline.miss_io);
         }
 
         // Default-lib sources never contribute project imports or package
