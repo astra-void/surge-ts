@@ -10,6 +10,7 @@ use surge_ts_types::fx::FxHashMap;
 
 static CANONICALIZE_MEMO_MISSES: AtomicU64 = AtomicU64::new(0);
 static CANONICALIZE_FULL_REALPATHS: AtomicU64 = AtomicU64::new(0);
+static CANONICALIZE_LEAF_PROBES: AtomicU64 = AtomicU64::new(0);
 static CANONICALIZE_MISS_NANOS: AtomicU64 = AtomicU64::new(0);
 
 /// Process-global canonicalization counters, mirroring the loader's
@@ -19,6 +20,7 @@ static CANONICALIZE_MISS_NANOS: AtomicU64 = AtomicU64::new(0);
 pub struct CanonicalizeIoSnapshot {
     pub memo_misses: u64,
     pub full_realpaths: u64,
+    pub leaf_probes: u64,
     pub miss_io: Duration,
 }
 
@@ -26,7 +28,34 @@ pub fn canonicalize_io_snapshot() -> CanonicalizeIoSnapshot {
     CanonicalizeIoSnapshot {
         memo_misses: CANONICALIZE_MEMO_MISSES.load(Ordering::Relaxed),
         full_realpaths: CANONICALIZE_FULL_REALPATHS.load(Ordering::Relaxed),
+        leaf_probes: CANONICALIZE_LEAF_PROBES.load(Ordering::Relaxed),
         miss_io: Duration::from_nanos(CANONICALIZE_MISS_NANOS.load(Ordering::Relaxed)),
+    }
+}
+
+#[derive(Clone)]
+struct CanonEntry {
+    canonical: PathBuf,
+    // The forward-slash string form, computed once per unique path: the
+    // loader's hottest callers want the string, and rebuilding it on every
+    // cache hit costs an allocation plus a rescan.
+    canonical_str: String,
+    // Whether `canonical` came from a successful realpath resolution (as
+    // opposed to the textual-normalization fallback for paths that do not
+    // exist). Only resolved parents may seed leaf-probe resolution: a
+    // fallback parent would join real-looking children onto a path realpath
+    // never blessed.
+    resolved: bool,
+}
+
+impl CanonEntry {
+    fn new(canonical: PathBuf, resolved: bool) -> Self {
+        let canonical_str = canonical.to_string_lossy().replace('\\', "/");
+        Self {
+            canonical,
+            canonical_str,
+            resolved,
+        }
     }
 }
 
@@ -36,7 +65,7 @@ thread_local! {
     // import-graph fixpoint) canonicalizes the same paths repeatedly, and
     // profiling showed the syscall as a top cost. The filesystem is stable for
     // the duration of a run, so memoizing per thread is safe.
-    static CANONICALIZE_CACHE: RefCell<FxHashMap<PathBuf, PathBuf>> =
+    static CANONICALIZE_CACHE: RefCell<FxHashMap<PathBuf, CanonEntry>> =
         RefCell::new(FxHashMap::default());
 }
 
@@ -102,33 +131,93 @@ pub fn absolutize(path: &Path) -> PathBuf {
     }
 }
 
-pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
-    CANONICALIZE_CACHE.with(|cache| {
-        if let Some(cached) = cache.borrow().get(path) {
-            return cached.clone();
-        }
-        let miss_start = std::time::Instant::now();
-        CANONICALIZE_MEMO_MISSES.fetch_add(1, Ordering::Relaxed);
-        CANONICALIZE_FULL_REALPATHS.fetch_add(1, Ordering::Relaxed);
-        let result = if let Ok(canonical) = std::fs::canonicalize(path) {
-            normalize_path_buf(&canonical)
-        } else {
-            normalize_path_buf(path)
-        };
-        CANONICALIZE_MISS_NANOS
-            .fetch_add(miss_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        cache
-            .borrow_mut()
-            .insert(path.to_path_buf(), result.clone());
-        result
-    })
+fn with_canonical_entry<R>(path: &Path, read: impl FnOnce(&CanonEntry) -> R) -> R {
+    let cached = CANONICALIZE_CACHE.with(|cache| cache.borrow().get(path).cloned());
+    if let Some(cached) = cached {
+        return read(&cached);
+    }
+    CANONICALIZE_MEMO_MISSES.fetch_add(1, Ordering::Relaxed);
+    let entry = resolve_canonical_entry(path);
+    let value = read(&entry);
+    CANONICALIZE_CACHE.with(|cache| cache.borrow_mut().insert(path.to_path_buf(), entry));
+    value
 }
 
-#[allow(dead_code)]
+fn resolve_canonical_entry(path: &Path) -> CanonEntry {
+    if let Some(entry) = resolve_via_parent(path) {
+        return entry;
+    }
+    full_realpath_entry(path)
+}
+
+/// Resolves `path` as canonical-parent + one leaf probe instead of a full
+/// `realpath` walk. Returns `None` whenever the answer could differ from
+/// `std::fs::canonicalize` — the caller then takes the full walk.
+fn resolve_via_parent(path: &Path) -> Option<CanonEntry> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let parent = path.parent()?;
+    if parent.as_os_str().is_empty() {
+        return None;
+    }
+    let name = path.file_name()?;
+    // `file_name()` hides trailing separators (`a/b/` -> `b`), but realpath
+    // fails those with ENOTDIR when `b` is a regular file; only take the
+    // shortcut when the spelling really ends with the leaf name.
+    if !path
+        .as_os_str()
+        .as_encoded_bytes()
+        .ends_with(name.as_encoded_bytes())
+    {
+        return None;
+    }
+    let (parent_canonical, parent_resolved) =
+        with_canonical_entry(parent, |entry| (entry.canonical.clone(), entry.resolved));
+    if !parent_resolved {
+        // realpath fails on the parent chain, so it would fail on `path` too.
+        return Some(CanonEntry::new(normalize_path_buf(path), false));
+    }
+    let probe_start = std::time::Instant::now();
+    CANONICALIZE_LEAF_PROBES.fetch_add(1, Ordering::Relaxed);
+    let probe = surge_ts_types::leaf_probe::probe_leaf(&parent_canonical.join(name));
+    CANONICALIZE_MISS_NANOS.fetch_add(probe_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    match probe {
+        surge_ts_types::leaf_probe::LeafProbe::Entry {
+            name: on_disk_name,
+            is_symlink: false,
+        } => Some(CanonEntry::new(
+            normalize_path_buf(&parent_canonical.join(on_disk_name)),
+            true,
+        )),
+        // A symlink leaf still needs realpath to chase the target.
+        surge_ts_types::leaf_probe::LeafProbe::Entry {
+            is_symlink: true, ..
+        } => None,
+        surge_ts_types::leaf_probe::LeafProbe::Missing => {
+            Some(CanonEntry::new(normalize_path_buf(path), false))
+        }
+        surge_ts_types::leaf_probe::LeafProbe::Unsupported => None,
+    }
+}
+
+fn full_realpath_entry(path: &Path) -> CanonEntry {
+    let syscall_start = std::time::Instant::now();
+    CANONICALIZE_FULL_REALPATHS.fetch_add(1, Ordering::Relaxed);
+    let result = std::fs::canonicalize(path);
+    CANONICALIZE_MISS_NANOS.fetch_add(syscall_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    match result {
+        Ok(canonical) => CanonEntry::new(normalize_path_buf(&canonical), true),
+        Err(_) => CanonEntry::new(normalize_path_buf(path), false),
+    }
+}
+
+pub fn canonicalize_if_exists(path: &Path) -> PathBuf {
+    with_canonical_entry(path, |entry| entry.canonical.clone())
+}
+
 pub fn canonicalize_if_exists_string(path: &Path) -> String {
-    canonicalize_if_exists(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    with_canonical_entry(path, |entry| entry.canonical_str.clone())
 }
 
 pub fn cycle_key(path: &Path) -> PathBuf {

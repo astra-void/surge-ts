@@ -104,6 +104,7 @@ pub struct ProjectTimings {
     pub fs_read_dir_count: u64,
     pub canonicalize_memo_misses: u64,
     pub canonicalize_full_realpaths: u64,
+    pub canonicalize_leaf_probes: u64,
     pub canonicalize_miss_io: Duration,
 }
 
@@ -389,6 +390,8 @@ impl Project {
                 canonicalize.memo_misses - canonicalize_baseline.memo_misses;
             timings.canonicalize_full_realpaths +=
                 canonicalize.full_realpaths - canonicalize_baseline.full_realpaths;
+            timings.canonicalize_leaf_probes +=
+                canonicalize.leaf_probes - canonicalize_baseline.leaf_probes;
             timings.canonicalize_miss_io += canonicalize
                 .miss_io
                 .saturating_sub(canonicalize_baseline.miss_io);

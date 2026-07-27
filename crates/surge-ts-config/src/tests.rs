@@ -939,3 +939,62 @@ fn config_d_ts_does_not_require_allow_js() {
     names.sort();
     assert_eq!(names, vec!["globals.d.ts", "index.ts"]);
 }
+
+/// The old canonicalization algorithm, kept as the reference the leaf-probe
+/// shortcut must match byte-for-byte.
+fn reference_canonicalize(path: &Path) -> PathBuf {
+    match fs::canonicalize(path) {
+        Ok(canonical) => normalize_path_buf(&canonical),
+        Err(_) => normalize_path_buf(path),
+    }
+}
+
+#[test]
+fn canonicalize_matches_full_realpath_on_every_spelling() {
+    let root = temp_dir("canon-equivalence");
+    write_file(&root, "Dir/File.ts", "");
+    write_file(&root, "Dir/nested/deep.ts", "");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(root.join("Dir"), root.join("dirlink")).unwrap();
+        std::os::unix::fs::symlink(root.join("Dir/File.ts"), root.join("filelink.ts")).unwrap();
+        std::os::unix::fs::symlink(root.join("gone"), root.join("dangling")).unwrap();
+    }
+
+    let spellings = [
+        "Dir/File.ts",
+        "dir/file.ts",
+        "DIR/FILE.TS",
+        "Dir/./File.ts",
+        "Dir/nested/../File.ts",
+        "Dir/nested/deep.ts",
+        "Dir/missing.ts",
+        "missing-dir/missing.ts",
+        "Dir/File.ts/",
+        "Dir/File.ts/extra.ts",
+        "Dir",
+        "Dir/",
+        "dirlink/File.ts",
+        "dirlink/file.ts",
+        "filelink.ts",
+        "dangling",
+        "dangling/x.ts",
+    ];
+    for spelling in spellings {
+        let path = root.join(spelling);
+        clear_canonicalize_cache();
+        let expected = reference_canonicalize(&path);
+        let actual = canonicalize_if_exists(&path);
+        assert_eq!(actual, expected, "spelling {spelling:?} diverged");
+        assert_eq!(
+            canonicalize_if_exists_string(&path),
+            expected.to_string_lossy().replace('\\', "/"),
+            "string form for {spelling:?} diverged"
+        );
+        // Same answers when ancestors were already cached by a prior call.
+        let warm = canonicalize_if_exists(&path);
+        assert_eq!(warm, expected, "warm spelling {spelling:?} diverged");
+    }
+
+    fs::remove_dir_all(&root).ok();
+}
