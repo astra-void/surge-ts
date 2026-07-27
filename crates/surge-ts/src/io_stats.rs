@@ -17,6 +17,7 @@ static PACKAGE_JSON_READS: AtomicU64 = AtomicU64::new(0);
 static FS_EXISTENCE_PROBES: AtomicU64 = AtomicU64::new(0);
 static FS_EXISTENCE_PROBE_NANOS: AtomicU64 = AtomicU64::new(0);
 static FS_READ_DIR_COUNT: AtomicU64 = AtomicU64::new(0);
+static FS_READ_DIR_NANOS: AtomicU64 = AtomicU64::new(0);
 
 pub fn record_expansion_read(bytes: usize, elapsed: Duration) {
     EXPANSION_FILES_READ.fetch_add(1, Ordering::Relaxed);
@@ -38,8 +39,9 @@ pub fn record_existence_probe(elapsed: Duration) {
     FS_EXISTENCE_PROBE_NANOS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
 }
 
-pub fn record_read_dir() {
+pub fn record_read_dir(elapsed: Duration) {
     FS_READ_DIR_COUNT.fetch_add(1, Ordering::Relaxed);
+    FS_READ_DIR_NANOS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
 }
 
 #[derive(Debug, Default)]
@@ -52,6 +54,7 @@ pub struct IoSnapshot {
     pub fs_existence_probes: u64,
     pub fs_existence_probe_io: Duration,
     pub fs_read_dir_count: u64,
+    pub fs_read_dir_io: Duration,
 }
 
 pub fn snapshot() -> IoSnapshot {
@@ -68,5 +71,6 @@ pub fn snapshot() -> IoSnapshot {
             FS_EXISTENCE_PROBE_NANOS.load(Ordering::Relaxed),
         ),
         fs_read_dir_count: FS_READ_DIR_COUNT.load(Ordering::Relaxed),
+        fs_read_dir_io: Duration::from_nanos(FS_READ_DIR_NANOS.load(Ordering::Relaxed)),
     }
 }

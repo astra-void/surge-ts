@@ -104,6 +104,7 @@ pub struct ProjectTimings {
     pub fs_existence_probes: u64,
     pub fs_existence_probe_io: Duration,
     pub fs_read_dir_count: u64,
+    pub fs_read_dir_io: Duration,
     pub canonicalize_memo_misses: u64,
     pub canonicalize_full_realpaths: u64,
     pub canonicalize_leaf_probes: u64,
@@ -398,6 +399,7 @@ impl Project {
                 .fs_existence_probe_io
                 .saturating_sub(io_baseline.fs_existence_probe_io);
             timings.fs_read_dir_count += io.fs_read_dir_count - io_baseline.fs_read_dir_count;
+            timings.fs_read_dir_io += io.fs_read_dir_io.saturating_sub(io_baseline.fs_read_dir_io);
             let canonicalize = surge_ts_config::canonicalize_io_snapshot();
             timings.canonicalize_memo_misses +=
                 canonicalize.memo_misses - canonicalize_baseline.memo_misses;

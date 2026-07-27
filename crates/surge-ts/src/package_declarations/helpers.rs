@@ -44,8 +44,10 @@ pub(super) fn discover_wildcard_type_names(
     let mut seen: HashSet<String> = HashSet::new();
 
     for root in roots {
-        crate::io_stats::record_read_dir();
-        let Ok(entries) = std::fs::read_dir(root) else {
+        let list_start = std::time::Instant::now();
+        let entries = std::fs::read_dir(root);
+        crate::io_stats::record_read_dir(list_start.elapsed());
+        let Ok(entries) = entries else {
             continue;
         };
 

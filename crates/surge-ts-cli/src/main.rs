@@ -149,6 +149,7 @@ struct CliTimings {
     fs_existence_probes: u64,
     fs_existence_probe_io: std::time::Duration,
     fs_read_dir_count: u64,
+    fs_read_dir_io: std::time::Duration,
     canonicalize_memo_misses: u64,
     canonicalize_full_realpaths: u64,
     canonicalize_leaf_probes: u64,
@@ -744,6 +745,7 @@ fn merge_project_timings(timings: &mut CliTimings, project: &ProjectTimings) {
     timings.fs_existence_probes += project.fs_existence_probes;
     timings.fs_existence_probe_io += project.fs_existence_probe_io;
     timings.fs_read_dir_count += project.fs_read_dir_count;
+    timings.fs_read_dir_io += project.fs_read_dir_io;
     timings.canonicalize_memo_misses += project.canonicalize_memo_misses;
     timings.canonicalize_full_realpaths += project.canonicalize_full_realpaths;
     timings.canonicalize_leaf_probes += project.canonicalize_leaf_probes;
@@ -1035,6 +1037,10 @@ fn render_cli_timings(timings: &CliTimings) {
         format_duration(timings.fs_existence_probe_io)
     );
     eprintln!("    fs_read_dir_count: {}", timings.fs_read_dir_count);
+    eprintln!(
+        "    fs_read_dir_io: {}",
+        format_duration(timings.fs_read_dir_io)
+    );
     eprintln!(
         "    canonicalize_memo_misses: {}",
         timings.canonicalize_memo_misses
