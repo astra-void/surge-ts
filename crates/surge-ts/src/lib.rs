@@ -98,10 +98,17 @@ pub struct ProjectTimings {
     pub expansion_files_read: u64,
     pub expansion_bytes_read: u64,
     pub package_declaration_read_io: Duration,
+    pub package_declaration_probes: u64,
+    pub package_declaration_probe_io: Duration,
     pub package_json_reads: u64,
     pub fs_existence_probes: u64,
     pub fs_existence_probe_io: Duration,
     pub fs_read_dir_count: u64,
+    pub fs_read_dir_io: Duration,
+    pub canonicalize_memo_misses: u64,
+    pub canonicalize_full_realpaths: u64,
+    pub canonicalize_leaf_probes: u64,
+    pub canonicalize_miss_io: Duration,
 }
 
 /// Outcome of [`Project::check`]: diagnostics, tsc-compatibility stats, the
@@ -191,6 +198,11 @@ impl Project {
             io_stats::snapshot()
         } else {
             io_stats::IoSnapshot::default()
+        };
+        let canonicalize_baseline = if collect {
+            surge_ts_config::canonicalize_io_snapshot()
+        } else {
+            surge_ts_config::CanonicalizeIoSnapshot::default()
         };
 
         if loaded.files.is_empty() {
@@ -307,6 +319,11 @@ impl Project {
             let files_before = inputs.len();
 
             let package_start = Instant::now();
+            let package_io_before = if collect {
+                io_stats::snapshot()
+            } else {
+                io_stats::IoSnapshot::default()
+            };
             let package_modules =
                 package_declarations::resolve_package_declaration_entrypoints_with_cache(
                     &mut inputs,
@@ -318,6 +335,12 @@ impl Project {
                 );
             if collect {
                 timings.package_declaration_discovery += package_start.elapsed();
+                let package_io = io_stats::snapshot();
+                timings.package_declaration_probes +=
+                    package_io.fs_existence_probes - package_io_before.fs_existence_probes;
+                timings.package_declaration_probe_io += package_io
+                    .fs_existence_probe_io
+                    .saturating_sub(package_io_before.fs_existence_probe_io);
             }
             // Package resolutions are importer-scoped; the flat map keeps the
             // first (BFS-order) resolution per specifier as the project-wide
@@ -376,6 +399,17 @@ impl Project {
                 .fs_existence_probe_io
                 .saturating_sub(io_baseline.fs_existence_probe_io);
             timings.fs_read_dir_count += io.fs_read_dir_count - io_baseline.fs_read_dir_count;
+            timings.fs_read_dir_io += io.fs_read_dir_io.saturating_sub(io_baseline.fs_read_dir_io);
+            let canonicalize = surge_ts_config::canonicalize_io_snapshot();
+            timings.canonicalize_memo_misses +=
+                canonicalize.memo_misses - canonicalize_baseline.memo_misses;
+            timings.canonicalize_full_realpaths +=
+                canonicalize.full_realpaths - canonicalize_baseline.full_realpaths;
+            timings.canonicalize_leaf_probes +=
+                canonicalize.leaf_probes - canonicalize_baseline.leaf_probes;
+            timings.canonicalize_miss_io += canonicalize
+                .miss_io
+                .saturating_sub(canonicalize_baseline.miss_io);
         }
 
         // Default-lib sources never contribute project imports or package

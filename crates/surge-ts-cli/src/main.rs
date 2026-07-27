@@ -144,9 +144,16 @@ struct CliTimings {
     expansion_bytes_read: u64,
     package_json_reads: u64,
     package_declaration_read_io: std::time::Duration,
+    package_declaration_probes: u64,
+    package_declaration_probe_io: std::time::Duration,
     fs_existence_probes: u64,
     fs_existence_probe_io: std::time::Duration,
     fs_read_dir_count: u64,
+    fs_read_dir_io: std::time::Duration,
+    canonicalize_memo_misses: u64,
+    canonicalize_full_realpaths: u64,
+    canonicalize_leaf_probes: u64,
+    canonicalize_miss_io: std::time::Duration,
 }
 
 #[derive(Debug, Parser)]
@@ -733,9 +740,16 @@ fn merge_project_timings(timings: &mut CliTimings, project: &ProjectTimings) {
     timings.expansion_bytes_read += project.expansion_bytes_read;
     timings.package_json_reads += project.package_json_reads;
     timings.package_declaration_read_io += project.package_declaration_read_io;
+    timings.package_declaration_probes += project.package_declaration_probes;
+    timings.package_declaration_probe_io += project.package_declaration_probe_io;
     timings.fs_existence_probes += project.fs_existence_probes;
     timings.fs_existence_probe_io += project.fs_existence_probe_io;
     timings.fs_read_dir_count += project.fs_read_dir_count;
+    timings.fs_read_dir_io += project.fs_read_dir_io;
+    timings.canonicalize_memo_misses += project.canonicalize_memo_misses;
+    timings.canonicalize_full_realpaths += project.canonicalize_full_realpaths;
+    timings.canonicalize_leaf_probes += project.canonicalize_leaf_probes;
+    timings.canonicalize_miss_io += project.canonicalize_miss_io;
 }
 
 /// `0` is the checker's sentinel for automatic worker-count selection, so `auto`
@@ -1009,12 +1023,40 @@ fn render_cli_timings(timings: &CliTimings) {
         "    package_declaration_read_io: {}",
         format_duration(timings.package_declaration_read_io)
     );
+    eprintln!(
+        "    package_declaration_probes: {}",
+        timings.package_declaration_probes
+    );
+    eprintln!(
+        "    package_declaration_probe_io: {}",
+        format_duration(timings.package_declaration_probe_io)
+    );
     eprintln!("    fs_existence_probes: {}", timings.fs_existence_probes);
     eprintln!(
         "    fs_existence_probe_io: {}",
         format_duration(timings.fs_existence_probe_io)
     );
     eprintln!("    fs_read_dir_count: {}", timings.fs_read_dir_count);
+    eprintln!(
+        "    fs_read_dir_io: {}",
+        format_duration(timings.fs_read_dir_io)
+    );
+    eprintln!(
+        "    canonicalize_memo_misses: {}",
+        timings.canonicalize_memo_misses
+    );
+    eprintln!(
+        "    canonicalize_full_realpaths: {}",
+        timings.canonicalize_full_realpaths
+    );
+    eprintln!(
+        "    canonicalize_leaf_probes: {}",
+        timings.canonicalize_leaf_probes
+    );
+    eprintln!(
+        "    canonicalize_miss_io: {}",
+        format_duration(timings.canonicalize_miss_io)
+    );
 }
 
 fn format_throughput(bytes: u64, elapsed: std::time::Duration) -> String {

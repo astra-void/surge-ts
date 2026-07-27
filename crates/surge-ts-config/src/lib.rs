@@ -16,8 +16,9 @@ pub use model::*;
 pub use options::*;
 pub use parse::load_tsconfig;
 pub use paths::{
-    absolutize, canonicalize_if_exists, canonicalize_if_exists_string, clear_canonicalize_cache,
-    cycle_key, normalize_path_buf, normalize_path_string, resolve_path, resolve_project_path,
+    CanonicalizeIoSnapshot, absolutize, canonicalize_if_exists, canonicalize_if_exists_string,
+    canonicalize_io_snapshot, clear_canonicalize_cache, cycle_key, normalize_path_buf,
+    normalize_path_string, resolve_path, resolve_project_path,
 };
 
 #[cfg(test)]

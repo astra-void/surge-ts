@@ -4,6 +4,7 @@ mod assignability;
 mod clone_reason;
 mod function;
 pub mod fx;
+pub mod leaf_probe;
 mod object;
 mod reference;
 mod store;
