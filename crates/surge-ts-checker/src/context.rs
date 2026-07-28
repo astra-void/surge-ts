@@ -893,6 +893,11 @@ pub(crate) struct CheckerContext {
     /// consumer's `symbols`. Populated once (read-only) before the check phase and
     /// shared across jobs. Consulted via `get` only.
     pub(crate) module_local_values_by_file: Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>,
+    /// While set (on the value-collection shadow context of a library
+    /// declaration file), annotated initializer-less variable declarations get
+    /// a lazy annotation reference instead of an eagerly mapped type. See
+    /// `infer::types::cache::make_lazy_value_annotation_reference`.
+    pub(crate) lazy_library_value_annotations: bool,
     /// While set, exportable-value collection runs THIN (`Unknown` types, no
     /// annotation/initializer resolution). Set only around the superseded
     /// analysis rounds' collection calls; see `modules::exports::values::
@@ -1013,6 +1018,7 @@ impl CheckerContext {
             module_scope_by_file: Arc::new(FxHashMap::default()),
             module_local_values_by_file: Arc::new(FxHashMap::default()),
             thin_superseded_value_collection: false,
+            lazy_library_value_annotations: false,
             jsx_intrinsic_elements_declarer: None,
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
@@ -1108,6 +1114,7 @@ impl CheckerContext {
             module_scope_by_file: data.module_scope_by_file.clone(),
             module_local_values_by_file: data.module_local_values_by_file.clone(),
             thin_superseded_value_collection: false,
+            lazy_library_value_annotations: false,
             jsx_intrinsic_elements_declarer: data.jsx_intrinsic_elements_declarer.clone(),
             type_parameter_scopes: data.type_parameter_scopes.clone(),
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
