@@ -1152,6 +1152,7 @@ fn check_program_with_stats_and_jobs_inner(
 
     let worker_count = resolve_worker_count(jobs, &parsed_files);
     crate::metrics::release_free_memory();
+    set_check_phase(true);
     let file_results = if worker_count <= 1 {
         check_program_files_serial(&mut parsed_files, &mut shared_state, &ctx, timings.clone())
     } else {
@@ -1215,6 +1216,7 @@ fn check_program_with_stats_and_jobs_inner(
     let declaration_environment_stats = ctx.declaration_environment_store.stats();
     let substitution_store_stats = ctx.substitution_store.stats();
     emit_type_graph_census("before_cache_cleanup", Some(&ctx), &store, census_external);
+    set_check_phase(false);
     ctx.clear_program_type_caches();
     store.clear();
     // The run-scoped thread-local caches are otherwise cleared only at the
@@ -2300,6 +2302,21 @@ fn check_program_files_parallel(
     }
 
     slots.into_iter().flatten().collect()
+}
+
+/// Program-global check-phase marker. A `CheckerContext` field cannot carry
+/// this: most check-phase resolution runs inside environment-RECOVERED
+/// contexts (`from_declaration_environment`), which would never see a field
+/// set on the driving context. Set when the per-file check dispatch starts,
+/// cleared in the end-of-run teardown alongside `clear_program_type_caches`.
+static IN_CHECK_PHASE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_check_phase(on: bool) {
+    IN_CHECK_PHASE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn in_check_phase() -> bool {
+    IN_CHECK_PHASE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn local_values_typeof_filter_enabled() -> bool {
