@@ -134,6 +134,13 @@ impl UnionType {
         Arc::as_ptr(&self.payload) as usize
     }
 
+    /// The interned member-list id, if this union's payload was interned.
+    /// Participates in the derived payload equality, so equality-faithful
+    /// cache identities must include it.
+    pub fn list_id(&self) -> Option<TypeListId> {
+        self.payload.list_id
+    }
+
     pub fn member_list_address(&self) -> usize {
         self.payload.types.as_ptr() as usize
     }

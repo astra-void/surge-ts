@@ -1493,9 +1493,16 @@ pub(crate) fn canonical_physical_interface_key(
     interface: &crate::symbols::InterfaceInfo,
     substitution: &TypeParameterSubstitution,
     ctx: &CheckerContext,
+    widened: bool,
 ) -> Result<InterfaceInstantiationKey, InterfaceCacheSkipReason> {
     let declaration = stable_interface_declaration_id(interface)?;
-    canonical_physical_interface_key_with_declaration(interface, substitution, ctx, declaration)
+    canonical_physical_interface_key_with_declaration(
+        interface,
+        substitution,
+        ctx,
+        declaration,
+        widened,
+    )
 }
 
 pub(crate) fn stable_interface_declaration_id(
@@ -1531,6 +1538,7 @@ fn canonical_physical_interface_key_with_declaration(
     substitution: &TypeParameterSubstitution,
     ctx: &CheckerContext,
     declaration: StableInterfaceDeclarationId,
+    widened: bool,
 ) -> Result<InterfaceInstantiationKey, InterfaceCacheSkipReason> {
     let mut arguments = Vec::with_capacity(interface.body.type_parameters.len());
     let mut budget = 128usize;
@@ -1546,7 +1554,7 @@ fn canonical_physical_interface_key_with_declaration(
         // cached instantiation never substitutes another context's rendering
         // (the canonical-store display-substitution class).
         arguments.push(CanonicalTypeIdentity::DisplayTagged(
-            Box::new(canonical_type_identity(argument, 0, &mut budget)?),
+            Box::new(canonical_type_identity(argument, 0, &mut budget, widened)?),
             crate::speculative::display_type_fingerprint(argument),
         ));
     }
@@ -1568,6 +1576,7 @@ fn canonical_type_identity(
     ty: &Type,
     depth: usize,
     budget: &mut usize,
+    widened: bool,
 ) -> Result<CanonicalTypeIdentity, InterfaceCacheSkipReason> {
     if depth >= 32 || *budget == 0 {
         return Err(InterfaceCacheSkipReason::UnsupportedTypeArgument);
@@ -1599,23 +1608,53 @@ fn canonical_type_identity(
 
     match ty {
         Type::Array(element) => Ok(CanonicalTypeIdentity::Array(Box::new(
-            canonical_type_identity(element, depth + 1, budget)?,
+            canonical_type_identity(element, depth + 1, budget, widened)?,
         ))),
         Type::Tuple(elements) => {
             let mut identities = Vec::with_capacity(elements.len());
             for element in elements {
-                identities.push(canonical_type_identity(element, depth + 1, budget)?);
+                identities.push(canonical_type_identity(element, depth + 1, budget, widened)?);
             }
             Ok(CanonicalTypeIdentity::Tuple(Arc::from(identities)))
         }
         Type::Reference(reference) => {
             let mut arguments = Vec::with_capacity(reference.arguments.len());
             for argument in reference.arguments.iter() {
-                arguments.push(canonical_type_identity(argument, depth + 1, budget)?);
+                arguments.push(canonical_type_identity(argument, depth + 1, budget, widened)?);
             }
             Ok(CanonicalTypeIdentity::Reference {
                 declaration: reference.id.clone(),
                 arguments: Arc::from(arguments),
+            })
+        }
+        Type::Object(object) if widened => {
+            // Structural, equality-faithful encoding: exactly the fields
+            // `ObjectType`'s equality compares (`properties` +
+            // `string_index_type`), property order canonicalized by name to
+            // match the order-independent `IndexMap` equality. The lib tier's
+            // alias fast-path is NOT reused here: `alias_id` does not
+            // participate in object equality.
+            let mut properties = Vec::with_capacity(object.properties.len());
+            for (name, property) in object.properties.iter() {
+                properties.push((
+                    name.clone(),
+                    property.optional,
+                    canonical_type_identity(&property.ty, depth + 1, budget, widened)?,
+                ));
+            }
+            properties.sort_by(|a, b| a.0.cmp(&b.0));
+            let string_index = match &object.string_index_type {
+                Some(index) => Some(Box::new(canonical_type_identity(
+                    index,
+                    depth + 1,
+                    budget,
+                    widened,
+                )?)),
+                None => None,
+            };
+            Ok(CanonicalTypeIdentity::ObjectArg {
+                properties: Arc::from(properties),
+                string_index,
             })
         }
         Type::Object(object) => object
@@ -1625,6 +1664,34 @@ fn canonical_type_identity(
             .ok_or(InterfaceCacheSkipReason::UnsupportedTypeArgument),
         Type::Unknown | Type::GenuineUnknown => {
             Err(InterfaceCacheSkipReason::UnresolvedTypeArgument)
+        }
+        Type::Union(union) if widened => {
+            let mut members = Vec::with_capacity(union.types().len());
+            for member in union.types() {
+                members.push(canonical_type_identity(member, depth + 1, budget, widened)?);
+            }
+            Ok(CanonicalTypeIdentity::UnionArg {
+                list_id: union.list_id(),
+                members: Arc::from(members),
+            })
+        }
+        Type::Function(function) if widened => {
+            let mut parameters = Vec::with_capacity(function.parameters().len());
+            for parameter in function.parameters() {
+                parameters.push(canonical_type_identity(parameter, depth + 1, budget, widened)?);
+            }
+            Ok(CanonicalTypeIdentity::FunctionArg {
+                parameter_list_id: function.parameter_list_id(),
+                parameters: Arc::from(parameters),
+                return_type: Box::new(canonical_type_identity(
+                    function.return_type(),
+                    depth + 1,
+                    budget,
+                    widened,
+                )?),
+                is_variadic: function.is_variadic(),
+                required_parameter_count: function.required_parameter_count(),
+            })
         }
         Type::Function(_) | Type::Union(_) => {
             Err(InterfaceCacheSkipReason::UnsupportedTypeArgument)
@@ -1926,7 +1993,7 @@ mod physical_interface_cache_tests {
         let interface = interface("Body", 100, &[]);
         let ctx = context(CheckerOptions::default());
         let key =
-            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx)
+            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx, false)
                 .unwrap();
 
         assert_eq!(ctx.substitution_store.stats().stored_arguments, 0);
@@ -1940,7 +2007,7 @@ mod physical_interface_cache_tests {
         let ctx = context(CheckerOptions::default());
         let mut substitution = TypeParameterSubstitution::new();
         substitution.insert("T".to_string(), Type::String);
-        let key = canonical_physical_interface_key(&interface, &substitution, &ctx).unwrap();
+        let key = canonical_physical_interface_key(&interface, &substitution, &ctx, false).unwrap();
 
         let first = intern_physical_interface_instantiation(&ctx, key.clone(), Type::String);
         let second = intern_physical_interface_instantiation(&ctx, key.clone(), Type::Number);
@@ -1960,8 +2027,8 @@ mod physical_interface_cache_tests {
         let mut numbers = TypeParameterSubstitution::new();
         numbers.insert("T".to_string(), Type::Number);
 
-        let string_key = canonical_physical_interface_key(&interface, &strings, &ctx).unwrap();
-        let number_key = canonical_physical_interface_key(&interface, &numbers, &ctx).unwrap();
+        let string_key = canonical_physical_interface_key(&interface, &strings, &ctx, false).unwrap();
+        let number_key = canonical_physical_interface_key(&interface, &numbers, &ctx, false).unwrap();
 
         assert_ne!(string_key, number_key);
     }
@@ -1976,11 +2043,11 @@ mod physical_interface_cache_tests {
         placeholder.insert_placeholder("T".to_string(), Type::String);
 
         assert_eq!(
-            canonical_physical_interface_key(&interface, &unknown, &ctx),
+            canonical_physical_interface_key(&interface, &unknown, &ctx, false),
             Err(InterfaceCacheSkipReason::UnresolvedTypeArgument)
         );
         assert_eq!(
-            canonical_physical_interface_key(&interface, &placeholder, &ctx),
+            canonical_physical_interface_key(&interface, &placeholder, &ctx, false),
             Err(InterfaceCacheSkipReason::UnresolvedTypeArgument)
         );
     }
@@ -2012,12 +2079,14 @@ mod physical_interface_cache_tests {
             &interface,
             &TypeParameterSubstitution::new(),
             &default_ctx,
+            false,
         )
         .unwrap();
         let skip_lib_key = canonical_physical_interface_key(
             &interface,
             &TypeParameterSubstitution::new(),
             &skip_lib_ctx,
+            false,
         )
         .unwrap();
 
@@ -2075,7 +2144,7 @@ mod physical_interface_cache_tests {
         let interface = interface("Callable", 1_000, &[]);
         let ctx = context(CheckerOptions::default());
         let key =
-            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx)
+            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx, false)
                 .unwrap();
         let first_overload = Type::Function(FunctionType::new(
             vec![Type::String],
@@ -2143,7 +2212,7 @@ mod physical_interface_cache_tests {
         let ctx = context(CheckerOptions::default());
         let mut substitution = TypeParameterSubstitution::new();
         substitution.insert("T".to_string(), recursive);
-        let _key = canonical_physical_interface_key(&interface, &substitution, &ctx).unwrap();
+        let _key = canonical_physical_interface_key(&interface, &substitution, &ctx, false).unwrap();
 
         assert_eq!(ctx.substitution_store.stats().stored_arguments, 1);
     }
@@ -2155,7 +2224,7 @@ mod physical_interface_cache_tests {
         let mut substitution = TypeParameterSubstitution::new();
         substitution.insert("T".to_string(), Type::String);
         let interface_key =
-            canonical_physical_interface_key(&interface, &substitution, &ctx).unwrap();
+            canonical_physical_interface_key(&interface, &substitution, &ctx, false).unwrap();
         let template =
             physical_interface_declaration_template(&ctx, &interface, &interface_key.declaration)
                 .unwrap();
@@ -2183,7 +2252,7 @@ mod physical_interface_cache_tests {
         let mut number_substitution = TypeParameterSubstitution::new();
         number_substitution.insert("T".to_string(), Type::Number);
         let number_interface_key =
-            canonical_physical_interface_key(&interface, &number_substitution, &ctx).unwrap();
+            canonical_physical_interface_key(&interface, &number_substitution, &ctx, false).unwrap();
         let number_key = interface_member_instantiation_key(
             &template.members[0].declaration,
             &number_interface_key,
@@ -2202,7 +2271,7 @@ mod physical_interface_cache_tests {
         );
         let ctx = context(CheckerOptions::default());
         let interface_key =
-            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx)
+            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx, false)
                 .unwrap();
         let template =
             physical_interface_declaration_template(&ctx, &interface, &interface_key.declaration)

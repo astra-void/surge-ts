@@ -641,6 +641,30 @@ pub(crate) enum CanonicalTypeIdentity {
     /// the display would bake the first winner's rendering into every
     /// consumer. Wraps each top-level instantiation argument.
     DisplayTagged(Box<Self>, u64),
+    /// Widened identities for the extended interface-instantiation tier:
+    /// equality-faithful encodings of argument shapes the compact identities
+    /// above cannot express. Each mirrors exactly the fields the type's
+    /// derived `PartialEq` compares — interned list ids included — so
+    /// identity equality implies argument equality and the flat cache key
+    /// stays injective without a bucket-plus-`==`-confirm tier. Object
+    /// properties are sorted by name (`IndexMap` equality is
+    /// order-independent); `call_signature`/`is_intersection`/`alias_id` are
+    /// excluded from `ObjectType` equality and stay unencoded.
+    UnionArg {
+        list_id: Option<surge_ts_types::TypeListId>,
+        members: Arc<[Self]>,
+    },
+    FunctionArg {
+        parameter_list_id: Option<surge_ts_types::TypeListId>,
+        parameters: Arc<[Self]>,
+        return_type: Box<Self>,
+        is_variadic: bool,
+        required_parameter_count: usize,
+    },
+    ObjectArg {
+        properties: Arc<[(Arc<str>, bool, Self)]>,
+        string_index: Option<Box<Self>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
