@@ -290,13 +290,13 @@ pub fn type_conflict_digest(ty: &Type) -> u64 {
     hasher.finish()
 }
 
-const FINE_KEY_NODE_BUDGET: u32 = 256;
-const FINE_KEY_MAX_DEPTH: u8 = 16;
+const FINE_KEY_NODE_BUDGET: u32 = 64;
+const FINE_KEY_MAX_DEPTH: u8 = 8;
 /// Independent per-property budget for object members. Object equality is
 /// order-independent (`IndexMap`), so each property's contribution must not
 /// depend on iteration order — a shared budget would truncate different
 /// properties depending on insertion order and break equality consistency.
-const FINE_KEY_PROPERTY_BUDGET: u32 = 64;
+const FINE_KEY_PROPERTY_BUDGET: u32 = 32;
 
 fn fine_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8, budget: &mut u32) {
     std::mem::discriminant(ty).hash(hasher);
