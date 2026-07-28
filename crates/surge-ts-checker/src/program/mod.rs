@@ -57,6 +57,11 @@ pub(crate) struct ParsedProgramFile {
     /// (diagnostic rendering uses the CLI's separate source map), and retaining a
     /// copy of every dependency `.d.ts` here was a sizeable share of peak RSS.
     pub(crate) has_export_default: bool,
+    /// Precomputed `source_text.contains("typeof")`. A `typeof` TYPE node can
+    /// only come from the keyword, so `false` proves the parse tree contains no
+    /// typeof type — the module-local-values stage skips such files' tables.
+    /// Identifier substrings (`typeofFoo`) only cause a harmless eager build.
+    pub(crate) contains_typeof: bool,
     pub(crate) statements: Vec<ParsedStatement>,
     pub(crate) parser_errors: Vec<String>,
     pub(crate) is_module: bool,
@@ -1075,14 +1080,13 @@ fn check_program_with_stats_and_jobs_inner(
             // contains no `typeof` type node can never be consulted, so its
             // table — the expensive full value collection with initializer
             // inference — is skipped outright (tRPC: 60 of 4513 entries are
-            // ever read). The scan is a Debug-formatter sink, so it covers
-            // every nesting the derived Debug covers, i.e. all of them; a
-            // false positive only costs the old eager build.
-            // `SURGE_LV_FILTER=0` restores unconditional building; the
-            // `SURGE_LV_PROBE` accessor probe warns on any consult miss.
-            if local_values_typeof_filter_enabled()
-                && !statements_contain_typeof(&parsed_file.statements)
-            {
+            // ever read). Containment comes from the parse-time
+            // `contains_typeof` source-text scan (a typeof type node can only
+            // come from the keyword; an identifier substring only costs the
+            // old eager build). `SURGE_LV_FILTER=0` restores unconditional
+            // building; the `SURGE_LV_PROBE` accessor probe warns on any
+            // consult miss.
+            if local_values_typeof_filter_enabled() && !parsed_file.contains_typeof {
                 continue;
             }
             ctx.file_name = parsed_file.file_name.clone();
@@ -1379,6 +1383,7 @@ fn parse_program_file(
     ParsedProgramFile {
         file_name: file_name.clone(),
         has_export_default: input.source_text.contains("export default"),
+        contains_typeof: input.source_text.contains("typeof"),
         statements: parsed.statements,
         parser_errors: parsed.parser_errors,
         is_module: parsed.is_module,
@@ -2300,51 +2305,6 @@ fn check_program_files_parallel(
 fn local_values_typeof_filter_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("SURGE_LV_FILTER").as_deref() != Ok("0"))
-}
-
-/// Whether any `typeof` TYPE node appears anywhere in the file's parse tree.
-/// Implemented as a Debug-formatter sink scanning for the `TypeOf(` variant
-/// marker — the derived `Debug` recurses through every statement, member,
-/// annotation, and expression-embedded type, so a `false` here is a proof of
-/// absence; nothing is allocated beyond a 6-byte carry window.
-fn statements_contain_typeof(statements: &[surge_ts_syntax::ParsedStatement]) -> bool {
-    use std::fmt::Write as _;
-    const NEEDLE: &[u8] = b"TypeOf(";
-    struct Finder {
-        matched: bool,
-        window: Vec<u8>,
-    }
-    impl std::fmt::Write for Finder {
-        fn write_str(&mut self, s: &str) -> std::fmt::Result {
-            if self.matched {
-                return Ok(());
-            }
-            self.window.extend_from_slice(s.as_bytes());
-            if self.window.len() >= NEEDLE.len()
-                && self.window.windows(NEEDLE.len()).any(|w| w == NEEDLE)
-            {
-                self.matched = true;
-                self.window = Vec::new();
-                return Ok(());
-            }
-            let keep = NEEDLE.len() - 1;
-            if self.window.len() > keep {
-                self.window.drain(..self.window.len() - keep);
-            }
-            Ok(())
-        }
-    }
-    let mut finder = Finder {
-        matched: false,
-        window: Vec::new(),
-    };
-    for statement in statements {
-        let _ = write!(finder, "{statement:?}");
-        if finder.matched {
-            return true;
-        }
-    }
-    false
 }
 
 fn census_check_milestone(completed: usize, total: usize) -> Option<&'static str> {

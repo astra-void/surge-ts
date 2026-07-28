@@ -380,6 +380,7 @@ impl Project {
             }
         }
         surge_ts_checker::lowlevel::record_loader_rss_stage("import_graph_expanded");
+        io_stats::report_probe_dirs();
 
         if collect {
             let io = io_stats::snapshot();

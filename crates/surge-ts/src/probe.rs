@@ -32,6 +32,7 @@ pub(crate) fn is_existing_file(path: &Path) -> bool {
             .map(|metadata| metadata.is_file())
             .unwrap_or(false);
         crate::io_stats::record_existence_probe(probe_start.elapsed());
+        crate::io_stats::record_probe_parent(path);
         cache.borrow_mut().insert(key.into(), is_file);
         is_file
     })
