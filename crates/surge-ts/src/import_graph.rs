@@ -288,6 +288,7 @@ fn candidate_is_existing_file(
         .map(|metadata| metadata.is_file())
         .unwrap_or(false);
     crate::io_stats::record_existence_probe(probe_start.elapsed());
+    crate::io_stats::record_probe_parent(candidate);
     cache.insert(key.into_owned(), is_file);
     is_file
 }

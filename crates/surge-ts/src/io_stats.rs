@@ -39,6 +39,48 @@ pub fn record_existence_probe(elapsed: Duration) {
     FS_EXISTENCE_PROBE_NANOS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
 }
 
+/// Temporary `SURGE_PROBE_DIRS=1` probe: per-parent-directory counts of actual
+/// existence-probe syscalls, deciding whether a directory-listing strategy
+/// could beat per-candidate stats on this corpus. Zero-cost when unset.
+fn probe_dir_histogram()
+-> Option<&'static std::sync::Mutex<surge_ts_types::fx::FxHashMap<std::path::PathBuf, u32>>> {
+    static HIST: std::sync::OnceLock<
+        Option<std::sync::Mutex<surge_ts_types::fx::FxHashMap<std::path::PathBuf, u32>>>,
+    > = std::sync::OnceLock::new();
+    HIST.get_or_init(|| {
+        std::env::var_os("SURGE_PROBE_DIRS")
+            .map(|_| std::sync::Mutex::new(surge_ts_types::fx::FxHashMap::default()))
+    })
+    .as_ref()
+}
+
+pub fn record_probe_parent(path: &std::path::Path) {
+    if let Some(hist) = probe_dir_histogram()
+        && let Some(parent) = path.parent()
+        && let Ok(mut map) = hist.lock()
+    {
+        *map.entry(parent.to_path_buf()).or_insert(0) += 1;
+    }
+}
+
+pub fn report_probe_dirs() {
+    if let Some(hist) = probe_dir_histogram()
+        && let Ok(map) = hist.lock()
+    {
+        let mut counts: Vec<u32> = map.values().copied().collect();
+        counts.sort_unstable();
+        let total: u64 = counts.iter().map(|&c| u64::from(c)).sum();
+        let dirs = counts.len();
+        let median = counts.get(dirs / 2).copied().unwrap_or(0);
+        let p90 = counts.get(dirs * 9 / 10).copied().unwrap_or(0);
+        let max = counts.last().copied().unwrap_or(0);
+        eprintln!(
+            "[probe-dirs] probes={total} dirs={dirs} mean={:.1} median={median} p90={p90} max={max}",
+            total as f64 / dirs.max(1) as f64,
+        );
+    }
+}
+
 pub fn record_read_dir(elapsed: Duration) {
     FS_READ_DIR_COUNT.fetch_add(1, Ordering::Relaxed);
     FS_READ_DIR_NANOS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);

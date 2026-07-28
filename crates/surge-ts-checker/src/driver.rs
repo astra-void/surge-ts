@@ -103,6 +103,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
             crate::program::ParsedProgramFile {
                 file_name: parsed.file_name,
                 has_export_default: input.source_text.contains("export default"),
+                contains_typeof: input.source_text.contains("typeof"),
                 statements: parsed.statements,
                 parser_errors: parsed.parser_errors,
                 is_module: parsed.is_module,
