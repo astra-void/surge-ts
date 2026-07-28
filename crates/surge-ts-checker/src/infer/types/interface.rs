@@ -200,7 +200,12 @@ pub(crate) fn resolve_interface(
         None
     };
     let interface_key = if cache_eligible || collect_all_interface_identities {
-        match canonical_physical_interface_key(interface, &local_substitution, ctx) {
+        match canonical_physical_interface_key(
+            interface,
+            &local_substitution,
+            ctx,
+            cache_eligible && !physical_default_lib,
+        ) {
             Ok(key) => Some(key),
             Err(reason) => {
                 record_interface_cache_skip(reason);
