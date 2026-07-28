@@ -128,6 +128,14 @@ pub(crate) fn collect_exportable_value_symbols(
     // RSS 8.5GB with both, 5.1GB with annotations only, 2.8GB with neither —
     // the last silently degrades every `ComponentProps<typeof Primitive.X>`).
     let library_file = ctx.is_library_scoped_file(&ctx.file_name);
+    shadow_ctx.lazy_library_value_annotations = library_file && lazy_dts_values_enabled();
+    if shadow_ctx.lazy_library_value_annotations {
+        // Lazy value-annotation references capture their declaration
+        // environment; the shadow's own store dies with the shadow, so the
+        // capture must intern into the caller's persistent store or every
+        // force degrades to `Unknown` (`checker_context()` -> None).
+        shadow_ctx.declaration_environment_store = ctx.declaration_environment_store.clone();
+    }
     shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
     shadow_ctx.ambient_global_type_declarations = ctx.ambient_global_type_declarations.clone();
     shadow_ctx.ambient_global_symbols = ctx
@@ -171,6 +179,117 @@ pub(crate) fn collect_exportable_value_symbols(
     exportable_values
 }
 
+/// Library `.d.ts` value annotations become lazy references (mapped on first
+/// read, unpeeled — matching eager `map_parsed_type` output shape) instead of
+/// being eagerly mapped once per analysis round. tRPC: −1s wall. Soundness
+/// pillars: the shadow shares the caller's persistent declaration-environment
+/// store (a shadow-owned store dies with the shadow and every force degrades
+/// to `Unknown`), typeof-bearing annotations stay eager (their query resolves
+/// against the collection-time working symbol table, which environment
+/// capture deliberately drops), and primitives stay eager (deferring them
+/// only exposes unforced references to structural variant matches).
+/// `SURGE_LAZY_DTS_VALUES=0` restores the old eager behavior for A/B.
+fn lazy_dts_values_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_LAZY_DTS_VALUES").as_deref() != Ok("0"))
+}
+
+/// Whether a library value annotation is worth deferring: structural shapes
+/// and named references (where alias-expansion cost lives). Primitives,
+/// literals, and keyword types map in nanoseconds — deferring them only
+/// exposes an unforced reference to structural checks (e.g. comparison
+/// overlap) that inspect types without peeling. Annotations containing
+/// `typeof` anywhere stay eager: the eager path resolves the query against
+/// the collection-time working symbol table (same-file values collected so
+/// far), which the captured declaration environment deliberately drops, and
+/// `module_local_values_by_file` is not populated yet when the capture is
+/// taken during the final analysis round.
+fn defer_value_annotation(annotation: &surge_ts_syntax::ParsedType) -> bool {
+    use surge_ts_syntax::ParsedType;
+    match annotation {
+        ParsedType::Object(_)
+        | ParsedType::Tuple(_)
+        | ParsedType::Union(_)
+        | ParsedType::Intersection(_)
+        | ParsedType::Function(_)
+        | ParsedType::KeyOf(_)
+        | ParsedType::IndexedAccess(_)
+        | ParsedType::Mapped(_)
+        | ParsedType::Conditional(_)
+        | ParsedType::TemplateLiteral(_)
+        | ParsedType::Named(_) => !annotation_contains_typeof(annotation),
+        ParsedType::Array(element) => defer_value_annotation(element),
+        ParsedType::TypeOf(_) => false,
+        _ => false,
+    }
+}
+
+fn annotation_contains_typeof(annotation: &surge_ts_syntax::ParsedType) -> bool {
+    use surge_ts_syntax::ParsedType;
+    match annotation {
+        ParsedType::TypeOf(_) => true,
+        ParsedType::Array(element) | ParsedType::KeyOf(element) => {
+            annotation_contains_typeof(element)
+        }
+        ParsedType::Tuple(elements)
+        | ParsedType::Union(elements)
+        | ParsedType::Intersection(elements) => {
+            elements.iter().any(annotation_contains_typeof)
+        }
+        ParsedType::Object(object) => {
+            object
+                .properties
+                .iter()
+                .any(|property| annotation_contains_typeof(&property.ty))
+                || object.call_signature.as_ref().is_some_and(|signature| {
+                    function_type_contains_typeof(signature)
+                })
+        }
+        ParsedType::Function(function) => function_type_contains_typeof(function),
+        ParsedType::Named(named) => named
+            .type_arguments
+            .iter()
+            .any(annotation_contains_typeof),
+        ParsedType::IndexedAccess(indexed) => {
+            annotation_contains_typeof(&indexed.object_type)
+                || annotation_contains_typeof(&indexed.index_type)
+        }
+        ParsedType::Mapped(mapped) => {
+            annotation_contains_typeof(&mapped.constraint)
+                || annotation_contains_typeof(&mapped.value_type)
+        }
+        ParsedType::Conditional(conditional) => {
+            annotation_contains_typeof(&conditional.check_type)
+                || annotation_contains_typeof(&conditional.extends_type)
+                || annotation_contains_typeof(&conditional.true_type)
+                || annotation_contains_typeof(&conditional.false_type)
+        }
+        ParsedType::TemplateLiteral(template) => template
+            .interpolations
+            .iter()
+            .any(annotation_contains_typeof),
+        _ => false,
+    }
+}
+
+fn function_type_contains_typeof(function: &surge_ts_syntax::ParsedFunctionType) -> bool {
+    function
+        .parameters
+        .iter()
+        .any(|parameter| annotation_contains_typeof(&parameter.ty))
+        || annotation_contains_typeof(&function.return_type)
+        || function.type_parameters.iter().any(|parameter| {
+            parameter
+                .constraint
+                .as_ref()
+                .is_some_and(annotation_contains_typeof)
+                || parameter
+                    .default_type
+                    .as_ref()
+                    .is_some_and(annotation_contains_typeof)
+        })
+}
+
 pub(crate) fn collect_exportable_value_symbols_from_statement(
     statement: &ParsedStatement,
     exportable_values: &mut SymbolTable,
@@ -179,6 +298,37 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
 ) {
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
+            if ctx.lazy_library_value_annotations
+                && variable.initializer.is_none()
+                && variable
+                    .declared_type
+                    .as_ref()
+                    .is_some_and(defer_value_annotation)
+                && let Some(annotation) = variable.declared_type.clone()
+            {
+                if exportable_values.get_shared(&variable.name).is_none() {
+                    let kind = match variable.kind {
+                        surge_ts_syntax::ParsedVariableKind::Var => SymbolKind::Var,
+                        surge_ts_syntax::ParsedVariableKind::Let => SymbolKind::Let,
+                        surge_ts_syntax::ParsedVariableKind::Const => SymbolKind::Const,
+                    };
+                    let ty = crate::infer::make_lazy_value_annotation_reference(
+                        ctx,
+                        &variable.name,
+                        variable.name_span.map_or(0, |span| span.start),
+                        annotation,
+                    );
+                    let _ = exportable_values.insert(
+                        variable.name.clone(),
+                        SymbolInfo {
+                            ty,
+                            kind,
+                            function_signature: None,
+                        },
+                    );
+                }
+                return;
+            }
             let existing_symbol = exportable_values.get_shared(&variable.name);
             let _ = check_variable_declaration_with_symbols(
                 variable.as_ref().clone(),
@@ -192,6 +342,18 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
 
             if let Some(existing_symbol) = existing_symbol {
                 exportable_values.insert_shared(variable.name.clone(), existing_symbol);
+            }
+            if let Some(filter) = crate::infer::types::cache::lazy_value_trace_filter()
+                && variable.name.contains(filter)
+                && let Some(symbol) = exportable_values.get_shared(&variable.name)
+            {
+                eprintln!(
+                    "[lazy-value] EAGER {}@{} file={} ty={}",
+                    variable.name,
+                    variable.name_span.map_or(0, |span| span.start),
+                    ctx.file_name,
+                    crate::infer::types::cache::lazy_value_trace_shape(&symbol.ty),
+                );
             }
         }
         ParsedStatement::ExportDeclaration(export) => {

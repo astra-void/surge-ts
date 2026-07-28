@@ -481,6 +481,11 @@ fn callable_property_signature(ty: Type) -> Type {
         Type::Object(object) => object.call_signature().cloned(),
         Type::Reference(_) => match ty.peeled() {
             Type::Object(object) => object.call_signature().cloned(),
+            // A reference resolving to a function IS the callable — surface it
+            // like the object call-signature case, or the caller's variant
+            // match sees the unpeeled reference and misreports TS2349 (lazy
+            // value annotations wrap plain function-typed `declare const`s).
+            Type::Function(function) => Some(function),
             _ => None,
         },
         _ => None,

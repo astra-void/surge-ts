@@ -474,10 +474,34 @@ impl LazyDeclarationAnnotation {
             substitution,
         );
         let had_error = resolved.had_error;
+        // Signature components historically peel to the structural type. A
+        // VALUE annotation (no signature component) must NOT: eager collection
+        // stored `map_parsed_type`'s output verbatim, leaving named references
+        // nominal so members expand through the live-context peel path — an
+        // eager peel here would bake a snapshot of the recovered environment's
+        // expansion into the symbol and drift from the eager shape.
         let resolved = Arc::new(match resolved.ty {
-            Type::Reference(reference) => reference.resolve().peeled(),
+            Type::Reference(reference) if self.signature_component.is_some() => {
+                reference.resolve().peeled()
+            }
             ty => ty,
         });
+        if let Some(filter) = lazy_value_trace_filter()
+            && self.key.name.contains(filter)
+        {
+            let diagnostics: Vec<String> = ctx
+                .diagnostics
+                .iter()
+                .take(4)
+                .map(|d| format!("{}:{}", d.code, d.message.chars().take(90).collect::<String>()))
+                .collect();
+            eprintln!(
+                "[lazy-value] FORCE {} had_error={had_error} diags={:?} ty={}",
+                self.key.name,
+                diagnostics,
+                lazy_value_trace_shape(&resolved),
+            );
+        }
         if had_error || resolved.is_unknown() {
             crate::program::note_expansion_degradation();
             crate::program::record_program_counter(|c| {
@@ -565,6 +589,98 @@ pub(crate) fn make_lazy_signature_annotation_reference(
             memo: std::sync::OnceLock::new(),
         }),
     ))
+}
+
+/// A lazy reference for a library declaration's VALUE annotation
+/// (`declare const x: T` in a dependency `.d.ts`): the annotation maps on
+/// first read under the captured declaration environment instead of eagerly
+/// during exportable-value collection. Unlike the signature variant, the
+/// resolver returns the mapped type UNPEELED (see `resolve_arc_inner`) so the
+/// symbol carries exactly the shape eager `map_parsed_type` would have
+/// produced — nested named references stay nominal and expand through the
+/// normal live-context peel path.
+pub(crate) fn make_lazy_value_annotation_reference(
+    ctx: &mut CheckerContext,
+    declaration_name: &str,
+    declaration_start: usize,
+    annotation: surge_ts_syntax::ParsedType,
+) -> Type {
+    let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
+    let key = DeclarationResolutionKey {
+        file_name: canonical_declaration_file_name(&ctx.file_name),
+        name: Arc::from(format!("value {declaration_name}@{declaration_start}")),
+        namespace: DeclarationNamespace::Type,
+    };
+    crate::program::record_lazy_reference_created(&key);
+    if let Some(filter) = lazy_value_trace_filter()
+        && key.name.contains(filter)
+    {
+        eprintln!("[lazy-value] CREATE {} file={}", key.name, key.file_name);
+    }
+    let id = format!(
+        "{}\u{0}value-annotation\u{0}{declaration_name}\u{0}{declaration_start}",
+        key.file_name
+    );
+    let environment = ctx.declaration_environment();
+    let creation_scope = ctx.type_declaration_scope.clone();
+    Type::Reference(TypeReference::new(
+        id,
+        display.clone(),
+        Vec::new(),
+        Arc::new(LazyDeclarationAnnotation {
+            environment,
+            creation_scope,
+            key,
+            display,
+            annotation,
+            signature_component: None,
+            signature_environment: None,
+            memo: std::sync::OnceLock::new(),
+        }),
+    ))
+}
+
+/// Opt-in probe filter (`SURGE_LAZY_VALUE_TRACE=<substr>`), read once — the
+/// trace sites sit on resolution paths where per-call `getenv` is prohibited.
+pub(crate) fn lazy_value_trace_filter() -> Option<&'static str> {
+    static FILTER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FILTER
+        .get_or_init(|| std::env::var("SURGE_LAZY_VALUE_TRACE").ok())
+        .as_deref()
+}
+
+/// Debug shape for the `SURGE_LAZY_VALUE_TRACE` probe: variant + display +
+/// (for objects / peeled references) the member-name list.
+pub(crate) fn lazy_value_trace_shape(ty: &Type) -> String {
+    fn describe(ty: &Type, force: bool) -> String {
+        match ty {
+            Type::Object(object) => {
+                let mut names: Vec<&str> =
+                    object.properties.keys().map(|k| k.as_ref()).collect();
+                names.sort_unstable();
+                format!(
+                    "Object{{{} props: {}}} call={}",
+                    names.len(),
+                    names.join(","),
+                    object.call_signature.is_some(),
+                )
+            }
+            Type::Reference(reference) => {
+                if force {
+                    let peeled = reference.resolve().peeled();
+                    format!(
+                        "Reference({}) -> {}",
+                        reference.display,
+                        describe(&peeled, false)
+                    )
+                } else {
+                    format!("Reference({})", reference.display)
+                }
+            }
+            other => format!("{other:?}").chars().take(120).collect(),
+        }
+    }
+    describe(ty, true)
 }
 
 fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType) -> String {
