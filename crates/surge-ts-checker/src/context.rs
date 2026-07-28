@@ -893,6 +893,11 @@ pub(crate) struct CheckerContext {
     /// consumer's `symbols`. Populated once (read-only) before the check phase and
     /// shared across jobs. Consulted via `get` only.
     pub(crate) module_local_values_by_file: Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>,
+    /// While set, exportable-value collection runs THIN (`Unknown` types, no
+    /// annotation/initializer resolution). Set only around the superseded
+    /// analysis rounds' collection calls; see `modules::exports::values::
+    /// thin_prelim_enabled` for the soundness argument.
+    pub(crate) thin_superseded_value_collection: bool,
     /// The export-table type declarations of the module that exports the
     /// program's JSX intrinsic-elements interface, plus its key in that table
     /// (`JSX.IntrinsicElements`), located once after module binding. Under the
@@ -1007,6 +1012,7 @@ impl CheckerContext {
             module_file_index_by_identity: Arc::new(FxHashMap::default()),
             module_scope_by_file: Arc::new(FxHashMap::default()),
             module_local_values_by_file: Arc::new(FxHashMap::default()),
+            thin_superseded_value_collection: false,
             jsx_intrinsic_elements_declarer: None,
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
@@ -1101,6 +1107,7 @@ impl CheckerContext {
             module_file_index_by_identity: data.module_file_index_by_identity.clone(),
             module_scope_by_file: data.module_scope_by_file.clone(),
             module_local_values_by_file: data.module_local_values_by_file.clone(),
+            thin_superseded_value_collection: false,
             jsx_intrinsic_elements_declarer: data.jsx_intrinsic_elements_declarer.clone(),
             type_parameter_scopes: data.type_parameter_scopes.clone(),
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),

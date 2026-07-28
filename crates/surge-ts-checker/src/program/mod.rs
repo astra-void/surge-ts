@@ -24,7 +24,7 @@ use crate::symbols::{
 };
 
 mod ambient;
-mod binding;
+pub(crate) mod binding;
 mod classes;
 mod globals;
 mod schedule;

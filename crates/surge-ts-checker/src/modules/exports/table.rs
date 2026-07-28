@@ -8,6 +8,8 @@ pub(crate) fn build_module_export_table(
     resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ctx: &mut CheckerContext,
 ) -> ModuleExportTable {
+    let split_start = crate::program::binding::analyze_split_enabled()
+        .then(std::time::Instant::now);
     let exportable_values = collect_exportable_value_symbols(
         &parsed_file.statements,
         local_type_declarations,
@@ -15,6 +17,9 @@ pub(crate) fn build_module_export_table(
         Some(imported_symbols),
         ctx,
     );
+    crate::program::binding::analyze_split_record(3, split_start);
+    let split_start = crate::program::binding::analyze_split_enabled()
+        .then(std::time::Instant::now);
 
     let mut type_declarations = TypeDeclarationTable::new();
     let mut symbols = SymbolTable::new();
@@ -37,6 +42,7 @@ pub(crate) fn build_module_export_table(
         );
     }
 
+    crate::program::binding::analyze_split_record(4, split_start);
     ModuleExportTable {
         type_declarations: Arc::new(type_declarations),
         symbols,
