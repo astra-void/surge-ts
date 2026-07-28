@@ -1069,6 +1069,22 @@ fn check_program_with_stats_and_jobs_inner(
                     .insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
                 continue;
             }
+            // The table is only ever consulted to resolve a `typeof <value>`
+            // appearing in THIS file's own declarations/annotations (resolution
+            // runs under the declaring file's name). A file whose parse tree
+            // contains no `typeof` type node can never be consulted, so its
+            // table — the expensive full value collection with initializer
+            // inference — is skipped outright (tRPC: 60 of 4513 entries are
+            // ever read). The scan is a Debug-formatter sink, so it covers
+            // every nesting the derived Debug covers, i.e. all of them; a
+            // false positive only costs the old eager build.
+            // `SURGE_LV_FILTER=0` restores unconditional building; the
+            // `SURGE_LV_PROBE` accessor probe warns on any consult miss.
+            if local_values_typeof_filter_enabled()
+                && !statements_contain_typeof(&parsed_file.statements)
+            {
+                continue;
+            }
             ctx.file_name = parsed_file.file_name.clone();
             ctx.type_declarations = analysis.local_type_declarations.as_ref().clone();
             let table = crate::modules::collect_exportable_value_symbols(
@@ -1208,6 +1224,7 @@ fn check_program_with_stats_and_jobs_inner(
     crate::metrics::release_free_memory();
     emit_type_graph_census("after_cache_cleanup", Some(&ctx), &store, census_external);
     emit_type_graph_census("before_process_exit", Some(&ctx), &store, census_external);
+    crate::context::report_local_values_consults(ctx.module_local_values_by_file.len());
     let (diagnostics, stats) = ctx.finish_with_stats();
     record_rss_stage(timings.as_ref(), "finish", program_start.elapsed());
     render_dts_expansion_summary();
@@ -2237,6 +2254,7 @@ fn check_program_files_parallel(
     if let Some(deps) = &critpath_deps {
         crate::speculative::report_critical_path(deps, &conflict_micros);
     }
+    crate::context::report_local_values_consults(ctx.module_local_values_by_file.len());
 
     if let Some(diff) = &defer_diff {
         eprintln!(
@@ -2277,6 +2295,56 @@ fn check_program_files_parallel(
     }
 
     slots.into_iter().flatten().collect()
+}
+
+fn local_values_typeof_filter_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_LV_FILTER").as_deref() != Ok("0"))
+}
+
+/// Whether any `typeof` TYPE node appears anywhere in the file's parse tree.
+/// Implemented as a Debug-formatter sink scanning for the `TypeOf(` variant
+/// marker — the derived `Debug` recurses through every statement, member,
+/// annotation, and expression-embedded type, so a `false` here is a proof of
+/// absence; nothing is allocated beyond a 6-byte carry window.
+fn statements_contain_typeof(statements: &[surge_ts_syntax::ParsedStatement]) -> bool {
+    use std::fmt::Write as _;
+    const NEEDLE: &[u8] = b"TypeOf(";
+    struct Finder {
+        matched: bool,
+        window: Vec<u8>,
+    }
+    impl std::fmt::Write for Finder {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            if self.matched {
+                return Ok(());
+            }
+            self.window.extend_from_slice(s.as_bytes());
+            if self.window.len() >= NEEDLE.len()
+                && self.window.windows(NEEDLE.len()).any(|w| w == NEEDLE)
+            {
+                self.matched = true;
+                self.window = Vec::new();
+                return Ok(());
+            }
+            let keep = NEEDLE.len() - 1;
+            if self.window.len() > keep {
+                self.window.drain(..self.window.len() - keep);
+            }
+            Ok(())
+        }
+    }
+    let mut finder = Finder {
+        matched: false,
+        window: Vec::new(),
+    };
+    for statement in statements {
+        let _ = write!(finder, "{statement:?}");
+        if finder.matched {
+            return true;
+        }
+    }
+    false
 }
 
 fn census_check_milestone(completed: usize, total: usize) -> Option<&'static str> {

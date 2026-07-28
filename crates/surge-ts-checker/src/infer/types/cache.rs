@@ -294,6 +294,13 @@ struct LazyDeclarationAnnotation {
     signature_component: Option<LazySignatureComponent>,
     signature_environment: Option<LazySignatureEnvironment>,
     memo: std::sync::OnceLock<std::sync::Weak<Type>>,
+    /// A degraded (`had_error`/unknown) resolution is never interned into the
+    /// shared caches (that would violate the no-degraded-results-program-wide
+    /// rule), so the weak `memo` has no keeper and every read would re-run the
+    /// full failed resolution — hot on value annotations read once per use
+    /// site. Pinning the FIRST answer per annotation instance both bounds the
+    /// cost and matches the eager collector's resolve-once semantics.
+    degraded_memo: std::sync::OnceLock<Arc<Type>>,
 }
 
 #[derive(Clone, Copy)]
@@ -426,6 +433,10 @@ impl LazyDeclarationAnnotation {
             }
             return resolved;
         }
+        if let Some(degraded) = self.degraded_memo.get() {
+            crate::program::record_program_counter(|c| c.lazy_reference_memo_hit_count += 1);
+            return degraded.clone();
+        }
         let Some(ctx) = self.environment.checker_context() else {
             return Arc::new(Type::Unknown);
         };
@@ -513,6 +524,7 @@ impl LazyDeclarationAnnotation {
             if self.signature_component.is_some() {
                 crate::program::record_degraded_signature_expansion(&self.key);
             }
+            let _ = self.degraded_memo.set(resolved.clone());
             return resolved;
         }
         let resolved = intern_instantiation(&ctx, &self.key, &[], (*resolved).clone());
@@ -587,6 +599,7 @@ pub(crate) fn make_lazy_signature_annotation_reference(
             signature_component: Some(component),
             signature_environment,
             memo: std::sync::OnceLock::new(),
+            degraded_memo: std::sync::OnceLock::new(),
         }),
     ))
 }
@@ -636,6 +649,7 @@ pub(crate) fn make_lazy_value_annotation_reference(
             signature_component: None,
             signature_environment: None,
             memo: std::sync::OnceLock::new(),
+            degraded_memo: std::sync::OnceLock::new(),
         }),
     ))
 }

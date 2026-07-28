@@ -20,6 +20,43 @@ pub enum DiagnosticProfile {
     Native,
 }
 
+/// Temporary `SURGE_LV_PROBE=1` probe: which files' local-value tables are
+/// actually consulted (post-population). Answers how much of the
+/// module_local_values stage a lazy per-file build would skip.
+fn local_values_consult_probe()
+-> Option<&'static Mutex<surge_ts_types::fx::FxHashSet<Arc<str>>>> {
+    static PROBE: std::sync::OnceLock<
+        Option<Mutex<surge_ts_types::fx::FxHashSet<Arc<str>>>>,
+    > = std::sync::OnceLock::new();
+    PROBE
+        .get_or_init(|| {
+            std::env::var_os("SURGE_LV_PROBE")
+                .map(|_| Mutex::new(surge_ts_types::fx::FxHashSet::default()))
+        })
+        .as_ref()
+}
+
+fn record_local_values_consult(file_name: &str) {
+    if let Some(probe) = local_values_consult_probe()
+        && let Ok(mut set) = probe.lock()
+        && !set.contains(file_name)
+    {
+        set.insert(Arc::from(file_name));
+    }
+}
+
+pub(crate) fn report_local_values_consults(total_entries: usize) {
+    if let Some(probe) = local_values_consult_probe()
+        && let Ok(set) = probe.lock()
+    {
+        eprintln!(
+            "[lv-probe] consulted_files={} of {} entries",
+            set.len(),
+            total_entries,
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileKind {
     RootSource,
@@ -1573,7 +1610,19 @@ impl CheckerContext {
     /// (resolved under the declaring file's name via `with_file_name`, but against
     /// the consumer's value `symbols`). See [`Self::module_local_values_by_file`].
     pub(crate) fn module_local_values_for_file(&self, file_name: &str) -> Option<Arc<SymbolTable>> {
-        self.module_local_values_by_file.get(file_name).cloned()
+        let entry = self.module_local_values_by_file.get(file_name).cloned();
+        if entry.is_some() {
+            record_local_values_consult(file_name);
+        } else if !self.module_local_values_by_file.is_empty()
+            && local_values_consult_probe().is_some()
+        {
+            // Under SURGE_LV_PROBE, a consult that misses the populated map
+            // would indicate the typeof-filter skipped a file that IS
+            // consulted — a violation of the consult ⇒ contains-typeof
+            // invariant the filter relies on.
+            eprintln!("[lv-probe] MISS {file_name}");
+        }
+        entry
     }
 
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
