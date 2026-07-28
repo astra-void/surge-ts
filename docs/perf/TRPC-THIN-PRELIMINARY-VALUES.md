@@ -82,9 +82,14 @@ Wall (interleaved, 4 rounds, jobs=auto): **base 10.30–10.78s, thin
 ## Follow-ups
 
 - The remaining analysis cost is now the FINAL round's value collection
-  (~1.6s incl. et_values) — irreducible under the current design but a
-  candidate for laziness (resolve-on-first-read) if a byte-stable scheme for
-  cache seeding order exists.
+  (~1.6s incl. et_values). **Laziness was tried the same day and reverted:**
+  extending `LazyDeclarationAnnotation` to library `declare const x: T`
+  annotations drifts tRPC by ~50 diagnostics in both directions (playwright
+  `TestType` members lost → new TS2339; node `path` values resolving *better*
+  than the eager path's degraded `{}` → diagnostics vanish). Force-time
+  resolution runs under the captured declaration environment, which is not
+  the collection-time shadow environment (`module_value_fallback`, scope
+  specifics). A byte-stable version needs full shadow-environment capture.
 - The `unnamed` corpus (ComponentProps/typeof-heavy) is not in this checkout;
   its FP suite should be re-run before assuming the thin rounds are safe for
   it (the values.rs comment history shows that corpus is the sensitive one).
