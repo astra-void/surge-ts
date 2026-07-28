@@ -274,8 +274,107 @@ fn dedup_key(ty: &Type) -> u64 {
 /// (see [`dedup_key_into`]'s invariant). Used by the checker's speculative-check
 /// conflict tracking, where a digest collision only causes a spurious (sound)
 /// serial recheck, never a missed conflict.
+///
+/// Much finer than [`dedup_key`]: that key's depth-3 cutoff, name-only object
+/// hashing, and empty function arm collide deep-but-distinct instantiation
+/// arguments, and in the speculative commit walk each collision falsely marks a
+/// valid replay stale (its miss digest matches a published entry whose
+/// arguments differ, i.e. one serial checking would also have missed).
+/// Measured on tRPC: 212 of 226 stale-replay offender digests were exactly this
+/// class. This walker keeps the same consistency invariant — hash only
+/// (a subset of) equality-participating fields, structurally, never by pointer.
 pub fn type_conflict_digest(ty: &Type) -> u64 {
-    dedup_key(ty)
+    let mut hasher = FxHasher::default();
+    let mut budget: u32 = FINE_KEY_NODE_BUDGET;
+    fine_key_into(ty, &mut hasher, 0, &mut budget);
+    hasher.finish()
+}
+
+const FINE_KEY_NODE_BUDGET: u32 = 64;
+const FINE_KEY_MAX_DEPTH: u8 = 8;
+/// Independent per-property budget for object members. Object equality is
+/// order-independent (`IndexMap`), so each property's contribution must not
+/// depend on iteration order — a shared budget would truncate different
+/// properties depending on insertion order and break equality consistency.
+const FINE_KEY_PROPERTY_BUDGET: u32 = 32;
+
+fn fine_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8, budget: &mut u32) {
+    std::mem::discriminant(ty).hash(hasher);
+    if depth >= FINE_KEY_MAX_DEPTH || *budget == 0 {
+        return;
+    }
+    *budget -= 1;
+    match ty {
+        Type::StringLiteral(value) => value.hash(hasher),
+        Type::NumberLiteral(value) => value.value.hash(hasher),
+        Type::BooleanLiteral(value) => value.hash(hasher),
+        Type::Reference(reference) => {
+            // `display` is excluded: `TypeReference` equality is nominal
+            // (id + arguments only).
+            reference.id.hash(hasher);
+            reference.arguments.len().hash(hasher);
+            for argument in reference.arguments.iter() {
+                fine_key_into(argument, hasher, depth + 1, budget);
+            }
+        }
+        Type::Array(element) => fine_key_into(element, hasher, depth + 1, budget),
+        Type::Tuple(elements) => {
+            elements.len().hash(hasher);
+            for element in elements {
+                fine_key_into(element, hasher, depth + 1, budget);
+            }
+        }
+        Type::Union(union) => {
+            // `list_id` participates in the derived payload equality; interned
+            // structurally, it doubles as a full-depth member-list fingerprint.
+            union.payload.list_id.hash(hasher);
+            union.types().len().hash(hasher);
+            for member in union.types() {
+                fine_key_into(member, hasher, depth + 1, budget);
+            }
+        }
+        Type::Object(object) => {
+            object.properties.len().hash(hasher);
+            // Order-independent map equality: fold per-property digests with a
+            // commutative combiner, each walked under its own fixed budget.
+            let mut combined: u64 = 0;
+            for (name, property) in object.properties.iter() {
+                let mut property_hasher = FxHasher::default();
+                name.hash(&mut property_hasher);
+                property.optional.hash(&mut property_hasher);
+                let mut property_budget = FINE_KEY_PROPERTY_BUDGET;
+                fine_key_into(
+                    &property.ty,
+                    &mut property_hasher,
+                    depth + 1,
+                    &mut property_budget,
+                );
+                combined = combined.wrapping_add(property_hasher.finish());
+            }
+            combined.hash(hasher);
+            // `call_signature`, `construct_signature`, and `is_intersection`
+            // are excluded from `ObjectType` equality and must stay unhashed.
+            match &object.string_index_type {
+                Some(index) => {
+                    1u8.hash(hasher);
+                    fine_key_into(index, hasher, depth + 1, budget);
+                }
+                None => 0u8.hash(hasher),
+            }
+        }
+        Type::Function(function) => {
+            let payload = &function.payload;
+            payload.parameter_list_id.hash(hasher);
+            payload.parameters.len().hash(hasher);
+            for parameter in payload.parameters.iter() {
+                fine_key_into(parameter, hasher, depth + 1, budget);
+            }
+            fine_key_into(&payload.return_type, hasher, depth + 1, budget);
+            payload.is_variadic.hash(hasher);
+            payload.required_parameter_count.hash(hasher);
+        }
+        _ => {}
+    }
 }
 
 /// Coarse structural key for union dedup. Invariant: `a == b` (under `Type`'s
