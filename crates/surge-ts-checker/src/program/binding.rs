@@ -74,6 +74,7 @@ pub(crate) fn collect_preliminary_module_type_bindings(
         let preliminary_resolution_scope = Arc::new(TypeDeclarationScope::new(vec![
             local_type_declarations.clone(),
         ]));
+        ctx.thin_superseded_value_collection = true;
         let preliminary_export_table = build_module_export_table(
             parsed_file,
             local_type_declarations.as_ref(),
@@ -82,6 +83,7 @@ pub(crate) fn collect_preliminary_module_type_bindings(
             Some(preliminary_resolution_scope),
             ctx,
         );
+        ctx.thin_superseded_value_collection = false;
 
         ctx.type_declarations = saved_type_declarations;
         ctx.symbols = saved_symbols;
@@ -206,6 +208,48 @@ fn next_analysis_round() -> u64 {
 /// representatives, which must be chosen in deterministic file order) and the
 /// ordered `analyses` placement.
 #[allow(clippy::too_many_arguments)]
+/// Opt-in `SURGE_ANALYZE_SPLIT=1` probe: cumulative micros per
+/// analyze_module sub-phase (plus `build_module_export_table`'s internal
+/// split), printed after each analysis round. Zero-cost when unset. This is
+/// how the thin-preliminary win was found — value collection via the export
+/// table, not signature collection, dominated the analysis rounds.
+static ANALYZE_SPLIT: [std::sync::atomic::AtomicU64; 5] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+
+pub(crate) fn analyze_split_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_ANALYZE_SPLIT").is_some())
+}
+
+pub(crate) fn analyze_split_record(slot: usize, start: Option<Instant>) {
+    if let Some(start) = start {
+        ANALYZE_SPLIT[slot].fetch_add(
+            start.elapsed().as_micros() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+}
+
+fn analyze_split_report(round: u64) {
+    if analyze_split_enabled() {
+        use std::sync::atomic::Ordering::Relaxed;
+        eprintln!(
+            "[analyze-split] round={round} values={:.3}s signatures={:.3}s export_table={:.3}s \
+             (et_values={:.3}s et_statements={:.3}s)",
+            ANALYZE_SPLIT[0].swap(0, Relaxed) as f64 / 1e6,
+            ANALYZE_SPLIT[1].swap(0, Relaxed) as f64 / 1e6,
+            ANALYZE_SPLIT[2].swap(0, Relaxed) as f64 / 1e6,
+            ANALYZE_SPLIT[3].swap(0, Relaxed) as f64 / 1e6,
+            ANALYZE_SPLIT[4].swap(0, Relaxed) as f64 / 1e6,
+        );
+    }
+}
+
 fn analyze_module(
     file_index: usize,
     parsed_file: &ParsedProgramFile,
@@ -299,6 +343,8 @@ fn analyze_module(
                 let _ = import_seed.insert_shared(name.clone(), symbol.clone());
             }
         }
+        let split_start = analyze_split_enabled().then(Instant::now);
+        ctx.thin_superseded_value_collection = !lower_global_augmentation_values;
         let value_env = crate::modules::collect_exportable_value_symbols(
             &parsed_file.statements,
             local_type_declarations.as_ref(),
@@ -306,6 +352,8 @@ fn analyze_module(
             None,
             ctx,
         );
+        ctx.thin_superseded_value_collection = false;
+        analyze_split_record(0, split_start);
         for (name, symbol) in value_env.iter_shared() {
             let _ = signature_env.insert_shared(name.clone(), symbol.clone());
             seeded_names.insert(name.clone());
@@ -319,6 +367,7 @@ fn analyze_module(
     let mut discarded_function_signatures = HashMap::new();
     let diagnostics_before_signatures = ctx.diagnostics().len();
     let consults_before_signatures = super::scope_fallback_consult_count();
+    let split_start = analyze_split_enabled().then(Instant::now);
     with_dts_expansion_reason(DtsExpansionReason::ModuleExportCollection, || {
         collect_function_signatures_from_statements(
             &parsed_file.statements,
@@ -328,6 +377,7 @@ fn analyze_module(
             ctx,
         )
     });
+    analyze_split_record(1, split_start);
     let signature_scope_consults =
         super::scope_fallback_consult_count() - consults_before_signatures;
     let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
@@ -353,6 +403,8 @@ fn analyze_module(
         .as_ref()
         .map(|bindings| &bindings.symbols);
     let empty_imported_symbols = SymbolTable::new();
+    let split_start = analyze_split_enabled().then(Instant::now);
+    ctx.thin_superseded_value_collection = !lower_global_augmentation_values;
     let export_table =
         with_dts_expansion_reason(DtsExpansionReason::ModuleExportCollection, || {
             build_module_export_table(
@@ -364,6 +416,8 @@ fn analyze_module(
                 ctx,
             )
         });
+    ctx.thin_superseded_value_collection = false;
+    analyze_split_record(2, split_start);
     ctx.module_scope_by_file = saved_module_scope_by_file;
 
     let analysis = ModuleAnalysis {
@@ -469,6 +523,7 @@ pub(crate) fn collect_module_analyses_with_bindings(
             crate::metrics::release_free_memory();
         }
     }
+    analyze_split_report(analysis_round);
 
     analyses
 }

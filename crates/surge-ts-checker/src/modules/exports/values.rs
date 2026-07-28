@@ -1,5 +1,86 @@
 use super::*;
 
+/// Superseded analysis rounds (the round-0 type-binding pass and the
+/// preliminary module-analysis round) collect exportable value symbols THIN:
+/// same symbol-name surface, but declared values carry `Unknown` instead of an
+/// eagerly resolved annotation/initializer type. Sound because nothing the
+/// final round bakes into output reads those intermediate value types: the
+/// check phase consumes the FINAL round's full-fidelity export tables plus
+/// `module_local_values_by_file` (populated after the final round), and the
+/// preliminary value types only ever bootstrapped the name surface. Measured
+/// on tRPC: eliminates ~2s of duplicated annotation resolution
+/// (`map_parsed_type_with_substitution` was ~75% of value collection),
+/// byte-identical across trpc/zod/ky/ofetch × jobs auto/8/1.
+/// `SURGE_THIN_PRELIM=0` restores the old eager behavior for A/B.
+pub(crate) fn thin_prelim_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_THIN_PRELIM").as_deref() != Ok("0"))
+}
+
+/// The thin variant of [`collect_exportable_value_symbols`]: same symbol name
+/// surface (variables degrade to `Unknown`, namespace value objects keep their
+/// permissive member sets), no shadow context, no annotation resolution, no
+/// initializer inference. See [`thin_prelim_enabled`] for the soundness
+/// argument.
+fn collect_exportable_value_symbols_thin(
+    statements: &[ParsedStatement],
+    local_symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> SymbolTable {
+    fn walk(statement: &ParsedStatement, exportable_values: &mut SymbolTable) {
+        match statement {
+            ParsedStatement::VariableDeclaration(variable) => {
+                if exportable_values.get_shared(&variable.name).is_none() {
+                    let kind = match variable.kind {
+                        surge_ts_syntax::ParsedVariableKind::Var => SymbolKind::Var,
+                        surge_ts_syntax::ParsedVariableKind::Let => SymbolKind::Let,
+                        surge_ts_syntax::ParsedVariableKind::Const => SymbolKind::Const,
+                    };
+                    let _ = exportable_values.insert(
+                        variable.name.clone(),
+                        SymbolInfo {
+                            ty: Type::Unknown,
+                            kind,
+                            function_signature: None,
+                        },
+                    );
+                }
+            }
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
+                    walk(declaration.as_ref(), exportable_values);
+                }
+            }
+            ParsedStatement::NamespaceDeclaration(namespace) => {
+                if exportable_values.get(&namespace.name).is_none() {
+                    let _ = exportable_values.insert(
+                        namespace.name.clone(),
+                        SymbolInfo {
+                            ty: namespace_value_object_type(namespace),
+                            kind: SymbolKind::Const,
+                            function_signature: None,
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut exportable_values = SymbolTable::new();
+    for (name, symbol) in local_symbols.iter_shared() {
+        let _ = exportable_values.insert_shared(name.clone(), symbol.clone());
+    }
+    let mut exportable_values = exportable_values.with_parent_fallback(Arc::new(
+        ctx.ambient_global_symbols
+            .clone_with_reason(TypeCopyReason::ModuleExport),
+    ));
+    for statement in statements {
+        walk(statement, &mut exportable_values);
+    }
+    exportable_values
+}
+
 pub(crate) fn collect_exportable_value_symbols(
     statements: &[ParsedStatement],
     local_type_declarations: &TypeDeclarationTable,
@@ -7,6 +88,9 @@ pub(crate) fn collect_exportable_value_symbols(
     imported_symbols: Option<&SymbolTable>,
     ctx: &CheckerContext,
 ) -> SymbolTable {
+    if thin_prelim_enabled() && ctx.thin_superseded_value_collection {
+        return collect_exportable_value_symbols_thin(statements, local_symbols, ctx);
+    }
     let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(ctx.file_name.clone(), FileKind::RootSource);
     let mut shadow_ctx = CheckerContext::new_with_shared_options(
