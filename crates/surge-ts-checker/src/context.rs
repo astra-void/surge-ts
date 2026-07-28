@@ -635,6 +635,12 @@ pub(crate) enum CanonicalTypeIdentity {
         arguments: Arc<[Self]>,
     },
     NamedObject(Arc<str>),
+    /// A structural identity paired with the argument's display fingerprint.
+    /// Structurally-equal arguments can carry different rendered display forms
+    /// (the canonical-store display-substitution class); a cache keyed without
+    /// the display would bake the first winner's rendering into every
+    /// consumer. Wraps each top-level instantiation argument.
+    DisplayTagged(Box<Self>, u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

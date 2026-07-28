@@ -1541,7 +1541,14 @@ fn canonical_physical_interface_key_with_declaration(
         let Some(argument) = substitution.get(&parameter.name) else {
             return Err(InterfaceCacheSkipReason::UnresolvedTypeArgument);
         };
-        arguments.push(canonical_type_identity(argument, 0, &mut budget)?);
+        // Display-inclusive identity: the deep display fingerprint keeps
+        // structurally-equal-but-differently-rendered arguments apart, so a
+        // cached instantiation never substitutes another context's rendering
+        // (the canonical-store display-substitution class).
+        arguments.push(CanonicalTypeIdentity::DisplayTagged(
+            Box::new(canonical_type_identity(argument, 0, &mut budget)?),
+            crate::speculative::display_type_fingerprint(argument),
+        ));
     }
 
     let substitution = ctx

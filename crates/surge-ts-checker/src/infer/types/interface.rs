@@ -10,6 +10,11 @@ use crate::context::{CheckerContext, DeclarationResolutionKey};
 use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default_lib_file_name};
 use crate::symbols::{InterfaceInfo, TypeDeclarationHandle};
 
+fn extended_interface_cache_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_IFACE_CACHE_ALL").is_some())
+}
+
 pub(crate) fn resolve_interface(
     interface: &InterfaceInfo,
     handle: TypeDeclarationHandle,
@@ -178,13 +183,23 @@ pub(crate) fn resolve_interface(
     }
 
     let physical_default_lib = is_physical_default_lib_file_name(&interface.file_name);
+    // Opt-in `SURGE_IFACE_CACHE_ALL=1`: extend the instantiation cache beyond
+    // the physical default lib to every interface declaration, but only during
+    // the check phase — before it, module scopes and augmentations still move
+    // between binding rounds, so the canonical key (declaration + arguments +
+    // options) does not pin the resolution inputs. The phase marker is
+    // program-global because most check-phase resolution runs in
+    // environment-recovered contexts. Every existing gate (clean-only
+    // interning, value validation, display-tagged argument identity) applies.
+    let cache_eligible = physical_default_lib
+        || (extended_interface_cache_enabled() && crate::program::in_check_phase());
     let collect_all_interface_identities = crate::program::dts_expansion_trace_enabled();
-    let stable_declaration = if physical_default_lib || collect_all_interface_identities {
+    let stable_declaration = if cache_eligible || collect_all_interface_identities {
         stable_interface_declaration_id(interface).ok()
     } else {
         None
     };
-    let interface_key = if physical_default_lib || collect_all_interface_identities {
+    let interface_key = if cache_eligible || collect_all_interface_identities {
         match canonical_physical_interface_key(interface, &local_substitution, ctx) {
             Ok(key) => Some(key),
             Err(reason) => {
@@ -204,7 +219,7 @@ pub(crate) fn resolve_interface(
         None
     };
     let creation_before = crate::program::type_creation_snapshot();
-    if physical_default_lib {
+    if cache_eligible {
         if !physical_interface_cache_enabled() {
             record_interface_cache_skip(InterfaceCacheSkipReason::Disabled);
         } else if let Some(key) = interface_key.as_ref() {
@@ -245,6 +260,15 @@ pub(crate) fn resolve_interface(
     // `CheckerContext::structural_resolution_frames`).
     ctx.structural_resolution_frames.push(resolving.len() - 1);
     ctx.push_type_parameter_constraints_only(&interface.body.type_parameters);
+    // Extended-tier interning requires a body resolution that touched NO cycle
+    // machinery at all (self-cycles included): a recursive re-entry embeds a
+    // nominal cycle reference whose ARGUMENTS carry the resolving context's
+    // substitution, so a cached body would substitute the first caller's
+    // rendering into every consumer (observed as zod message drift). The
+    // physical default-lib tier keeps its historical behavior.
+    let cycle_floor = resolving.len();
+    let saved_lowest_cycle = ctx.lowest_cycle_target_index;
+    ctx.lowest_cycle_target_index = usize::MAX;
     let diagnostics_before = ctx.diagnostics().len();
     let utility_keys_before = ctx.utility_diagnostic_keys.len();
     let degradation_before = crate::program::expansion_degradation_epoch();
@@ -276,6 +300,9 @@ pub(crate) fn resolve_interface(
     });
     ctx.pop_type_parameter_scope();
     ctx.structural_resolution_frames.pop();
+    let subtree_lowest_cycle = ctx.lowest_cycle_target_index;
+    ctx.lowest_cycle_target_index = saved_lowest_cycle.min(subtree_lowest_cycle);
+    let cycle_free = subtree_lowest_cycle >= cycle_floor;
     if is_namespace_member {
         ctx.namespace_member_resolution_depth -= 1;
         ctx.namespace_member_prefix_stack.pop();
@@ -289,7 +316,8 @@ pub(crate) fn resolve_interface(
         crate::program::expansion_degradation_epoch() != degradation_before;
     let clean = !had_error && !emitted_diagnostics && !degraded_during_expansion;
     let mut ty = resolved.ty;
-    if physical_default_lib
+    if cache_eligible
+        && (physical_default_lib || cycle_free)
         && physical_interface_cache_enabled()
         && let Some(key) = interface_key.clone()
     {
