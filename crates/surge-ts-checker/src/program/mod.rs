@@ -1853,6 +1853,119 @@ fn check_program_files_parallel(
         (None, None)
     };
 
+    // `SURGE_DEFER_DIFF=1` (opt-in, measurement only): classify why replays go
+    // stale. For each stale replay's offending miss digest (a miss an earlier
+    // position later published), attribute the actual publisher and its commit
+    // kind, and test the digest against the worker-log reservation universe —
+    // separating worker-log prediction gaps (fixable by reserving on real
+    // insert sets) from reservation-mechanism failures. Also diffs each
+    // replay/inline-committed position's real insert set against its worker-log
+    // prediction. Counters only; resolution is untouched.
+    struct DeferDiff {
+        reserved_by: surge_ts_types::fx::FxHashMap<u64, usize>,
+        predicted: Vec<surge_ts_types::fx::FxHashSet<u64>>,
+        published_by: surge_ts_types::fx::FxHashMap<u64, usize>,
+        commit_kind: Vec<u8>,
+        stale_replays: u64,
+        offenders: u64,
+        unreserved: u64,
+        reserved_by_publisher: u64,
+        reserved_by_other: u64,
+        reserved_later_or_self: u64,
+        publisher_kind: [u64; 4],
+        diffed_positions: u64,
+        unpredicted_inserts: u64,
+        unrealized_predictions: u64,
+    }
+    impl DeferDiff {
+        const KIND_CLEAN: u8 = 1;
+        const KIND_REPLAY: u8 = 2;
+        const KIND_INLINE: u8 = 3;
+
+        fn record_commit(
+            &mut self,
+            position: usize,
+            kind: u8,
+            digests: impl Iterator<Item = u64>,
+            published: &surge_ts_types::fx::FxHashSet<u64>,
+        ) {
+            self.commit_kind[position] = kind;
+            let mut actual = surge_ts_types::fx::FxHashSet::default();
+            for digest in digests {
+                if published.contains(&digest) {
+                    self.published_by.entry(digest).or_insert(position);
+                }
+                actual.insert(digest);
+            }
+            if kind != Self::KIND_CLEAN {
+                self.diffed_positions += 1;
+                let predicted = &self.predicted[position];
+                self.unpredicted_inserts +=
+                    actual.iter().filter(|d| !predicted.contains(d)).count() as u64;
+                self.unrealized_predictions +=
+                    predicted.iter().filter(|d| !actual.contains(d)).count() as u64;
+            }
+        }
+
+        fn record_stale(
+            &mut self,
+            position: usize,
+            log: &crate::speculative::FileCacheLog,
+            published: &surge_ts_types::fx::FxHashSet<u64>,
+        ) {
+            self.stale_replays += 1;
+            for digest in log.miss_digests() {
+                if !published.contains(&digest) {
+                    continue;
+                }
+                self.offenders += 1;
+                let publisher = self.published_by.get(&digest).copied();
+                if let Some(publisher) = publisher {
+                    let kind = self.commit_kind.get(publisher).copied().unwrap_or(0);
+                    self.publisher_kind[usize::from(kind.min(3))] += 1;
+                }
+                match self.reserved_by.get(&digest) {
+                    None => self.unreserved += 1,
+                    Some(&reserver) if reserver >= position => self.reserved_later_or_self += 1,
+                    Some(&reserver) if Some(reserver) == publisher => {
+                        self.reserved_by_publisher += 1;
+                    }
+                    Some(_) => self.reserved_by_other += 1,
+                }
+            }
+        }
+    }
+    let mut defer_diff = if std::env::var_os("SURGE_DEFER_DIFF").is_some() {
+        let mut reserved_by = surge_ts_types::fx::FxHashMap::default();
+        let mut predicted = vec![surge_ts_types::fx::FxHashSet::default(); n];
+        for (position, log) in worker_logs.iter().enumerate() {
+            if let Some(log) = log {
+                for digest in log.insert_digests() {
+                    reserved_by.entry(digest).or_insert(position);
+                    predicted[position].insert(digest);
+                }
+            }
+        }
+        Some(DeferDiff {
+            reserved_by,
+            predicted,
+            published_by: surge_ts_types::fx::FxHashMap::default(),
+            commit_kind: vec![0u8; n],
+            stale_replays: 0,
+            offenders: 0,
+            unreserved: 0,
+            reserved_by_publisher: 0,
+            reserved_by_other: 0,
+            reserved_later_or_self: 0,
+            publisher_kind: [0; 4],
+            diffed_positions: 0,
+            unpredicted_inserts: 0,
+            unrealized_predictions: 0,
+        })
+    } else {
+        None
+    };
+
     // `SURGE_REPLAY_OFF=1` disables pre-replay (every conflict resolves inline —
     // the serial recheck), for interleaved A/B measurement of the pipeline.
     let submit_at = if std::env::var_os("SURGE_REPLAY_OFF").is_some() {
@@ -1995,6 +2108,14 @@ fn check_program_files_parallel(
                     ),
                     crate::speculative::CommitVerdict::Clean
                 ) {
+                    if let Some(diff) = &mut defer_diff {
+                        diff.record_commit(
+                            file_index,
+                            DeferDiff::KIND_CLEAN,
+                            log.insert_digests(),
+                            &published,
+                        );
+                    }
                     // The worker's speculative result stands (slots already holds it).
                     return crate::replay::CommitOutcome::Committed;
                 }
@@ -2003,19 +2124,29 @@ fn check_program_files_parallel(
             }
             dirty.insert(file_index);
             let had_replay = replay.is_some();
-            if let Some(replay) = replay
-                && crate::speculative::commit_replay_log(
+            let mut stale_log = None;
+            if let Some(replay) = replay {
+                if crate::speculative::commit_replay_log(
                     &live,
                     &replay.log,
                     &mut published,
                     cap,
                     &mut stats,
-                )
-            {
-                worker_logs[file_index] = None;
-                replay_committed += 1;
-                slots[file_index] = Some(replay.result);
-                return crate::replay::CommitOutcome::Committed;
+                ) {
+                    if let Some(diff) = &mut defer_diff {
+                        diff.record_commit(
+                            file_index,
+                            DeferDiff::KIND_REPLAY,
+                            replay.log.insert_digests(),
+                            &published,
+                        );
+                    }
+                    worker_logs[file_index] = None;
+                    replay_committed += 1;
+                    slots[file_index] = Some(replay.result);
+                    return crate::replay::CommitOutcome::Committed;
+                }
+                stale_log = Some(replay.log);
             }
             // Stale or absent replay: recompute inline against the exact
             // committed<file_index. Moving this recompute onto the pool (return
@@ -2027,6 +2158,9 @@ fn check_program_files_parallel(
             let _ = is_final;
             if had_replay {
                 replay_stale += 1;
+                if let (Some(diff), Some(stale)) = (&mut defer_diff, &stale_log) {
+                    diff.record_stale(file_index, stale, &published);
+                }
             } else {
                 inline_only += 1;
             }
@@ -2064,6 +2198,14 @@ fn check_program_files_parallel(
                     cap,
                     &mut stats,
                 );
+                if let Some(diff) = &mut defer_diff {
+                    diff.record_commit(
+                        file_index,
+                        DeferDiff::KIND_INLINE,
+                        recheck_log.insert_digests(),
+                        &published,
+                    );
+                }
             }
             crate::replay::CommitOutcome::Committed
         },
@@ -2094,6 +2236,28 @@ fn check_program_files_parallel(
 
     if let Some(deps) = &critpath_deps {
         crate::speculative::report_critical_path(deps, &conflict_micros);
+    }
+
+    if let Some(diff) = &defer_diff {
+        eprintln!(
+            "[stc-defer-diff] stale={} offenders={} unreserved={} reserved_by_other={} \
+             reserved_by_publisher={} reserved_later_or_self={} \
+             publisher_kind(unknown/clean/replay/inline)={}/{}/{}/{}",
+            diff.stale_replays,
+            diff.offenders,
+            diff.unreserved,
+            diff.reserved_by_other,
+            diff.reserved_by_publisher,
+            diff.reserved_later_or_self,
+            diff.publisher_kind[0],
+            diff.publisher_kind[1],
+            diff.publisher_kind[2],
+            diff.publisher_kind[3],
+        );
+        eprintln!(
+            "[stc-defer-diff] diffed_positions={} unpredicted_inserts={} unrealized_predictions={}",
+            diff.diffed_positions, diff.unpredicted_inserts, diff.unrealized_predictions,
+        );
     }
 
     if let (Some(table), Some(stats)) = (&reservations, &defer_stats)

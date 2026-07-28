@@ -200,6 +200,24 @@ impl FileCacheLog {
         }
     }
 
+    /// Every insertion digest in this log, across all six caches. Measurement
+    /// probes (`SURGE_DEFER_DIFF`) use this to diff a position's real insert
+    /// set against its worker-log prediction.
+    pub(crate) fn insert_digests(&self) -> impl Iterator<Item = u64> + '_ {
+        self.generic_inserts
+            .iter()
+            .map(|(_, _, d)| *d)
+            .chain(self.instantiation_inserts.iter().map(|(_, _, d)| *d))
+            .chain(self.physical_inserts.iter().map(|(_, _, d)| *d))
+            .chain(self.template_inserts.iter().map(|(_, _, d)| *d))
+            .chain(self.method_inserts.iter().map(|(_, _, d)| *d))
+            .chain(self.overload_inserts.iter().map(|(_, _, d)| *d))
+    }
+
+    pub(crate) fn miss_digests(&self) -> impl Iterator<Item = u64> + '_ {
+        self.misses.iter().copied()
+    }
+
     /// Debug probe: a stable one-line summary of this file's cache insertions
     /// (digests plus degraded flags), for regime-bisection dumps.
     pub(crate) fn debug_insert_line(&self) -> String {
