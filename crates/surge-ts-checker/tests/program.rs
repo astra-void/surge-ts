@@ -6575,3 +6575,173 @@ fn signature_context_cache_does_not_leak_across_programs() {
     );
 }
 
+/// The zod `util.MakeReadonly` shape: a distributive conditional whose true
+/// branch instantiates a library generic from `infer` captures.
+const MAKE_READONLY_SHAPE: &str = "export type MakeRO<T> = T extends Map<infer K, infer V>\n\
+     \x20 ? ReadonlyMap<K, V>\n\
+     \x20 : Readonly<T>;\n";
+
+/// An `any` member distributed into the conditional must degrade to an open
+/// `any` (the same rule the non-distributive path applies), not select the
+/// true branch with its `infer` captures unbound — which resolved
+/// `ReadonlyMap<K, V>` with `K`/`V` as unresolvable type names (surge-only
+/// TS2304s on zod v3's `MakeReadonly`) and silently degraded every enclosing
+/// interface expansion.
+#[test]
+fn distributive_conditional_any_member_stays_open_without_phantom_captures() {
+    let files = vec![
+        SourceFileInput {
+            file_name: "util.ts".to_string(),
+            source_text: MAKE_READONLY_SHAPE.to_string(),
+        },
+        SourceFileInput {
+            file_name: "use.ts".to_string(),
+            source_text: "import { MakeRO } from \"./util\";\n\
+                 export interface Holder<T> { value: MakeRO<T>; }\n\
+                 export function go<T>(seed: T, h: Holder<any>): void {\n\
+                 \x20 const v = h.value;\n\
+                 }\n"
+            .to_string(),
+        },
+    ];
+    let diagnostics = check_program(files);
+    assert!(
+        diagnostics.is_empty(),
+        "an `any` member must not produce unbound-capture diagnostics: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+}
+
+/// The clean concrete instantiation of the same shape: a real `Map` member
+/// selects the true branch, binds `K`/`V` from the nominal reference, and the
+/// resulting `ReadonlyMap<string, number>` keeps checking members (`size` is a
+/// `number`, so the anchor assignment must still report TS2322).
+#[test]
+fn distributive_conditional_concrete_map_member_binds_infer_captures() {
+    let files = vec![
+        SourceFileInput {
+            file_name: "util.ts".to_string(),
+            source_text: MAKE_READONLY_SHAPE.to_string(),
+        },
+        SourceFileInput {
+            file_name: "use.ts".to_string(),
+            source_text: "import { MakeRO } from \"./util\";\n\
+                 type RO = MakeRO<Map<string, number>>;\n\
+                 declare const ro: RO;\n\
+                 export const bad: string = ro.size;\n"
+            .to_string(),
+        },
+    ];
+    let diagnostics = check_program(files);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2322".to_string()],
+        "the bound `ReadonlyMap<string, number>` must keep its true positive: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+}
+
+/// A member that resolved to the `unknown` degradation sentinel (here via
+/// `keyof` of a non-object) must get the same "cannot decide" treatment as a
+/// syntactic sentinel: no branch is selected, no capture goes unbound, and the
+/// open result stays diagnostic-free.
+#[test]
+fn distributive_conditional_sentinel_member_stays_undecided() {
+    let files = vec![
+        SourceFileInput {
+            file_name: "util.ts".to_string(),
+            source_text: MAKE_READONLY_SHAPE.to_string(),
+        },
+        SourceFileInput {
+            file_name: "use.ts".to_string(),
+            source_text: "import { MakeRO } from \"./util\";\n\
+                 type Mystery = keyof 5;\n\
+                 declare const m: MakeRO<Mystery>;\n\
+                 export const ok: number = m;\n"
+            .to_string(),
+        },
+    ];
+    let diagnostics = check_program(files);
+    assert!(
+        diagnostics.is_empty(),
+        "a sentinel member must stay undecided and open: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+}
+
+/// Negative control: a genuinely unresolved name in the instantiation still
+/// reports its TS2304 — the `any`/sentinel guards must not swallow real
+/// resolution errors.
+#[test]
+fn distributive_conditional_unresolved_member_still_reports_ts2304() {
+    let files = vec![
+        SourceFileInput {
+            file_name: "util.ts".to_string(),
+            source_text: MAKE_READONLY_SHAPE.to_string(),
+        },
+        SourceFileInput {
+            file_name: "use.ts".to_string(),
+            source_text: "import { MakeRO } from \"./util\";\n\
+                 export type Broken = MakeRO<Missing>;\n"
+            .to_string(),
+        },
+    ];
+    let diagnostics = check_program(files);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code.to_string() == "TS2304" && d.message.contains("Missing")),
+        "a real unresolved name must keep its TS2304: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|d| d.message.contains("'K'") || d.message.contains("'V'")),
+        "no phantom capture-name diagnostics: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+}
+
+/// The full fixture set must produce byte-identical rendered diagnostics
+/// across job counts and repeated runs.
+#[test]
+fn distributive_conditional_fixtures_deterministic_across_jobs() {
+    use surge_ts_checker::check_program_with_stats_and_jobs;
+
+    let files = vec![
+        SourceFileInput {
+            file_name: "util.ts".to_string(),
+            source_text: MAKE_READONLY_SHAPE.to_string(),
+        },
+        SourceFileInput {
+            file_name: "any_use.ts".to_string(),
+            source_text: "import { MakeRO } from \"./util\";\n\
+                 export interface Holder<T> { value: MakeRO<T>; }\n\
+                 export function go<T>(seed: T, h: Holder<any>): void {\n\
+                 \x20 const v = h.value;\n\
+                 }\n"
+            .to_string(),
+        },
+        SourceFileInput {
+            file_name: "map_use.ts".to_string(),
+            source_text: "import { MakeRO } from \"./util\";\n\
+                 type RO = MakeRO<Map<string, number>>;\n\
+                 declare const ro: RO;\n\
+                 export const bad: string = ro.size;\n"
+            .to_string(),
+        },
+    ];
+    let serial =
+        check_program_with_stats_and_jobs(files.clone(), CheckerOptions::default(), 1).diagnostics;
+    for jobs in [2usize, 4] {
+        let parallel =
+            check_program_with_stats_and_jobs(files.clone(), CheckerOptions::default(), jobs)
+                .diagnostics;
+        assert_eq!(
+            rendered_sorted(&serial),
+            rendered_sorted(&parallel),
+            "jobs={jobs} diverged"
+        );
+    }
+}

@@ -120,6 +120,17 @@ pub(crate) fn resolve_named_type(
         if !named_type.name.contains('.') {
             emit_unknown_type_name(&named_type, ctx);
         }
+        if crate::infer::types::interface::had_error_trace_enabled() {
+            eprintln!(
+                "[had-error] lookup-miss '{}' scope_installed={} file_in_map={} map_len={} check_phase={} in file {}",
+                named_type.name,
+                ctx.type_declaration_scope.is_some(),
+                ctx.module_scope_by_file.contains_key(ctx.file_name.as_str()),
+                ctx.module_scope_by_file.len(),
+                crate::program::in_check_phase(),
+                ctx.file_name
+            );
+        }
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,

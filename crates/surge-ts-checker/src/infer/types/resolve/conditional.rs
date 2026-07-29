@@ -47,6 +47,9 @@ pub(crate) fn resolve_conditional_type(
     // must proceed rather than collapse — that collapse is what blocked
     // `ComponentProps<"input">` from selecting its `JSX.IntrinsicElements[T]` branch.
     if resolved_extends.had_error && resolved_extends.ty.is_unknown() {
+        if crate::infer::types::interface::had_error_trace_enabled() {
+            eprintln!("[had-error] conditional-extends cp={} in file {}", crate::program::in_check_phase(), ctx.file_name);
+        }
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,
@@ -60,6 +63,9 @@ pub(crate) fn resolve_conditional_type(
         substitution,
     );
     if resolved_check.had_error {
+        if crate::infer::types::interface::had_error_trace_enabled() {
+            eprintln!("[had-error] conditional-check cp={} in file {}", crate::program::in_check_phase(), ctx.file_name);
+        }
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,
@@ -111,6 +117,37 @@ pub(crate) fn resolve_conditional_type(
                 results.push(Type::Unknown);
                 continue;
             }
+            // Same `any` rule as the non-distributive path below: an `any`
+            // member makes the branch indeterminate (tsc yields the union of
+            // both branches), so degrade to an open `any` rather than selecting
+            // the true branch — which would also leave its `infer` captures
+            // unbound (`MakeReadonly<any>` was measured resolving
+            // `ReadonlyMap<K, V>` with `K`/`V` unresolvable at thousands of zod
+            // sites, silently degrading every enclosing interface expansion).
+            if matches!(member, Type::Any) {
+                results.push(Type::Any);
+                continue;
+            }
+            // The sentinel guard above only sees a *syntactic* `unknown`; a
+            // member carried behind a lazy reference (`output<T>` whose body
+            // could not resolve) peels to the same sentinel and must get the
+            // same "cannot decide" treatment instead of matching the branch
+            // test (`unknown` is assignable to everything, so it would always
+            // select the true branch with its captures unbound).
+            if matches!(member, Type::Reference(_)) {
+                let peeled = crate::program::with_dts_expansion_reason(
+                    crate::program::DtsExpansionReason::ConditionalType,
+                    || member.peeled(),
+                );
+                if matches!(peeled, Type::Unknown) {
+                    results.push(Type::Unknown);
+                    continue;
+                }
+                if matches!(peeled, Type::Any) {
+                    results.push(Type::Any);
+                    continue;
+                }
+            }
             let mut member_substitution =
                 substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
             member_substitution.insert(parameter_name.clone(), member.clone());
@@ -149,6 +186,29 @@ pub(crate) fn resolve_conditional_type(
                 (*conditional.false_type).clone()
             };
 
+            if crate::infer::types::interface::had_error_trace_enabled() {
+                let mut names = Vec::new();
+                collect_infer_names(&extends_pattern, &mut names);
+                let missing: Vec<&String> = names
+                    .iter()
+                    .filter(|name| member_substitution.get(name).is_none())
+                    .collect();
+                if !missing.is_empty() {
+                    let shape = match &member {
+                        Type::Reference(reference) => {
+                            format!("Ref(args={})", reference.arguments.len())
+                        }
+                        Type::Object(_) => "Object".to_string(),
+                        Type::Union(_) => "Union".to_string(),
+                        other => format!("{other:?}").chars().take(30).collect(),
+                    };
+                    eprintln!(
+                        "[had-error] infer-unbound {missing:?} member_shape={shape} member_name={} cp={}",
+                        member.name(),
+                        crate::program::in_check_phase()
+                    );
+                }
+            }
             let resolved_branch = resolve_parsed_type(branch, ctx, resolving, &member_substitution);
             had_error |= resolved_branch.had_error;
             results.push(resolved_branch.ty);
@@ -559,5 +619,64 @@ pub(crate) fn substitute_parsed_type_parameters_deep(
             ParsedType::Function(std::sync::Arc::new(substituted))
         }
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod distributive_member_guard_tests {
+    use crate::program::{SourceFileInput, check_program_with_stats_and_jobs};
+
+    /// One file (no import) so the preliminary analysis round's import-less
+    /// scope contributes no degraded resolution of its own, and the returned
+    /// `h.value` forces the deferred `MakeRO<any>` conditional to actually
+    /// distribute (an unused member never peels the lazy alias reference).
+    fn forced_any_member_fixture() -> Vec<SourceFileInput> {
+        vec![SourceFileInput {
+            file_name: "single.ts".to_string(),
+            source_text: "export type MakeRO<T> = T extends Map<infer K, infer V>\n\
+                 \x20 ? ReadonlyMap<K, V>\n\
+                 \x20 : Readonly<T>;\n\
+                 export interface Holder<T> { value: MakeRO<T>; }\n\
+                 export function go<T>(seed: T, h: Holder<any>): string {\n\
+                 \x20 return h.value;\n\
+                 }\n"
+                .to_string(),
+        }]
+    }
+
+    /// The pinning assertion for the member guards: distributing an `any`
+    /// member must not select the `Map` branch with `K`/`V` unbound — before
+    /// the guards, this exact fixture resolved `ReadonlyMap<K, V>` with both
+    /// arguments unresolvable and finished with 1 degraded interface
+    /// resolution out of 24 attempts (verified against the pre-fix binary);
+    /// with the guards it is 0 of 13. The diagnostic surface alone cannot pin
+    /// the failure (the lookup misses are suppressed in most windows), so the
+    /// counter is the assertion.
+    ///
+    /// Known tsc divergence, deliberate: tsc types `MakeRO<any>` as the union
+    /// of both branches (`Readonly<any> | ReadonlyMap<unknown, unknown>`) and
+    /// reports TS2322 on the `string` return here; surge's `any` collapse
+    /// (the same modeling the non-distributive path documents) under-reports
+    /// this synthetic shape. On the real corpora the guards only removed
+    /// diagnostics that the pinned tsc does not emit.
+    #[test]
+    fn any_member_produces_no_degraded_interface_resolutions() {
+        // Safety: set before any checker thread is spawned in this test
+        // process (nextest: one process per test); the counters gate is
+        // re-derived from this env var at the start of every run.
+        unsafe { std::env::set_var("SURGE_TIMINGS", "1") };
+        let _ = check_program_with_stats_and_jobs(
+            forced_any_member_fixture(),
+            crate::CheckerOptions::default(),
+            1,
+        );
+        let counters = crate::metrics::snapshot_program_counters();
+        assert_eq!(
+            counters.interface_resolution_degraded_count, 0,
+            "an `any` member must not degrade any interface resolution \
+             (got {} degraded of {} attempts)",
+            counters.interface_resolution_degraded_count,
+            counters.interface_resolution_attempt_count,
+        );
     }
 }

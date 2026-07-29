@@ -15,6 +15,16 @@ fn extended_interface_cache_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_IFACE_CACHE_ALL").is_some())
 }
 
+/// Opt-in (`SURGE_TRACE_HAD_ERROR=1`) per-origin trace of every `had_error`
+/// creation site: lookup misses (with scope/phase provenance), interface
+/// base/member/argument taint, alias cycles/arguments, conditional failures,
+/// and unbound `infer` captures. Read once; zero cost when unset (every
+/// probe short-circuits on its error condition before consulting the gate).
+pub(crate) fn had_error_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_TRACE_HAD_ERROR").is_some())
+}
+
 pub(crate) fn resolve_interface(
     interface: &InterfaceInfo,
     handle: TypeDeclarationHandle,
@@ -315,6 +325,9 @@ pub(crate) fn resolve_interface(
     resolving.pop();
 
     let had_error = resolved.had_error || arguments_had_error;
+    if arguments_had_error && !resolved.had_error && had_error_trace_enabled() {
+        eprintln!("[had-error] iface-args '{}' cp={}", interface.name, crate::program::in_check_phase());
+    }
     let emitted_diagnostics = ctx.diagnostics().len() != diagnostics_before
         || ctx.utility_diagnostic_keys.len() != utility_keys_before;
     let degraded_during_expansion =
@@ -416,6 +429,9 @@ pub(crate) fn resolve_interface_declaration(
             },
         );
         had_error |= resolved_base.had_error;
+        if resolved_base.had_error && had_error_trace_enabled() {
+            eprintln!("[had-error] base '{}' cp={} in file {}", base.name, crate::program::in_check_phase(), ctx.file_name);
+        }
         // A base that resolved with errors may be missing members surge could
         // not model; the derived member set is incomplete, so keep it open
         // rather than flagging every inherited access.
@@ -633,6 +649,12 @@ pub(crate) fn resolve_interface_declaration(
             }
         }
         had_error |= property_type.had_error;
+        if property_type.had_error && had_error_trace_enabled() {
+            eprintln!(
+                "[had-error] member '{}' cp={} in file {}",
+                member.name, crate::program::in_check_phase(), ctx.file_name
+            );
+        }
 
         if is_method {
             let inherited_function = !own_method_group_contaminated.contains_key(&member.name)
