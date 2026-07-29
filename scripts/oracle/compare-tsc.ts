@@ -314,6 +314,7 @@ export const fixturePresets: Record<string, string> = {
   'node-decl-subpath-cts-mts-basic': path.join(workspaceRoot, 'tests/compat-projects/node-decl-subpath-cts-mts-basic/tsconfig.json'),
   'combined-conditional-mapped-indexed-basic': path.join(workspaceRoot, 'tests/compat-projects/combined-conditional-mapped-indexed-basic/tsconfig.json'),
   'combined-augmentation-generic-registry-basic': path.join(workspaceRoot, 'tests/compat-projects/combined-augmentation-generic-registry-basic/tsconfig.json'),
+  'namespace-import-qualified-member-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-import-qualified-member-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

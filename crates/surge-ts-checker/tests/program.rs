@@ -2912,6 +2912,48 @@ fn module_namespace_import_missing_property_ts2339() {
     assert_eq!(codes(&diagnostics), vec!["TS2339"]);
 }
 
+/// A namespace member reached through a namespace import keeps its namespace
+/// qualifier (`ns.Inner.Member`). Flattening it to `ns.Member` in the alias
+/// table left the real name unresolvable, so the type silently opened and the
+/// member error below was never reported.
+#[test]
+fn module_namespace_import_qualified_member_resolves_through_namespace() {
+    let diagnostics = program(&[
+        (
+            "core.ts",
+            "export namespace Inner { export interface Leaf { depth: number } }",
+        ),
+        (
+            "index.ts",
+            "import * as ns from \"./core\";\ndeclare const leaf: ns.Inner.Leaf;\nlet wrong: string = leaf.depth;",
+        ),
+    ]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+/// The flattened `ns.Member` spelling is not a real name for a namespace
+/// member; resolving it would hide a genuine error behind an open type.
+#[test]
+fn module_namespace_import_does_not_flatten_qualified_member() {
+    let diagnostics = program(&[
+        (
+            "core.ts",
+            "export namespace Inner { export interface Leaf { depth: number } }",
+        ),
+        (
+            "index.ts",
+            "import * as ns from \"./core\";\ndeclare const leaf: ns.Leaf;\nlet value = leaf.depth;",
+        ),
+    ]);
+
+    assert!(
+        !codes(&diagnostics).contains(&"TS2322".to_string()),
+        "unexpected diagnostics: {:?}",
+        codes(&diagnostics)
+    );
+}
+
 #[test]
 fn module_namespace_import_does_not_bind_named_value() {
     let diagnostics = program(&[
@@ -6221,3 +6263,4 @@ fn nested_distributive_conditional_blowup_degrades_instead_of_hanging() {
         "budget degradation must not produce diagnostics on unrelated code: {diagnostics:?}"
     );
 }
+

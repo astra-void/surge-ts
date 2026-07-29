@@ -667,11 +667,11 @@ fn build_namespace_alias_table(
 ) -> Arc<TypeDeclarationTable> {
     let mut table = TypeDeclarationTable::new();
     for (key, declaration) in export_table.type_declarations.iter() {
-        let member = match key.as_str().split_once('.') {
-            Some((_namespace, rest)) => rest,
-            None => key.as_str(),
-        };
-        let local_key = format!("{local_name}.{member}");
+        // A member of an exported namespace is keyed `ns.Member`, and under a
+        // namespace import its tsc-visible name keeps that qualifier
+        // (`local.ns.Member`). Registering only the last segment leaves the real
+        // name unresolvable, so the reference silently degrades to an open type.
+        let local_key = format!("{local_name}.{key}");
         if table.get(&local_key).is_none() {
             crate::modules::exports::insert_type_export(
                 &mut table,
