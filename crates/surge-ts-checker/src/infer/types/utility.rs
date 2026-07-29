@@ -89,6 +89,9 @@ pub(crate) fn resolve_type_alias(
         if !legal_recursion {
             emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
         }
+        if !legal_recursion && crate::infer::types::interface::had_error_trace_enabled() {
+            eprintln!("[had-error] alias-cycle '{}' cp={}", alias.name, crate::program::in_check_phase());
+        }
         return ResolvedType {
             ty: Type::Unknown,
             had_error: !legal_recursion,
@@ -197,6 +200,12 @@ pub(crate) fn resolve_type_alias(
     }
     resolving.pop();
 
+    if arguments_had_error
+        && !resolved.had_error
+        && crate::infer::types::interface::had_error_trace_enabled()
+    {
+        eprintln!("[had-error] alias-args '{}' cp={}", alias.name, crate::program::in_check_phase());
+    }
     ResolvedType {
         ty: resolved.ty,
         had_error: resolved.had_error || arguments_had_error,

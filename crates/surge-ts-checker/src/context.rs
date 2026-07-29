@@ -568,6 +568,13 @@ use crate::modules::ModuleExportTable;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum DeclarationNamespace {
     Type,
+    /// Instantiations expanded *inside* an open type-parameter scope (a generic
+    /// signature or body). Their nested references defer differently than at a
+    /// concrete site (`concrete_instantiation` is false for everything they
+    /// contain), so their interned expansions must never share a bucket with
+    /// the concrete tier's — same declaration, same arguments, different
+    /// representation.
+    TypeSignatureContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

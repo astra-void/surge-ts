@@ -127,6 +127,8 @@ pub(crate) struct ProgramCounters {
     pub(crate) instantiation_intern_hit_count: u64,
     pub(crate) instantiation_intern_insert_count: u64,
     pub(crate) instantiation_intern_capped_count: u64,
+    pub(crate) signature_context_generic_hit_count: u64,
+    pub(crate) signature_context_generic_store_count: u64,
     pub(crate) named_type_cache_hit_count: u64,
     pub(crate) named_type_cache_insert_count: u64,
     pub(crate) lazy_reference_create_count: u64,

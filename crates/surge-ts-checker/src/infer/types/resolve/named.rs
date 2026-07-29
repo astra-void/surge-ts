@@ -17,6 +17,84 @@ fn defer_concrete_library_aliases() -> bool {
     *ENABLED.get_or_init(|| std::env::var("SURGE_EAGER_DEPENDENCY_ALIASES").as_deref() != Ok("1"))
 }
 
+/// Kill switch (`SURGE_DISABLE_SIG_CONTEXT_CACHE=1`) for the signature-context
+/// instantiation tier, for regression isolation and A/B experiments. Read once.
+fn signature_context_cache_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_DISABLE_SIG_CONTEXT_CACHE").as_deref() != Ok("1"))
+}
+
+/// Whether a resolved type argument is a sound cache-key component for the
+/// signature-context tier. Rejects the `unknown` degradation/placeholder
+/// sentinel anywhere in the type (two placeholder-derived `unknown`s from
+/// different generic scopes compare equal but are not interchangeable), while
+/// the genuine `unknown` keyword stays eligible. References are keyed by
+/// (id, arguments) and never peeled, so their arguments are screened too.
+/// Budget exhaustion means "cannot prove safe" and makes the site ineligible.
+fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) -> bool {
+    if depth >= 16 || *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    match ty {
+        Type::Unknown => false,
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::Undefined
+        | Type::Void
+        | Type::Any
+        | Type::GenuineUnknown
+        | Type::Never
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Array(element) => signature_cache_safe_argument(element, depth + 1, budget),
+        Type::Tuple(elements) => elements
+            .iter()
+            .all(|element| signature_cache_safe_argument(element, depth + 1, budget)),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .all(|member| signature_cache_safe_argument(member, depth + 1, budget)),
+        Type::Function(function) => {
+            function
+                .parameters()
+                .iter()
+                .all(|parameter| signature_cache_safe_argument(parameter, depth + 1, budget))
+                && signature_cache_safe_argument(function.return_type(), depth + 1, budget)
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .all(|property| signature_cache_safe_argument(&property.ty, depth + 1, budget))
+                && object
+                    .string_index_type
+                    .as_deref()
+                    .is_none_or(|index| signature_cache_safe_argument(index, depth + 1, budget))
+                && [object.call_signature(), object.construct_signature()]
+                    .into_iter()
+                    .flatten()
+                    .all(|signature| {
+                        signature.parameters().iter().all(|parameter| {
+                            signature_cache_safe_argument(parameter, depth + 1, budget)
+                        }) && signature_cache_safe_argument(
+                            signature.return_type(),
+                            depth + 1,
+                            budget,
+                        )
+                    })
+        }
+        Type::Reference(reference) => reference
+            .arguments
+            .iter()
+            .all(|argument| signature_cache_safe_argument(argument, depth + 1, budget)),
+    }
+}
+
 pub(crate) fn resolve_named_type(
     named_type: std::sync::Arc<ParsedNamedType>,
     ctx: &mut CheckerContext,
@@ -41,6 +119,17 @@ pub(crate) fn resolve_named_type(
         // positive against `@types/*` and generated namespace clients.
         if !named_type.name.contains('.') {
             emit_unknown_type_name(&named_type, ctx);
+        }
+        if crate::infer::types::interface::had_error_trace_enabled() {
+            eprintln!(
+                "[had-error] lookup-miss '{}' scope_installed={} file_in_map={} map_len={} check_phase={} in file {}",
+                named_type.name,
+                ctx.type_declaration_scope.is_some(),
+                ctx.module_scope_by_file.contains_key(ctx.file_name.as_str()),
+                ctx.module_scope_by_file.len(),
+                crate::program::in_check_phase(),
+                ctx.file_name
+            );
         }
         return ResolvedType {
             ty: Type::Unknown,
@@ -208,15 +297,86 @@ pub(crate) fn resolve_named_type(
         .iter()
         .all(|scope| scope.is_empty());
 
+    // Signature-context tier: a *user interface* instantiation made inside an
+    // open type-parameter scope (a generic signature or body) whose explicit
+    // argument tuple resolved cleanly to placeholder-free types is a pure
+    // function of (declaration, arguments) within that context class — nested
+    // references defer identically at every such site, the body binds only its
+    // own parameters, and check-phase module scopes are stable. Interning those
+    // expansions under a namespace-separated key lets the dominant repeated
+    // instantiations (measured on zod: ~7.7k clean re-expansions of
+    // `$ZodTypeInternals` alone) reuse one expansion instead of re-resolving
+    // the body per use site. Eligibility deliberately excludes: the analysis
+    // phase (scopes still move between binding rounds), library-scoped
+    // declarations (covered by the persistent library tier), defaults
+    // (`type_arguments.len() != type_parameters.len()` — defaults resolve under
+    // an effective substitution that can see the consumer), syntactic
+    // placeholder arguments (the placeholder mark changes body resolution
+    // beyond the argument value), `unknown`-carrying arguments (the sentinel
+    // collides across contexts), and declarations currently on the `resolving`
+    // stack (mid-cycle sites must keep their cycle behavior).
+    let signature_context_key = if !concrete_instantiation
+        && !library_scoped
+        && signature_context_cache_enabled()
+        && crate::program::in_check_phase()
+        && matches!(declaration, TypeDeclarationInfo::Interface(_))
+        && !resolving.iter().any(|key| key == &decl_key)
+        && named_type.type_arguments.len()
+            == match declaration {
+                TypeDeclarationInfo::Alias(alias) => alias.body.type_parameters.len(),
+                TypeDeclarationInfo::Interface(interface) => interface.body.type_parameters.len(),
+            }
+        && named_type
+            .type_arguments
+            .iter()
+            .all(|argument| !parsed_type_is_placeholder_reference(argument, substitution))
+        && reference_arguments.as_ref().is_some_and(|arguments| {
+            let mut budget = 96usize;
+            arguments
+                .iter()
+                .all(|argument| signature_cache_safe_argument(argument, 0, &mut budget))
+        }) {
+        // Display-inclusive identity: `Type` equality compares references by
+        // (id, arguments) only, so two argument tuples that are nominally equal
+        // but *render* differently (a lazy `$ZodErrorMap<T>` captured under one
+        // consumer's parameter name vs another's) would otherwise share a
+        // bucket and substitute the first site's rendering into every later
+        // consumer's diagnostics (the canonical-store display-substitution
+        // class; measured as zod message drift). Folding a deep display
+        // fingerprint of the tuple into the key keeps them apart, exactly as
+        // the interface cache's `DisplayTagged` argument identity does.
+        let mut display_hasher = surge_ts_types::fx::FxHasher::default();
+        for argument in reference_arguments.as_deref().unwrap_or_default() {
+            std::hash::Hasher::write_u64(
+                &mut display_hasher,
+                crate::speculative::display_type_fingerprint(argument),
+            );
+        }
+        let display_fingerprint = std::hash::Hasher::finish(&display_hasher);
+        Some(DeclarationResolutionKey {
+            file_name: decl_key.file_name.clone(),
+            name: Arc::from(format!("{}\u{1}{display_fingerprint:016x}", decl_key.name)),
+            namespace: crate::context::DeclarationNamespace::TypeSignatureContext,
+        })
+    } else {
+        None
+    };
+
     // Perf short-circuit: reuse a previously-interned instantiation with the same
     // resolved arguments without re-expanding the body. The interner holds only
     // diagnostic-free, cycle-independent, concrete expansions (see
     // `tag_generic_object_reference`), so a reused entry cannot drop a body
     // diagnostic — the hazard that makes a naive generic cache unsound.
-    if concrete_instantiation
-        && let Some(arguments) = reference_arguments.as_ref()
-        && let Some(entry) = lookup_instantiation(ctx, &decl_key, arguments)
+    if let Some(lookup_key) = if concrete_instantiation {
+        Some(&decl_key)
+    } else {
+        signature_context_key.as_ref()
+    } && let Some(arguments) = reference_arguments.as_ref()
+        && let Some(entry) = lookup_instantiation(ctx, lookup_key, arguments)
     {
+        if !concrete_instantiation {
+            crate::program::record_program_counter(|c| c.signature_context_generic_hit_count += 1);
+        }
         // An interned object with a display form keeps today's nominal wrapping;
         // any other entry (union, reference, primitive, or a display-less bare
         // reference — see the structural interning arm in
@@ -250,7 +410,7 @@ pub(crate) fn resolve_named_type(
                 &reference_id,
                 &decl_key,
                 reference_arguments.clone(),
-                true,
+                Some(&decl_key),
                 ctx,
             );
         }
@@ -336,6 +496,7 @@ pub(crate) fn resolve_named_type(
     // diagnostic. Track both the plain-diagnostic vector and the once-guard set.
     let diagnostics_before_body = ctx.diagnostics().len();
     let utility_keys_before_body = ctx.utility_diagnostic_keys.len();
+    let degradation_epoch_before_body = crate::program::expansion_degradation_epoch();
 
     let resolved = match declaration {
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
@@ -385,6 +546,30 @@ pub(crate) fn resolve_named_type(
     // re-entry (bounded peel, illegal cycle) sets `had_error`/emits, which the
     // remaining guards still exclude, so a thin shape is never frozen program-wide.
     let cacheable = concrete_instantiation && !body_emitted_diagnostics && !resolved.had_error;
+    // The signature-context tier stores under stricter gates than the concrete
+    // tier: additionally no degradation anywhere in the subtree (a nested
+    // bounded peel embeds a transient `unknown` that depends on the consumer's
+    // peel-stack state) and a validated value (no embedded sentinel, no
+    // context-retaining resolver).
+    let signature_context_store_key = signature_context_key.as_ref().filter(|_| {
+        subtree_lowest_cycle >= floor
+            && !body_emitted_diagnostics
+            && !resolved.had_error
+            && crate::program::expansion_degradation_epoch() == degradation_epoch_before_body
+            // Full physical-cache value validation, embedded-`unknown`
+            // rejection included. The sentinel-embedding shapes are exactly the
+            // ones that bake a first-resolution-window difference (a member
+            // expanded thin while its declaration was mid-first-resolution):
+            // tolerating them was measured to change real zod diagnostics
+            // (four TS2339s vanished plus one message render), so they stay
+            // per-site.
+            && validate_physical_interface_cache_value(&resolved.ty).is_ok()
+    });
+    let intern_key = if cacheable {
+        Some(&decl_key)
+    } else {
+        signature_context_store_key
+    };
 
     if subtree_lowest_cycle >= floor {
         if let (Some(key), Some(arguments)) = (generic_cache_key, cached_arguments) {
@@ -397,7 +582,7 @@ pub(crate) fn resolve_named_type(
         &reference_id,
         &decl_key,
         reference_arguments,
-        cacheable,
+        intern_key,
         ctx,
     )
 }
@@ -422,7 +607,7 @@ fn tag_generic_object_reference(
     reference_id: &str,
     decl_key: &DeclarationResolutionKey,
     arguments: Option<Vec<Type>>,
-    cacheable: bool,
+    intern_key: Option<&DeclarationResolutionKey>,
     ctx: &CheckerContext,
 ) -> ResolvedType {
     // When the parsed arguments were not renderable (e.g. an object-literal type
@@ -455,8 +640,9 @@ fn tag_generic_object_reference(
             // when it is diagnostic-free and cycle-independent; otherwise keep a
             // private expansion so no other site reuses a context-dependent or
             // diagnostic-suppressing result.
-            let interned = if cacheable {
-                intern_instantiation(ctx, decl_key, &arguments, structural)
+            let interned = if let Some(key) = intern_key {
+                record_signature_context_store(key);
+                intern_instantiation(ctx, key, &arguments, structural)
             } else {
                 std::sync::Arc::new(structural)
             };
@@ -481,11 +667,19 @@ fn tag_generic_object_reference(
         // produced shape. An `unknown` result (or a union carrying one) may be a
         // degradation sentinel from a bounded lazy peel, so it is never frozen
         // program-wide.
-        (_, Some(arguments), ty) if cacheable && !type_may_carry_degradation(ty) => {
-            intern_instantiation(ctx, decl_key, &arguments, resolved.ty.clone());
+        (_, Some(arguments), ty) if intern_key.is_some() && !type_may_carry_degradation(ty) => {
+            let key = intern_key.expect("guarded by intern_key.is_some()");
+            record_signature_context_store(key);
+            intern_instantiation(ctx, key, &arguments, resolved.ty.clone());
             resolved
         }
         (display_name, _, _) => tag_generic_object_alias(resolved, display_name),
+    }
+}
+
+fn record_signature_context_store(key: &DeclarationResolutionKey) {
+    if key.namespace == crate::context::DeclarationNamespace::TypeSignatureContext {
+        crate::program::record_program_counter(|c| c.signature_context_generic_store_count += 1);
     }
 }
 
@@ -617,5 +811,93 @@ fn attach_object_alias_name(resolved: ResolvedType, name: &str, alias_id: &str) 
             ty,
             had_error: resolved.had_error,
         },
+    }
+}
+
+#[cfg(test)]
+mod signature_context_cache_tests {
+    use crate::program::{SourceFileInput, check_program_with_stats_and_jobs};
+
+    fn fixture(count: usize) -> Vec<SourceFileInput> {
+        let mut files = vec![SourceFileInput {
+            file_name: "core.ts".to_string(),
+            source_text:
+                "export interface Internals<O, I> { out: O; inp: I; parse(value: I): O; }\n"
+                    .to_string(),
+        }];
+        files.extend((0..count).map(|i| SourceFileInput {
+            file_name: format!("use_{i}.ts"),
+            source_text: format!(
+                "import {{ Internals }} from \"./core\";\n\
+                 export function pick_{i}<T>(seed: T, internals: Internals<string, number>): string {{\n\
+                 \x20 return internals.out;\n\
+                 }}\n"
+            ),
+        }));
+        files
+    }
+
+    /// The zero-hit regression: repeated identical user-generic instantiations
+    /// inside generic signatures must produce nonzero signature-context stores
+    /// and hits, and hits must dominate once the tuple repeats. nextest runs
+    /// each test in its own process, so the global counters are isolated.
+    #[test]
+    fn repeated_signature_context_instantiations_hit_after_first_store() {
+        // Safety: set before any checker thread is spawned in this test process
+        // (nextest: one process per test). `check_program` re-derives the
+        // counters gate from this env var at the start of every run.
+        unsafe { std::env::set_var("SURGE_TIMINGS", "1") };
+        let result =
+            check_program_with_stats_and_jobs(fixture(10), crate::CheckerOptions::default(), 1);
+        assert!(
+            result.diagnostics.is_empty(),
+            "fixture is clean: {:?}",
+            result.diagnostics
+        );
+        let counters = crate::metrics::snapshot_program_counters();
+        assert!(
+            counters.signature_context_generic_store_count >= 1,
+            "expected at least one signature-context store, got {}",
+            counters.signature_context_generic_store_count
+        );
+        assert!(
+            counters.signature_context_generic_hit_count >= 8,
+            "expected repeated tuples to hit (10 modules, 1 unique tuple), got {} hits / {} stores",
+            counters.signature_context_generic_hit_count,
+            counters.signature_context_generic_store_count
+        );
+    }
+
+    /// Unknown-carrying tuples (a placeholder-typed argument) must never be
+    /// stored in or read from the signature-context tier.
+    #[test]
+    fn placeholder_argument_tuples_are_never_cached() {
+        // Safety: set before any checker thread is spawned in this test process
+        // (nextest: one process per test). `check_program` re-derives the
+        // counters gate from this env var at the start of every run.
+        unsafe { std::env::set_var("SURGE_TIMINGS", "1") };
+        let mut files = vec![SourceFileInput {
+            file_name: "core.ts".to_string(),
+            source_text: "export interface Internals<O, I> { out: O; inp: I; }\n".to_string(),
+        }];
+        files.extend((0..6).map(|i| SourceFileInput {
+            file_name: format!("use_{i}.ts"),
+            source_text: format!(
+                "import {{ Internals }} from \"./core\";\n\
+                 export function poly_{i}<T>(seed: T, internals: Internals<T, T>): T {{\n\
+                 \x20 return internals.out;\n\
+                 }}\n"
+            ),
+        }));
+        let _ = check_program_with_stats_and_jobs(files, crate::CheckerOptions::default(), 1);
+        let counters = crate::metrics::snapshot_program_counters();
+        assert_eq!(
+            counters.signature_context_generic_store_count, 0,
+            "placeholder tuples must not be stored"
+        );
+        assert_eq!(
+            counters.signature_context_generic_hit_count, 0,
+            "placeholder tuples must not hit"
+        );
     }
 }
