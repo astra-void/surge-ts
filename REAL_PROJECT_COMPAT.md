@@ -11,8 +11,9 @@ Cargo crates are still named `surge-ts-*`; the CLI binary is `surge`.
 
 - auth-kit matches TypeScript exactly at 0/0 diagnostics under the measured
   command set.
-- The oracle preset sweep is 76/76 under the normal gate (diagnostic code-count
-  and file/code/line). Message-text and span/column drift are reported but
+- The oracle preset sweep is 98/98 under the normal gate (diagnostic code-count
+  and file/code/line) as of 2026-07-29, after adding
+  `namespace-import-qualified-member-basic`. Message-text and span/column drift are reported but
   non-gating unless `--strictMessages` / `--strictSpans` are passed. The
   `namespace-import-reexport-basic` preset pins re-export of namespace/named/
   default import bindings (`import * as z; export { z }`).
@@ -71,11 +72,92 @@ pinned at exact file/code/line parity.
 Shapes below currently mismatch the oracle and were reduced out of the
 fixtures rather than pinned. Each is a candidate checker fix; none is gated.
 
-- `interface X extends NS.Member` does not see members merged into
-  `NS.Member` from other files' `declare global { namespace NS { ... } }`
-  blocks (surge-only TS2339). Direct type-position use of `NS.Member` sees the
-  merge. This is the `Express.Request` global-namespace pattern; the express
+- A qualified heritage clause (`interface X extends NS.Member`,
+  `class C extends NS.Base`) inherits **no** members at all — not merely the
+  cross-file merged ones. `parse_interface_heritage` /`parse_class_heritage`
+  (`crates/surge-ts-syntax/src/parser/`) accept only a bare
+  `Expression::Identifier`, so a dotted base is dropped at parse time and the
+  derived type is built with an empty heritage list. Every inherited access is
+  then a surge-only TS2339, and tsc's TS2503/TS2694 for an unresolvable
+  qualified base are never emitted. This affects local, `declare`, global, and
+  namespace-imported namespaces alike; direct type-position use of
+  `NS.Member` is correct. This is the `Express.Request` pattern; the express
   fixtures use `declare module` augmentation instead.
+
+  Reproduction (measured 2026-07-29, tsc 7.0.2):
+  `tests/compat-projects/interface-qualified-heritage-basic` — 8 intentional
+  errors, ~24 positive assertions. It is **not registered** as an oracle
+  preset because the checker does not support the shape; see the fixture's
+  `README.md`. A parse-side fix was implemented and measured this session: it
+  reached exact 8/8 parity there and removed 371 net zod false positives, but
+  regressed zod by +77% wall / +44% peak footprint and tRPC by +10% / +7%, so
+  it was reverted under the Phase 8 policy. Root cause of the regression:
+  resolving the previously-dropped bases roughly doubles
+  `interface_resolution_attempt_count` and more than doubles
+  `interface_resolution_degraded_count` (zod 61k → 147k, tRPC 69k → 126k);
+  degraded resolutions are never cached (see
+  [docs/PERFORMANCE_INVARIANTS.md](docs/PERFORMANCE_INVARIANTS.md)), so each
+  one is recomputed at every use site. Landing this shape needs the
+  underlying base resolutions (`stream.Writable`, `http.IncomingMessage`,
+  and nested-namespace-through-import members) to resolve *cleanly* first, so
+  the results become cacheable.
+  Fixing the qualified-member resolution below did **not** unblock it: with
+  both changes applied, zod's `interface_resolution_degraded_count` is
+  unchanged at 147,148. The trace instead shows `cache_hits=0` on every hot
+  user generic (`$ZodTypeInternals`: 31,121 attempts, 150 unique argument
+  tuples, 0 cache hits; `lib.es2015.collection.d.ts::ReadonlyMap`: 9,474
+  attempts, 100% degraded).
+
+  Re-measured 2026-07-29 after the signature-context generic-instantiation
+  cache landed (see
+  [docs/perf/SIGNATURE-CONTEXT-GENERIC-CACHE.md](docs/perf/SIGNATURE-CONTEXT-GENERIC-CACHE.md)):
+  still rejected. The cache doubles its zod hits under the patch
+  (7,001 → 13,110) but only absorbs the *clean* fraction; the explosion is in
+  degraded resolutions (zod 60,961 → 147,132, attempts 162,686 → 292,888),
+  which are uncacheable by invariant — and demonstrably so: an experiment
+  that program-wide-cached the sentinel-embedding expansions changed real zod
+  diagnostics (four TS2339s vanished, one message render drifted). Interleaved
+  A/B at the patch (7/7 pairs): zod `--jobs auto` 2.13 s → 3.78 s (+77%),
+  peak footprint 645 MB → 885 MB (+37%). The remaining lever is making the
+  newly-resolved base expansions *clean* (they degrade because their bodies
+  carry placeholder/`unknown`-sentinel members in generic contexts), not
+  caching them.
+
+  Degradation-provenance work, 2026-07-29 (see
+  [docs/perf/CLEAN-GENERIC-BASE-EXPANSION.md](docs/perf/CLEAN-GENERIC-BASE-EXPANSION.md)):
+  a per-origin `had_error` trace split the explosion into (1) a check-phase
+  unbound-`infer`-capture family (`MakeReadonly`'s `Map<infer K, infer V>`
+  branch selected for `any`/sentinel members, then `ReadonlyMap<K, V>`
+  resolved with `K`/`V` unresolvable) — fixed by the distributive-conditional
+  member guards, removing 3 zod + 6 tRPC false positives with zero additions —
+  and (2) a larger analysis-phase family where declaration bodies resolve
+  under import-less pre-attached scopes while `module_scope_by_file` is
+  deliberately absent (the `core.output`-class silent misses). Repairing (2)
+  via authoritative-map substitution in environment recovery was measured and
+  **reverted**: it exposed a latent two-copy nominal-identity gap in
+  dependency `.d.ts` resolution (three new FPs: tinybench `Task` vs `Task`,
+  `QueryClient` vs `QueryClient`, playwright `MakeMatchers`). That identity
+  gap is the prerequisite for the next attempt on (2), which is itself the
+  bulk of the heritage explosion. The guards landed with zod 912 → 909 and
+  tRPC 1878 → 1872 (all removals, adjudicated FP-only; ky/ofetch/unnamed
+  byte-identical) and neutral-to-positive perf (zod auto −1.7% wall, 11/11
+  pairs). Heritage re-applied on top of them was re-measured: zod auto
+  2.27 s → 3.61 s (**+59%**, 0/7 pairs) / peak +26% — better than the
+  pre-batch +77%/+37% but still rejected; degraded resolutions under
+  heritage fall 147,132 → 126,517.
+- ~~A namespace member reached through a namespace import with three or more
+  segments (`import * as N from "./m"; N.NS.Member`) does not resolve.~~
+  **Fixed 2026-07-29** and gated by the
+  `namespace-import-qualified-member-basic` preset. The namespace-import alias
+  table flattened a qualified export key (`util.TupleItems`) to its last
+  segment, registering `core.TupleItems` instead of `core.util.TupleItems`, so
+  the real name never resolved and the type silently opened (a false negative:
+  tsc's member errors were missed). The alias table now keys members by their
+  full exported path. Named-namespace imports (`import { util }`) were already
+  correct. Note the residual message-only drift: surge renders the qualified
+  name (`core.util.TupleItems`) where tsc renders the declaration name
+  (`TupleItems`); this is pre-existing, non-gating, and applies to all
+  qualified references.
 - Module augmentations of a package interface are lost when the interface is
   imported through a star re-export wrapper (`export * from "core"` in
   `wrapper`; importing from `wrapper` yields the unaugmented shape, importing
