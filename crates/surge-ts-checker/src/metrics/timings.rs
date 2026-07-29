@@ -855,6 +855,14 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         counters.instantiation_intern_capped_count
     );
     eprintln!(
+        "    signature_context_generic_hit_count: {}",
+        counters.signature_context_generic_hit_count
+    );
+    eprintln!(
+        "    signature_context_generic_store_count: {}",
+        counters.signature_context_generic_store_count
+    );
+    eprintln!(
         "    named_type_cache_hit_count: {}",
         counters.named_type_cache_hit_count
     );
