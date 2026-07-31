@@ -5,10 +5,17 @@ use surge_ts_checker::SourceFileInput;
 use surge_ts_checker::lowlevel::resolution_candidates::mapped_target_candidates;
 use surge_ts_config::PathMapping;
 use surge_ts_config::{canonicalize_if_exists_string, select_path_mapping_targets};
-use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, ParserWorker};
 
-pub fn resolve_path_mappings(
+use crate::specifier_scan::ModuleSpecifierScanner;
+
+/// Resolve `paths`/`baseUrl` specifiers against the loaded file set. The
+/// specifier lists come from the loader's scanner cache (`sources` must be the
+/// loader's append-only source vector the scanner was indexed by), so no file
+/// is re-parsed here.
+pub(crate) fn resolve_path_mappings(
     inputs: &[SourceFileInput],
+    sources: &[(std::path::PathBuf, String, String)],
+    scanner: &mut ModuleSpecifierScanner,
     paths: &[PathMapping],
     base_url: Option<&Path>,
     root_dir: &Path,
@@ -33,32 +40,11 @@ pub fn resolve_path_mappings(
     }
 
     let mut specifiers_to_resolve = HashSet::new();
-
-    let mut parser = ParserWorker::new();
-    for input in inputs {
-        let parsed = parser.parse(&input.source_text, &input.file_name);
-        for statement in parsed.statements {
-            match statement {
-                ParsedStatement::ImportDeclaration(import) => {
-                    if is_external_specifier(&import.module_specifier) {
-                        specifiers_to_resolve.insert(import.module_specifier.clone());
-                    }
-                }
-                ParsedStatement::ExportDeclaration(export) => match *export {
-                    ParsedExportDeclaration::Named {
-                        module_specifier: Some(module_specifier),
-                        ..
-                    }
-                    | ParsedExportDeclaration::All {
-                        module_specifier, ..
-                    } => {
-                        if is_external_specifier(&module_specifier) {
-                            specifiers_to_resolve.insert(module_specifier.clone());
-                        }
-                    }
-                    _ => {}
-                },
-                _ => {}
+    for index in 0..sources.len() {
+        let (_, file_name, source_text) = &sources[index];
+        for specifier in scanner.specifiers(index, file_name, source_text).iter() {
+            if is_external_specifier(specifier) {
+                specifiers_to_resolve.insert(specifier.clone());
             }
         }
     }
@@ -169,6 +155,26 @@ mod tests {
         canonicalize_if_exists_string(Path::new(file_name))
     }
 
+    fn resolve(
+        inputs: &[SourceFileInput],
+        paths: &[PathMapping],
+        base_url: Option<&Path>,
+        root_dir: &Path,
+    ) -> HashMap<String, String> {
+        let sources: Vec<(PathBuf, String, String)> = inputs
+            .iter()
+            .map(|input| {
+                (
+                    PathBuf::from(&input.file_name),
+                    input.file_name.clone(),
+                    input.source_text.clone(),
+                )
+            })
+            .collect();
+        let mut scanner = ModuleSpecifierScanner::new();
+        resolve_path_mappings(inputs, &sources, &mut scanner, paths, base_url, root_dir)
+    }
+
     // `baseUrl: src` anchors both `paths` substitutions and the bare-import
     // fallback, matching how roblox-ts (and other `baseUrl` projects) resolve.
     #[test]
@@ -193,7 +199,7 @@ mod tests {
             substitutions: vec!["runtime/*".to_string()],
         }];
 
-        let resolved = resolve_path_mappings(&inputs, &paths, Some(base_url.as_path()), &root);
+        let resolved = resolve(&inputs, &paths, Some(base_url.as_path()), &root);
 
         assert_eq!(
             resolved.get("shared/constants").map(String::as_str),
@@ -221,7 +227,7 @@ mod tests {
 
         // `paths` empty + no `baseUrl`: the early return means nothing resolves,
         // even though the target file is loaded.
-        let resolved = resolve_path_mappings(&inputs, &[], None, &root);
+        let resolved = resolve(&inputs, &[], None, &root);
         assert!(resolved.get("shared/constants").is_none());
     }
 }

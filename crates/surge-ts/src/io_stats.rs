@@ -78,6 +78,11 @@ pub fn report_probe_dirs() {
             "[probe-dirs] probes={total} dirs={dirs} mean={:.1} median={median} p90={p90} max={max}",
             total as f64 / dirs.max(1) as f64,
         );
+        let mut rows: Vec<_> = map.iter().collect();
+        rows.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+        for (dir, count) in rows.into_iter().take(20) {
+            eprintln!("[probe-dirs]   {count}: {}", dir.display());
+        }
     }
 }
 

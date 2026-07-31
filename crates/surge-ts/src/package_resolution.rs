@@ -24,6 +24,14 @@ pub struct ResolverOptions {
     pub resolve_imports: bool,
     /// `customConditions`, in configured priority order.
     pub custom_conditions: Vec<String>,
+    /// tsconfig `paths` patterns. A bare specifier that matches a pattern and
+    /// resolves to an existing mapped file is handled by path mapping, so the
+    /// package-declaration walk must not run for it (tsc only falls back to
+    /// `node_modules` when no mapped target exists).
+    pub path_mappings: Vec<surge_ts_config::PathMapping>,
+    /// Base directory `paths` targets resolve against: `baseUrl` when set,
+    /// else the config directory.
+    pub path_mapping_base: Option<std::path::PathBuf>,
 }
 
 impl Default for ResolverOptions {
@@ -33,6 +41,8 @@ impl Default for ResolverOptions {
             resolve_exports: true,
             resolve_imports: true,
             custom_conditions: Vec::new(),
+            path_mappings: Vec::new(),
+            path_mapping_base: None,
         }
     }
 }

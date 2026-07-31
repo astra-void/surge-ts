@@ -271,10 +271,10 @@ fn probe_loadable_candidates(
     None
 }
 
-// Each probe previously issued two stat syscalls (`exists()` then `is_file()`).
-// A single `metadata` call answers both, and most extensionless specifiers fan
-// out to ~15 candidate paths, so caching by path collapses repeated probes for
-// modules imported from many files.
+// Most extensionless specifiers fan out to ~15 candidate paths and modules are
+// imported from many files, so hits are memoized by path; misses go through
+// the shared probe layer, which upgrades hot directories to a one-shot
+// `read_dir` listing.
 fn candidate_is_existing_file(
     candidate: &Path,
     cache: &mut surge_ts_types::fx::FxHashMap<String, bool>,
@@ -283,12 +283,7 @@ fn candidate_is_existing_file(
     if let Some(&hit) = cache.get(key.as_ref()) {
         return hit;
     }
-    let probe_start = std::time::Instant::now();
-    let is_file = fs::metadata(candidate)
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false);
-    crate::io_stats::record_existence_probe(probe_start.elapsed());
-    crate::io_stats::record_probe_parent(candidate);
+    let is_file = crate::probe::is_existing_file(candidate);
     cache.insert(key.into_owned(), is_file);
     is_file
 }

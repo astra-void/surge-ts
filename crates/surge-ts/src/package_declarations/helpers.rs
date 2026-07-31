@@ -824,6 +824,40 @@ pub(super) fn extract_packages_from_source(
     }
 }
 
+/// Whether a bare specifier is claimed by tsconfig `paths`: a pattern matches
+/// and one of the mapped targets exists as a loadable TypeScript file (the
+/// same candidate set and filter the import-graph expander uses). When true,
+/// resolution ends at the mapped file and tsc performs no `node_modules`
+/// fallback, so the package-declaration walk must be skipped.
+fn resolved_by_path_mapping(specifier: &str, opts: &ResolverOptions) -> bool {
+    if opts.path_mappings.is_empty() {
+        return false;
+    }
+    let Some(base) = opts.path_mapping_base.as_deref() else {
+        return false;
+    };
+    let Some(targets) = surge_ts_config::select_path_mapping_targets(specifier, &opts.path_mappings)
+    else {
+        return false;
+    };
+    for target in targets {
+        let joined = surge_ts_config::normalize_path_string(&base.join(&target).to_string_lossy());
+        for candidate in
+            surge_ts_checker::lowlevel::resolution_candidates::mapped_target_candidates(&joined)
+        {
+            let lower = candidate.to_ascii_lowercase();
+            let loadable = lower.ends_with(".ts")
+                || lower.ends_with(".tsx")
+                || lower.ends_with(".mts")
+                || lower.ends_with(".cts");
+            if loadable && crate::probe::is_existing_file(Path::new(&candidate)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Queue a module specifier for package resolution. Handles `#alias` imports and
 /// bare/scoped package specifiers; relative specifiers are ignored (handled by
 /// the import-graph expander). Deduplication is per (importer file, specifier):
@@ -863,6 +897,10 @@ pub(super) fn queue_specifier(
     }
 
     if !is_external_specifier(specifier) {
+        return;
+    }
+
+    if resolved_by_path_mapping(specifier, opts) {
         return;
     }
 

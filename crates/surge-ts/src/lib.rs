@@ -296,6 +296,14 @@ impl Project {
             resolve_exports: loaded.compiler_options.resolve_package_json_exports,
             resolve_imports: loaded.compiler_options.resolve_package_json_imports,
             custom_conditions: loaded.compiler_options.custom_conditions.clone(),
+            path_mappings: loaded.compiler_options.paths.clone(),
+            path_mapping_base: Some(
+                loaded
+                    .compiler_options
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| loaded.root_dir.clone()),
+            ),
         };
 
         let type_package_resolution = package_declarations::resolve_type_packages(
@@ -413,6 +421,25 @@ impl Project {
                 .saturating_sub(canonicalize_baseline.miss_io);
         }
 
+        // Path mapping reuses the scanner's cached per-file specifier lists,
+        // so it must run against the pre-splice `sources` order the scanner
+        // was indexed by (default libs contribute no external specifiers).
+        let path_mapping_start = Instant::now();
+        let path_modules = path_mapping::resolve_path_mappings(
+            &inputs,
+            &sources,
+            &mut specifier_scanner,
+            &loaded.compiler_options.paths,
+            loaded.compiler_options.base_url.as_deref(),
+            &loaded.root_dir,
+        );
+        for (k, v) in path_modules {
+            resolved_modules.insert(k, v);
+        }
+        if collect {
+            timings.path_mapping_resolution += path_mapping_start.elapsed();
+        }
+
         // Default-lib sources never contribute project imports or package
         // specifiers, so they stay out of the package-declaration / import-graph
         // scan above. Splice them to the front now, preserving the
@@ -456,24 +483,11 @@ impl Project {
             checker_types.push("*".to_string());
         }
 
-        let path_mapping_start = Instant::now();
-        let path_modules = path_mapping::resolve_path_mappings(
-            &inputs,
-            &loaded.compiler_options.paths,
-            loaded.compiler_options.base_url.as_deref(),
-            &loaded.root_dir,
-        );
-        for (k, v) in path_modules {
-            resolved_modules.insert(k, v);
-        }
         if loaded.compiler_options.allow_synthetic_default_imports {
             resolved_modules.insert(
                 CheckerOptions::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL.to_string(),
                 String::new(),
             );
-        }
-        if collect {
-            timings.path_mapping_resolution += path_mapping_start.elapsed();
         }
 
         let checker_options = CheckerOptions {
