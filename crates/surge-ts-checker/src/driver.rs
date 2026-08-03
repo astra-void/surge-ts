@@ -61,6 +61,12 @@ pub fn check_source_with_options(
     for (k, v) in ctx.symbols.iter() {
         let _ = merged_sym.insert(k.clone(), v.clone());
     }
+    // Classes hoist as values, but `check_class_declaration` never installs the
+    // symbol (and skips ambient classes outright), so without this pass a
+    // single-file `typeof <Class>` annotation reports a false TS2304 and a
+    // reference to the constructor reports a false TS2693. The program path gets
+    // the same symbols from `collect_global_function_signatures`.
+    crate::program::collect_class_value_symbols(&parsed.statements, &mut merged_sym, &mut ctx);
     ctx.set_symbols(merged_sym);
 
     let current_type_declarations = ctx.type_declarations.clone();

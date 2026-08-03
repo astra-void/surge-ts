@@ -6745,3 +6745,89 @@ fn distributive_conditional_fixtures_deterministic_across_jobs() {
         );
     }
 }
+
+#[test]
+fn typeof_class_in_script_file_annotation_resolves() {
+    // A script (non-module) `.ts` file lowers its `declare` variable annotations
+    // in the script-global pass, which used to map `typeof <Class>` against a
+    // context that could not see the class constructor symbols collected just
+    // above it — a false TS2304 on user code that a `.d.ts` never hit.
+    let diagnostics = program(&[(
+        "src/index.ts",
+        "type CtorArgs<T extends new (..._a: any) => any> = ConstructorParameters<T>[0];\n\
+         declare class AppendCmd {\n\
+         \x20 constructor(cmd: [key: string, value: string]);\n\
+         }\n\
+         declare const append: (...args: CtorArgs<typeof AppendCmd>) => void;\n\
+         append(\"k\", \"v\");\n",
+    )]);
+
+    assert!(
+        diagnostics.is_empty(),
+        "typeof of a script-file class must resolve: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+}
+
+#[test]
+fn typeof_class_in_single_file_annotation_resolves() {
+    // Same query under the single-file driver, which has no script-global pass:
+    // classes hoist as values, but `check_class_declaration` never installs the
+    // symbol, so both the `typeof` annotation and the value reference degraded.
+    let diagnostics = check_source(
+        "declare class AppendCmd {\n\
+         \x20 static tag: string;\n\
+         \x20 constructor(cmd: string);\n\
+         }\n\
+         class Plain {\n\
+         \x20 constructor(a: number) {}\n\
+         }\n\
+         declare const a: typeof AppendCmd;\n\
+         declare const b: typeof Plain;\n\
+         const tag: string = a.tag;\n\
+         const made: Plain = new b(1);\n",
+        "index.ts",
+    );
+
+    assert!(
+        diagnostics.is_empty(),
+        "class constructor symbols must hoist before statement checking: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+}
+
+#[test]
+fn typeof_class_hoisting_keeps_static_and_construct_signatures() {
+    // The hoisted symbol must be the real constructor object, not a permissive
+    // stand-in: static member types and the construct signature still check.
+    let diagnostics = check_source(
+        "declare class C {\n\
+         \x20 static s: number;\n\
+         \x20 constructor(a: string);\n\
+         }\n\
+         declare const v: typeof C;\n\
+         const bad: string = v.s;\n\
+         new v(1);\n",
+        "index.ts",
+    );
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2322", "TS2345"],
+        "hoisted class value must keep static/construct types: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+}
+
+#[test]
+fn typeof_missing_name_still_reports_ts2304() {
+    // The hoisting fallback must not swallow genuinely-unresolvable queries.
+    let diagnostics = check_source("declare const v: typeof NotDeclared;\n", "index.ts");
+
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2304"],
+        "an unknown name in `typeof` position must still report: {:?}",
+        rendered_sorted(&diagnostics)
+    );
+}

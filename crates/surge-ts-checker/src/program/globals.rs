@@ -194,6 +194,18 @@ pub(crate) fn collect_global_variables(
     global_symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
 ) {
+    // Annotations are mapped here, long before `global_symbols` becomes the
+    // check phase's symbol table, so a `typeof <scriptGlobal>` query resolves
+    // against a context that cannot see the script globals collected above it —
+    // class constructor symbols in particular, which exist nowhere else at this
+    // point. Expose the snapshot as the `typeof` fallback so
+    // `declare const x: typeof SomeClass` resolves instead of reporting a false
+    // TS2304. Purely additive: the fallback is the last link of the lookup
+    // chain, and the loop only ever adds variables to `global_symbols`.
+    let saved_module_value_fallback = ctx.module_value_fallback.replace(Arc::new(
+        global_symbols.clone_with_reason(surge_ts_types::TypeCopyReason::SymbolTable),
+    ));
+
     for parsed_file in parsed_files {
         if parsed_file.file_kind == FileKind::GeneratedDeclaration {
             continue;
@@ -254,6 +266,8 @@ pub(crate) fn collect_global_variables(
             }
         }
     }
+
+    ctx.module_value_fallback = saved_module_value_fallback;
 }
 
 #[allow(dead_code)]

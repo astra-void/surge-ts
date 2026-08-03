@@ -8,8 +8,10 @@
 
 use surge_ts_syntax::{
     ParsedBindingName, ParsedClassAccessor, ParsedClassDeclaration, ParsedClassMember,
-    ParsedClassMethod, ParsedClassProperty, ParsedFunctionParameter, ParsedFunctionType,
-    ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedNamedType, ParsedType,
+    ParsedClassMethod, ParsedClassProperty, ParsedDefaultExportDeclaration,
+    ParsedExportDeclaration, ParsedFunctionParameter, ParsedFunctionType,
+    ParsedFunctionTypeParameter, ParsedInterfaceMember, ParsedNamedType, ParsedStatement,
+    ParsedType,
 };
 use surge_ts_types::{FunctionType, ObjectProperty, ObjectType, PropertyMap, Type};
 
@@ -438,4 +440,45 @@ pub(crate) fn collect_class(class: &ParsedClassDeclaration, ctx: &mut CheckerCon
     let _ = ctx
         .type_declarations
         .insert(class.name.clone(), TypeDeclarationInfo::Interface(info));
+}
+
+/// Builds the constructor/static value symbol of every top-level class, keyed by
+/// name, mirroring what `collect_function_signature_from_statement` does for the
+/// program's script-global pass. Classes hoist as values in TypeScript, so a
+/// `typeof <Class>` annotation — or any reference preceding the declaration —
+/// must see the symbol before statement checking begins. Duplicates are
+/// first-wins, matching `collect_class`'s handling of the instance type.
+/// Requires the class *type* declarations to be collected already, since the
+/// construct signature names the instance type.
+pub(crate) fn collect_class_value_symbols(
+    statements: &[ParsedStatement],
+    symbols: &mut crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for statement in statements {
+        let class = match statement {
+            ParsedStatement::ClassDeclaration(class) => class,
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => {
+                    collect_class_value_symbols(
+                        std::slice::from_ref(declaration.as_ref()),
+                        symbols,
+                        ctx,
+                    );
+                    continue;
+                }
+                ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Class(class),
+                    ..
+                } => class,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if symbols.get(&class.name).is_some() {
+            continue;
+        }
+        let symbol = build_class_value_symbol(class, ctx);
+        symbols.insert(class.name.clone(), symbol);
+    }
 }
