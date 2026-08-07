@@ -1536,7 +1536,7 @@ pub(crate) fn stable_interface_declaration_id(
             interface
                 .declared_name
                 .as_deref()
-                .unwrap_or(interface.name.as_str()),
+                .unwrap_or(&interface.name),
         ),
         merged_fragments: Arc::from(merged_fragments),
     })

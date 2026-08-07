@@ -511,13 +511,13 @@ fn collect_named_local_type_declaration(
 
     let matches = |declaration: &TypeDeclarationInfo| match (kind, declaration) {
         (LocalDeclarationKind::Alias, TypeDeclarationInfo::Alias(info)) => {
-            info.name == name
-                && canonicalize_if_exists_string(std::path::Path::new(&info.file_name))
+            &*info.name == name
+                && canonicalize_if_exists_string(std::path::Path::new(&*info.file_name))
                     == *canonical_file_name
         }
         (LocalDeclarationKind::Interface, TypeDeclarationInfo::Interface(info)) => {
-            info.name == name
-                && canonicalize_if_exists_string(std::path::Path::new(&info.file_name))
+            &*info.name == name
+                && canonicalize_if_exists_string(std::path::Path::new(&*info.file_name))
                     == *canonical_file_name
         }
         _ => false,
@@ -638,7 +638,7 @@ fn collect_namespace_type_declarations_prefixed(
                 let mut register = |key: String| {
                     let info = InterfaceInfo::new(
                         key.clone(),
-                        ctx.file_name.clone(),
+                        ctx.file_name_arc(),
                         interface.name_span,
                         interface.type_parameters.clone(),
                         interface.extends.clone(),
@@ -661,7 +661,7 @@ fn collect_namespace_type_declarations_prefixed(
                 let mut register = |key: String| {
                     let info = TypeAliasInfo::new(
                         key.clone(),
-                        ctx.file_name.clone(),
+                        ctx.file_name_arc(),
                         alias.name_span,
                         alias.type_parameters.clone(),
                         alias.ty.clone(),
@@ -737,7 +737,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                 let declaration = crate::symbols::TypeDeclarationInfo::Alias(
                                     crate::symbols::TypeAliasInfo::new(
                                         specifier.local_name.to_string(),
-                                        ctx.file_name.clone(),
+                                        ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
                                         surge_ts_syntax::ParsedType::Unknown,
@@ -751,7 +751,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                 let declaration = crate::symbols::TypeDeclarationInfo::Alias(
                                     crate::symbols::TypeAliasInfo::new(
                                         specifier.local_name.to_string(),
-                                        ctx.file_name.clone(),
+                                        ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
                                         surge_ts_syntax::ParsedType::Unknown,
@@ -782,7 +782,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                             let declaration = crate::symbols::TypeDeclarationInfo::Alias(
                                 crate::symbols::TypeAliasInfo::new(
                                     local_name.clone(),
-                                    ctx.file_name.clone(),
+                                    ctx.file_name_arc(),
                                     *name_span,
                                     vec![],
                                     surge_ts_syntax::ParsedType::Unknown,
@@ -808,7 +808,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                 let declaration = crate::symbols::TypeDeclarationInfo::Alias(
                                     crate::symbols::TypeAliasInfo::new(
                                         specifier.local_name.to_string(),
-                                        ctx.file_name.clone(),
+                                        ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
                                         surge_ts_syntax::ParsedType::Unknown,
@@ -822,7 +822,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                 let declaration = crate::symbols::TypeDeclarationInfo::Alias(
                                     crate::symbols::TypeAliasInfo::new(
                                         specifier.local_name.to_string(),
-                                        ctx.file_name.clone(),
+                                        ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
                                         surge_ts_syntax::ParsedType::Unknown,
@@ -862,7 +862,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                             let declaration = crate::symbols::TypeDeclarationInfo::Alias(
                                 crate::symbols::TypeAliasInfo::new(
                                     local_name.clone(),
-                                    ctx.file_name.clone(),
+                                    ctx.file_name_arc(),
                                     None,
                                     vec![],
                                     surge_ts_syntax::ParsedType::Unknown,
@@ -1072,7 +1072,7 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
 
     let info = TypeAliasInfo::new(
         alias.name.clone(),
-        ctx.file_name.clone(),
+        ctx.file_name_arc(),
         alias.name_span,
         alias.type_parameters.clone(),
         alias.ty.clone(),
@@ -1099,7 +1099,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
 
     let info = InterfaceInfo::new(
         interface.name.clone(),
-        ctx.file_name.clone(),
+        ctx.file_name_arc(),
         interface.name_span,
         interface.type_parameters.clone(),
         interface.extends.clone(),

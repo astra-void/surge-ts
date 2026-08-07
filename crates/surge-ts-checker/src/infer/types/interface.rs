@@ -96,7 +96,7 @@ pub(crate) fn resolve_interface(
     let local_substitution = bound_arguments.substitution;
 
     if is_generated_default_lib_file_name(&interface.file_name) {
-        match interface.name.as_str() {
+        match &*interface.name {
             "Array" | "ReadonlyArray" => {
                 let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
                 resolving.pop();
@@ -135,7 +135,7 @@ pub(crate) fn resolve_interface(
     }
 
     if is_physical_default_lib_file_name(&interface.file_name) {
-        match interface.name.as_str() {
+        match &*interface.name {
             // The lib declares `Array`/`ReadonlyArray` as interfaces, but they
             // model the same structure as the `T[]` syntax (which lowers to
             // `Type::Array`). Collapse them so an `Array<T>` annotation and a
@@ -181,7 +181,7 @@ pub(crate) fn resolve_interface(
     // awaited value (as the physical-lib path does for implicit-await) would
     // strip those members and over-report.
     if ctx.options.no_lib
-        && matches!(interface.name.as_str(), "Array" | "ReadonlyArray")
+        && matches!(&*interface.name, "Array" | "ReadonlyArray")
         && crate::program::is_configured_types_global_file(&interface.file_name, &ctx.options.types)
     {
         let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);

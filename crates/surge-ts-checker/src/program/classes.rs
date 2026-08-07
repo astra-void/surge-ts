@@ -13,6 +13,8 @@ use surge_ts_syntax::{
 };
 use surge_ts_types::{FunctionType, ObjectProperty, ObjectType, PropertyMap, Type};
 
+use std::sync::Arc;
+
 use surge_ts_diagnostics::Diagnostic;
 
 use crate::checks::function::{
@@ -26,7 +28,7 @@ use crate::symbols::{InterfaceInfo, SymbolInfo, SymbolKind, TypeDeclarationInfo}
 /// Static members and the constructor are excluded; they live on the value side.
 pub(crate) fn class_instance_interface_info(
     class: &ParsedClassDeclaration,
-    file_name: String,
+    file_name: Arc<str>,
 ) -> InterfaceInfo {
     let mut members: Vec<_> = class
         .members
@@ -434,7 +436,7 @@ fn collect_inherited_instance_member_names(
 /// Inserts a class's instance-side interface into the current type-declaration
 /// table. Mirrors `collect_interface` for first-wins / duplicate behaviour.
 pub(crate) fn collect_class(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
-    let info = class_instance_interface_info(class, ctx.file_name.clone());
+    let info = class_instance_interface_info(class, ctx.file_name_arc());
     let _ = ctx
         .type_declarations
         .insert(class.name.clone(), TypeDeclarationInfo::Interface(info));

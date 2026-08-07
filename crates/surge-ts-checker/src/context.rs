@@ -854,6 +854,10 @@ pub(crate) struct InterfaceOverloadInstantiationKey {
 #[derive(Debug, Clone)]
 pub(crate) struct CheckerContext {
     pub(crate) file_name: String,
+    /// Lazily built `Arc` copy of `file_name`, invalidated by `set_file_name`.
+    /// Declaration headers collected for one file share this single allocation
+    /// instead of owning a path copy per header.
+    file_name_arc: Option<Arc<str>>,
     pub(crate) current_file_kind: FileKind,
     pub(crate) options: Arc<CheckerOptions>,
     pub(crate) diagnostics: Vec<Diagnostic>,
@@ -1058,6 +1062,7 @@ impl CheckerContext {
 
         Self {
             file_name,
+            file_name_arc: None,
             current_file_kind,
             options,
             diagnostics: Vec::new(),
@@ -1148,6 +1153,7 @@ impl CheckerContext {
     ) -> Self {
         Self {
             file_name: data.file_name.clone(),
+            file_name_arc: None,
             current_file_kind: data.current_file_kind,
             options: data.options.clone(),
             diagnostics: Vec::new(),
@@ -1361,6 +1367,7 @@ impl CheckerContext {
             self.declaration_environment_generation =
                 self.declaration_environment_generation.wrapping_add(1);
             self.environment_visit_counter = self.environment_visit_counter.wrapping_add(1);
+            self.file_name_arc = None;
         }
         self.current_file_kind = self
             .file_kinds
@@ -1368,6 +1375,19 @@ impl CheckerContext {
             .copied()
             .unwrap_or(FileKind::RootSource);
         self.file_name = file_name;
+    }
+
+    /// The memo is revalidated against `file_name` on every call because a few
+    /// callers rebind `file_name` directly instead of through `set_file_name`.
+    pub(crate) fn file_name_arc(&mut self) -> Arc<str> {
+        if let Some(arc) = &self.file_name_arc
+            && **arc == *self.file_name
+        {
+            return arc.clone();
+        }
+        let arc: Arc<str> = Arc::from(self.file_name.as_str());
+        self.file_name_arc = Some(arc.clone());
+        arc
     }
 
     /// Retained-capacity bound for the per-file utility-key overlay. A typical

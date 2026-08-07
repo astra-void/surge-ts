@@ -146,8 +146,8 @@ pub(crate) fn resolve_named_type(
 
     if has_type_arguments && !is_generic_declaration {
         let name = match declaration {
-            TypeDeclarationInfo::Alias(alias) => alias.name.as_str(),
-            TypeDeclarationInfo::Interface(interface) => interface.name.as_str(),
+            TypeDeclarationInfo::Alias(alias) => &alias.name,
+            TypeDeclarationInfo::Interface(interface) => &interface.name,
         };
         emit_type_is_not_generic(name, named_type.span, ctx);
         return ResolvedType {
@@ -737,8 +737,8 @@ fn declaration_file_is_library_scoped(
     // legitimately gets different answers per consumer (measured 467k
     // divergences on tRPC when a per-declaration memo was attempted).
     let file_name = match declaration {
-        TypeDeclarationInfo::Alias(alias) => alias.file_name.as_str(),
-        TypeDeclarationInfo::Interface(interface) => interface.file_name.as_str(),
+        TypeDeclarationInfo::Alias(alias) => &alias.file_name,
+        TypeDeclarationInfo::Interface(interface) => &interface.file_name,
     };
     ctx.is_library_scoped_file(file_name)
 }

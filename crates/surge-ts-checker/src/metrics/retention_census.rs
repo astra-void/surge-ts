@@ -77,6 +77,8 @@ struct Walker {
     seen_scopes: FxHashMap<usize, ()>,
     seen_shared_captures: FxHashMap<usize, ()>,
     seen_resolved_memos: FxHashMap<usize, ()>,
+    seen_signature_infos: FxHashMap<usize, ()>,
+    seen_header_strings: FxHashMap<usize, ()>,
     groups: HashMap<&'static str, GroupTally>,
     sub_tallies: HashMap<&'static str, HashMap<&'static str, u64>>,
     current_group: &'static str,
@@ -120,6 +122,8 @@ impl Walker {
             seen_scopes: FxHashMap::default(),
             seen_shared_captures: FxHashMap::default(),
             seen_resolved_memos: FxHashMap::default(),
+            seen_signature_infos: FxHashMap::default(),
+            seen_header_strings: FxHashMap::default(),
             groups: HashMap::new(),
             sub_tallies: HashMap::new(),
             current_group: "unattributed",
@@ -163,6 +167,16 @@ impl Walker {
             .or_default()
             .entry(key)
             .or_default() += bytes;
+    }
+
+    /// Charges an `Arc<str>` header string once per distinct allocation.
+    fn header_string_bytes(&mut self, value: &Arc<str>) -> u64 {
+        let address = value.as_ptr() as usize;
+        if Walker::first_visit(&mut self.seen_header_strings, address) {
+            value.len() as u64
+        } else {
+            0
+        }
     }
 
     fn first_visit(map: &mut FxHashMap<usize, ()>, address: usize) -> bool {
@@ -434,13 +448,13 @@ impl Walker {
         self.declaration_entries += 1;
         match declaration {
             TypeDeclarationInfo::Alias(info) => {
-                let meta_bytes = (info.name.capacity()
-                    + info.file_name.capacity()
+                let meta_bytes = self.header_string_bytes(&info.name)
+                    + self.header_string_bytes(&info.file_name)
                     + info
                         .declared_name
                         .as_ref()
-                        .map_or(0, |declared_name| declared_name.capacity())
-                    + size_of::<TypeDeclarationInfo>()) as u64;
+                        .map_or(0, |declared_name| self.header_string_bytes(declared_name))
+                    + size_of::<TypeDeclarationInfo>() as u64;
                 self.add(meta_bytes);
                 self.sub("decl_meta", meta_bytes);
                 if let Some(scope) = info.resolution_scope.as_ref() {
@@ -459,13 +473,13 @@ impl Walker {
                 }
             }
             TypeDeclarationInfo::Interface(info) => {
-                let meta_bytes = (info.name.capacity()
-                    + info.file_name.capacity()
+                let meta_bytes = self.header_string_bytes(&info.name)
+                    + self.header_string_bytes(&info.file_name)
                     + info
                         .declared_name
                         .as_ref()
-                        .map_or(0, |declared_name| declared_name.capacity())
-                    + size_of::<TypeDeclarationInfo>()) as u64;
+                        .map_or(0, |declared_name| self.header_string_bytes(declared_name))
+                    + size_of::<TypeDeclarationInfo>() as u64;
                 self.add(meta_bytes);
                 self.sub("decl_meta", meta_bytes);
                 if let Some(scope) = info.resolution_scope.as_ref() {

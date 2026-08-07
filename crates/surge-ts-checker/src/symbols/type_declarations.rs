@@ -35,13 +35,13 @@ impl Clone for TypeAliasBody {
 
 #[derive(Debug)]
 pub(crate) struct TypeAliasInfo {
-    pub(crate) name: String,
+    pub(crate) name: Arc<str>,
     /// The name this declaration was originally declared under at its source,
     /// captured the first time it is renamed by a re-export/import (`import type
     /// { Box as ABox }`). Used only for diagnostic display so messages show the
     /// original name (`Box<string>`) rather than the local binding (`ABox`).
-    pub(crate) declared_name: Option<String>,
-    pub(crate) file_name: String,
+    pub(crate) declared_name: Option<Arc<str>>,
+    pub(crate) file_name: Arc<str>,
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
     pub(crate) body: Arc<TypeAliasBody>,
@@ -59,17 +59,17 @@ pub(crate) struct TypeAliasInfo {
 
 impl TypeAliasInfo {
     pub(crate) fn new(
-        name: String,
-        file_name: String,
+        name: impl Into<Arc<str>>,
+        file_name: impl Into<Arc<str>>,
         name_span: Option<TextSpan>,
         type_parameters: Vec<ParsedTypeParameter>,
         ty: ParsedType,
         resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             declared_name: None,
-            file_name,
+            file_name: file_name.into(),
             name_span,
             resolution_scope,
             body: Arc::new(TypeAliasBody {
@@ -139,11 +139,11 @@ impl Clone for InterfaceBody {
 
 #[derive(Debug)]
 pub(crate) struct InterfaceInfo {
-    pub(crate) name: String,
+    pub(crate) name: Arc<str>,
     /// See [`TypeAliasInfo::declared_name`]. Original source name, captured on the
     /// first re-export/import rename, for diagnostic display only.
-    pub(crate) declared_name: Option<String>,
-    pub(crate) file_name: String,
+    pub(crate) declared_name: Option<Arc<str>>,
+    pub(crate) file_name: Arc<str>,
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
     pub(crate) body: Arc<InterfaceBody>,
@@ -156,8 +156,8 @@ pub(crate) struct InterfaceInfo {
 impl InterfaceInfo {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        name: String,
-        file_name: String,
+        name: impl Into<Arc<str>>,
+        file_name: impl Into<Arc<str>>,
         name_span: Option<TextSpan>,
         type_parameters: Vec<ParsedTypeParameter>,
         extends: Vec<ParsedNamedType>,
@@ -167,13 +167,14 @@ impl InterfaceInfo {
         construct_signatures: Vec<ParsedFunctionType>,
         resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ) -> Self {
+        let file_name = file_name.into();
         let declaration_fragment = InterfaceDeclarationFragmentId {
-            file_name: Arc::from(file_name.as_str()),
+            file_name: file_name.clone(),
             declaration_start: name_span.map_or(0, |span| span.start),
         };
         let member_fragments = vec![declaration_fragment.clone(); members.len()];
         Self {
-            name,
+            name: name.into(),
             declared_name: None,
             file_name,
             name_span,

@@ -326,7 +326,7 @@ fn resolve_default_and_named_import(
         if *is_type_only {
             let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
                 local_name.clone(),
-                ctx.file_name.clone(),
+                ctx.file_name_arc(),
                 *name_span,
                 vec![],
                 ParsedType::Unknown,
@@ -343,7 +343,7 @@ fn resolve_default_and_named_import(
             if *is_type_only {
                 let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
                     specifier.local_name.to_string(),
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     specifier.name_span,
                     vec![],
                     ParsedType::Unknown,
@@ -355,7 +355,7 @@ fn resolve_default_and_named_import(
             } else {
                 let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
                     specifier.local_name.to_string(),
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     specifier.name_span,
                     vec![],
                     ParsedType::Unknown,
@@ -380,7 +380,7 @@ fn resolve_default_and_named_import(
             if *is_type_only {
                 let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
                     local_name.clone(),
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     *name_span,
                     vec![],
                     ParsedType::Unknown,
@@ -411,7 +411,7 @@ fn resolve_default_and_named_import(
                 if *is_type_only {
                     let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
                         local_name.clone(),
-                        ctx.file_name.clone(),
+                        ctx.file_name_arc(),
                         *name_span,
                         vec![],
                         ParsedType::Unknown,
@@ -426,7 +426,7 @@ fn resolve_default_and_named_import(
             } else if *is_type_only {
                 let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
                     local_name.clone(),
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     *name_span,
                     vec![],
                     ParsedType::Unknown,
@@ -487,7 +487,7 @@ fn resolve_default_and_named_import(
             insert_unknown_type_import(
                 type_declarations,
                 &specifier.local_name,
-                ctx.file_name.clone(),
+                ctx.file_name_arc(),
                 specifier.name_span,
             );
             continue;
@@ -518,7 +518,7 @@ fn resolve_default_and_named_import(
                 insert_unknown_type_import(
                     type_declarations,
                     &specifier.local_name,
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     specifier.name_span,
                 );
                 insert_unknown_value_import(&specifier.local_name, symbols);
@@ -540,7 +540,7 @@ fn resolve_default_and_named_import(
             insert_unknown_type_import(
                 type_declarations,
                 &specifier.local_name,
-                ctx.file_name.clone(),
+                ctx.file_name_arc(),
                 specifier.name_span,
             );
             insert_unknown_value_import(&specifier.local_name, symbols);
@@ -801,7 +801,7 @@ fn resolve_namespace_import(
 
         let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
             local_name.clone(),
-            ctx.file_name.clone(),
+            ctx.file_name_arc(),
             None,
             vec![],
             ParsedType::Unknown,
@@ -909,7 +909,7 @@ fn resolve_named_import(
                     insert_unknown_type_import(
                         type_declarations,
                         &specifier.local_name,
-                        ctx.file_name.clone(),
+                        ctx.file_name_arc(),
                         specifier.name_span,
                     );
                     continue;
@@ -918,7 +918,7 @@ fn resolve_named_import(
                 insert_unknown_type_import(
                     type_declarations,
                     &specifier.local_name,
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     specifier.name_span,
                 );
                 insert_unknown_value_import(&specifier.local_name, symbols);
@@ -970,7 +970,7 @@ fn resolve_named_import(
             insert_unknown_type_import(
                 type_declarations,
                 &specifier.local_name,
-                ctx.file_name.clone(),
+                ctx.file_name_arc(),
                 specifier.name_span,
             );
             insert_unknown_value_import(&specifier.local_name, symbols);
@@ -1018,7 +1018,7 @@ fn resolve_named_import(
                 insert_unknown_type_import(
                     type_declarations,
                     &specifier.local_name,
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     specifier.name_span,
                 );
                 continue;
@@ -1027,7 +1027,7 @@ fn resolve_named_import(
             insert_unknown_type_import(
                 type_declarations,
                 &specifier.local_name,
-                ctx.file_name.clone(),
+                ctx.file_name_arc(),
                 specifier.name_span,
             );
             insert_unknown_value_import(&specifier.local_name, symbols);
@@ -1090,7 +1090,7 @@ fn resolve_named_import(
             insert_unknown_type_import(
                 type_declarations,
                 &specifier.local_name,
-                ctx.file_name.clone(),
+                ctx.file_name_arc(),
                 specifier.name_span,
             );
             continue;
@@ -1127,7 +1127,7 @@ fn resolve_named_import(
                     insert_unknown_type_import(
                         type_declarations,
                         &specifier.local_name,
-                        ctx.file_name.clone(),
+                        ctx.file_name_arc(),
                         specifier.name_span,
                     );
                     continue;
@@ -1136,7 +1136,7 @@ fn resolve_named_import(
                 insert_unknown_type_import(
                     type_declarations,
                     &specifier.local_name,
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     specifier.name_span,
                 );
                 insert_unknown_value_import(&specifier.local_name, symbols);
@@ -1148,7 +1148,7 @@ fn resolve_named_import(
                 insert_unknown_type_import(
                     type_declarations,
                     &specifier.local_name,
-                    ctx.file_name.clone(),
+                    ctx.file_name_arc(),
                     specifier.name_span,
                 );
                 insert_unknown_value_import(&specifier.local_name, symbols);
@@ -1164,7 +1164,7 @@ fn resolve_named_import(
             insert_unknown_type_import(
                 type_declarations,
                 &specifier.local_name,
-                ctx.file_name.clone(),
+                ctx.file_name_arc(),
                 specifier.name_span,
             );
             insert_unknown_value_import(&specifier.local_name, symbols);

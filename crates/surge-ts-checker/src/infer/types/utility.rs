@@ -124,17 +124,14 @@ pub(crate) fn resolve_type_alias(
     let local_substitution = bound_arguments.substitution;
 
     let from_default_lib =
-        alias.file_name == "<built-in>" || is_generated_default_lib_file_name(&alias.file_name);
+        &*alias.file_name == "<built-in>" || is_generated_default_lib_file_name(&alias.file_name);
     // The physical lib models `Pick`/`Omit` as homomorphic mapped types
     // (`{[P in K]: T[P]}`) that should preserve each source property's optional
     // modifier, but `resolve_mapped_type` forces them required. Resolve them as
     // builtin utilities (which clone the source property, keeping optionality)
     // even from the physical lib.
     let physical_modifier_utility = is_physical_default_lib_file_name(&alias.file_name)
-        && matches!(
-            alias.name.as_str(),
-            "Pick" | "Omit" | "Required" | "Readonly"
-        );
+        && matches!(&*alias.name, "Pick" | "Omit" | "Required" | "Readonly");
     if from_default_lib || physical_modifier_utility {
         if let Some(resolved) = resolve_builtin_utility_alias(
             &alias.name,
@@ -147,7 +144,9 @@ pub(crate) fn resolve_type_alias(
         }
     }
 
-    if alias.file_name == "<built-in>" && (alias.name == "Array" || alias.name == "ReadonlyArray") {
+    if &*alias.file_name == "<built-in>"
+        && (&*alias.name == "Array" || &*alias.name == "ReadonlyArray")
+    {
         resolving.pop();
         let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
         return ResolvedType {

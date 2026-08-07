@@ -49,7 +49,7 @@ pub(crate) fn rename_type_declaration(
             if alias.declared_name.is_none() {
                 alias.declared_name = Some(alias.name.clone());
             }
-            alias.name = exported_name;
+            alias.name = exported_name.into();
             alias.cached_resolution_key = std::sync::OnceLock::new();
             alias.cached_alias_id = std::sync::OnceLock::new();
             TypeDeclarationInfo::Alias(alias)
@@ -58,7 +58,7 @@ pub(crate) fn rename_type_declaration(
             if interface.declared_name.is_none() {
                 interface.declared_name = Some(interface.name.clone());
             }
-            interface.name = exported_name;
+            interface.name = exported_name.into();
             interface.cached_resolution_key = std::sync::OnceLock::new();
             interface.cached_alias_id = std::sync::OnceLock::new();
             TypeDeclarationInfo::Interface(interface)
@@ -82,7 +82,7 @@ pub(crate) fn insert_type_export(
 pub(crate) fn insert_unknown_type_import(
     type_declarations: &mut TypeDeclarationTable,
     local_name: &str,
-    file_name: String,
+    file_name: Arc<str>,
     name_span: Option<TextSpan>,
 ) {
     let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(

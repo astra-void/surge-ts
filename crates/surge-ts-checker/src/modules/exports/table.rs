@@ -234,7 +234,7 @@ pub(crate) fn resolve_module_export_table(
                         insert_unknown_type_import(
                             Arc::make_mut(&mut resolved_export_table.type_declarations),
                             &specifier.exported_name,
-                            ctx.file_name.clone(),
+                            ctx.file_name_arc(),
                             specifier.name_span,
                         );
 
@@ -278,7 +278,7 @@ pub(crate) fn resolve_module_export_table(
                         insert_unknown_type_import(
                             Arc::make_mut(&mut resolved_export_table.type_declarations),
                             &specifier.exported_name,
-                            ctx.file_name.clone(),
+                            ctx.file_name_arc(),
                             specifier.name_span,
                         );
                         continue;
@@ -324,7 +324,7 @@ pub(crate) fn resolve_module_export_table(
                             insert_unknown_type_import(
                                 Arc::make_mut(&mut resolved_export_table.type_declarations),
                                 &specifier.exported_name,
-                                ctx.file_name.clone(),
+                                ctx.file_name_arc(),
                                 specifier.name_span,
                             );
                             if !specifier_is_type_only {
@@ -344,7 +344,7 @@ pub(crate) fn resolve_module_export_table(
                             insert_unknown_type_import(
                                 Arc::make_mut(&mut resolved_export_table.type_declarations),
                                 &specifier.exported_name,
-                                ctx.file_name.clone(),
+                                ctx.file_name_arc(),
                                 specifier.name_span,
                             );
                             if !specifier_is_type_only {
@@ -365,7 +365,7 @@ pub(crate) fn resolve_module_export_table(
                         insert_unknown_type_import(
                             Arc::make_mut(&mut resolved_export_table.type_declarations),
                             &specifier.exported_name,
-                            ctx.file_name.clone(),
+                            ctx.file_name_arc(),
                             specifier.name_span,
                         );
                         if !specifier_is_type_only {
