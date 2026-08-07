@@ -1050,6 +1050,22 @@ fn check_program_with_stats_and_jobs_inner(
             let Some(analysis) = shared_state.module_analyses[file_index].as_ref() else {
                 continue;
             };
+            // The table is only ever consulted to resolve a `typeof <value>`
+            // appearing in THIS file's own declarations/annotations (resolution
+            // runs under the declaring file's name), so a file whose parse tree
+            // contains no `typeof` type node can never be consulted and its
+            // entry is skipped outright. This covers declaration files too:
+            // their seed of Arc-shared handles is cheap to build, but the entry
+            // is what pins each `.d.ts` module's symbol graph past the per-file
+            // release after its check. Containment comes from the parse-time
+            // `contains_typeof` source-text scan (a typeof type node can only
+            // come from the keyword; an identifier substring only costs the
+            // old eager build). `SURGE_LV_FILTER=0` restores unconditional
+            // building; the `SURGE_LV_PROBE` accessor probe warns on any
+            // consult miss.
+            if local_values_typeof_filter_enabled() && !parsed_file.contains_typeof {
+                continue;
+            }
             let mut seed = SymbolTable::new();
             if let Some(bindings) = shared_state.module_import_bindings[file_index].as_ref() {
                 for (name, symbol) in bindings.symbols.iter_shared() {
@@ -1073,21 +1089,6 @@ fn check_program_with_stats_and_jobs_inner(
                 }
                 module_local_values
                     .insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
-                continue;
-            }
-            // The table is only ever consulted to resolve a `typeof <value>`
-            // appearing in THIS file's own declarations/annotations (resolution
-            // runs under the declaring file's name). A file whose parse tree
-            // contains no `typeof` type node can never be consulted, so its
-            // table — the expensive full value collection with initializer
-            // inference — is skipped outright (tRPC: 60 of 4513 entries are
-            // ever read). Containment comes from the parse-time
-            // `contains_typeof` source-text scan (a typeof type node can only
-            // come from the keyword; an identifier substring only costs the
-            // old eager build). `SURGE_LV_FILTER=0` restores unconditional
-            // building; the `SURGE_LV_PROBE` accessor probe warns on any
-            // consult miss.
-            if local_values_typeof_filter_enabled() && !parsed_file.contains_typeof {
                 continue;
             }
             ctx.file_name = parsed_file.file_name.clone();
