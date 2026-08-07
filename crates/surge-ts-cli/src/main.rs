@@ -668,6 +668,8 @@ fn run_project_mode(
             &loaded.config_path,
         ),
         collect_timings,
+        // The compatibility report re-parses every source text.
+        retain_all_sources: compat_report,
     };
 
     let result = match project.check(&options) {

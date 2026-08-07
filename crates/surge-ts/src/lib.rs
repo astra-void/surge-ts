@@ -62,6 +62,13 @@ pub struct ProjectOptions {
     /// Populate [`ProjectCheckResult::timings`]. Off by default to avoid the
     /// per-step `Instant` and global counter overhead.
     pub collect_timings: bool,
+    /// Keep every source text in [`ProjectCheckResult::sources`]. By default
+    /// texts are dropped before checking (they are only needed again to render
+    /// code frames, and holding a second copy of every dependency `.d.ts`
+    /// through the checker's peak costs tens of MB); files that end up with
+    /// diagnostics are re-read from disk afterwards. Consumers that re-parse
+    /// every source (`--compatReport`) must opt in.
+    pub retain_all_sources: bool,
 }
 
 impl Default for ProjectOptions {
@@ -72,6 +79,7 @@ impl Default for ProjectOptions {
             diagnostic_profile: DiagnosticProfile::default(),
             physical_libs_requested: false,
             collect_timings: false,
+            retain_all_sources: false,
         }
     }
 }
@@ -451,7 +459,11 @@ impl Project {
                     (
                         PathBuf::from(&input.file_name),
                         input.file_name.clone(),
-                        input.source_text.clone(),
+                        if options.retain_all_sources {
+                            input.source_text.clone()
+                        } else {
+                            String::new()
+                        },
                     )
                 })
                 .collect::<Vec<_>>();
@@ -513,6 +525,20 @@ impl Project {
             diagnostic_profile: options.diagnostic_profile,
         };
 
+        // The loader is done with source texts (specifier scan and path mapping
+        // ran above), and the checker owns its own copies in `inputs`. Holding
+        // this second copy of every dependency `.d.ts` through the checker's
+        // peak costs tens of MB; drop the bodies now and re-read the few files
+        // that end up with diagnostics after checking. Entries without an
+        // on-disk file keep their text — they cannot be re-read.
+        if !options.retain_all_sources {
+            for (file_path, _, source_text) in &mut sources {
+                if !source_text.is_empty() && file_path.is_file() {
+                    *source_text = String::new();
+                }
+            }
+        }
+
         let checking_start = Instant::now();
         let result = Checker::new()
             .options(checker_options)
@@ -546,6 +572,21 @@ impl Project {
                     },
                 ),
             );
+        }
+
+        if !options.retain_all_sources {
+            let needed: std::collections::HashSet<&str> = diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.file_name.as_str())
+                .collect();
+            for (file_path, file_name, source_text) in &mut sources {
+                if source_text.is_empty()
+                    && needed.contains(file_name.as_str())
+                    && let Ok(read) = std::fs::read_to_string(&*file_path)
+                {
+                    *source_text = read;
+                }
+            }
         }
 
         Ok(ProjectCheckResult {
