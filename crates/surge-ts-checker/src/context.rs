@@ -1267,6 +1267,7 @@ impl CheckerContext {
             environments.by_key.clear();
             environments.by_id.clear();
         }
+        surge_ts_types::clear_name_intern_table();
     }
 
     /// Whether unresolved type names should be silently treated as `unknown`

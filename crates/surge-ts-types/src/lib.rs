@@ -5,6 +5,8 @@ mod clone_reason;
 mod function;
 pub mod fx;
 pub mod leaf_probe;
+mod name_memo;
+pub use name_memo::clear_name_intern_table;
 mod object;
 mod reference;
 mod store;

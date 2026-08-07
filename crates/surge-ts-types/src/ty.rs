@@ -288,18 +288,7 @@ impl Type {
                     .join(", ");
                 format!("[{elements}]")
             }
-            Type::Union(union) => {
-                if union.types().is_empty() {
-                    return "unknown".to_string();
-                }
-
-                union
-                    .types()
-                    .iter()
-                    .map(Type::name)
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            }
+            Type::Union(union) => union.name(),
             Type::Reference(reference) => reference.display.to_string(),
         }
     }

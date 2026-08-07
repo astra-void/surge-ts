@@ -70,6 +70,7 @@ pub struct FunctionTypePayload {
     pub return_type: Type,
     pub is_variadic: bool,
     pub required_parameter_count: usize,
+    pub(crate) name_memo: crate::name_memo::NameMemo,
 }
 
 impl Clone for FunctionTypePayload {
@@ -81,6 +82,7 @@ impl Clone for FunctionTypePayload {
             return_type: self.return_type.clone(),
             is_variadic: self.is_variadic,
             required_parameter_count: self.required_parameter_count,
+            name_memo: self.name_memo.clone(),
         }
     }
 }
@@ -133,6 +135,7 @@ impl FunctionType {
                             return_type,
                             is_variadic,
                             required_parameter_count,
+                            name_memo: crate::name_memo::NameMemo::default(),
                         }),
                         id: None,
                     };
@@ -147,6 +150,7 @@ impl FunctionType {
                 return_type,
                 is_variadic,
                 required_parameter_count,
+                name_memo: crate::name_memo::NameMemo::default(),
             }),
             id: None,
         }
@@ -189,15 +193,21 @@ impl FunctionType {
     }
 
     pub fn name(&self) -> String {
-        let mut parameters = self.parameters().iter().map(Type::name).collect::<Vec<_>>();
+        self.payload
+            .name_memo
+            .get_or_render(|| {
+                let mut parameters =
+                    self.parameters().iter().map(Type::name).collect::<Vec<_>>();
 
-        if self.is_variadic() {
-            parameters.push("...args: any[]".to_string());
-        }
+                if self.is_variadic() {
+                    parameters.push("...args: any[]".to_string());
+                }
 
-        let parameters = parameters.join(", ");
+                let parameters = parameters.join(", ");
 
-        format!("({parameters}) => {}", self.return_type().name())
+                format!("({parameters}) => {}", self.return_type().name())
+            })
+            .to_string()
     }
 }
 

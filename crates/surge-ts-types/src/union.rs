@@ -49,6 +49,7 @@ pub struct UnionTypeCounters {
 pub struct UnionTypePayload {
     pub types: Arc<[Type]>,
     pub(crate) list_id: Option<TypeListId>,
+    pub(crate) name_memo: crate::name_memo::NameMemo,
 }
 
 impl Clone for UnionTypePayload {
@@ -57,6 +58,7 @@ impl Clone for UnionTypePayload {
         Self {
             types: self.types.clone(),
             list_id: self.list_id,
+            name_memo: self.name_memo.clone(),
         }
     }
 }
@@ -85,6 +87,7 @@ impl UnionType {
                         payload: Arc::new(UnionTypePayload {
                             types: types.into(),
                             list_id: None,
+                            name_memo: crate::name_memo::NameMemo::default(),
                         }),
                         id: None,
                     };
@@ -96,6 +99,7 @@ impl UnionType {
             payload: Arc::new(UnionTypePayload {
                 types: types.into(),
                 list_id: None,
+                name_memo: crate::name_memo::NameMemo::default(),
             }),
             id: None,
         }
@@ -124,6 +128,22 @@ impl UnionType {
 
     pub fn types(&self) -> &[Type] {
         &self.payload.types
+    }
+
+    pub fn name(&self) -> String {
+        if self.types().is_empty() {
+            return "unknown".to_string();
+        }
+        self.payload
+            .name_memo
+            .get_or_render(|| {
+                self.types()
+                    .iter()
+                    .map(Type::name)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .to_string()
     }
 
     pub fn id(&self) -> Option<UnionTypeId> {

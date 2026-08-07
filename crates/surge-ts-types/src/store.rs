@@ -223,6 +223,7 @@ impl ProgramTypeStore {
             return_type,
             is_variadic,
             required_parameter_count,
+            name_memo: crate::name_memo::NameMemo::default(),
         });
         record_function_type_payload_alloc_count();
         bucket.push(FunctionEntry {
@@ -379,6 +380,7 @@ impl ProgramTypeStore {
         let payload = Arc::new(UnionTypePayload {
             types: types.into(),
             list_id: None,
+            name_memo: crate::name_memo::NameMemo::default(),
         });
         record_union_type_payload_alloc_count();
         bucket.push(UnionEntry {
