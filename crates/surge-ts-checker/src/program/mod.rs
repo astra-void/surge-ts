@@ -734,6 +734,7 @@ fn check_program_with_stats_and_jobs_inner(
         crate::metrics::RetentionCensusView {
             preliminary_module_analyses: Some(&preliminary_module_analyses),
             preliminary_module_import_bindings: Some(&preliminary_module_import_bindings),
+            parsed_files: Some(&parsed_files),
             global_symbols: Some(&global_symbols),
             ..Default::default()
         },
@@ -1122,6 +1123,7 @@ fn check_program_with_stats_and_jobs_inner(
                 module_analyses: Some(&shared_state.module_analyses),
                 module_import_bindings: Some(&shared_state.module_import_bindings),
                 module_resolution_scopes: Some(&shared_state.module_resolution_scopes),
+                parsed_files: Some(&parsed_files),
                 global_symbols: Some(&shared_state.global_symbols),
                 function_signatures: Some(&signature_refs),
                 ..Default::default()
@@ -1194,6 +1196,7 @@ fn check_program_with_stats_and_jobs_inner(
                 module_analyses: Some(&shared_state.module_analyses),
                 module_import_bindings: Some(&shared_state.module_import_bindings),
                 module_resolution_scopes: Some(&shared_state.module_resolution_scopes),
+                parsed_files: Some(&parsed_files),
                 global_symbols: Some(&shared_state.global_symbols),
                 function_signatures: Some(&signature_refs),
                 ..Default::default()

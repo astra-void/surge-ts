@@ -42,6 +42,7 @@ pub(crate) struct RetentionCensusView<'a> {
     pub(crate) module_import_bindings: Option<&'a [Option<ModuleImportBindings>]>,
     pub(crate) preliminary_module_import_bindings: Option<&'a [Option<ModuleImportBindings>]>,
     pub(crate) module_resolution_scopes: Option<&'a [Option<Arc<TypeDeclarationScope>>]>,
+    pub(crate) parsed_files: Option<&'a [crate::program::ParsedProgramFile]>,
     pub(crate) global_symbols: Option<&'a SymbolTable>,
     pub(crate) function_signatures: Option<&'a [&'a surge_ts_types::FunctionType]>,
 }
@@ -98,6 +99,7 @@ struct Walker {
     declaration_parsed_bytes: u64,
     span_map_entries: u64,
     span_map_bytes: u64,
+    arena_bytes_by_identity: FxHashMap<usize, u64>,
 }
 
 impl Walker {
@@ -138,6 +140,7 @@ impl Walker {
             declaration_parsed_bytes: 0,
             span_map_entries: 0,
             span_map_bytes: 0,
+            arena_bytes_by_identity: FxHashMap::default(),
         }
     }
 
@@ -351,6 +354,11 @@ impl Walker {
         self.declaration_table_instances += 1;
         self.declaration_index_bytes += table.index_heap_bytes();
         self.add(table.index_heap_bytes());
+        for arena in table.census_arenas() {
+            self.arena_bytes_by_identity
+                .entry(arena.identity())
+                .or_insert_with(|| arena.used_bytes() as u64);
+        }
         for (_, declaration) in table.iter() {
             self.walk_declaration_info(declaration);
         }
@@ -703,6 +711,468 @@ fn parsed_type_bytes(ty: &ParsedType) -> u64 {
     }
 }
 
+fn parsed_expression_bytes(expression: &surge_ts_syntax::ParsedExpression) -> u64 {
+    use surge_ts_syntax::ParsedExpression as E;
+    let own = size_of::<E>() as u64;
+    own + match expression {
+        E::StringLiteral(value) | E::NumberLiteral(value) => value.capacity() as u64,
+        E::Identifier { name, .. } => name.capacity() as u64,
+        E::ObjectLiteral { properties, .. } => properties
+            .iter()
+            .map(|property| {
+                size_of::<surge_ts_syntax::ParsedObjectProperty>() as u64
+                    + property.name.capacity() as u64
+                    + parsed_expression_bytes(&property.value)
+            })
+            .sum(),
+        E::ArrayLiteral { elements, .. } => elements
+            .iter()
+            .map(|element| {
+                size_of::<surge_ts_syntax::ParsedArrayElement>() as u64
+                    + parsed_expression_bytes(&element.expression)
+            })
+            .sum(),
+        E::TemplateLiteral { expressions, .. } => {
+            expressions.iter().map(parsed_expression_bytes).sum()
+        }
+        E::Unary { operand, .. } => parsed_expression_bytes(operand),
+        E::Binary { left, right, .. }
+        | E::Logical { left, right, .. }
+        | E::NullishCoalescing { left, right, .. } => {
+            parsed_expression_bytes(left) + parsed_expression_bytes(right)
+        }
+        E::Conditional {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => {
+            parsed_expression_bytes(condition)
+                + parsed_expression_bytes(when_true)
+                + parsed_expression_bytes(when_false)
+        }
+        E::PropertyAccess {
+            object,
+            property_name,
+            ..
+        }
+        | E::OptionalPropertyAccess {
+            object,
+            property_name,
+            ..
+        } => property_name.capacity() as u64 + parsed_expression_bytes(object),
+        E::IndexAccess {
+            object_name, index, ..
+        } => object_name.capacity() as u64 + parsed_expression_bytes(index),
+        E::ElementAccess { object, index, .. } | E::OptionalIndexAccess { object, index, .. } => {
+            parsed_expression_bytes(object) + parsed_expression_bytes(index)
+        }
+        E::Call {
+            callee_name,
+            type_arguments,
+            arguments,
+            ..
+        } => {
+            callee_name.capacity() as u64
+                + type_arguments.iter().map(parsed_type_bytes).sum::<u64>()
+                + arguments
+                    .iter()
+                    .map(|argument| {
+                        size_of::<surge_ts_syntax::ParsedCallArgument>() as u64
+                            + parsed_expression_bytes(&argument.expression)
+                    })
+                    .sum::<u64>()
+        }
+        E::New {
+            callee,
+            type_arguments,
+            arguments,
+            ..
+        }
+        | E::OptionalCall {
+            callee,
+            type_arguments,
+            arguments,
+            ..
+        } => {
+            parsed_expression_bytes(callee)
+                + type_arguments.iter().map(parsed_type_bytes).sum::<u64>()
+                + arguments
+                    .iter()
+                    .map(|argument| {
+                        size_of::<surge_ts_syntax::ParsedCallArgument>() as u64
+                            + parsed_expression_bytes(&argument.expression)
+                    })
+                    .sum::<u64>()
+        }
+        E::PropertyCall {
+            object,
+            property_name,
+            type_arguments,
+            arguments,
+            ..
+        }
+        | E::OptionalPropertyCall {
+            object,
+            property_name,
+            type_arguments,
+            arguments,
+            ..
+        } => {
+            parsed_expression_bytes(object)
+                + property_name.capacity() as u64
+                + type_arguments.iter().map(parsed_type_bytes).sum::<u64>()
+                + arguments
+                    .iter()
+                    .map(|argument| {
+                        size_of::<surge_ts_syntax::ParsedCallArgument>() as u64
+                            + parsed_expression_bytes(&argument.expression)
+                    })
+                    .sum::<u64>()
+        }
+        E::TypeAssertion { expression, ty, .. } => {
+            parsed_expression_bytes(expression) + parsed_type_bytes(ty)
+        }
+        E::SatisfiesExpression {
+            expression,
+            target_type,
+            ..
+        } => parsed_expression_bytes(expression) + parsed_type_bytes(target_type),
+        E::NonNullAssertion { expression, .. } | E::ConstAssertion { expression, .. } => {
+            parsed_expression_bytes(expression)
+        }
+        E::JsxElement {
+            tag_name,
+            component_name,
+            attributes,
+            children,
+            ..
+        } => {
+            tag_name.capacity() as u64
+                + component_name
+                    .as_ref()
+                    .map_or(0, |name| name.capacity() as u64)
+                + attributes
+                    .iter()
+                    .map(|attribute| {
+                        size_of::<surge_ts_syntax::ParsedJsxAttribute>() as u64
+                            + attribute.name.capacity() as u64
+                            + attribute
+                                .value
+                                .as_ref()
+                                .map_or(0, parsed_expression_bytes)
+                    })
+                    .sum::<u64>()
+                + children.iter().map(parsed_jsx_child_bytes).sum::<u64>()
+        }
+        E::JsxFragment { children, .. } => {
+            children.iter().map(parsed_jsx_child_bytes).sum::<u64>()
+        }
+        E::ArrowFunction(arrow) => {
+            let body = match &arrow.body {
+                surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => {
+                    parsed_expression_bytes(expression)
+                }
+                surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => statements
+                    .iter()
+                    .map(parsed_body_statement_bytes)
+                    .sum::<u64>(),
+            };
+            size_of::<surge_ts_syntax::ParsedArrowFunction>() as u64
+                + string_vec_bytes(&arrow.body_reads)
+                + arrow
+                    .type_parameters
+                    .iter()
+                    .map(parsed_type_parameter_bytes)
+                    .sum::<u64>()
+                + arrow
+                    .parameters
+                    .iter()
+                    .map(parsed_function_parameter_bytes)
+                    .sum::<u64>()
+                + arrow.return_type.as_ref().map_or(0, parsed_type_bytes)
+                + body
+        }
+        _ => 0,
+    }
+}
+
+fn parsed_jsx_child_bytes(child: &surge_ts_syntax::ParsedJsxChild) -> u64 {
+    use surge_ts_syntax::ParsedJsxChild as C;
+    size_of::<C>() as u64
+        + match child {
+            C::Expression { expression, .. } => {
+                expression.as_ref().map_or(0, parsed_expression_bytes)
+            }
+            C::Element(element) => parsed_expression_bytes(element),
+            _ => 0,
+        }
+}
+
+fn string_vec_bytes(strings: &[String]) -> u64 {
+    strings
+        .iter()
+        .map(|value| value.capacity() as u64 + size_of::<String>() as u64)
+        .sum()
+}
+
+fn parsed_function_parameter_bytes(parameter: &surge_ts_syntax::ParsedFunctionParameter) -> u64 {
+    size_of::<surge_ts_syntax::ParsedFunctionParameter>() as u64
+        + parameter.declared_type.as_ref().map_or(0, parsed_type_bytes)
+        + parameter
+            .initializer
+            .as_ref()
+            .map_or(0, parsed_expression_bytes)
+}
+
+fn parsed_body_statement_bytes(statement: &surge_ts_syntax::ParsedFunctionBodyStatement) -> u64 {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as B;
+    let own = size_of::<B>() as u64;
+    own + match statement {
+        B::VariableDeclaration(declaration) => parsed_variable_declaration_bytes(declaration),
+        B::Return(statement) => statement
+            .expression
+            .as_ref()
+            .map_or(0, parsed_expression_bytes),
+        B::Assignment(assignment) => {
+            assignment.target_name.capacity() as u64 + parsed_expression_bytes(&assignment.value)
+        }
+        B::Expression(expression) => parsed_expression_bytes(expression),
+        B::Block(statements) => statements.iter().map(parsed_body_statement_bytes).sum(),
+        B::Function(function) => parsed_function_declaration_bytes(function),
+        B::If(statement) => {
+            parsed_expression_bytes(&statement.condition)
+                + statement
+                    .then_body
+                    .iter()
+                    .map(parsed_body_statement_bytes)
+                    .sum::<u64>()
+                + statement
+                    .else_body
+                    .iter()
+                    .map(parsed_body_statement_bytes)
+                    .sum::<u64>()
+        }
+        // Remaining variants (throw/while/for-of/switch/try/this-assignment)
+        // carry the same expression/body shapes; their statement counts are
+        // small enough that the enum-size charge above suffices for a census.
+        _ => 0,
+    }
+}
+
+fn parsed_variable_declaration_bytes(
+    declaration: &surge_ts_syntax::ParsedVariableDeclaration,
+) -> u64 {
+    size_of::<surge_ts_syntax::ParsedVariableDeclaration>() as u64
+        + declaration.name.capacity() as u64
+        + declaration
+            .declared_type
+            .as_ref()
+            .map_or(0, parsed_type_bytes)
+        + declaration
+            .initializer
+            .as_ref()
+            .map_or(0, parsed_expression_bytes)
+}
+
+fn parsed_function_declaration_bytes(
+    function: &surge_ts_syntax::ParsedFunctionDeclaration,
+) -> u64 {
+    size_of::<surge_ts_syntax::ParsedFunctionDeclaration>() as u64
+        + string_vec_bytes(&function.body_reads)
+        + function.name.capacity() as u64
+        + function
+            .type_parameters
+            .iter()
+            .map(parsed_type_parameter_bytes)
+            .sum::<u64>()
+        + function
+            .parameters
+            .iter()
+            .map(parsed_function_parameter_bytes)
+            .sum::<u64>()
+        + function.return_type.as_ref().map_or(0, parsed_type_bytes)
+        + function
+            .body
+            .iter()
+            .map(parsed_body_statement_bytes)
+            .sum::<u64>()
+}
+
+fn parsed_statement_bytes(statement: &surge_ts_syntax::ParsedStatement) -> u64 {
+    use surge_ts_syntax::ParsedStatement as S;
+    let own = size_of::<S>() as u64;
+    own + match statement {
+        S::VariableDeclaration(declaration) => parsed_variable_declaration_bytes(declaration),
+        S::Assignment(assignment) => {
+            size_of::<surge_ts_syntax::ParsedAssignment>() as u64
+                + assignment.target_name.capacity() as u64
+                + parsed_expression_bytes(&assignment.value)
+        }
+        S::FunctionDeclaration(function) => parsed_function_declaration_bytes(function),
+        S::Call(call) => {
+            size_of::<surge_ts_syntax::ParsedCall>() as u64
+                + call.callee_name.capacity() as u64
+                + call
+                    .type_arguments
+                    .iter()
+                    .map(parsed_type_bytes)
+                    .sum::<u64>()
+                + call
+                    .arguments
+                    .iter()
+                    .map(|argument| {
+                        size_of::<surge_ts_syntax::ParsedCallArgument>() as u64
+                            + parsed_expression_bytes(&argument.expression)
+                    })
+                    .sum::<u64>()
+        }
+        S::Expression(expression) => parsed_expression_bytes(expression),
+        S::TypeAliasDeclaration(alias) => {
+            size_of::<surge_ts_syntax::ParsedTypeAliasDeclaration>() as u64
+                + alias.name.capacity() as u64
+                + alias
+                    .type_parameters
+                    .iter()
+                    .map(parsed_type_parameter_bytes)
+                    .sum::<u64>()
+                + parsed_type_bytes(&alias.ty)
+        }
+        S::InterfaceDeclaration(interface) => {
+            size_of::<surge_ts_syntax::ParsedInterfaceDeclaration>() as u64
+                + interface.name.capacity() as u64
+                + interface
+                    .type_parameters
+                    .iter()
+                    .map(parsed_type_parameter_bytes)
+                    .sum::<u64>()
+                + interface
+                    .extends
+                    .iter()
+                    .map(parsed_named_type_bytes)
+                    .sum::<u64>()
+                + interface
+                    .members
+                    .iter()
+                    .map(parsed_interface_member_bytes)
+                    .sum::<u64>()
+                + interface
+                    .string_index_type
+                    .as_ref()
+                    .map_or(0, parsed_type_bytes)
+                + interface
+                    .call_signature
+                    .as_ref()
+                    .map_or(0, parsed_function_type_bytes)
+        }
+        S::ClassDeclaration(class) => {
+            use surge_ts_syntax::ParsedClassMember as M;
+            size_of::<surge_ts_syntax::ParsedClassDeclaration>() as u64
+                + class.name.capacity() as u64
+                + class
+                    .type_parameters
+                    .iter()
+                    .map(parsed_type_parameter_bytes)
+                    .sum::<u64>()
+                + class
+                    .extends
+                    .iter()
+                    .map(parsed_named_type_bytes)
+                    .sum::<u64>()
+                + class
+                    .members
+                    .iter()
+                    .map(|member| {
+                        size_of::<M>() as u64
+                            + match member {
+                                M::Property(property) => {
+                                    property.name.capacity() as u64
+                                        + property
+                                            .declared_type
+                                            .as_ref()
+                                            .map_or(0, parsed_type_bytes)
+                                }
+                                M::Method(method) => {
+                                    method.name.capacity() as u64
+                                        + string_vec_bytes(&method.body_reads)
+                                        + method
+                                            .parameters
+                                            .iter()
+                                            .map(parsed_function_parameter_bytes)
+                                            .sum::<u64>()
+                                        + method
+                                            .return_type
+                                            .as_ref()
+                                            .map_or(0, parsed_type_bytes)
+                                        + method
+                                            .body
+                                            .iter()
+                                            .map(parsed_body_statement_bytes)
+                                            .sum::<u64>()
+                                }
+                                M::Accessor(accessor) => {
+                                    accessor.name.capacity() as u64
+                                        + accessor
+                                            .getter_return_type
+                                            .as_ref()
+                                            .map_or(0, parsed_type_bytes)
+                                        + accessor
+                                            .setter_param_type
+                                            .as_ref()
+                                            .map_or(0, parsed_type_bytes)
+                                }
+                                M::Constructor(constructor) => {
+                                    string_vec_bytes(&constructor.body_reads)
+                                        + constructor
+                                            .parameters
+                                            .iter()
+                                            .map(parsed_function_parameter_bytes)
+                                            .sum::<u64>()
+                                        + constructor
+                                            .body
+                                            .iter()
+                                            .map(parsed_body_statement_bytes)
+                                            .sum::<u64>()
+                                }
+                            }
+                    })
+                    .sum::<u64>()
+        }
+        S::ImportDeclaration(import) => {
+            size_of::<surge_ts_syntax::ParsedImportDeclaration>() as u64
+                + import.module_specifier.capacity() as u64
+        }
+        S::ExportDeclaration(export) => {
+            size_of::<surge_ts_syntax::ParsedExportDeclaration>() as u64
+                + match export.as_ref() {
+                    surge_ts_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    } => parsed_statement_bytes(declaration),
+                    _ => 0,
+                }
+        }
+        S::DeclareModuleDeclaration(declaration) => {
+            size_of::<surge_ts_syntax::ParsedDeclareModuleDeclaration>() as u64
+                + declaration.module_specifier.capacity() as u64
+                + declaration
+                    .statements
+                    .iter()
+                    .map(parsed_statement_bytes)
+                    .sum::<u64>()
+        }
+        S::NamespaceDeclaration(namespace) => {
+            size_of::<surge_ts_syntax::ParsedNamespaceDeclaration>() as u64
+                + namespace.name.capacity() as u64
+                + namespace
+                    .statements
+                    .iter()
+                    .map(parsed_statement_bytes)
+                    .sum::<u64>()
+        }
+        S::UnsupportedDeclaration { .. } => 0,
+    }
+}
+
 pub(crate) fn emit_retention_census(
     stage: &str,
     ctx: Option<&CheckerContext>,
@@ -727,6 +1197,24 @@ pub(crate) fn emit_retention_census(
         walker.current_group = "module_analyses.decl_tables";
         for analysis in analyses.iter().flatten() {
             walker.walk_declaration_table(analysis.local_type_declarations());
+        }
+    }
+    if let Some(parsed_files) = view.parsed_files {
+        walker.current_group = "parsed_files";
+        for file in parsed_files {
+            let mut bytes = file.file_name.capacity() as u64
+                + file
+                    .module_reads
+                    .iter()
+                    .map(|read| read.capacity() as u64 + size_of::<String>() as u64)
+                    .sum::<u64>()
+                + (file.statements.capacity() * size_of::<surge_ts_syntax::ParsedStatement>())
+                    as u64;
+            for statement in &file.statements {
+                bytes += parsed_statement_bytes(statement);
+            }
+            walker.add(bytes);
+            walker.add_item();
         }
     }
     if let Some(analyses) = view.preliminary_module_analyses {
@@ -912,5 +1400,10 @@ pub(crate) fn emit_retention_census(
         walker.environment_index_bytes,
         walker.declaration_table_instances,
         walker.declaration_index_bytes,
+    );
+    eprintln!(
+        "  checker_arenas={} checker_arena_bytes={}",
+        walker.arena_bytes_by_identity.len(),
+        walker.arena_bytes_by_identity.values().sum::<u64>(),
     );
 }

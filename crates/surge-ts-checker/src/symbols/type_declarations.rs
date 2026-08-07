@@ -745,6 +745,13 @@ impl TypeDeclarationTable {
             + self.payloads.capacity() * std::mem::size_of::<usize>()) as u64
     }
 
+    /// Census-only view of every arena this table can reach (its own plus the
+    /// owners of foreign shared payloads). Callers dedup by
+    /// [`CheckerArena::identity`].
+    pub(crate) fn census_arenas(&self) -> impl Iterator<Item = &CheckerArena> + '_ {
+        std::iter::once(&self.arena).chain(self.foreign_payload_arenas.values())
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&ArenaStr, &TypeDeclarationInfo)> + '_ {
         self.declarations
             .iter()

@@ -97,6 +97,17 @@ impl CheckerArena {
         }
     }
 
+    /// Bytes bump-allocated into this arena. Retention-census accounting only.
+    pub(crate) fn used_bytes(&self) -> usize {
+        self.allocator.allocator.used_bytes()
+    }
+
+    /// Stable identity for census dedup across the many table handles that
+    /// share one arena.
+    pub(crate) fn identity(&self) -> usize {
+        Arc::as_ptr(&self.allocator) as usize
+    }
+
     pub(crate) fn ptr_eq(&self, other: &CheckerArena) -> bool {
         Arc::ptr_eq(&self.allocator, &other.allocator)
     }
