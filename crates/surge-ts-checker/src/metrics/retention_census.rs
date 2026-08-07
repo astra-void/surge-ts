@@ -103,6 +103,8 @@ struct Walker {
     span_map_entries: u64,
     span_map_bytes: u64,
     arena_bytes_by_identity: FxHashMap<usize, u64>,
+    scope_self_cycle_declarations: u64,
+    scope_attached_declarations: u64,
 }
 
 impl Walker {
@@ -147,6 +149,8 @@ impl Walker {
             span_map_entries: 0,
             span_map_bytes: 0,
             arena_bytes_by_identity: FxHashMap::default(),
+            scope_self_cycle_declarations: 0,
+            scope_attached_declarations: 0,
         }
     }
 
@@ -432,6 +436,23 @@ impl Walker {
                 .or_insert_with(|| arena.used_bytes() as u64);
         }
         for (_, declaration) in table.iter() {
+            // Cycle probe: a payload whose attached resolution scope carries
+            // the payload's own table as a layer forms a strong
+            // scope->table->payload->scope cycle, which decides whether the
+            // per-file scope-release lever can free anything.
+            let scope = match declaration {
+                TypeDeclarationInfo::Alias(info) => info.resolution_scope.as_ref(),
+                TypeDeclarationInfo::Interface(info) => info.resolution_scope.as_ref(),
+            };
+            if let Some(scope) = scope {
+                self.scope_attached_declarations += 1;
+                if scope
+                    .census_layer_addresses()
+                    .any(|layer_address| layer_address == address)
+                {
+                    self.scope_self_cycle_declarations += 1;
+                }
+            }
             self.walk_declaration_info(declaration);
         }
     }
@@ -1598,8 +1619,10 @@ pub(crate) fn emit_retention_census(
         walker.declaration_index_bytes,
     );
     eprintln!(
-        "  checker_arenas={} checker_arena_bytes={}",
+        "  checker_arenas={} checker_arena_bytes={} scope_attached_decls={} scope_self_cycles={}",
         walker.arena_bytes_by_identity.len(),
         walker.arena_bytes_by_identity.values().sum::<u64>(),
+        walker.scope_attached_declarations,
+        walker.scope_self_cycle_declarations,
     );
 }

@@ -563,6 +563,11 @@ impl TypeDeclarationScope {
         Self { layers }
     }
 
+    /// Census-only: layer table identities, for the scope↔table cycle probe.
+    pub(crate) fn census_layer_addresses(&self) -> impl Iterator<Item = usize> + '_ {
+        self.layers.iter().map(|layer| layer.identity_address())
+    }
+
     pub(crate) fn get(&self, name: &str) -> Option<&TypeDeclarationInfo> {
         let mut layers_visited = 0;
 
