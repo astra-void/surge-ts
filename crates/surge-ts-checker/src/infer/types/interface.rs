@@ -512,8 +512,8 @@ pub(crate) fn resolve_interface_declaration(
         }
     }
 
-    let mut own_method_group_contaminated = std::collections::HashMap::<String, bool>::new();
-    let mut own_method_group_clean = std::collections::HashMap::<String, bool>::new();
+    let mut own_method_group_contaminated = surge_ts_types::fx::FxHashMap::<String, bool>::default();
+    let mut own_method_group_clean = surge_ts_types::fx::FxHashMap::<String, bool>::default();
     for (member_index, member) in members.iter().enumerate() {
         let is_method = matches!(member.ty, ParsedType::Function(_));
         let reason = if is_method {

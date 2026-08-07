@@ -1279,8 +1279,8 @@ pub(crate) fn physical_interface_declaration_template(
         return None;
     }
 
-    let mut overload_indices = std::collections::HashMap::<&str, u32>::new();
-    let mut group_indices = std::collections::HashMap::<&str, u32>::new();
+    let mut overload_indices = surge_ts_types::fx::FxHashMap::<&str, u32>::default();
+    let mut group_indices = surge_ts_types::fx::FxHashMap::<&str, u32>::default();
     let mut group_members = Vec::<Vec<StableInterfaceMemberDeclarationId>>::new();
     let mut members = Vec::with_capacity(interface.body.members.len());
     for (member, fragment) in interface

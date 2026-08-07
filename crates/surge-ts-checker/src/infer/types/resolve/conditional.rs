@@ -568,7 +568,7 @@ fn expand_named_alias_pattern(named: &ParsedNamedType, ctx: &CheckerContext) -> 
         TypeDeclarationInfo::Interface(_) => return None,
     };
 
-    let mut map: std::collections::HashMap<String, ParsedType> = std::collections::HashMap::new();
+    let mut map: surge_ts_types::fx::FxHashMap<String, ParsedType> = surge_ts_types::fx::FxHashMap::default();
     for (index, parameter) in body.type_parameters.iter().enumerate() {
         if let Some(argument) = named.type_arguments.get(index) {
             map.insert(parameter.name.clone(), argument.clone());
@@ -587,7 +587,7 @@ fn expand_named_alias_pattern(named: &ParsedNamedType, ctx: &CheckerContext) -> 
 /// into an expanded alias body such as `JSXElementConstructor<infer P>`.
 pub(crate) fn substitute_parsed_type_parameters_deep(
     ty: &ParsedType,
-    map: &std::collections::HashMap<String, ParsedType>,
+    map: &surge_ts_types::fx::FxHashMap<String, ParsedType>,
 ) -> ParsedType {
     match ty {
         ParsedType::Named(named) => {

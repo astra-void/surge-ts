@@ -1127,7 +1127,7 @@ const TYPE_DEDUP_FINGERPRINT_NODE_BUDGET: usize = 4096;
 
 fn type_dedup_fingerprint(ty: &Type) -> u64 {
     use std::hash::Hasher;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = surge_ts_types::fx::FxHasher::default();
     let mut budget = TYPE_DEDUP_FINGERPRINT_NODE_BUDGET;
     fingerprint_type(ty, &mut hasher, &mut budget);
     hasher.finish()

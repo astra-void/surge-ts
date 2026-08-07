@@ -451,7 +451,7 @@ pub(crate) fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution
         };
     };
 
-    let keys: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
+    let keys: surge_ts_types::fx::FxHashSet<&str> = keys.iter().map(String::as_str).collect();
     let mut properties = PropertyMap::default();
     for (key, property) in object_type.properties.iter() {
         if keys.contains(key.as_ref()) {

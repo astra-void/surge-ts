@@ -547,7 +547,7 @@ fn infer_through_generic_reference(
         return;
     }
 
-    let parameter_map: HashMap<String, ParsedType> = body
+    let parameter_map: surge_ts_types::fx::FxHashMap<String, ParsedType> = body
         .type_parameters
         .iter()
         .zip(named_type.type_arguments.iter())
@@ -588,7 +588,7 @@ fn infer_through_generic_alias(
     if alias.body.type_parameters.len() != named_type.type_arguments.len() {
         return;
     }
-    let parameter_map: HashMap<String, ParsedType> = alias
+    let parameter_map: surge_ts_types::fx::FxHashMap<String, ParsedType> = alias
         .body
         .type_parameters
         .iter()
@@ -625,7 +625,7 @@ fn infer_through_generic_alias(
 /// type parameters before inference.
 fn substitute_parsed_type_parameters(
     parsed_type: &ParsedType,
-    map: &HashMap<String, ParsedType>,
+    map: &surge_ts_types::fx::FxHashMap<String, ParsedType>,
 ) -> ParsedType {
     match parsed_type {
         ParsedType::Named(named) => {

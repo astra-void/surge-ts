@@ -737,7 +737,7 @@ impl SubstitutionStore {
         self.input_arguments
             .fetch_add(arguments.len() as u64, Ordering::Relaxed);
         let argument_count = arguments.len() as u64;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = surge_ts_types::fx::FxHasher::default();
         declaration.hash(&mut hasher);
         arguments.hash(&mut hasher);
         let key = hasher.finish();
