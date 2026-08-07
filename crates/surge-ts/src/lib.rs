@@ -476,9 +476,15 @@ impl Project {
         // The scan caches (parser arena, per-file specifier lists, probe and
         // known-file sets) are loader-lifetime only; release them before the
         // checker's peak so they never count against the program footprint.
+        // The package-declaration cache (parsed package.json values) and the
+        // path-canonicalize memo are likewise done: nothing canonicalizes or
+        // resolves packages after this point, and a later `check` on a fresh
+        // `Project` simply re-fills them.
         drop(specifier_scanner);
         drop(import_graph_state);
+        drop(package_resolution_cache);
         probe::clear_probe_cache();
+        surge_ts_config::clear_canonicalize_cache();
 
         let mut checker_types = type_package_resolution.effective_type_names.clone();
         for name in &reference_type_resolution.effective_type_names {
