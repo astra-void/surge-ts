@@ -588,8 +588,8 @@ pub(crate) fn function_signature_info(
     parameters: &[ParsedFunctionParameter],
     return_type: Option<&ParsedType>,
     declaring_file: &str,
-) -> FunctionSignatureInfo {
-    FunctionSignatureInfo {
+) -> Arc<FunctionSignatureInfo> {
+    Arc::new(FunctionSignatureInfo {
         type_parameters: type_parameters.to_vec(),
         parameter_types: parameters
             .iter()
@@ -603,8 +603,8 @@ pub(crate) fn function_signature_info(
             })
             .collect(),
         return_type: return_type.cloned(),
-        declaring_file: Some(declaring_file.to_string()),
-    }
+        declaring_file: Some(Arc::from(declaring_file)),
+    })
 }
 
 pub(crate) fn with_type_parameter_scope<R>(
@@ -667,7 +667,7 @@ fn merge_overload_group_signatures(a: &FunctionType, b: &FunctionType) -> Functi
 pub(crate) fn register_function_signature(
     name: String,
     function_type: FunctionType,
-    function_signature: Option<FunctionSignatureInfo>,
+    function_signature: Option<Arc<FunctionSignatureInfo>>,
     symbols: &mut SymbolTable,
     replace_existing: bool,
     is_implementation: bool,
@@ -836,7 +836,7 @@ pub(crate) fn check_function_body_with_signature(
     body: Vec<ParsedFunctionBodyStatement>,
     function_type: &FunctionType,
     type_parameters: &[ParsedTypeParameter],
-    function_signature: Option<FunctionSignatureInfo>,
+    function_signature: Option<Arc<FunctionSignatureInfo>>,
     has_explicit_return_type: bool,
     missing_return_span: Option<TextSpan>,
     body_reads: Option<&[String]>,
@@ -868,7 +868,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     body: Vec<ParsedFunctionBodyStatement>,
     function_type: &FunctionType,
     type_parameters: &[ParsedTypeParameter],
-    function_signature: Option<FunctionSignatureInfo>,
+    function_signature: Option<Arc<FunctionSignatureInfo>>,
     has_explicit_return_type: bool,
     missing_return_span: Option<TextSpan>,
     this_type: Option<Type>,

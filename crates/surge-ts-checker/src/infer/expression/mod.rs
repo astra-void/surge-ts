@@ -260,7 +260,7 @@ pub(crate) fn infer_expression(
                     let return_type =
                         crate::checks::call::instantiate_function_return_type_for_call(
                             function_type,
-                            symbol.function_signature.as_ref(),
+                            symbol.function_signature.as_deref(),
                             type_arguments,
                             *callee_span,
                             arguments,

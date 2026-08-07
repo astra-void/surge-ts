@@ -163,9 +163,9 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
 fn resolve_predicate_guard_type(guard: &PredicateGuardInfo, ctx: &mut CheckerContext) -> Option<Type> {
     let declaring_file = guard
         .declaring_file
-        .as_ref()
-        .filter(|file| file.as_str() != ctx.file_name)
-        .cloned();
+        .as_deref()
+        .filter(|file| *file != ctx.file_name)
+        .map(str::to_string);
     let saved_file_name = declaring_file.map(|file| {
         let saved = ctx.file_name.clone();
         ctx.set_file_name(file);

@@ -18,7 +18,7 @@ pub(crate) type SymbolInfoHandle = Arc<SymbolInfo>;
 pub(crate) struct SymbolInfo {
     pub(crate) ty: Type,
     pub(crate) kind: SymbolKind,
-    pub(crate) function_signature: Option<FunctionSignatureInfo>,
+    pub(crate) function_signature: Option<Arc<FunctionSignatureInfo>>,
 }
 
 impl Clone for SymbolInfo {
@@ -48,7 +48,7 @@ pub(crate) struct FunctionSignatureInfo {
     /// the declaring file's per-file scope but not the caller's; the
     /// `module_scope_by_file` fallback keys on the active file name, so
     /// instantiation runs under this one.
-    pub(crate) declaring_file: Option<String>,
+    pub(crate) declaring_file: Option<Arc<str>>,
 }
 
 #[derive(Debug, Default)]

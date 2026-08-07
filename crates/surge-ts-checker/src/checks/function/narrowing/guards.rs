@@ -726,7 +726,7 @@ pub(super) struct PredicateGuardInfo {
     /// File the predicate signature was declared in; its module-local type
     /// names resolve under this file's scope (see
     /// [`crate::symbols::FunctionSignatureInfo::declaring_file`]).
-    pub(super) declaring_file: Option<String>,
+    pub(super) declaring_file: Option<std::sync::Arc<str>>,
 }
 
 /// Extracts a user-defined type-predicate guard from a call condition. The
@@ -736,7 +736,7 @@ pub(super) struct PredicateGuardInfo {
 /// and the argument in the tested position must be a bare identifier.
 pub(super) fn parse_type_predicate_condition(
     condition: &ParsedExpression,
-    signature_of: &mut dyn FnMut(&str) -> Option<crate::symbols::FunctionSignatureInfo>,
+    signature_of: &mut dyn FnMut(&str) -> Option<std::sync::Arc<crate::symbols::FunctionSignatureInfo>>,
 ) -> Option<PredicateGuardInfo> {
     let ParsedExpression::Call {
         callee_name,

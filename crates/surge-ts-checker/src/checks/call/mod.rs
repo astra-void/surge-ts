@@ -93,7 +93,7 @@ pub(crate) fn check_call_like(
             with_type_copy_reason(TypeCopyReason::CallResolution, || {
                 let function_type = instantiate_function_type(
                     function_type,
-                    symbol.function_signature.as_ref(),
+                    symbol.function_signature.as_deref(),
                     type_arguments,
                     callee_span,
                     arguments,

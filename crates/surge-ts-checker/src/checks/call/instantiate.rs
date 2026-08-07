@@ -132,12 +132,11 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
     // already-resolved `Type`s, so they are unaffected by the swap.
     let declaring_file = function_signature
         .declaring_file
-        .as_ref()
-        .filter(|file| file.as_str() != ctx.file_name)
-        .cloned();
-    let saved_file_name = declaring_file.as_ref().map(|file| {
+        .as_deref()
+        .filter(|file| *file != ctx.file_name);
+    let saved_file_name = declaring_file.map(|file| {
         let saved = ctx.file_name.clone();
-        ctx.set_file_name(file.clone());
+        ctx.set_file_name(file.to_string());
         saved
     });
 

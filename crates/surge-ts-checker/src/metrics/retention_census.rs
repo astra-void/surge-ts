@@ -205,7 +205,12 @@ impl Walker {
         self.add_item();
         self.add(size_of::<SymbolInfo>() as u64);
         self.sub("symbol_struct", size_of::<SymbolInfo>() as u64);
-        if let Some(signature) = symbol.function_signature.as_ref() {
+        if let Some(signature) = symbol.function_signature.as_ref()
+            && Walker::first_visit(
+                &mut self.seen_signature_infos,
+                Arc::as_ptr(signature) as usize,
+            )
+        {
             let mut tp_bytes = 0u64;
             let mut tp_unique = 0u64;
             for parameter in &signature.type_parameters {
@@ -228,9 +233,10 @@ impl Walker {
                 rt_bytes += parsed_type_bytes(return_type);
                 rt_unique += parsed_type_unique_bytes(return_type);
             }
-            let df_bytes = signature.declaring_file.as_ref().map_or(0, |file| {
-                file.capacity() as u64 + size_of::<String>() as u64
-            });
+            let df_bytes = signature
+                .declaring_file
+                .as_ref()
+                .map_or(0, |file| file.len() as u64 + size_of::<Arc<str>>() as u64);
             let pn_bytes: u64 = signature
                 .parameter_names
                 .iter()
@@ -249,7 +255,11 @@ impl Walker {
                 "sig_unique_nonarc",
                 tp_unique + pt_unique + rt_unique + df_bytes + pn_bytes,
             );
-            let bytes = tp_bytes + pt_bytes + rt_bytes + df_bytes;
+            let bytes = tp_bytes
+                + pt_bytes
+                + rt_bytes
+                + df_bytes
+                + size_of::<crate::symbols::FunctionSignatureInfo>() as u64;
             self.parsed_signature_bytes += bytes;
             self.add(bytes);
         }
