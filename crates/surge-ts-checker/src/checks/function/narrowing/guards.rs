@@ -101,6 +101,70 @@ pub(super) fn narrow_union_by_discriminant(
     Some(union_type(kept))
 }
 
+/// Parses an `expr === null` / `expr === undefined` (or `!==`) test. Returns the
+/// tested expression and whether the operator is an equality test. `null` and
+/// `undefined` are the same [`Type::Undefined`] in this model, so both spellings
+/// narrow identically.
+pub(super) fn parse_nullish_equality_condition(
+    condition: &ParsedExpression,
+) -> Option<(&ParsedExpression, bool)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let eq = match operator {
+        ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::Equals => true,
+        ParsedBinaryOperator::StrictNotEquals | ParsedBinaryOperator::NotEquals => false,
+        _ => return None,
+    };
+
+    let is_nullish = |expression: &ParsedExpression| {
+        matches!(
+            expression,
+            ParsedExpression::NullLiteral | ParsedExpression::UndefinedLiteral
+        )
+    };
+
+    if is_nullish(right) && !is_nullish(left) {
+        return Some((left.as_ref(), eq));
+    }
+    if is_nullish(left) && !is_nullish(right) {
+        return Some((right.as_ref(), eq));
+    }
+    None
+}
+
+/// Narrows `ty` by an `=== null`/`undefined` test: the matching branch keeps only
+/// the nullish member, the complement drops it. `None` when `ty` has no nullish
+/// member to split on, so an unrelated type is left untouched.
+pub(super) fn narrow_union_by_nullish(ty: &Type, keep_matching: bool) -> Option<Type> {
+    let Type::Union(union) = ty else {
+        return None;
+    };
+    if !union.types().iter().any(|member| *member == Type::Undefined) {
+        return None;
+    }
+    if keep_matching {
+        return Some(Type::Undefined);
+    }
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| **member != Type::Undefined)
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
 /// Parses a `base.property === literal` (or `!==`) discriminant test. Returns the
 /// discriminant object expression, the property name, the literal type, and
 /// whether the operator is an equality (`===`/`==`) vs inequality test.
@@ -650,6 +714,116 @@ pub(super) fn narrow_union_by_arraybufferview(ty: &Type, keep_views: bool) -> Op
         return None;
     }
     Some(union_type(kept))
+}
+
+/// A user-defined type-predicate guard extracted from a call condition
+/// (`isFoo(x)` where `isFoo`'s collected signature returns `param is T`).
+pub(super) struct PredicateGuardInfo {
+    /// The bare-identifier argument in the tested parameter's position.
+    pub(super) subject: String,
+    /// The predicate's parsed target type (`T` in `param is T`), unresolved.
+    pub(super) predicate_type: surge_ts_syntax::ParsedType,
+    /// File the predicate signature was declared in; its module-local type
+    /// names resolve under this file's scope (see
+    /// [`crate::symbols::FunctionSignatureInfo::declaring_file`]).
+    pub(super) declaring_file: Option<String>,
+}
+
+/// Extracts a user-defined type-predicate guard from a call condition. The
+/// callee's collected signature must declare a non-asserts `param is T`
+/// predicate over a named value parameter, the call must not be generic (an
+/// unsubstituted type parameter in `T` cannot be resolved at the guard site),
+/// and the argument in the tested position must be a bare identifier.
+pub(super) fn parse_type_predicate_condition(
+    condition: &ParsedExpression,
+    signature_of: &mut dyn FnMut(&str) -> Option<crate::symbols::FunctionSignatureInfo>,
+) -> Option<PredicateGuardInfo> {
+    let ParsedExpression::Call {
+        callee_name,
+        type_arguments,
+        arguments,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    if !type_arguments.is_empty() {
+        return None;
+    }
+    let signature = signature_of(callee_name)?;
+    if !signature.type_parameters.is_empty() {
+        return None;
+    }
+    let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = &signature.return_type else {
+        return None;
+    };
+    if predicate.asserts || predicate.parameter_name == "this" {
+        return None;
+    }
+    let predicate_type = predicate.ty.clone()?;
+    let index = signature
+        .parameter_names
+        .iter()
+        .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))?;
+    let ParsedExpression::Identifier { name: subject, .. } = &arguments.get(index)?.expression
+    else {
+        return None;
+    };
+    Some(PredicateGuardInfo {
+        subject: subject.clone(),
+        predicate_type,
+        declaring_file: signature.declaring_file.clone(),
+    })
+}
+
+/// Narrows a value tested by a `param is T` predicate. In the true branch a
+/// union keeps the members assignable to `T`; when none are but `T` itself fits
+/// a member (`string | undefined` guarded by `x is "a" | "b"`), the value *is*
+/// `T`. The false branch removes the members assignable to `T`. A non-union
+/// subject narrows to `T` in the true branch when `T` is a subtype of it.
+/// Returns `None` when the guard proves nothing new (or would empty the type —
+/// stay conservative rather than model `never`).
+pub(super) fn narrow_by_predicate(ty: &Type, predicate: &Type, keep_matching: bool) -> Option<Type> {
+    let peeled = ty.peeled();
+    if let Type::Union(union) = &peeled {
+        let members = union.types();
+        if keep_matching {
+            let matching: Vec<Type> = members
+                .iter()
+                .filter(|member| surge_ts_types::is_assignable_to(member, predicate))
+                .cloned()
+                .collect();
+            if !matching.is_empty() {
+                if matching.len() == members.len() {
+                    return None;
+                }
+                return Some(union_type(matching));
+            }
+            if members
+                .iter()
+                .any(|member| surge_ts_types::is_assignable_to(predicate, member))
+            {
+                return Some(predicate.clone());
+            }
+            return None;
+        }
+        let remaining: Vec<Type> = members
+            .iter()
+            .filter(|member| !surge_ts_types::is_assignable_to(member, predicate))
+            .cloned()
+            .collect();
+        if remaining.is_empty() || remaining.len() == members.len() {
+            return None;
+        }
+        return Some(union_type(remaining));
+    }
+    if keep_matching
+        && !surge_ts_types::is_assignable_to(&peeled, predicate)
+        && surge_ts_types::is_assignable_to(predicate, &peeled)
+    {
+        return Some(predicate.clone());
+    }
+    None
 }
 
 /// The identifier a single type guard tests, if the guard is one we model over a

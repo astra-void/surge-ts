@@ -43,6 +43,24 @@ pub(crate) fn check_property_call_like(
     {
         return check_promise_then_call(value_type, arguments, symbols, ctx);
     }
+    // `Promise<T>` is modeled as its awaited `T`, so a `.then`/`.catch`/`.finally`
+    // chained on a promise-returning call lands on the value type and would be
+    // reported as a missing member. Treat the receiver as the awaited value
+    // instead — the chain keeps its promise-like result so further links resolve.
+    if matches!(property_name, "then" | "catch" | "finally")
+        && !object_ty.is_unknown()
+        && object_ty.get_property_access_type(property_name).is_none()
+    {
+        // The receiver was already collapsed to its awaited value, so the chain's
+        // result is collapsed too — wrapping it back into a promise-like object
+        // would leak that synthetic shape into assignability checks.
+        return if property_name == "then" {
+            check_promise_then_call(object_ty, arguments, symbols, ctx)
+                .map(|result| promise_like_value_type(&result).unwrap_or(result))
+        } else {
+            Some(object_ty)
+        };
+    }
 
     match object_ty {
         Type::Any => Some(Type::Any),

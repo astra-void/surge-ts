@@ -155,6 +155,81 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
     }
 }
 
+/// Resolves a predicate guard's target type under the predicate's declaring
+/// file (see [`crate::symbols::FunctionSignatureInfo::declaring_file`]). A
+/// resolution that degrades (`had_error` or the `Unknown` sentinel) proves
+/// nothing — narrowing on it would manufacture facts from a modeling gap — so
+/// it yields `None`.
+fn resolve_predicate_guard_type(guard: &PredicateGuardInfo, ctx: &mut CheckerContext) -> Option<Type> {
+    let declaring_file = guard
+        .declaring_file
+        .as_ref()
+        .filter(|file| file.as_str() != ctx.file_name)
+        .cloned();
+    let saved_file_name = declaring_file.map(|file| {
+        let saved = ctx.file_name.clone();
+        ctx.set_file_name(file);
+        saved
+    });
+    let resolved = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        crate::infer::types::resolve_parsed_type(
+            guard.predicate_type.clone(),
+            ctx,
+            &mut Vec::new(),
+            &crate::infer::TypeParameterSubstitution::new(),
+        )
+    });
+    if let Some(saved) = saved_file_name {
+        ctx.set_file_name(saved);
+    }
+    if resolved.had_error() {
+        return None;
+    }
+    let ty = resolved.into_ty();
+    (!matches!(ty, Type::Unknown)).then_some(ty)
+}
+
+/// Applies user-defined type-predicate narrowing (`isFoo(x)`) in place to a
+/// `ScopeStack`. Returns whether the condition was such a predicate call over a
+/// bare-identifier argument.
+fn narrow_predicate_call_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let Some(guard) = parse_type_predicate_condition(condition, &mut |name| {
+        scopes
+            .resolve(name)
+            .and_then(|symbol| symbol.function_signature.clone())
+    }) else {
+        return false;
+    };
+    let Some(symbol) = scopes.resolve(&guard.subject) else {
+        return true;
+    };
+    let subject_ty = symbol.ty.clone();
+    let kind = symbol.kind;
+    let function_signature = symbol.function_signature.clone();
+    let Some(predicate_ty) = resolve_predicate_guard_type(&guard, ctx) else {
+        return true;
+    };
+    let Some(narrowed) = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        narrow_by_predicate(&subject_ty, &predicate_ty, branch_is_true)
+    }) else {
+        return true;
+    };
+    let _ = scopes.insert_current(
+        guard.subject,
+        SymbolInfo {
+            ty: narrowed,
+            kind,
+            function_signature,
+        },
+    );
+    true
+}
+
 /// Narrows `ty` for variable `var_name` under `condition`, returning the narrowed
 /// type or `None` when the condition does not constrain `var_name` (or leaves it
 /// unchanged). Composes `||` (true branch: union of disjuncts — every disjunct
@@ -164,13 +239,15 @@ fn narrow_type_for_identifier(
     var_name: &str,
     ty: &Type,
     branch_is_true: bool,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
 ) -> Option<Type> {
     match condition {
         ParsedExpression::Unary {
             operator: ParsedUnaryOperator::Not,
             operand,
             ..
-        } => narrow_type_for_identifier(operand, var_name, ty, !branch_is_true),
+        } => narrow_type_for_identifier(operand, var_name, ty, !branch_is_true, scopes, ctx),
         ParsedExpression::Logical {
             left,
             operator: ParsedLogicalOperator::Or,
@@ -181,8 +258,9 @@ fn narrow_type_for_identifier(
             // union of each disjunct's narrowing. A disjunct that does not
             // constrain `var_name` leaves it unconstrained, so the whole guard
             // cannot narrow — bail.
-            let left_narrowed = narrow_type_for_identifier(left, var_name, ty, true)?;
-            let right_narrowed = narrow_type_for_identifier(right, var_name, ty, true)?;
+            let left_narrowed = narrow_type_for_identifier(left, var_name, ty, true, scopes, ctx)?;
+            let right_narrowed =
+                narrow_type_for_identifier(right, var_name, ty, true, scopes, ctx)?;
             Some(union_type(vec![left_narrowed, right_narrowed]))
         }
         ParsedExpression::Logical {
@@ -192,14 +270,44 @@ fn narrow_type_for_identifier(
             ..
         } if branch_is_true => {
             // `A && B` true branch: apply each guard in sequence.
-            let after_left =
-                narrow_type_for_identifier(left, var_name, ty, true).unwrap_or_else(|| ty.clone());
+            let after_left = narrow_type_for_identifier(left, var_name, ty, true, scopes, ctx)
+                .unwrap_or_else(|| ty.clone());
             Some(
-                narrow_type_for_identifier(right, var_name, &after_left, true)
+                narrow_type_for_identifier(right, var_name, &after_left, true, scopes, ctx)
                     .unwrap_or(after_left),
             )
         }
-        _ => narrow_single_guard_for_identifier(condition, var_name, ty, branch_is_true),
+        // Fall-through of `A || B` is `!A && !B`: apply each disjunct's negation
+        // in sequence. Treating the whole guard as one atom here narrowed to the
+        // disjunct's *true* shape, so `if (r.kind === "x" || other) continue;`
+        // left `r` as the `"x"` member instead of removing it.
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or,
+            right,
+            ..
+        } => {
+            let after_left = narrow_type_for_identifier(left, var_name, ty, false, scopes, ctx)
+                .unwrap_or_else(|| ty.clone());
+            Some(
+                narrow_type_for_identifier(right, var_name, &after_left, false, scopes, ctx)
+                    .unwrap_or(after_left),
+            )
+        }
+        // Fall-through of `A && B` is `!A || !B` — a union, and only sound when
+        // both operands constrain the value.
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And,
+            right,
+            ..
+        } => {
+            let left_narrowed = narrow_type_for_identifier(left, var_name, ty, false, scopes, ctx)?;
+            let right_narrowed =
+                narrow_type_for_identifier(right, var_name, ty, false, scopes, ctx)?;
+            Some(union_type(vec![left_narrowed, right_narrowed]))
+        }
+        _ => narrow_single_guard_for_identifier(condition, var_name, ty, branch_is_true, scopes, ctx),
     }
 }
 
@@ -209,6 +317,8 @@ fn narrow_single_guard_for_identifier(
     var_name: &str,
     ty: &Type,
     branch_is_true: bool,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
 ) -> Option<Type> {
     if let Some((ParsedExpression::Identifier { name, .. }, ctor_name)) =
         parse_instanceof_condition(condition).map(|(operand, ctor)| (operand, ctor))
@@ -234,7 +344,105 @@ fn narrow_single_guard_for_identifier(
     {
         return narrow_union_by_arraybufferview(ty, branch_is_true);
     }
+    if let Some(guard) = parse_type_predicate_condition(condition, &mut |name| {
+        scopes
+            .resolve(name)
+            .and_then(|symbol| symbol.function_signature.clone())
+    }) && guard.subject == var_name
+    {
+        let predicate_ty = resolve_predicate_guard_type(&guard, ctx)?;
+        return narrow_by_predicate(ty, &predicate_ty, branch_is_true);
+    }
+    if let Some((ParsedExpression::Identifier { name, .. }, property, literal, eq)) =
+        parse_discriminant_condition(condition)
+        && name == var_name
+    {
+        return narrow_union_by_discriminant(ty, property, &literal, branch_is_true == eq);
+    }
+    if let Some((ParsedExpression::Identifier { name, .. }, eq)) =
+        parse_nullish_equality_condition(condition)
+        && name == var_name
+    {
+        return narrow_union_by_nullish(ty, branch_is_true == eq);
+    }
     None
+}
+
+/// Collects the identifiers tested by equality guards — a discriminant test
+/// (`x.kind === "a"` → `x`) or a nullish test (`x === null`) — within a
+/// (possibly `||`/`&&`/`!`-composed) condition. Kept out of
+/// [`collect_guard_operand_identifiers`], whose results also drive the
+/// genuine-`unknown` downgrade — testing a *property* proves nothing about the
+/// whole value there.
+fn collect_equality_guard_subjects(condition: &ParsedExpression, names: &mut Vec<String>) {
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => collect_equality_guard_subjects(operand, names),
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or | ParsedLogicalOperator::And,
+            right,
+            ..
+        } => {
+            collect_equality_guard_subjects(left, names);
+            collect_equality_guard_subjects(right, names);
+        }
+        _ => {
+            let subject = match parse_discriminant_condition(condition) {
+                Some((ParsedExpression::Identifier { name, .. }, _, _, _)) => Some(name),
+                _ => match parse_nullish_equality_condition(condition) {
+                    Some((ParsedExpression::Identifier { name, .. }, _)) => Some(name),
+                    _ => None,
+                },
+            };
+            if let Some(name) = subject
+                && !names.iter().any(|existing| existing == name)
+            {
+                names.push(name.clone());
+            }
+        }
+    }
+}
+
+/// Collects the subjects of user-defined predicate guard calls (`isFoo(x)` → `x`)
+/// within a (possibly `||`/`&&`/`!`-composed) condition. Kept separate from
+/// [`collect_guard_operand_identifiers`]: recognizing a predicate call needs the
+/// callee's collected signature, and a non-predicate call must not count as a
+/// guard (tsc does not narrow `if (foo(x))`).
+fn collect_predicate_guard_subjects(
+    condition: &ParsedExpression,
+    scopes: &ScopeStack,
+    names: &mut Vec<String>,
+) {
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => collect_predicate_guard_subjects(operand, scopes, names),
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or | ParsedLogicalOperator::And,
+            right,
+            ..
+        } => {
+            collect_predicate_guard_subjects(left, scopes, names);
+            collect_predicate_guard_subjects(right, scopes, names);
+        }
+        _ => {
+            if let Some(guard) = parse_type_predicate_condition(condition, &mut |name| {
+                scopes
+                    .resolve(name)
+                    .and_then(|symbol| symbol.function_signature.clone())
+            }) && !names.iter().any(|existing| existing == &guard.subject)
+            {
+                names.push(guard.subject);
+            }
+        }
+    }
 }
 
 /// Applies `||`/`&&`-composed guard narrowing in place to a `ScopeStack`. Returns
@@ -243,6 +451,7 @@ fn narrow_logical_guard_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
+    ctx: &mut CheckerContext,
 ) -> bool {
     if !matches!(
         condition,
@@ -256,23 +465,28 @@ fn narrow_logical_guard_in_scope(
 
     let mut operand_names = Vec::new();
     collect_guard_operand_identifiers(condition, &mut operand_names);
+    collect_predicate_guard_subjects(condition, scopes, &mut operand_names);
+    collect_equality_guard_subjects(condition, &mut operand_names);
 
     for name in operand_names {
         let Some(symbol) = scopes.resolve(&name) else {
             continue;
         };
+        let symbol_ty = symbol.ty.clone();
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
         let Some(narrowed) =
-            narrow_type_for_identifier(condition, &name, &symbol.ty, branch_is_true)
+            narrow_type_for_identifier(condition, &name, &symbol_ty, branch_is_true, scopes, ctx)
         else {
             continue;
         };
-        if narrowed == symbol.ty {
+        if narrowed == symbol_ty {
             continue;
         }
         let narrowed_symbol = SymbolInfo {
             ty: narrowed,
-            kind: symbol.kind,
-            function_signature: symbol.function_signature.clone(),
+            kind,
+            function_signature,
         };
         let _ = scopes.insert_current(name, narrowed_symbol);
     }
@@ -499,6 +713,7 @@ pub(crate) fn narrow_discriminant_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
+    ctx: &mut CheckerContext,
 ) {
     // `!guard` narrows the opposite branch.
     if let ParsedExpression::Unary {
@@ -507,7 +722,7 @@ pub(crate) fn narrow_discriminant_in_scope(
         ..
     } = condition
     {
-        narrow_discriminant_in_scope(operand, scopes, !branch_is_true);
+        narrow_discriminant_in_scope(operand, scopes, !branch_is_true, ctx);
         return;
     }
 
@@ -520,7 +735,7 @@ pub(crate) fn narrow_discriminant_in_scope(
         downgrade_guarded_genuine_unknown_in_scope(condition, scopes);
     }
 
-    if narrow_logical_guard_in_scope(condition, scopes, branch_is_true) {
+    if narrow_logical_guard_in_scope(condition, scopes, branch_is_true, ctx) {
         return;
     }
     if narrow_typeof_in_scope(condition, scopes, branch_is_true) {
@@ -535,7 +750,13 @@ pub(crate) fn narrow_discriminant_in_scope(
     if narrow_arraybuffer_isview_in_scope(condition, scopes, branch_is_true) {
         return;
     }
+    if narrow_predicate_call_in_scope(condition, scopes, branch_is_true, ctx) {
+        return;
+    }
     if narrow_truthy_identifier_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
+    if narrow_nullish_equality_in_scope(condition, scopes, branch_is_true) {
         return;
     }
 
@@ -748,6 +969,91 @@ fn narrow_array_isarray_in_scope(
     };
     let name = name.clone();
     let _ = scopes.insert_current(name, narrowed_symbol);
+    true
+}
+
+/// Applies `x === null` / `x.p === undefined` narrowing in place to a
+/// `ScopeStack`, for a bare identifier or one property of one. Returns whether
+/// the condition was such a test (handled either way, so the discriminant parse
+/// downstream is skipped — `null` is not a discriminant literal).
+fn narrow_nullish_equality_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let Some((subject, eq)) = parse_nullish_equality_condition(condition) else {
+        return false;
+    };
+    let keep_matching = branch_is_true == eq;
+
+    match subject {
+        ParsedExpression::Identifier { name, .. } => {
+            let Some(symbol) = scopes.resolve(name) else {
+                return true;
+            };
+            let Some(narrowed) = narrow_union_by_nullish(&symbol.ty, keep_matching) else {
+                return true;
+            };
+            let narrowed_symbol = SymbolInfo {
+                ty: narrowed,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            };
+            let _ = scopes.insert_current(name.clone(), narrowed_symbol);
+        }
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+                return true;
+            };
+            let Some(symbol) = scopes.resolve(name) else {
+                return true;
+            };
+            let symbol_ty = symbol.ty.peeled();
+            let Type::Object(object_type) = &symbol_ty else {
+                return true;
+            };
+            let Some(property) = object_type.properties.get(property_name.as_str()) else {
+                return true;
+            };
+            // An optional property carries its `undefined` in the `optional` flag
+            // rather than the type, so splitting on it also clears the flag.
+            let (narrowed_ty, narrowed_optional) = match narrow_union_by_nullish(
+                &property.ty,
+                keep_matching,
+            ) {
+                Some(narrowed) => (narrowed, property.optional && keep_matching),
+                None if property.optional => {
+                    if keep_matching {
+                        (Type::Undefined, true)
+                    } else {
+                        (property.ty.clone(), false)
+                    }
+                }
+                None => return true,
+            };
+
+            let mut new_object = object_type.clone();
+            let properties = Arc::make_mut(&mut new_object.properties);
+            properties.insert(
+                property_name.as_str().into(),
+                surge_ts_types::ObjectProperty {
+                    ty: narrowed_ty,
+                    optional: narrowed_optional,
+                },
+            );
+            let narrowed_symbol = SymbolInfo {
+                ty: Type::Object(new_object),
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            };
+            let _ = scopes.insert_current(name.clone(), narrowed_symbol);
+        }
+        _ => {}
+    }
     true
 }
 

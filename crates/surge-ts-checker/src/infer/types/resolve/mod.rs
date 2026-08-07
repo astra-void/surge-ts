@@ -309,6 +309,17 @@ pub(crate) fn resolve_parsed_type(
             ty: Type::Any,
             had_error: false,
         },
+        // A predicate annotation types the function's return value: `boolean`
+        // for `x is T`, `void` for an assertion signature. The predicate payload
+        // itself is consumed by guard narrowing, not by type resolution.
+        ParsedType::Predicate(predicate) => ResolvedType {
+            ty: if predicate.asserts {
+                Type::Void
+            } else {
+                Type::Boolean
+            },
+            had_error: false,
+        },
     }
 }
 

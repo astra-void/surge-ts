@@ -194,6 +194,46 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
         );
     }
 
+    // An object literal against a union target (an overload group's merged
+    // parameter, `A | B`) is contextually typed by the member that declares the
+    // most of the written properties, mirroring how tsc picks the overload the
+    // argument fits. Without it the literal is evaluated context-free and its
+    // method/callback parameters lose their types (false TS7006).
+    if let (Type::Union(union), ParsedExpression::ObjectLiteral { properties, .. }) =
+        (expected_type, expression)
+    {
+        let written: Vec<&str> = properties
+            .iter()
+            .filter(|property| !property.is_spread)
+            .map(|property| property.name.as_str())
+            .collect();
+        // Only an unambiguous match is used: one member must declare every
+        // written property and cover strictly more of them than any other. A
+        // discriminated union (every member carries `code`, `message`, …) ties
+        // and stays context-free, since picking a member there needs discriminant
+        // matching and guessing wrong reports the literal against the wrong one.
+        let mut matching = union.types().iter().filter(|member| {
+            written
+                .iter()
+                .any(|name| member.get_property_access_type(name).is_some())
+        });
+        let unambiguous = match (matching.next(), matching.next()) {
+            (Some(member), None) if !written.is_empty() => Some(member),
+            _ => None,
+        };
+        if let Some(member) = unambiguous {
+            return evaluate_expression_with_expected_type_anchored(
+                expression,
+                fallback_span,
+                target_span,
+                Some(member),
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            );
+        }
+    }
+
     // Contextual typing through a union: when the expected type is a union whose
     // only non-nullish member is a single concrete type (e.g. `{ ... } | null`,
     // mapped here to `{ ... } | undefined`), use that member as the contextual

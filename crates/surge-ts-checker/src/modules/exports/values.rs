@@ -405,6 +405,31 @@ pub(crate) fn fill_namespace_value_properties(
     use surge_ts_types::{FunctionType, ObjectProperty};
 
     for statement in &namespace.statements {
+        // `declare namespace N { export { a, b } }` re-exports declarations from
+        // the enclosing file as namespace members (the shape Prisma's runtime
+        // `Extensions` uses). The referenced declarations are not in this body,
+        // so the members are permissive — enough for `N.a` to resolve instead of
+        // reporting a missing property on an empty object.
+        if let ParsedStatement::ExportDeclaration(export) = statement
+            && let ParsedExportDeclaration::Named {
+                specifiers,
+                module_specifier: None,
+                is_type_only: false,
+                ..
+            } = export.as_ref()
+        {
+            for specifier in specifiers {
+                if specifier.is_type_only {
+                    continue;
+                }
+                properties.insert(
+                    specifier.exported_name.as_str().into(),
+                    ObjectProperty::required(Type::Any),
+                );
+            }
+            continue;
+        }
+
         let inner = match statement {
             ParsedStatement::ExportDeclaration(export) => {
                 if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {

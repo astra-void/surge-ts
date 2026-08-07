@@ -36,6 +36,11 @@ impl Clone for SymbolInfo {
 pub(crate) struct FunctionSignatureInfo {
     pub(crate) type_parameters: Vec<ParsedTypeParameter>,
     pub(crate) parameter_types: Vec<Option<ParsedType>>,
+    /// Declared parameter names (`None` for binding patterns), parallel to
+    /// `parameter_types`. A `x is T` return predicate names its tested
+    /// parameter, so guard narrowing maps that name back to a call-argument
+    /// position through this list.
+    pub(crate) parameter_names: Vec<Option<String>>,
     pub(crate) return_type: Option<ParsedType>,
     /// File the signature was declared in. Instantiation re-resolves the parsed
     /// parameter/return annotations, whose names (an imported generic's

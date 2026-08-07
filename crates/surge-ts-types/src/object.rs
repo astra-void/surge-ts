@@ -42,13 +42,13 @@ pub struct ObjectType {
     pub alias_id: Option<Arc<str>>,
     /// Construct signature for a class value (static side). When present, the
     /// object is callable with `new`, producing the signature's return type (the
-    /// instance type). Static members live in `properties`. Excluded from
-    /// equality, like `alias_name`, so structural comparisons stay shape-based.
+    /// instance type). Static members live in `properties`. Part of equality —
+    /// see `signatures_equal`.
     pub construct_signature: Option<Arc<FunctionType>>,
     /// Call signature for a callable object (a `declare var Number: NumberConstructor`
     /// style value whose interface has a `(value?: any): number` signature). When
     /// present, the object is callable without `new`, producing the signature's
-    /// return type. Excluded from equality, like `construct_signature`.
+    /// return type. Part of equality, like `construct_signature`.
     pub call_signature: Option<Arc<FunctionType>>,
     /// Set when this object is the merged surface of an intersection (`A & B`).
     /// Used only to pick the diagnostic tsc reports for a missing required
@@ -66,7 +66,24 @@ impl PartialEq for ObjectType {
         // graphs (DOM `Request`/`Response`, …) reached through nominal references.
         let properties_equal =
             Arc::ptr_eq(&self.properties, &other.properties) || self.properties == other.properties;
-        properties_equal && self.string_index_type == other.string_index_type
+        properties_equal
+            && self.string_index_type == other.string_index_type
+            && signatures_equal(&self.construct_signature, &other.construct_signature)
+            && signatures_equal(&self.call_signature, &other.call_signature)
+    }
+}
+
+/// Call/construct signatures participate in equality: two class *static* sides
+/// (`typeof AppendCommand` vs `typeof PExpireAtCommand`) usually carry identical
+/// (often empty) static property maps and differ only in their constructor, so
+/// leaving signatures out made them compare equal — and any cache keyed on
+/// resolved type arguments (the generic-instantiation interner) then served one
+/// class's expansion for another's.
+fn signatures_equal(left: &Option<Arc<FunctionType>>, right: &Option<Arc<FunctionType>>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right) || left == right,
+        _ => false,
     }
 }
 
@@ -240,5 +257,41 @@ impl Clone for ObjectType {
             call_signature: self.call_signature.clone(),
             is_intersection: self.is_intersection,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::FunctionType;
+
+    fn constructor(parameter: Type) -> FunctionType {
+        FunctionType::new(vec![parameter], Type::Number, false, 1)
+    }
+
+    #[test]
+    fn static_sides_differing_only_in_their_constructor_are_not_equal() {
+        // Two class static sides carry the same (here empty) static property map
+        // and differ only in the constructor, so leaving signatures out of
+        // equality made every `typeof SomeClass` interchangeable — and caches
+        // keyed on resolved type arguments served one class's expansion for
+        // another's.
+        let append = ObjectType::new(PropertyMap::default(), None)
+            .with_construct_signature(constructor(Type::String));
+        let expire = ObjectType::new(PropertyMap::default(), None)
+            .with_construct_signature(constructor(Type::Number));
+        assert_ne!(append, expire);
+
+        let same = ObjectType::new(PropertyMap::default(), None)
+            .with_construct_signature(constructor(Type::String));
+        assert_eq!(append, same);
+    }
+
+    #[test]
+    fn a_callable_object_is_not_equal_to_a_plain_one() {
+        let plain = ObjectType::new(PropertyMap::default(), None);
+        let callable = ObjectType::new(PropertyMap::default(), None)
+            .with_call_signature(constructor(Type::String));
+        assert_ne!(plain, callable);
     }
 }

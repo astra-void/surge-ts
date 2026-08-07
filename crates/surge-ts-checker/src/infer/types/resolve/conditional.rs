@@ -163,6 +163,7 @@ pub(crate) fn resolve_conditional_type(
             let branch = if !resolved_extends.ty.is_unknown()
                 && is_assignable_to(&member, &resolved_extends.ty)
             {
+                seed_infer_placeholders(&extends_pattern, &mut member_substitution);
                 bind_infer_captures(
                     &extends_pattern,
                     &member,
@@ -249,6 +250,7 @@ pub(crate) fn resolve_conditional_type(
     if is_assignable_to(&resolved_check.ty, &resolved_extends.ty) {
         let mut branch_substitution =
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+        seed_infer_placeholders(&extends_pattern, &mut branch_substitution);
         bind_infer_captures(
             &extends_pattern,
             &resolved_check.ty,
@@ -314,6 +316,21 @@ fn bind_infer_captures(
                     .iter()
                     .filter(|parameter| !parameter.is_this);
                 for (index, pattern_parameter) in pattern_parameters.enumerate() {
+                    // `(...args: infer P)` captures the *tuple* of every remaining
+                    // parameter, not the one at this position — that is what makes
+                    // `Parameters`/`ConstructorParameters` yield a parameter list.
+                    if pattern_parameter.rest {
+                        bind_infer_captures(
+                            &pattern_parameter.ty,
+                            &Type::Tuple(check_parameters[index.min(check_parameters.len())..].to_vec()),
+                            substitution,
+                            ctx,
+                            resolving,
+                            depth,
+                            reference_positional,
+                        );
+                        break;
+                    }
                     if let Some(check_parameter) = check_parameters.get(index) {
                         bind_infer_captures(
                             &pattern_parameter.ty,
@@ -471,6 +488,21 @@ fn callable_signature(ty: &Type) -> Option<&surge_ts_types::FunctionType> {
             .call_signature()
             .or_else(|| object.construct_signature()),
         _ => None,
+    }
+}
+
+/// Seeds every `infer X` capture in the pattern as a degradation placeholder
+/// before matching. `bind_infer_captures` overwrites the positions it can line
+/// up; the ones it cannot (a union check type against a function pattern, the
+/// shape Prisma's `IntersectOf` uses) then read as unresolved rather than
+/// reporting a false TS2304 for the capture name in the true branch.
+fn seed_infer_placeholders(pattern: &ParsedType, substitution: &mut TypeParameterSubstitution) {
+    let mut names = Vec::new();
+    collect_infer_names(pattern, &mut names);
+    for name in names {
+        if substitution.get(&name).is_none() {
+            substitution.insert_placeholder(name, Type::Unknown);
+        }
     }
 }
 

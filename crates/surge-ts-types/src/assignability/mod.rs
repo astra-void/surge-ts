@@ -287,13 +287,15 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         (Type::Tuple(source), Type::Array(target)) => source
             .iter()
             .all(|source_ty| is_assignable_to(source_ty, target)),
-        (Type::Union(from_union), Type::Union(to_union)) => {
-            from_union.types().iter().all(|from_ty| {
-                to_union
-                    .types()
-                    .iter()
-                    .any(|to_ty| is_assignable_to(from_ty, to_ty))
-            })
+        (Type::Union(from_union), Type::Union(_)) => {
+            // Check each source member against the whole target union rather
+            // than `any` single target member: a source member that is itself a
+            // union (surge builds nested unions in a few synthesized spots)
+            // fits the target member-wise, not as one atom.
+            from_union
+                .types()
+                .iter()
+                .all(|from_ty| is_assignable_to(from_ty, to))
         }
         (Type::Union(from_union), to_ty) => from_union
             .types()
@@ -426,21 +428,57 @@ fn parameter_carries_degraded_unknown(ty: &Type, depth: usize) -> bool {
     }
 }
 
+/// A tuple-typed rest parameter (`(...args: [a: A, b?: B]) => R`) *is* a
+/// positional parameter list in tsc, so it must compare against a plainly
+/// declared `(a: A, b?: B) => R`. Expands that trailing tuple into its elements;
+/// every other signature is returned unchanged.
+fn expanded_signature(function: &FunctionType) -> (std::borrow::Cow<'_, [Type]>, usize, bool) {
+    let parameters = function.parameters();
+    if function.is_variadic()
+        && let Some(Type::Tuple(elements)) = parameters.last()
+    {
+        let leading = parameters.len() - 1;
+        let mut expanded = parameters[..leading].to_vec();
+        expanded.extend(elements.iter().cloned());
+        let required = function.required_parameter_count().min(leading)
+            + elements
+                .iter()
+                .take_while(|element| !type_includes_undefined(element))
+                .count();
+        return (std::borrow::Cow::Owned(expanded), required, false);
+    }
+    (
+        std::borrow::Cow::Borrowed(parameters),
+        function.required_parameter_count(),
+        function.is_variadic(),
+    )
+}
+
+fn type_includes_undefined(ty: &Type) -> bool {
+    match ty {
+        Type::Undefined => true,
+        Type::Union(union) => union.types().iter().any(type_includes_undefined),
+        _ => false,
+    }
+}
+
 fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bool {
+    let (source_parameters, source_required, _) = expanded_signature(source);
+    let (target_parameters, _, target_variadic) = expanded_signature(target);
+
     // A source function may declare fewer parameters than the target expects —
     // the surplus arguments the target would pass are simply ignored — but it
     // must not *require* more parameters than the target can ever supply. This
     // mirrors how tsc accepts `(v) => …` and `(v, i) => …` for an
     // `(element, index, array) => …` callback slot. The shared parameter prefix
     // is still checked bivariantly.
-    if !target.is_variadic() && source.required_parameter_count() > target.parameters().len() {
+    if !target_variadic && source_required > target_parameters.len() {
         return false;
     }
 
-    let parameters_compatible = source
-        .parameters()
+    let parameters_compatible = source_parameters
         .iter()
-        .zip(target.parameters().iter())
+        .zip(target_parameters.iter())
         .all(|(source_parameter, target_parameter)| {
             // A source parameter typed `unknown`/`any` accepts whatever argument
             // the target would supply, so it is contravariantly compatible with
@@ -531,6 +569,29 @@ fn callable_object_function_member(source: &ObjectType, name: &str) -> Option<Ty
     }
 }
 
+/// Drops the `undefined` member a value may carry when the target property is
+/// optional. `None` means the value was *only* `undefined`, which such a target
+/// always accepts.
+fn strip_undefined_member(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Undefined => None,
+        Type::Union(union) if union.types().iter().any(|member| *member == Type::Undefined) => {
+            let kept: Vec<Type> = union
+                .types()
+                .iter()
+                .filter(|member| **member != Type::Undefined)
+                .cloned()
+                .collect();
+            if kept.is_empty() {
+                None
+            } else {
+                Some(crate::union_type(kept))
+            }
+        }
+        _ => Some(ty.clone()),
+    }
+}
+
 pub fn object_assignability_failure(
     source: &Type,
     target: &Type,
@@ -568,7 +629,24 @@ pub fn object_assignability_failure(
             });
         }
 
-        if !is_assignable_to(source_property_ty, &target_property.ty) {
+        // Without `exactOptionalPropertyTypes` an optional target property accepts
+        // an explicit `undefined`, so a required source property read as
+        // `T | undefined` (typically itself an optional property's read type)
+        // satisfies a `p?: T` target.
+        let stripped_source_ty;
+        let comparable_source_ty = if target_property.is_optional() {
+            match strip_undefined_member(source_property_ty) {
+                Some(stripped) => {
+                    stripped_source_ty = stripped;
+                    &stripped_source_ty
+                }
+                None => continue,
+            }
+        } else {
+            source_property_ty
+        };
+
+        if !is_assignable_to(comparable_source_ty, &target_property.ty) {
             return Some(ObjectAssignabilityFailure::PropertyTypeMismatch {
                 property_name: property_name.to_string(),
                 source_type: source_property_ty.clone(),

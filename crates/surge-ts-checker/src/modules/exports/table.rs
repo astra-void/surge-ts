@@ -110,7 +110,9 @@ pub(crate) fn try_resolve_module_export_table(
         }
     }
 
-    if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
+    if let Some(export_table) =
+        crate::modules::imports::ambient_module_export_table(ctx, module_specifier)
+    {
         record_program_timing(ctx.timings.as_ref(), |timings| {
             timings.package_export_lookup += resolution_start.elapsed();
         });

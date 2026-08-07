@@ -3531,12 +3531,16 @@ fn parse_declare_global_is_supported() {
 }
 
 #[test]
-fn parse_declare_module_wildcard_is_unsupported() {
-    let parsed = parse_source("declare module \"*\" {}", "example.d.ts");
+// A wildcard module declaration keeps its pattern: the checker matches it
+// against an importer's specifier (`declare module "*.css"` covers
+// `import "./globals.css"`).
+fn parse_declare_module_wildcard_keeps_pattern() {
+    let parsed = parse_source("declare module \"*.css\" {}", "example.d.ts");
     assert!(parsed.parser_errors.is_empty());
     assert!(matches!(
         &parsed.statements[0],
-        ParsedStatement::UnsupportedDeclaration { .. }
+        ParsedStatement::DeclareModuleDeclaration(declaration)
+            if declaration.module_specifier == "*.css"
     ));
 }
 

@@ -401,11 +401,32 @@ pub(crate) fn evaluate_expression(
                 crate::infer::InferredExpression::Known(ty) => {
                     match ctx.options.diagnostic_profile {
                         crate::context::DiagnosticProfile::Tsc => {
-                            if matches!(
-                                **satisfied_expression,
-                                ParsedExpression::ConstAssertion { .. }
-                            ) {
-                                crate::infer::InferredExpression::Known(ty)
+                            if let ParsedExpression::ConstAssertion {
+                                expression: const_inner,
+                                span: const_span,
+                            } = &**satisfied_expression
+                            {
+                                // `x as const satisfies T` keeps the
+                                // const-asserted literal type; `infer_expression`
+                                // widens literal members. Re-derive it with the
+                                // const-aware evaluator, gated to pure literal
+                                // trees so the re-evaluation cannot re-emit
+                                // expression diagnostics.
+                                if is_pure_literal_tree(const_inner) {
+                                    match evaluate_const_expression(
+                                        const_inner,
+                                        const_span.or(fallback_span),
+                                        symbols,
+                                        ctx,
+                                    ) {
+                                        crate::infer::InferredExpression::Known(const_ty) => {
+                                            crate::infer::InferredExpression::Known(const_ty)
+                                        }
+                                        _ => crate::infer::InferredExpression::Known(ty),
+                                    }
+                                } else {
+                                    crate::infer::InferredExpression::Known(ty)
+                                }
                             } else {
                                 crate::infer::InferredExpression::Known(widen_type(&ty))
                             }
@@ -594,5 +615,23 @@ fn evaluate_jsx_child(
         ParsedJsxChild::Element(element) => {
             let _ = evaluate_expression(element, fallback_span, symbols, ctx);
         }
+    }
+}
+
+/// Whether an expression is a tree of literals and array/object literals only —
+/// re-evaluating such a tree cannot resolve names or push diagnostics, so the
+/// `satisfies` result path may safely re-derive its const-asserted type.
+fn is_pure_literal_tree(expression: &ParsedExpression) -> bool {
+    match expression {
+        ParsedExpression::StringLiteral(_)
+        | ParsedExpression::NumberLiteral(_)
+        | ParsedExpression::BooleanLiteral(_) => true,
+        ParsedExpression::ArrayLiteral { elements, .. } => elements
+            .iter()
+            .all(|element| is_pure_literal_tree(&element.expression)),
+        ParsedExpression::ObjectLiteral { properties, .. } => properties
+            .iter()
+            .all(|property| !property.is_spread && !property.is_method && is_pure_literal_tree(&property.value)),
+        _ => false,
     }
 }

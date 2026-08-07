@@ -43,6 +43,11 @@ pub(crate) fn infer_object_literal(
                         merged_properties.insert(name.clone(), source_property.clone());
                     }
                 }
+                // `{ ...(cond ? { list } : {}) }`: spreading a union contributes
+                // each member's properties, and a property absent from (or
+                // optional in) some member becomes optional — the shape tsc
+                // infers for a conditional spread.
+                Type::Union(source) => merge_union_spread(&source, &mut merged_properties),
                 _ => continue,
             }
             continue;
@@ -59,6 +64,60 @@ pub(crate) fn infer_object_literal(
         timings.object_literal_checking += object_literal_start.elapsed()
     });
     result
+}
+
+fn merge_union_spread(source: &surge_ts_types::UnionType, merged: &mut PropertyMap) {
+    let members: Vec<Option<&surge_ts_types::ObjectType>> = source
+        .types()
+        .iter()
+        .map(|member| match member {
+            Type::Object(object) => Some(object),
+            // `undefined`/`null` (and anything else with no own properties)
+            // contributes nothing but still makes the other members' properties
+            // optional.
+            _ => None,
+        })
+        .collect();
+
+    if members.iter().all(Option::is_none) {
+        return;
+    }
+
+    let mut names: Vec<std::sync::Arc<str>> = Vec::new();
+    for member in members.iter().flatten() {
+        for (name, _) in member.properties.iter() {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+    }
+
+    for name in names {
+        let mut present_types = Vec::new();
+        let mut missing_or_optional = false;
+        for member in &members {
+            match member.and_then(|object| object.properties.get(&name)) {
+                Some(property) => {
+                    present_types.push(property.ty.clone());
+                    missing_or_optional |= property.is_optional();
+                }
+                None => missing_or_optional = true,
+            }
+        }
+
+        // An earlier required property is not weakened by a later conditional
+        // spread: `{ a: 1, ...(cond ? { a: 2 } : {}) }` still always has `a`.
+        let already_required = merged.get(&name).is_some_and(ObjectProperty::is_required);
+        let ty = union_type(present_types);
+        merged.insert(
+            name,
+            if missing_or_optional && !already_required {
+                ObjectProperty::optional(ty)
+            } else {
+                ObjectProperty::required(ty)
+            },
+        );
+    }
 }
 
 pub(crate) fn infer_array_literal(

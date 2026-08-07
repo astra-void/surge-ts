@@ -107,6 +107,19 @@ pub enum ParsedType {
     /// so a conditional that uses it (e.g. React's `ComponentProps<T>`) survives
     /// parsing instead of degrading the whole conditional to `Unknown`.
     Infer(String),
+    /// A type-predicate return annotation (`x is T`, `this is T`, `asserts x`,
+    /// `asserts x is T`). Resolves to `boolean` in type position; the guard
+    /// narrowing consumes the payload to narrow the tested argument.
+    Predicate(std::sync::Arc<ParsedPredicateType>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedPredicateType {
+    /// The tested parameter's name (`"this"` for a `this is T` predicate).
+    pub parameter_name: String,
+    /// `None` for a bare `asserts x` assertion with no type.
+    pub ty: Option<ParsedType>,
+    pub asserts: bool,
 }
 
 impl Clone for ParsedType {
@@ -141,6 +154,7 @@ impl Clone for ParsedType {
             Self::Conditional(payload) => Self::Conditional(payload.clone()),
             Self::TemplateLiteral(payload) => Self::TemplateLiteral(payload.clone()),
             Self::Infer(name) => Self::Infer(name.clone()),
+            Self::Predicate(payload) => Self::Predicate(payload.clone()),
         }
     }
 }
@@ -170,7 +184,7 @@ impl ParsedType {
             Self::TypeOf(_) => 8,
             Self::IndexedAccess(_) => 9,
             Self::Mapped(_) | Self::Conditional(_) => 10,
-            Self::TemplateLiteral(_) | Self::Infer(_) => 11,
+            Self::TemplateLiteral(_) | Self::Infer(_) | Self::Predicate(_) => 11,
         }
     }
 }

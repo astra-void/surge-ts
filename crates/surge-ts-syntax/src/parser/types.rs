@@ -10,8 +10,9 @@ use oxc_span::GetSpan;
 
 use crate::{
     ParsedConditionalType, ParsedFunctionType, ParsedIndexedAccessType, ParsedMappedType,
-    ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedTemplateLiteralType,
-    ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType, ParsedTypeParameter,
+    ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedPredicateType,
+    ParsedTemplateLiteralType, ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType,
+    ParsedTypeParameter,
 };
 
 use super::function_types::{
@@ -84,13 +85,26 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSThisType(_) => Some(ParsedType::Any),
         // A type predicate (`x is T`) evaluates to `boolean` at the value level;
         // an assertion predicate (`asserts x`, `asserts x is T`) evaluates to
-        // `void`. Lowering to those keeps the surrounding signature intact (e.g.
-        // `ArrayConstructor.isArray`) instead of dropping the whole member.
-        TSType::TSTypePredicate(predicate) => Some(if predicate.asserts {
-            ParsedType::Void
-        } else {
-            ParsedType::Boolean
-        }),
+        // `void`. The payload (tested parameter + target type) is preserved so
+        // guard narrowing can consume calls of the predicate.
+        TSType::TSTypePredicate(predicate) => {
+            let parameter_name = match &predicate.parameter_name {
+                oxc_ast::ast::TSTypePredicateName::Identifier(identifier) => {
+                    identifier.name.to_string()
+                }
+                oxc_ast::ast::TSTypePredicateName::This(_) => "this".to_string(),
+            };
+            Some(ParsedType::Predicate(std::sync::Arc::new(
+                ParsedPredicateType {
+                    parameter_name,
+                    ty: predicate
+                        .type_annotation
+                        .as_ref()
+                        .and_then(|annotation| parse_type(&annotation.type_annotation)),
+                    asserts: predicate.asserts,
+                },
+            )))
+        }
         // `infer X` in a conditional `extends` clause. Carrying the name (rather
         // than dropping to `None`) keeps the enclosing conditional alive; the
         // resolver treats the capture as a permissive hole.
@@ -375,8 +389,13 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
+    let getters = getter_accessor_names(&type_literal.members);
 
     for member in &type_literal.members {
+        if is_shadowed_setter(member, &getters) {
+            continue;
+        }
+
         let property = match member {
             TSSignature::TSPropertySignature(property_signature) => {
                 parse_type_property_signature(property_signature)
@@ -529,19 +548,85 @@ pub(crate) fn parse_construct_signature(
     })
 }
 
+/// Names declared with a `get` accessor. A `set` accessor for the same name is
+/// dropped so the read type wins, which is what tsc reports for a pair whose
+/// getter and setter types differ.
+pub(crate) fn getter_accessor_names<'a>(
+    members: &'a [TSSignature<'a>],
+) -> std::collections::HashSet<&'a str> {
+    members
+        .iter()
+        .filter_map(|member| match member {
+            TSSignature::TSMethodSignature(signature)
+                if signature.kind == TSMethodSignatureKind::Get =>
+            {
+                match &signature.key {
+                    PropertyKey::StaticIdentifier(key) => Some(key.name.as_str()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn is_shadowed_setter(
+    member: &TSSignature<'_>,
+    getters: &std::collections::HashSet<&str>,
+) -> bool {
+    match member {
+        TSSignature::TSMethodSignature(signature)
+            if signature.kind == TSMethodSignatureKind::Set =>
+        {
+            matches!(
+                &signature.key,
+                PropertyKey::StaticIdentifier(key) if getters.contains(key.name.as_str())
+            )
+        }
+        _ => false,
+    }
+}
+
 /// Lowers a method signature (`foo(arg: A): R`) into a property whose type is a
 /// [`ParsedType::Function`], so method calls reuse the existing function-type property
 /// checking. Shared by interface and object-type-literal parsing.
 pub(crate) fn parse_type_method_signature(
     method_signature: &TSMethodSignature<'_>,
 ) -> Option<ParsedObjectTypeProperty> {
-    if method_signature.kind != TSMethodSignatureKind::Method || method_signature.computed {
+    if method_signature.computed {
         return None;
     }
 
     let PropertyKey::StaticIdentifier(key) = &method_signature.key else {
         return None;
     };
+
+    // A `get`/`set` accessor lowers to a plain property: the getter's return
+    // type, or the setter's parameter type when only a setter is declared. The
+    // pair is written with differing types across the DOM lib
+    // (`get location(): Location; set location(href: string)`), so dropping
+    // them left `window.location` unresolved.
+    if method_signature.kind != TSMethodSignatureKind::Method {
+        let accessor_type = match method_signature.kind {
+            TSMethodSignatureKind::Get => method_signature
+                .return_type
+                .as_ref()
+                .and_then(|annotation| parse_type_annotation(annotation.as_ref()))?,
+            _ => method_signature
+                .params
+                .items
+                .first()
+                .and_then(|parameter| parameter.type_annotation.as_ref())
+                .and_then(|annotation| parse_type_annotation(annotation))?,
+        };
+
+        return Some(ParsedObjectTypeProperty {
+            name: key.name.to_string(),
+            name_span: Some(text_span_from_oxc_span(key.span)),
+            optional: false,
+            ty: accessor_type,
+        });
+    }
 
     let mut parameters = method_signature
         .params
@@ -621,8 +706,16 @@ pub(crate) fn parse_type_property_signature(
         return None;
     }
 
-    let PropertyKey::StaticIdentifier(key) = &property_signature.key else {
-        return None;
+    // A numeric key is a property name like any other: numeric-key tables
+    // (`{ 0: 1; 1: 0 }[B]`, the shape Prisma's generated `Not<B>` uses) must not
+    // drop the member — losing one collapses the whole type literal to
+    // `unknown`, which then reports the index as invalid. Quoted string keys stay
+    // unsupported: admitting them resolves shapes whose members surge models
+    // incompletely and churned zod by +38 for no measured gain.
+    let (name, key_span) = match &property_signature.key {
+        PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+        PropertyKey::NumericLiteral(literal) => (literal.raw_str().to_string(), literal.span),
+        _ => return None,
     };
 
     let type_annotation = property_signature
@@ -631,8 +724,8 @@ pub(crate) fn parse_type_property_signature(
         .and_then(|annotation| parse_type_annotation(annotation))?;
 
     Some(ParsedObjectTypeProperty {
-        name: key.name.to_string(),
-        name_span: Some(text_span_from_oxc_span(key.span)),
+        name,
+        name_span: Some(text_span_from_oxc_span(key_span)),
         ty: type_annotation,
         optional: property_signature.optional,
     })

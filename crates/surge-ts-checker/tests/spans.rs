@@ -2151,21 +2151,16 @@ fn declare_namespace_is_supported_without_diagnostic() {
 }
 
 #[test]
-fn span_unsupported_wildcard_declare_module_points_to_module_specifier_or_statement() {
+// A wildcard module declaration is a supported shape (tsc reports nothing), so
+// it no longer raises the unsupported-declaration diagnostic.
+fn wildcard_declare_module_is_accepted() {
     let source = "declare module \"*\" {}";
     let diagnostics = native_program(vec![surge_ts_checker::SourceFileInput {
         file_name: "example.d.ts".to_string(),
         source_text: source.to_string(),
     }]);
 
-    assert_eq!(
-        diagnostic_tuples(&diagnostics),
-        vec![(
-            "surge::unsupported-declaration".to_string(),
-            "example.d.ts".to_string(),
-            Some(span(source, source)),
-        )]
-    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
 
 #[test]

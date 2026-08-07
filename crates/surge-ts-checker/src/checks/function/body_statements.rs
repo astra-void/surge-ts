@@ -24,7 +24,7 @@ use crate::flow::{
     check_obvious_truthiness_condition, mark_assignment_state, merge_branch_deltas,
 };
 use crate::infer::{InferredExpression, map_parsed_type};
-use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
+use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
 pub(crate) fn check_function_variable_declaration(
     variable: ParsedVariableDeclaration,
@@ -71,6 +71,23 @@ pub(crate) fn check_function_variable_declaration(
         let _ = flow_state.finish_branch_capture();
         blocked
     });
+
+    // The declared name is visible inside its own initializer's nested function
+    // bodies (`const t = setInterval(() => clearInterval(t), 10)`), which run
+    // after the binding exists. It is seeded as the degradation sentinel so the
+    // closure reference resolves without inventing a type; the real symbol
+    // replaces it below. A *direct* self-read is still caught by the flow layer's
+    // temporal-dead-zone check, which runs above.
+    if has_initializer {
+        scopes.insert_current(
+            local_name.as_str(),
+            SymbolInfo {
+                ty: Type::Unknown,
+                kind: SymbolKind::Var,
+                function_signature: None,
+            },
+        );
+    }
 
     let visible_symbols = visible_symbols(scopes);
 
@@ -178,7 +195,7 @@ pub(crate) fn check_function_if_statement(
     if flow_active {
         let mut branch_deltas = Vec::new();
         scopes.push_child();
-        narrow_discriminant_in_scope(&if_statement.condition, scopes, true);
+        narrow_discriminant_in_scope(&if_statement.condition, scopes, true, ctx);
         flow_state.begin_branch_capture();
         check_function_body(
             if_statement.then_body,
@@ -197,7 +214,7 @@ pub(crate) fn check_function_if_statement(
             let else_diverts_control =
                 else_flow.guarantees_value_return || else_flow.guarantees_exit;
             scopes.push_child();
-            narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
             flow_state.begin_branch_capture();
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let mut else_delta = flow_state.finish_branch_capture();
@@ -208,14 +225,14 @@ pub(crate) fn check_function_if_statement(
 
         if !has_else_body && then_diverts_control {
             narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
-            narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
 
         merge_branch_deltas(flow_state, &branch_deltas, !has_else_body);
     } else {
         scopes.push_child();
-        narrow_discriminant_in_scope(&if_statement.condition, scopes, true);
+        narrow_discriminant_in_scope(&if_statement.condition, scopes, true, ctx);
         check_function_body(
             if_statement.then_body,
             with_type_copy_reason(TypeCopyReason::ReturnChecking, || return_type.clone()),
@@ -227,14 +244,14 @@ pub(crate) fn check_function_if_statement(
 
         if has_else_body {
             scopes.push_child();
-            narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             scopes.pop_child();
         }
 
         if !has_else_body && then_diverts_control {
             narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
-            narrow_discriminant_in_scope(&if_statement.condition, scopes, false);
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
     }
@@ -536,7 +553,7 @@ pub(crate) fn check_function_switch_statement(
 
             scopes.push_child();
             if let Some(condition) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, true);
+                narrow_discriminant_in_scope(condition, scopes, true, ctx);
             }
             flow_state.begin_branch_capture();
             check_function_body(
@@ -557,7 +574,7 @@ pub(crate) fn check_function_switch_statement(
         for (case_index, switch_case) in switch_statement.cases.into_iter().enumerate() {
             scopes.push_child();
             if let Some(condition) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, true);
+                narrow_discriminant_in_scope(condition, scopes, true, ctx);
             }
             check_function_body(
                 switch_case.consequent,
@@ -858,13 +875,23 @@ pub(crate) fn update_assigned_symbol_type(
         return;
     };
 
+    let mut narrowed_by_assignment = false;
     let updated_ty = if symbol.ty == Type::Undefined {
         union_type(vec![
             Type::Undefined,
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || value_ty.clone()),
         ])
     } else if symbol.ty == value_ty || is_assignable_to(&value_ty, &symbol.ty) {
-        with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
+        // Assigning to a union-declared variable narrows it to what was
+        // assigned, as tsc does: the lazy-singleton idiom
+        // (`let client: Redis | null = null; … client = new Redis(); return client;`)
+        // otherwise keeps reading as the full union at every later use.
+        if matches!(symbol.ty, Type::Union(_)) && !value_ty.is_unknown() {
+            narrowed_by_assignment = true;
+            value_ty
+        } else {
+            with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
+        }
     } else if matches!(symbol.ty, Type::Any | Type::Unknown | Type::GenuineUnknown) {
         union_type(vec![
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone()),
@@ -880,14 +907,21 @@ pub(crate) fn update_assigned_symbol_type(
         return;
     }
 
-    let _ = scopes.update_visible(
-        target_name,
-        SymbolInfo {
-            ty: updated_ty,
-            kind: symbol.kind,
-            function_signature: symbol.function_signature.clone(),
-        },
-    );
+    let updated = SymbolInfo {
+        ty: updated_ty,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+
+    if narrowed_by_assignment {
+        // Assignment narrowing is block-scoped: written into the current frame it
+        // is discarded when a branch scope pops, so `if (t === "draft-4") t = "draft-04";`
+        // leaves the declared union in place for the code that follows.
+        scopes.insert_current(target_name, updated);
+        return;
+    }
+
+    let _ = scopes.update_visible(target_name, updated);
 }
 
 pub(crate) fn check_function_expression_statement(

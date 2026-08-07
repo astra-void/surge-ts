@@ -160,7 +160,14 @@ pub(crate) fn check_function_body(
                 std::sync::Arc::new(SymbolInfo {
                     ty: Type::Function(function_type),
                     kind: crate::symbols::SymbolKind::Function,
-                    function_signature: None,
+                    function_signature: Some(
+                        crate::checks::function::signature::function_signature_info(
+                            &function.type_parameters,
+                            &function.parameters,
+                            function.return_type.as_ref(),
+                            &ctx.file_name,
+                        ),
+                    ),
                 }),
             );
         }

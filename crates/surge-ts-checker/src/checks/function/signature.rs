@@ -530,7 +530,8 @@ fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {
         | ParsedType::NumberLiteral(_)
         | ParsedType::BooleanLiteral(_)
         | ParsedType::Named(_)
-        | ParsedType::Infer(_) => false,
+        | ParsedType::Infer(_)
+        | ParsedType::Predicate(_) => false,
     }
 }
 
@@ -560,9 +561,13 @@ pub(crate) fn has_contextual_unknown_object_binding_pattern(
     parameters.iter().enumerate().any(|(index, parameter)| {
         matches!(parameter.binding_name, ParsedBindingName::ObjectPattern(_))
             && parameter.declared_type.is_none()
+            // Only a written `unknown` is an error in tsc. The degradation
+            // sentinel means the contextual type failed to resolve, and
+            // reporting it turns every unresolved callback slot into a false
+            // positive (zod `superRefine`, `refine`).
             && contextual_parameter_types
                 .get(index)
-                .is_some_and(|ty| ty.is_unknown())
+                .is_some_and(|ty| matches!(ty, Type::GenuineUnknown))
     })
 }
 
@@ -590,6 +595,13 @@ pub(crate) fn function_signature_info(
             .iter()
             .map(|parameter| parameter.declared_type.clone())
             .collect(),
+        parameter_names: parameters
+            .iter()
+            .map(|parameter| match &parameter.binding_name {
+                surge_ts_syntax::ParsedBindingName::Identifier { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect(),
         return_type: return_type.cloned(),
         declaring_file: Some(declaring_file.to_string()),
     }
@@ -609,6 +621,47 @@ pub(crate) fn with_type_parameter_scope<R>(
     let result = f(ctx);
     ctx.pop_type_parameter_scope();
     result
+}
+
+/// Folds two signatures of one overload group into a single callable shape: a
+/// position declared differently across overloads becomes the union of what the
+/// overloads accept, the arity floor drops to the smallest, and a return type
+/// that differs between overloads widens to `any` (which overload applies depends
+/// on the arguments, which one signature cannot express).
+///
+/// The union — rather than `any` — keeps the group's contextual typing usable, so
+/// an object-literal argument still types its callback parameters.
+fn merge_overload_group_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
+    let (longer, shorter) = if a.parameters().len() >= b.parameters().len() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+
+    let parameters = longer
+        .parameters()
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| match shorter.parameters().get(index) {
+            Some(other) if other == ty => ty.clone(),
+            Some(other) => surge_ts_types::union_type(vec![ty.clone(), other.clone()]),
+            None => ty.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let return_type = if a.return_type() == b.return_type() {
+        a.return_type().clone()
+    } else {
+        Type::Any
+    };
+
+    alloc_function_type(
+        parameters,
+        return_type,
+        a.is_variadic() || b.is_variadic(),
+        a.required_parameter_count()
+            .min(b.required_parameter_count()),
+    )
 }
 
 pub(crate) fn register_function_signature(
@@ -638,6 +691,30 @@ pub(crate) fn register_function_signature(
     }
 
     if symbol_exists && !replace_existing {
+        // Overload group: fold the incoming signature into the one already
+        // registered instead of keeping only the first. Positions that differ
+        // across overloads widen to `any` and the arity floor drops to the
+        // smallest — the same permissive merge interface methods and type-literal
+        // call signatures already use. Without it, a later overload's call
+        // (`cacheLife("minutes")` against a first overload declared `'default'`)
+        // is a false TS2345.
+        // A second *implementation* is a duplicate declaration (TS2393), not an
+        // overload group: the first signature stays authoritative for calls.
+        if !duplicate_implementation
+            && let Some(existing) = symbols.get(&name)
+            && let Type::Function(existing_function) = &existing.ty
+        {
+            let merged = merge_overload_group_signatures(existing_function, &function_type);
+            let existing_signature = existing.function_signature.clone();
+            symbols.insert(
+                name,
+                SymbolInfo {
+                    ty: Type::Function(merged),
+                    kind: SymbolKind::Function,
+                    function_signature: existing_signature.or(function_signature),
+                },
+            );
+        }
         return duplicate_implementation;
     }
 

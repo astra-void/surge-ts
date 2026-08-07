@@ -965,23 +965,34 @@ pub(crate) fn parse_object_properties(
                 }
             };
 
-            let PropertyKey::StaticIdentifier(key) = &property.key else {
-                return None;
-            };
-
             if property.kind != PropertyKind::Init || property.computed {
                 return None;
             }
 
-            if property.method {
+            if let PropertyKey::StaticIdentifier(key) = &property.key
+                && property.method
+            {
                 return parse_object_method_shorthand(key, property);
             }
+
+            // A quoted or numeric key names a property like any other. Dropping
+            // it silently removed the member from the literal's type, so a
+            // fully-quoted literal (Prisma's generated client config) inferred as
+            // `{}` and reported every required property as missing.
+            let (name, key_span) = match &property.key {
+                PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
+                PropertyKey::NumericLiteral(literal) => {
+                    (literal.raw_str().to_string(), literal.span)
+                }
+                _ => return None,
+            };
 
             let (value, value_span) = parse_expression(&property.value);
 
             Some(ParsedObjectProperty {
-                name: key.name.to_string(),
-                name_span: Some(text_span_from_oxc_span(key.span)),
+                name,
+                name_span: Some(text_span_from_oxc_span(key_span)),
                 value,
                 value_span: Some(text_span_from_oxc_span(value_span)),
                 span: Some(text_span_from_oxc_span(property.span)),

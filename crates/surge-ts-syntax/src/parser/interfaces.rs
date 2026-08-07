@@ -12,10 +12,12 @@ use super::types::{
 pub(crate) fn parse_interface_declaration(
     declaration: &TSInterfaceDeclaration<'_>,
 ) -> Option<ParsedInterfaceDeclaration> {
+    let getters = super::types::getter_accessor_names(&declaration.body.body);
     let members = declaration
         .body
         .body
         .iter()
+        .filter(|member| !super::types::is_shadowed_setter(member, &getters))
         .filter_map(parse_interface_member)
         .collect();
 

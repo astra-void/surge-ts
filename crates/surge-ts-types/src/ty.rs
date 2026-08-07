@@ -402,7 +402,10 @@ fn tuple_property_access_type(name: &str, elements: &[Type]) -> Option<Type> {
     let element = if elements.is_empty() {
         Type::Never
     } else {
-        Type::Union(UnionType::new(elements.to_vec()))
+        // Flatten and dedup (a tuple element may itself be a union, and
+        // repeated literals are common in `as const` tables); a raw nested
+        // union fails member-wise assignability against its flat equivalent.
+        crate::union_type(elements.to_vec())
     };
     array_property_access_type(name, &element)
 }
@@ -452,7 +455,7 @@ fn array_iteration_callback(element: &Type, return_type: Type) -> Type {
 }
 
 fn element_or_undefined(element: &Type) -> Type {
-    Type::Union(UnionType::new(vec![element.clone(), Type::Undefined]))
+    crate::union_type(vec![element.clone(), Type::Undefined])
 }
 
 fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {

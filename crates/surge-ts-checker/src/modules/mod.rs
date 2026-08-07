@@ -12,7 +12,7 @@ use crate::symbols::{SymbolInfo, SymbolTable, TypeDeclarationTable};
 pub(crate) mod candidates;
 mod diagnostics;
 mod exports;
-mod imports;
+pub(crate) mod imports;
 mod node_builtins;
 mod resolution;
 

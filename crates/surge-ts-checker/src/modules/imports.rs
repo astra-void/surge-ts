@@ -74,6 +74,39 @@ pub(crate) fn resolve_module_imports(
     }
 }
 
+/// Looks up an ambient `declare module "…"` export table, honoring wildcard
+/// patterns (`declare module "*.css"`, which Next's `next-env.d.ts` relies on for
+/// `import "./globals.css"`). tsc matches a single `*` against any substring and
+/// prefers the pattern with the longest matching prefix; an exact declaration
+/// always wins.
+pub(crate) fn ambient_module_export_table<'a>(
+    ctx: &'a CheckerContext,
+    module_specifier: &str,
+) -> Option<&'a ModuleExportTable> {
+    if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
+        return Some(export_table);
+    }
+
+    let mut best: Option<(usize, &ModuleExportTable)> = None;
+    for (pattern, export_table) in ctx.ambient_modules.iter() {
+        let Some((prefix, suffix)) = pattern.split_once('*') else {
+            continue;
+        };
+        if suffix.contains('*')
+            || module_specifier.len() < prefix.len() + suffix.len()
+            || !module_specifier.starts_with(prefix)
+            || !module_specifier.ends_with(suffix)
+        {
+            continue;
+        }
+        if best.is_none_or(|(best_prefix, _)| prefix.len() > best_prefix) {
+            best = Some((prefix.len(), export_table));
+        }
+    }
+
+    best.map(|(_, export_table)| export_table)
+}
+
 pub(crate) fn try_resolve_module(
     module_specifier: &str,
     ctx: &CheckerContext,
@@ -113,7 +146,7 @@ pub(crate) fn try_resolve_module(
         }
     }
 
-    if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
+    if let Some(export_table) = ambient_module_export_table(ctx, module_specifier) {
         record_program_timing(ctx.timings.as_ref(), |timings| {
             timings.package_export_lookup += resolution_start.elapsed();
             timings.import_specifier_resolution += resolution_start.elapsed();
@@ -217,7 +250,7 @@ pub(crate) fn resolve_import_declaration(
             ctx,
         ),
         ParsedImportKind::SideEffect => {
-            if ctx.ambient_modules.contains_key(&import.module_specifier) {
+            if ambient_module_export_table(ctx, &import.module_specifier).is_some() {
                 return;
             }
             if ctx
@@ -728,7 +761,10 @@ fn resolve_namespace_import(
     };
     if *is_type_only {
         // `import type * as ns` still exposes the module's exported types under
-        // the qualified alias (`ns.Member`); only the value binding is elided.
+        // the qualified alias (`ns.Member`), and `typeof ns.Member` stays legal
+        // in type positions — only emitting the binding at runtime is elided. So
+        // the namespace value shape is registered too, otherwise
+        // `ComponentProps<typeof LabelPrimitive.Root>` reports a false TS2304.
         if let Some((export_table, scope, resolved_index)) = try_resolve_module(
             &import.module_specifier,
             ctx,
@@ -742,6 +778,25 @@ fn resolve_namespace_import(
                 scope.as_ref(),
                 resolved_index,
             ));
+
+            if local_symbols.get(local_name).is_none() {
+                let namespace_type = namespace_export_object_type(&export_table);
+                let namespace_type = match resolved_index.and_then(|index| program_files.get(index))
+                {
+                    Some(resolved_file) => {
+                        tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
+                    }
+                    None => namespace_type,
+                };
+                symbols.insert(
+                    local_name.clone(),
+                    SymbolInfo {
+                        ty: namespace_type,
+                        kind: SymbolKind::Const,
+                        function_signature: None,
+                    },
+                );
+            }
         }
 
         let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(

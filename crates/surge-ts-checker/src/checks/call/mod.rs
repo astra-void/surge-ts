@@ -687,6 +687,11 @@ fn substituted_construct_signature(
             .iter()
             .map(|parameter| Some(parameter.ty.clone()))
             .collect(),
+        parameter_names: parsed
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.clone())
+            .collect(),
         return_type: Some((*parsed.return_type).clone()),
         declaring_file: None,
     };

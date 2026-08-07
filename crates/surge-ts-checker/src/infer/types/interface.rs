@@ -850,7 +850,7 @@ pub(crate) fn resolve_interface_declaration(
 /// is variadic if either overload is. The shorter overload's return type is kept
 /// as the representative, matching the most basic form (e.g. `Array.from`'s
 /// `T[]`).
-fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
+pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
     let canonical_merge = a
         .id()
         .zip(b.id())
@@ -882,11 +882,24 @@ fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType
     let required_parameter_count = a
         .required_parameter_count()
         .min(b.required_parameter_count());
+    // Which overload's return applies depends on the arguments, which a single
+    // merged signature cannot express. When one overload's return did not
+    // resolve (`createElement<K>(…): HTMLElementTagNameMap[K]` alongside the
+    // plain `createElement(…): HTMLElement`), committing to the *resolved* one
+    // reports the other overload's calls against a type they never had — so the
+    // group degrades instead. Two concrete returns keep the existing choice.
+    let return_type = if a.return_type() != b.return_type()
+        && (a.return_type().is_unknown() || b.return_type().is_unknown())
+    {
+        Type::Unknown
+    } else {
+        shorter.return_type().clone()
+    };
     let merged = [a, b]
         .into_iter()
         .find(|candidate| {
             candidate.parameters() == parameters.as_slice()
-                && candidate.return_type() == shorter.return_type()
+                && candidate.return_type() == &return_type
                 && candidate.is_variadic() == is_variadic
                 && candidate.required_parameter_count() == required_parameter_count
         })
@@ -895,7 +908,7 @@ fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType
             crate::program::record_program_counter(|c| c.overload_array_alloc_count += 1);
             alloc_function_type(
                 parameters,
-                shorter.return_type().clone(),
+                return_type,
                 is_variadic,
                 required_parameter_count,
             )

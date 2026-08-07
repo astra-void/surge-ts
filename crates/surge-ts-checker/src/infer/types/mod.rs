@@ -177,6 +177,16 @@ pub(crate) struct ResolvedType {
     had_error: bool,
 }
 
+impl ResolvedType {
+    pub(crate) fn had_error(&self) -> bool {
+        self.had_error
+    }
+
+    pub(crate) fn into_ty(self) -> Type {
+        self.ty
+    }
+}
+
 pub(crate) fn map_parsed_type(parsed_type: ParsedType, ctx: &mut CheckerContext) -> Type {
     with_type_copy_reason(TypeCopyReason::SubstitutionChanged, || {
         map_parsed_type_with_substitution(parsed_type, ctx, &TypeParameterSubstitution::new())

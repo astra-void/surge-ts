@@ -303,12 +303,15 @@ fn parse_object_binding_property_declarations(
         return Vec::new();
     };
 
+    // Marked bracketed: this access is synthesized from a binding pattern, and
+    // tsc does not apply `noPropertyAccessFromIndexSignature` (TS4111) to
+    // destructuring — only to written dotted accesses.
     let property_initializer = ParsedExpression::PropertyAccess {
         object: Box::new(source_initializer),
         object_span: source_initializer_span,
         property_name: identifier.name.to_string(),
         property_span: Some(text_span_from_oxc_span(identifier.span)),
-        is_bracketed: false,
+        is_bracketed: true,
     };
 
     parse_binding_pattern_declarations(
@@ -387,12 +390,6 @@ pub(crate) fn parse_ts_module_declaration(
             );
         }
     };
-
-    if module_specifier.contains('*') {
-        return vec![ParsedStatement::UnsupportedDeclaration {
-            span: Some(text_span_from_oxc_span(module.span)),
-        }];
-    }
 
     let statements = match &module.body {
         Some(TSModuleDeclarationBody::TSModuleBlock(block)) => block

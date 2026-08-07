@@ -1709,7 +1709,7 @@ pub(crate) fn should_replay_preliminary_diagnostic(
         return true;
     };
 
-    ctx.ambient_modules.contains_key(module_specifier)
+    crate::modules::imports::ambient_module_export_table(ctx, module_specifier).is_some()
 }
 
 pub(crate) fn merge_module_import_bindings(

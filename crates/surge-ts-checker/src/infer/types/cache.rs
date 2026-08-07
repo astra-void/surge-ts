@@ -870,6 +870,15 @@ fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType) -> String
             display
         }
         ParsedType::Infer(name) => format!("infer {name}"),
+        ParsedType::Predicate(predicate) => match &predicate.ty {
+            Some(ty) => format!(
+                "{}{} is {}",
+                if predicate.asserts { "asserts " } else { "" },
+                predicate.parameter_name,
+                parsed_annotation_display(ty)
+            ),
+            None => format!("asserts {}", predicate.parameter_name),
+        },
     }
 }
 
