@@ -78,6 +78,7 @@ struct Walker {
     seen_shared_captures: FxHashMap<usize, ()>,
     seen_resolved_memos: FxHashMap<usize, ()>,
     groups: HashMap<&'static str, GroupTally>,
+    sub_tallies: HashMap<&'static str, HashMap<&'static str, u64>>,
     current_group: &'static str,
     // Global tallies independent of groups.
     canonical_function_payloads: u64,
@@ -120,6 +121,7 @@ impl Walker {
             seen_shared_captures: FxHashMap::default(),
             seen_resolved_memos: FxHashMap::default(),
             groups: HashMap::new(),
+            sub_tallies: HashMap::new(),
             current_group: "unattributed",
             canonical_function_payloads: 0,
             fallback_function_payloads: 0,
@@ -154,6 +156,15 @@ impl Walker {
         tally.items += 1;
     }
 
+    fn sub(&mut self, key: &'static str, bytes: u64) {
+        *self
+            .sub_tallies
+            .entry(self.current_group)
+            .or_default()
+            .entry(key)
+            .or_default() += bytes;
+    }
+
     fn first_visit(map: &mut FxHashMap<usize, ()>, address: usize) -> bool {
         match map.entry(address) {
             Entry::Vacant(entry) => {
@@ -168,7 +179,9 @@ impl Walker {
         let map_address = table.symbols_map_address();
         if Walker::first_visit(&mut self.seen_symbol_maps, map_address) {
             for (name, symbol) in table.iter_shared() {
-                self.add((size_of::<Arc<str>>() + name.len() + size_of::<usize>() * 2) as u64);
+                let name_bytes = (size_of::<Arc<str>>() + name.len() + size_of::<usize>() * 2) as u64;
+                self.add(name_bytes);
+                self.sub("symbol_names", name_bytes);
                 self.walk_symbol_info(symbol);
             }
         }
@@ -191,23 +204,52 @@ impl Walker {
         self.symbol_count += 1;
         self.add_item();
         self.add(size_of::<SymbolInfo>() as u64);
+        self.sub("symbol_struct", size_of::<SymbolInfo>() as u64);
         if let Some(signature) = symbol.function_signature.as_ref() {
-            let mut bytes = 0u64;
+            let mut tp_bytes = 0u64;
+            let mut tp_unique = 0u64;
             for parameter in &signature.type_parameters {
-                bytes += parsed_type_parameter_bytes(parameter);
+                tp_bytes += parsed_type_parameter_bytes(parameter);
+                tp_unique += parsed_type_parameter_unique_bytes(parameter);
             }
+            let mut pt_bytes = 0u64;
+            let mut pt_unique = 0u64;
             for parameter in &signature.parameter_types {
-                bytes += size_of::<Option<ParsedType>>() as u64;
+                pt_bytes += size_of::<Option<ParsedType>>() as u64;
+                pt_unique += size_of::<Option<ParsedType>>() as u64;
                 if let Some(ty) = parameter {
-                    bytes += parsed_type_bytes(ty);
+                    pt_bytes += parsed_type_bytes(ty);
+                    pt_unique += parsed_type_unique_bytes(ty);
                 }
             }
+            let mut rt_bytes = 0u64;
+            let mut rt_unique = 0u64;
             if let Some(return_type) = signature.return_type.as_ref() {
-                bytes += parsed_type_bytes(return_type);
+                rt_bytes += parsed_type_bytes(return_type);
+                rt_unique += parsed_type_unique_bytes(return_type);
             }
-            bytes += signature.declaring_file.as_ref().map_or(0, |file| {
+            let df_bytes = signature.declaring_file.as_ref().map_or(0, |file| {
                 file.capacity() as u64 + size_of::<String>() as u64
             });
+            let pn_bytes: u64 = signature
+                .parameter_names
+                .iter()
+                .map(|name| {
+                    size_of::<Option<String>>() as u64
+                        + name.as_ref().map_or(0, |n| n.capacity() as u64)
+                })
+                .sum();
+            self.sub("sig_count", 1);
+            self.sub("sig_type_parameters", tp_bytes);
+            self.sub("sig_parameter_types", pt_bytes);
+            self.sub("sig_return_type", rt_bytes);
+            self.sub("sig_declaring_file", df_bytes);
+            self.sub("sig_parameter_names_UNCENSUSED", pn_bytes);
+            self.sub(
+                "sig_unique_nonarc",
+                tp_unique + pt_unique + rt_unique + df_bytes + pn_bytes,
+            );
+            let bytes = tp_bytes + pt_bytes + rt_bytes + df_bytes;
             self.parsed_signature_bytes += bytes;
             self.add(bytes);
         }
@@ -230,11 +272,11 @@ impl Walker {
             }
             Type::Union(union) => {
                 if Walker::first_visit(&mut self.seen_union_payloads, union.payload_address()) {
-                    self.add(
-                        (size_of::<surge_ts_types::UnionTypePayload>()
-                            + union.types().len() * size_of::<Type>())
-                            as u64,
-                    );
+                    let union_bytes = (size_of::<surge_ts_types::UnionTypePayload>()
+                        + union.types().len() * size_of::<Type>())
+                        as u64;
+                    self.add(union_bytes);
+                    self.sub("union_payloads", union_bytes);
                     for member in union.types() {
                         self.walk_type(member);
                     }
@@ -255,6 +297,7 @@ impl Walker {
         let is_fallback = function.id().is_none();
         let payload_bytes = size_of::<FunctionTypePayload>() as u64;
         self.add(payload_bytes);
+        self.sub("function_payloads", payload_bytes);
         if is_fallback {
             self.fallback_function_payloads += 1;
         } else {
@@ -267,6 +310,7 @@ impl Walker {
             function.parameter_list_address(),
         ) {
             self.add(list_bytes);
+            self.sub("function_param_lists", list_bytes);
             for parameter in parameters {
                 self.walk_type(parameter);
             }
@@ -289,15 +333,16 @@ impl Walker {
 
     fn walk_object(&mut self, object: &ObjectType) {
         self.add(size_of::<ObjectType>() as u64);
+        self.sub("object_structs", size_of::<ObjectType>() as u64);
         if Walker::first_visit(
             &mut self.seen_property_maps,
             Arc::as_ptr(&object.properties) as usize,
         ) {
             for (name, property) in object.properties.iter() {
-                self.add(
-                    (size_of::<Arc<str>>() + name.len()) as u64
-                        + size_of::<surge_ts_types::ObjectProperty>() as u64,
-                );
+                let prop_bytes = (size_of::<Arc<str>>() + name.len()) as u64
+                    + size_of::<surge_ts_types::ObjectProperty>() as u64;
+                self.add(prop_bytes);
+                self.sub("object_props", prop_bytes);
                 self.walk_type(&property.ty);
             }
         }
@@ -315,12 +360,12 @@ impl Walker {
     fn walk_reference(&mut self, reference: &TypeReference) {
         self.reference_count += 1;
         self.reference_argument_slots += reference.arguments.len() as u64;
-        self.add(
-            (size_of::<TypeReference>()
-                + reference.arguments.len() * size_of::<Type>()
-                + reference.id.len()
-                + reference.display.len()) as u64,
-        );
+        let ref_bytes = (size_of::<TypeReference>()
+            + reference.arguments.len() * size_of::<Type>()
+            + reference.id.len()
+            + reference.display.len()) as u64;
+        self.add(ref_bytes);
+        self.sub("type_reference_own", ref_bytes);
         for argument in reference.arguments.iter() {
             self.walk_type(argument);
         }
@@ -329,10 +374,12 @@ impl Walker {
             let census = reference.captured_census();
             self.resolver_own_bytes += census.own_bytes;
             self.add(census.own_bytes);
+            self.sub("resolver_own", census.own_bytes);
             for (address, bytes) in census.shared_captures {
                 if Walker::first_visit(&mut self.seen_shared_captures, address) {
                     self.resolver_shared_bytes += bytes;
                     self.add(bytes);
+                    self.sub("resolver_shared", bytes);
                 }
             }
             if let Some(resolved) = reference.peek_resolved()
@@ -354,6 +401,7 @@ impl Walker {
         self.declaration_table_instances += 1;
         self.declaration_index_bytes += table.index_heap_bytes();
         self.add(table.index_heap_bytes());
+        self.sub("decl_index", table.index_heap_bytes());
         for arena in table.census_arenas() {
             self.arena_bytes_by_identity
                 .entry(arena.identity())
@@ -376,15 +424,15 @@ impl Walker {
         self.declaration_entries += 1;
         match declaration {
             TypeDeclarationInfo::Alias(info) => {
-                self.add(
-                    (info.name.capacity()
-                        + info.file_name.capacity()
-                        + info
-                            .declared_name
-                            .as_ref()
-                            .map_or(0, |declared_name| declared_name.capacity())
-                        + size_of::<TypeDeclarationInfo>()) as u64,
-                );
+                let meta_bytes = (info.name.capacity()
+                    + info.file_name.capacity()
+                    + info
+                        .declared_name
+                        .as_ref()
+                        .map_or(0, |declared_name| declared_name.capacity())
+                    + size_of::<TypeDeclarationInfo>()) as u64;
+                self.add(meta_bytes);
+                self.sub("decl_meta", meta_bytes);
                 if let Some(scope) = info.resolution_scope.as_ref() {
                     self.walk_scope(scope);
                 }
@@ -397,18 +445,19 @@ impl Walker {
                     bytes += parsed_type_bytes(&info.body.ty);
                     self.declaration_parsed_bytes += bytes;
                     self.add(bytes);
+                    self.sub("decl_parsed", bytes);
                 }
             }
             TypeDeclarationInfo::Interface(info) => {
-                self.add(
-                    (info.name.capacity()
-                        + info.file_name.capacity()
-                        + info
-                            .declared_name
-                            .as_ref()
-                            .map_or(0, |declared_name| declared_name.capacity())
-                        + size_of::<TypeDeclarationInfo>()) as u64,
-                );
+                let meta_bytes = (info.name.capacity()
+                    + info.file_name.capacity()
+                    + info
+                        .declared_name
+                        .as_ref()
+                        .map_or(0, |declared_name| declared_name.capacity())
+                    + size_of::<TypeDeclarationInfo>()) as u64;
+                self.add(meta_bytes);
+                self.sub("decl_meta", meta_bytes);
                 if let Some(scope) = info.resolution_scope.as_ref() {
                     self.walk_scope(scope);
                 }
@@ -438,6 +487,7 @@ impl Walker {
                     bytes += (fragment_count * size_of::<usize>() * 5) as u64;
                     self.declaration_parsed_bytes += bytes;
                     self.add(bytes);
+                    self.sub("decl_parsed", bytes);
                 }
             }
         }
@@ -605,6 +655,86 @@ fn classify_fallback(function: &FunctionType) -> FallbackClass {
     } else {
         FallbackClass::Internable
     }
+}
+
+/// Like [`parsed_type_bytes`] but charges only heap that a `ParsedType::clone`
+/// actually duplicates: `Arc`-backed variants (Named/Function/Union/…) share
+/// their payload with the clone source, so they cost just the inline enum.
+fn parsed_type_unique_bytes(ty: &ParsedType) -> u64 {
+    let own = size_of::<ParsedType>() as u64;
+    own + match ty {
+        ParsedType::StringLiteral(value) | ParsedType::NumberLiteral(value) => {
+            value.capacity() as u64
+        }
+        ParsedType::Object(object) => {
+            let mut bytes = 0u64;
+            for property in &object.properties {
+                bytes += property.name.capacity() as u64
+                    + size_of::<surge_ts_syntax::ParsedObjectTypeProperty>() as u64
+                    + parsed_type_unique_bytes(&property.ty);
+            }
+            if let Some(call) = object.call_signature.as_ref() {
+                bytes += parsed_function_type_bytes(call);
+            }
+            bytes
+        }
+        ParsedType::Array(_)
+        | ParsedType::KeyOf(_)
+        | ParsedType::Tuple(_)
+        | ParsedType::Union(_)
+        | ParsedType::Intersection(_)
+        | ParsedType::Function(_)
+        | ParsedType::Named(_)
+        | ParsedType::Predicate(_) => 0,
+        ParsedType::TypeOf(type_of) => {
+            type_of.name.capacity() as u64
+                + type_of
+                    .members
+                    .iter()
+                    .map(|member| member.capacity() as u64 + size_of::<String>() as u64)
+                    .sum::<u64>()
+        }
+        ParsedType::IndexedAccess(indexed) => {
+            parsed_type_unique_bytes(&indexed.object_type)
+                + parsed_type_unique_bytes(&indexed.index_type)
+        }
+        ParsedType::Mapped(mapped) => {
+            mapped.key_name.capacity() as u64
+                + parsed_type_unique_bytes(&mapped.constraint)
+                + parsed_type_unique_bytes(&mapped.value_type)
+        }
+        ParsedType::Conditional(conditional) => {
+            parsed_type_unique_bytes(&conditional.check_type)
+                + parsed_type_unique_bytes(&conditional.extends_type)
+                + parsed_type_unique_bytes(&conditional.true_type)
+                + parsed_type_unique_bytes(&conditional.false_type)
+        }
+        ParsedType::TemplateLiteral(template) => {
+            template
+                .quasis
+                .iter()
+                .map(|quasi| quasi.capacity() as u64 + size_of::<String>() as u64)
+                .sum::<u64>()
+                + template
+                    .interpolations
+                    .iter()
+                    .map(parsed_type_unique_bytes)
+                    .sum::<u64>()
+        }
+        ParsedType::Infer(name) => name.capacity() as u64,
+        _ => 0,
+    }
+}
+
+fn parsed_type_parameter_unique_bytes(parameter: &ParsedTypeParameter) -> u64 {
+    let mut bytes = (size_of::<ParsedTypeParameter>() + parameter.name.capacity()) as u64;
+    if let Some(constraint) = parameter.constraint.as_ref() {
+        bytes += parsed_type_unique_bytes(constraint);
+    }
+    if let Some(default_type) = parameter.default_type.as_ref() {
+        bytes += parsed_type_unique_bytes(default_type);
+    }
+    bytes
 }
 
 fn parsed_type_parameter_bytes(parameter: &ParsedTypeParameter) -> u64 {
@@ -1263,10 +1393,42 @@ pub(crate) fn emit_retention_census(
     }
 
     if let Some(ctx) = ctx {
-        walker.current_group = "ctx.ambient_globals";
+        let snap = |walker: &Walker| {
+            (
+                walker.parsed_signature_bytes,
+                walker.resolver_own_bytes,
+                walker.resolver_shared_bytes,
+                walker.declaration_parsed_bytes,
+                walker.declaration_index_bytes,
+                walker.resolver_count,
+                walker.reference_count,
+            )
+        };
+        let report = |label: &str, before: (u64, u64, u64, u64, u64, u64, u64), walker: &Walker| {
+            let after = snap(walker);
+            eprintln!(
+                "  DETAIL {label}: parsed_sig={} resolver_own={} resolver_shared={} decl_parsed={} decl_index={} resolvers={} references={}",
+                after.0 - before.0,
+                after.1 - before.1,
+                after.2 - before.2,
+                after.3 - before.3,
+                after.4 - before.4,
+                after.5 - before.5,
+                after.6 - before.6,
+            );
+        };
+        let before = snap(&walker);
+        walker.current_group = "ctx.ambient_globals.symbols";
         walker.walk_symbol_table(&ctx.ambient_global_symbols);
+        report("ambient_globals.symbols", before, &walker);
+        let before = snap(&walker);
+        walker.current_group = "ctx.ambient_globals.live_decls";
         walker.walk_declaration_table(&ctx.type_declarations);
+        report("ambient_globals.live_decls", before, &walker);
+        let before = snap(&walker);
+        walker.current_group = "ctx.ambient_globals.global_decls";
         walker.walk_declaration_table(&ctx.ambient_global_type_declarations);
+        report("ambient_globals.global_decls", before, &walker);
         walker.current_group = "ctx.ambient_modules";
         for table in ctx.ambient_modules.values() {
             walker.walk_export_table(table);
@@ -1282,16 +1444,19 @@ pub(crate) fn emit_retention_census(
         for table in ctx.module_local_values_by_file.values() {
             walker.walk_symbol_table(table);
         }
-        walker.current_group = "declaration_environments";
         ctx.declaration_environment_store.census_environments(
             &mut |file_name, symbols, type_declarations, scope, type_parameter_entries| {
                 walker.environment_count += 1;
                 let own_bytes = file_name.len() as u64 + 512 + (type_parameter_entries * 64) as u64;
                 walker.environment_index_bytes += own_bytes;
+                walker.current_group = "declaration_environments.own";
                 walker.add(own_bytes);
+                walker.current_group = "declaration_environments.symbols";
                 walker.walk_symbol_table(symbols);
+                walker.current_group = "declaration_environments.snapshots";
                 walker.walk_declaration_table(type_declarations);
                 if let Some(scope) = scope {
+                    walker.current_group = "declaration_environments.scopes";
                     walker.walk_scope(scope);
                 }
             },
@@ -1369,6 +1534,13 @@ pub(crate) fn emit_retention_census(
             "  group {name:<38} bytes={:>12} items={}",
             tally.bytes, tally.items
         );
+        if let Some(subs) = walker.sub_tallies.get(name) {
+            let mut subs: Vec<(&&'static str, &u64)> = subs.iter().collect();
+            subs.sort_by_key(|(_, bytes)| std::cmp::Reverse(**bytes));
+            for (key, bytes) in subs {
+                eprintln!("    sub {key:<36} bytes={bytes:>12}");
+            }
+        }
     }
     eprintln!(
         "  functions: canonical={} fallback={} fallback_bytes={} classes: unknown={} ctx_ref={} over_budget={} internable={}",
