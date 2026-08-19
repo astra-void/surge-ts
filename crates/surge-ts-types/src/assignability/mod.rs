@@ -105,6 +105,87 @@ fn record_assignability_assumption() {
     ASSIGNABILITY_ASSUMPTION_EVENTS.with(|events| events.set(events.get() + 1));
 }
 
+/// Widest source discriminant a distribution is attempted over, and widest
+/// target union it is attempted against. Both are small in practice (a parse
+/// status is three states); the caps keep a pathological union from turning one
+/// failed comparison into a quadratic sweep.
+const MAX_DISCRIMINANT_LITERALS: usize = 16;
+const MAX_DISCRIMINATED_UNION_MEMBERS: usize = 32;
+
+fn is_unit_literal(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+    )
+}
+
+/// tsc distributes an object over a union-typed discriminant before giving up on
+/// a discriminated-union target: `{ status: "valid" | "dirty"; value: T }` is
+/// assignable to `OK<T> | DIRTY<T>` because *each* status the source can carry
+/// picks a member the rest of the object fits. Member-wise `any` misses that,
+/// because the whole source matches no single member.
+///
+/// Runs only after the plain member-wise check already failed.
+fn discriminated_union_assignable(from: &Type, to_union: &crate::UnionType) -> bool {
+    let Type::Object(from_object) = from else {
+        return false;
+    };
+    let members = to_union.types();
+    if members.len() > MAX_DISCRIMINATED_UNION_MEMBERS {
+        return false;
+    }
+    let peeled_members: Vec<Type> = members.iter().map(Type::peeled).collect();
+    if !peeled_members
+        .iter()
+        .all(|member| matches!(member, Type::Object(_)))
+    {
+        return false;
+    }
+
+    for (property_name, property) in from_object.properties.iter() {
+        let Type::Union(source_literals) = &property.ty else {
+            continue;
+        };
+        if source_literals.types().len() > MAX_DISCRIMINANT_LITERALS
+            || !source_literals.types().iter().all(is_unit_literal)
+        {
+            continue;
+        }
+        // Every target member must discriminate on this property for the
+        // distribution to be sound.
+        if !peeled_members.iter().all(|member| {
+            member
+                .get_property_access_type(property_name)
+                .is_some_and(|ty| is_unit_literal(&ty))
+        }) {
+            continue;
+        }
+
+        if source_literals.types().iter().all(|literal| {
+            let mut narrowed_properties = (*from_object.properties).clone();
+            narrowed_properties.insert(
+                property_name.clone(),
+                crate::ObjectProperty {
+                    ty: literal.clone(),
+                    optional: property.optional,
+                    method: property.method,
+                },
+            );
+            let narrowed = Type::Object(ObjectType::new(
+                narrowed_properties,
+                from_object.string_index_type.as_deref().cloned(),
+            ));
+            peeled_members
+                .iter()
+                .any(|member| is_assignable_to(&narrowed, member))
+        }) {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     struct DepthGuard;
     impl Drop for DepthGuard {
@@ -301,10 +382,14 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             .types()
             .iter()
             .all(|from_ty| is_assignable_to(from_ty, to_ty)),
-        (from_ty, Type::Union(to_union)) => to_union
-            .types()
-            .iter()
-            .any(|to_ty| is_assignable_to(from_ty, to_ty)),
+        (from_ty, Type::Union(to_union)) => {
+            to_union
+                .types()
+                .iter()
+                .any(|to_ty| is_assignable_to(from_ty, to_ty))
+                || matches!(from_ty, Type::Object(_))
+                    && discriminated_union_assignable(from_ty, to_union)
+        }
         (Type::Object(from_obj), Type::Object(to_obj)) => {
             object_assignable(from_obj, to_obj, from, to)
         }
@@ -463,6 +548,18 @@ fn type_includes_undefined(ty: &Type) -> bool {
 }
 
 fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bool {
+    is_signature_assignable_to(source, target, false)
+}
+
+/// `bivariant_parameters` relaxes the contravariant parameter test to accept
+/// either direction. tsc applies exactly that relaxation to members declared
+/// with method syntax (`m(x: T): U`), even under `strictFunctionTypes` — an
+/// override whose parameter is a *subtype* of the base's still satisfies it.
+fn is_signature_assignable_to(
+    source: &FunctionType,
+    target: &FunctionType,
+    bivariant_parameters: bool,
+) -> bool {
     let (source_parameters, source_required, _) = expanded_signature(source);
     let (target_parameters, _, target_variadic) = expanded_signature(target);
 
@@ -476,10 +573,8 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
         return false;
     }
 
-    let parameters_compatible = source_parameters
-        .iter()
-        .zip(target_parameters.iter())
-        .all(|(source_parameter, target_parameter)| {
+    let parameters_compatible = source_parameters.iter().zip(target_parameters.iter()).all(
+        |(source_parameter, target_parameter)| {
             // A source parameter typed `unknown`/`any` accepts whatever argument
             // the target would supply, so it is contravariantly compatible with
             // any target parameter. This is what makes a generic call signature
@@ -503,9 +598,11 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
                 || source_parameter.is_unknown()
                 || matches!(source_parameter, Type::Any)
                 || is_assignable_to(target_parameter, source_parameter)
-                || (parameter_carries_degraded_unknown(target_parameter, 0)
+                || ((bivariant_parameters
+                    || parameter_carries_degraded_unknown(target_parameter, 0))
                     && is_assignable_to(source_parameter, target_parameter))
-        });
+        },
+    );
 
     // A `void`-returning target ignores whatever the source returns: tsc accepts
     // any function as a `() => void` slot (`Array.prototype.forEach` callbacks,
@@ -575,7 +672,12 @@ fn callable_object_function_member(source: &ObjectType, name: &str) -> Option<Ty
 fn strip_undefined_member(ty: &Type) -> Option<Type> {
     match ty {
         Type::Undefined => None,
-        Type::Union(union) if union.types().iter().any(|member| *member == Type::Undefined) => {
+        Type::Union(union)
+            if union
+                .types()
+                .iter()
+                .any(|member| *member == Type::Undefined) =>
+        {
             let kept: Vec<Type> = union
                 .types()
                 .iter()
@@ -646,7 +748,18 @@ pub fn object_assignability_failure(
             source_property_ty
         };
 
-        if !is_assignable_to(comparable_source_ty, &target_property.ty) {
+        let property_assignable = match (
+            target_property.is_method(),
+            comparable_source_ty,
+            &target_property.ty,
+        ) {
+            (true, Type::Function(source_signature), Type::Function(target_signature)) => {
+                is_signature_assignable_to(source_signature, target_signature, true)
+            }
+            _ => is_assignable_to(comparable_source_ty, &target_property.ty),
+        };
+
+        if !property_assignable {
             return Some(ObjectAssignabilityFailure::PropertyTypeMismatch {
                 property_name: property_name.to_string(),
                 source_type: source_property_ty.clone(),

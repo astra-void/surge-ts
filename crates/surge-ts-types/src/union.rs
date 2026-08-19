@@ -723,6 +723,7 @@ mod tests {
                 construct_signature: None,
                 call_signature: None,
                 is_intersection: false,
+                synthetic_open_index: false,
             })
         };
 
