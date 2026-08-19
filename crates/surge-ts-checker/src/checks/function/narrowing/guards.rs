@@ -857,7 +857,14 @@ pub(super) fn narrow_union_by_arrayness(ty: &Type, keep_arrays: bool) -> Option<
         .cloned()
         .collect();
 
-    if kept.is_empty() || kept.len() == union.types().len() {
+    if kept.is_empty() {
+        // No member can be an array, so the true branch is unreachable. tsc
+        // narrows to the predicate's own type (`Array.isArray(arg: any): arg is
+        // any[]`) rather than leaving the union alone, which is why reading
+        // `.map` there is legal in tsc and was a false TS2339 here.
+        return keep_arrays.then(|| Type::Array(Box::new(Type::Any)));
+    }
+    if kept.len() == union.types().len() {
         return None;
     }
     Some(union_type(kept))

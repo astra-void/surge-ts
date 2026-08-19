@@ -518,13 +518,11 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 continue;
             }
             // An index signature (and anything else unmodelled) degrades the
-            // whole literal. Modelling `[k: string]: T` here (with quoted string
-            // keys, which it needs) was measured twice on 2026-08-19: it fixes
-            // `Alias<T> & { [k: string]: unknown }` and `"~standard"`, but closes
-            // shapes that were open, for a net +5 on zod. The four blockers are
-            // assignment narrowing, contextual literal typing of array-literal
-            // elements against a union target, `never`-narrowing of an impossible
-            // guard branch, and `Parameters<…>` degrading to `{}`.
+            // whole literal. Modelling `[k: string]: T` here was measured three
+            // times on 2026-08-19; the last blocker is assignment narrowing
+            // (`json.items = {…}` then `json.items.anyOf`), and with quoted keys,
+            // the `?? {}` idiom, impossible-guard narrowing and array-literal
+            // union targets all landed it is still net +1 (trpc).
             _ => return ParsedType::Unknown,
         };
 

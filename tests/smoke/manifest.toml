@@ -5263,6 +5263,11 @@ path = "tests/smoke/function_type_literal_parameter_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "isarray-impossible-branch"
+path = "tests/smoke/isarray_impossible_branch.ts"
+expected_diagnostics = []
+
+[[case]]
 name = "quoted-property-key-member"
 path = "tests/smoke/quoted_property_key_member.ts"
 expected_diagnostics = []
