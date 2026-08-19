@@ -25,6 +25,7 @@ mod package_declarations;
 mod package_resolution;
 mod path_mapping;
 mod probe;
+mod specifier;
 mod specifier_scan;
 
 use std::path::{Path, PathBuf};
@@ -320,6 +321,7 @@ impl Project {
             &loaded.root_dir,
             loaded.compiler_options.types.as_deref(),
             &loaded.compiler_options.type_roots,
+            &resolver_options,
             &mut package_resolution_cache,
         );
 
@@ -388,6 +390,7 @@ impl Project {
             reference_type_resolver.scan_and_resolve(
                 &mut inputs,
                 &mut sources,
+                &resolver_options,
                 &mut package_resolution_cache,
             );
 
@@ -528,6 +531,8 @@ impl Project {
                 loaded.compiler_options.jsx,
                 Some(surge_ts_config::JsxMode::ReactJsx | surge_ts_config::JsxMode::ReactJsxDev)
             ),
+            jsx_classic_react: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::React),
+            allow_umd_global_access: loaded.compiler_options.allow_umd_global_access,
             diagnostic_profile: options.diagnostic_profile,
         };
 

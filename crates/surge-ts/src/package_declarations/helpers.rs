@@ -110,6 +110,76 @@ pub(super) fn resolve_type_directive_in_roots(
     None
 }
 
+/// TypeScript's *first* branch of `resolveTypeReferenceDirective`: a directive
+/// whose name is relative or rooted resolves against the referencing file's
+/// directory as a declaration file, and never through the type roots or the
+/// `node_modules` chain. Packages chain their own surface this way — `next`'s
+/// `index.d.ts` reaches its `NodeJS.ProcessEnv` augmentation through
+/// `/// <reference types="./types/global" />`.
+pub(super) fn resolve_relative_type_directive(
+    name: &str,
+    lookup_dir: &Path,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PathBuf> {
+    let candidate = if Path::new(name).is_absolute() {
+        PathBuf::from(name)
+    } else {
+        lookup_dir.join(name)
+    };
+
+    if let Some(path) = resolve_declaration_candidate(&candidate) {
+        return Some(path);
+    }
+
+    if let Some(json) = read_package_json(&candidate.join("package.json"), cache) {
+        for field in ["types", "typings"] {
+            if let Some(value) = json.get(field).and_then(|value| value.as_str())
+                && let Some(path) = resolve_declaration_candidate(&candidate.join(value))
+            {
+                return Some(path);
+            }
+        }
+    }
+
+    resolve_declaration_candidate(&candidate.join("index"))
+}
+
+/// TypeScript's *secondary* lookup for a type directive no type root provided:
+/// resolve the directive name as a bare module specifier through the ancestor
+/// `node_modules` chain, accepting declaration entrypoints only (tsc probes with
+/// `Extensions.Declaration` here, so a runtime-only hit is not a resolution).
+///
+/// This is the only path by which a subpath directive resolves: `vitest/globals`
+/// is reachable through `vitest`'s `exports` map, never as a `node_modules/@types`
+/// directory, so the primary type-root lookup can never find it.
+pub(super) fn resolve_type_directive_in_node_modules(
+    name: &str,
+    lookup_dir: &Path,
+    root_dir: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PathBuf> {
+    if !is_external_specifier(name) {
+        return None;
+    }
+
+    let (package_name, subpath) = parse_package_specifier(name)?;
+    let req = PackageDeclarationRequest {
+        specifier: name.to_string(),
+        package_name,
+        subpath,
+        importer_dir: lookup_dir.to_path_buf(),
+        importer_file: lookup_dir.to_path_buf(),
+        is_imports: false,
+    };
+
+    let resolution = resolve_package_entrypoint(&req, opts, true, cache, root_dir)?;
+    match resolution.kind {
+        PackageEntrypointKind::Declaration => Some(resolution.path),
+        PackageEntrypointKind::RuntimeOnly => None,
+    }
+}
+
 /// Add a resolved type-package declaration file to the project file set unless it
 /// is already present.
 /// Load the file targeted by a `/// <reference path="..." />` directive,
