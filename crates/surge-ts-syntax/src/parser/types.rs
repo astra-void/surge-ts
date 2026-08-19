@@ -824,6 +824,7 @@ pub(crate) fn parse_type_property_signature(
     let (name, key_span) = match &property_signature.key {
         PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
         PropertyKey::NumericLiteral(literal) => (literal.raw_str().to_string(), literal.span),
+        PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
         _ => return None,
     };
 

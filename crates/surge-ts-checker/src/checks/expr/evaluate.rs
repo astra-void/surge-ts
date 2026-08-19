@@ -140,16 +140,17 @@ pub(crate) fn evaluate_expression(
             // operand from the left's — that is what gives `opts.uri ?? ((id) =>
             // id)`'s parameter a type instead of a false TS7006.
             let right_result = match contextual_default_operand_type(&left_result) {
-                Some(contextual) => {
-                    crate::checks::expected::evaluate_expression_with_expected_type(
+                Some(contextual) => match empty_object_fallback_type(right, &contextual) {
+                    Some(fallback) => InferredExpression::Known(fallback),
+                    None => crate::checks::expected::evaluate_expression_with_expected_type(
                         right,
                         right_span.or(fallback_span),
                         Some(&contextual),
                         crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
                         symbols,
                         ctx,
-                    )
-                }
+                    ),
+                },
                 None => evaluate_expression(right, right_span.or(fallback_span), symbols, ctx),
             };
 
@@ -212,16 +213,17 @@ pub(crate) fn evaluate_expression(
                 .then(|| contextual_default_operand_type(&left_result))
                 .flatten();
             let right_result = match right_contextual {
-                Some(contextual) => {
-                    crate::checks::expected::evaluate_expression_with_expected_type(
+                Some(contextual) => match empty_object_fallback_type(right, &contextual) {
+                    Some(fallback) => InferredExpression::Known(fallback),
+                    None => crate::checks::expected::evaluate_expression_with_expected_type(
                         right,
                         right_span.or(fallback_span),
                         Some(&contextual),
                         crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
                         right_symbols,
                         ctx,
-                    )
-                }
+                    ),
+                },
                 None => {
                     evaluate_expression(right, right_span.or(fallback_span), right_symbols, ctx)
                 }
@@ -711,5 +713,33 @@ fn contextual_default_operand_type(left: &InferredExpression) -> Option<Type> {
         return None;
     };
     let stripped = surge_ts_types::remove_nullish(left_type);
-    matches!(stripped.peeled(), Type::Function(_)).then_some(stripped)
+    matches!(stripped.peeled(), Type::Function(_) | Type::Object(_)).then_some(stripped)
+}
+
+/// The type tsc gives the `{}` in the `opts ?? {}` idiom. An object literal is
+/// contextually typed by the binding pattern it initializes, so the empty
+/// fallback carries the left operand's property *names* with type `undefined`;
+/// reads off the joined union then answer `T | undefined` rather than reporting
+/// the name as missing from a bare `{}`. `None` for any other right operand.
+pub(crate) fn empty_object_fallback_type(
+    right: &ParsedExpression,
+    contextual: &Type,
+) -> Option<Type> {
+    let ParsedExpression::ObjectLiteral { properties, .. } = right else {
+        return None;
+    };
+    if !properties.is_empty() {
+        return None;
+    }
+    let Type::Object(contextual_object) = contextual.peeled() else {
+        return None;
+    };
+    let mut absent = surge_ts_types::PropertyMap::default();
+    for name in contextual_object.properties.keys() {
+        absent.insert(
+            name.clone(),
+            surge_ts_types::ObjectProperty::optional(Type::Undefined),
+        );
+    }
+    Some(Type::Object(surge_ts_types::ObjectType::new(absent, None)))
 }
