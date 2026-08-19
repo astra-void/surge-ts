@@ -153,6 +153,8 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
@@ -192,6 +194,60 @@ fn project_mode_generated_default_libs_visible_by_default() {
         const n = Math.max(1, 2);
         const transport: AuthenticatorTransport = "usb";
         "#,
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert!(json_diagnostics(&parsed).is_empty());
+}
+
+#[test]
+fn project_mode_untyped_javascript_import_reports_ts7016() {
+    let root = temp_dir("project-untyped-js-import");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"
+        {
+          "compilerOptions": { "strict": true },
+          "include": ["src/**/*.ts"]
+        }
+        "#,
+    );
+    write_file(&root, "src/helper.mjs", "export const value = 1;\n");
+    write_file(
+        &root,
+        "src/index.ts",
+        "import helper from \"./helper.mjs\";\nexport const used = helper;\n",
+    );
+
+    let project = root.join("tsconfig.json");
+    let project = project.to_string_lossy().into_owned();
+    let parsed = run_cli_json(&["--project", project.as_str(), "--format", "json"]);
+
+    assert_eq!(json_diagnostic_codes(&parsed), vec!["TS7016"]);
+}
+
+#[test]
+fn project_mode_untyped_javascript_import_is_silent_without_no_implicit_any() {
+    let root = temp_dir("project-untyped-js-import-loose");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"
+        {
+          "compilerOptions": { "noImplicitAny": false },
+          "include": ["src/**/*.ts"]
+        }
+        "#,
+    );
+    write_file(&root, "src/helper.mjs", "export const value = 1;\n");
+    write_file(
+        &root,
+        "src/index.ts",
+        "import helper from \"./helper.mjs\";\nexport const used = helper;\n",
     );
 
     let project = root.join("tsconfig.json");
@@ -4368,6 +4424,24 @@ fn cli_configured_types_scoped_maps_to_at_types_scope_dir() {
 }
 
 #[test]
+fn cli_configured_types_subpath_resolves_through_package_exports() {
+    let parsed = run_cli_json(&[
+        "--project",
+        "../../tests/compat-projects/configured-types-subpath-basic/tsconfig.json",
+        "--format",
+        "json",
+    ]);
+
+    // `subpath-pkg/globals` exists only under the package's `exports` map, so the
+    // type-root lookup cannot find it; the secondary node_modules lookup must.
+    // Only the `bad` assignment mismatch should remain.
+    let codes = json_diagnostic_codes(&parsed);
+    assert_eq!(codes, vec!["TS2322".to_string()]);
+    assert!(!codes.contains(&"TS2688".to_string()));
+    assert!(!codes.contains(&"TS2304".to_string()));
+}
+
+#[test]
 fn cli_configured_types_missing_reports_ts2688() {
     let parsed = run_cli_json(&[
         "--project",
@@ -4715,6 +4789,27 @@ fn project_mode_ambient_module_reopen_merge() {
 }
 
 #[test]
+fn project_mode_ambient_namespace_value_merge() {
+    // `namespace X` declaration-merges with a same-named `const`/`function` in
+    // the same ambient module instead of shadowing it, in either declaration
+    // order (the `@types/node` `path` shape). The single expected diagnostic is
+    // the deliberate `number = string` mismatch, which proves the members
+    // resolved to their real types rather than to `any` or `{}`.
+    assert_eq!(
+        run_compat_fixture_codes("ambient-namespace-value-merge-basic"),
+        vec!["TS2322"]
+    );
+}
+
+#[test]
+fn project_mode_ambient_global_namespace_value_merge() {
+    // A type-only `declare namespace X` in a script declaration file must not
+    // claim the global name ahead of the `declare global { var X: … }` block
+    // lowered in a later pass (the bun-types shape), which pinned `X` to `{}`.
+    assert!(run_compat_fixture_codes("ambient-global-namespace-value-merge-basic").is_empty());
+}
+
+#[test]
 fn project_mode_module_augmentation_unresolved_no_cascade() {
     // Augmenting an unresolved module is reported once as TS2307 with no
     // downstream cascade from the unresolved import binding.
@@ -4737,4 +4832,41 @@ fn project_mode_class_interface_merge_instance_members() {
     // Class/interface merging contributes the interface's instance members to
     // the class type, matching tsc (no diagnostics for this fixture).
     assert!(run_compat_fixture_codes("class-interface-merge-policy-pinned").is_empty());
+}
+
+#[test]
+fn project_mode_re_export_imported_type() {
+    // `export { X }` / `export type { X }` naming an IMPORTED type must enter
+    // the export table, or the name is lost through every re-export hop
+    // (TS2305 at the consumer, TS2304 at the `export` site).
+    assert!(run_compat_fixture_codes("re-export-imported-type-basic").is_empty());
+}
+
+#[test]
+fn project_mode_import_type_of_value_only_export() {
+    // `import type { f }` imports the symbol, so a function/const export is a
+    // legal target and `typeof f` must resolve.
+    assert!(run_compat_fixture_codes("import-type-value-only-export-basic").is_empty());
+}
+
+#[test]
+fn project_mode_export_assignment_named_import() {
+    // A named import reaches the members of an `export = X` surface, including
+    // through an `import x = require(...)` alias module.
+    assert!(run_compat_fixture_codes("export-assignment-named-import-basic").is_empty());
+}
+
+#[test]
+fn project_mode_reexport_type_only_namespace() {
+    // A type-only namespace publishes only qualified `NS.Member` keys, so the
+    // re-export path needs the same fallback the import path has.
+    assert!(run_compat_fixture_codes("reexport-type-only-namespace-basic").is_empty());
+}
+
+#[test]
+fn project_mode_default_export_expression_reexport() {
+    // A module ending in `export default <expression>` has a default export
+    // even when the expression form is unmodelled, and `export { default }`
+    // republishes it.
+    assert!(run_compat_fixture_codes("default-export-expression-reexport-basic").is_empty());
 }

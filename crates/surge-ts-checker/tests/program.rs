@@ -540,6 +540,8 @@ fn program_api_no_lib_hides_generated_default_libs() {
             no_lib: true,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
         },
     );
@@ -898,6 +900,8 @@ fn single_file_builtins_visible() {
         no_lib: false,
         skip_lib_check: false,
         jsx_automatic_runtime: false,
+        jsx_classic_react: false,
+        allow_umd_global_access: false,
         types: Vec::new(),
         ..Default::default()
     };
@@ -924,6 +928,8 @@ fn single_file_no_lib_hides_builtins() {
         no_lib: true,
         skip_lib_check: false,
         jsx_automatic_runtime: false,
+        jsx_classic_react: false,
+        allow_umd_global_access: false,
         types: Vec::new(),
         ..Default::default()
     };
@@ -952,6 +958,8 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
         },
     );
@@ -973,6 +981,8 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
         },
     );
@@ -1277,6 +1287,22 @@ fn no_property_access_from_index_signature_silent_without_index_signature() {
 }
 
 #[test]
+fn no_property_access_from_index_signature_silent_for_synthetic_intersection_openness() {
+    // `T & { url: string }` degrades the bare type parameter, and the merge keeps
+    // the survivor open with a synthetic `any` string index so the dropped
+    // operand's members are not reported as excess properties. That synthetic
+    // index is not a declared index signature, so TS4111 must not fire on it.
+    let source = "function use<T extends { path?: string }>(o: T & { url: string }) { return o.path; }";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
 fn no_property_access_from_index_signature_silent_when_flag_off() {
     let source = "interface D { [k: string]: number; } declare const d: D; const a = d.foo;";
     let diagnostics =
@@ -1323,6 +1349,235 @@ fn no_unused_locals_exempts_unused_class() {
 fn no_unused_locals_exempts_used_and_exported() {
     let source = "const used = 1;\nexport const reexported = 2;\nexport const x = used;\n";
     assert!(ts6133_program_codes(source, true).is_empty());
+}
+
+#[test]
+fn definite_assignment_assertion_skips_the_unassigned_check() {
+    let source = concat!(
+        "export function f() {\n",
+        "  let t!: string;\n",
+        "  return t;\n",
+        "}\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn destructuring_default_removes_undefined() {
+    let source = concat!(
+        "type P = { a?: number };\n",
+        "declare const p: P;\n",
+        "export function f() {\n",
+        "  const { a = 0 } = p;\n",
+        "  const x: number = a;\n",
+        "  return x;\n",
+        "}\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn class_method_does_not_shadow_an_outer_function() {
+    // A method name is a member, not a lexical binding: the bare call inside the
+    // body must reach the module-level `helper`.
+    let source = concat!(
+        "export function helper(a: string, b: number): string {\n",
+        "  return a;\n",
+        "}\n",
+        "export class C {\n",
+        "  helper(a: string): string {\n",
+        "    return helper(a, 1);\n",
+        "  }\n",
+        "}\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn intersected_function_types_are_overloads() {
+    let source = concat!(
+        "type M = ((a: string) => number) & ((a: string, b: number) => string);\n",
+        "declare const m: M;\n",
+        "export const r = m(\"a\", 1);\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn interface_call_signature_overloads_merge() {
+    let source = concat!(
+        "interface M {\n",
+        "  (a: string): number;\n",
+        "  (a: string, b: number): string;\n",
+        "}\n",
+        "declare const m: M;\n",
+        "export const r = m(\"a\", 1);\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn array_reduce_and_string_replace_type_their_callbacks() {
+    let source = concat!(
+        "declare const items: string[];\n",
+        "export const a = items.reduce((acc, value) => acc + value.length, 0);\n",
+        "declare const s: string;\n",
+        "export const b = s.replace(/x/g, (c) => c.toUpperCase());\n",
+        "export const c = s.normalize(\"NFC\");\n",
+        "export const d = items.filter((x) => x);\n",
+    );
+    let options = CheckerOptions {
+        no_implicit_any: true,
+        ..Default::default()
+    };
+    let diagnostics = program_with_options(&[("a.ts", source)], options);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn object_destructuring_binds_each_property_type() {
+    // The binding used to receive the *source* type, so every use compared
+    // against the whole object (`for (const { schema } of items) …`).
+    let source = concat!(
+        "const items = [{ a: 1, b: \"x\" }];\n",
+        "export function f() {\n",
+        "  for (const { a, b } of items) {\n",
+        "    const bad: string = a;\n",
+        "    return [bad, b];\n",
+        "  }\n",
+        "  return [];\n",
+        "}\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert!(
+        diagnostics[0].message.contains("number"),
+        "{}",
+        diagnostics[0].message
+    );
+}
+
+#[test]
+fn ts_expect_error_suppresses_the_next_line() {
+    let source = concat!(
+        "export function need(a: string): void {}\n",
+        "export function f() {\n",
+        "  // @ts-expect-error\n",
+        "  need();\n",
+        "}\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn ts_expect_error_does_not_suppress_other_lines() {
+    let source = concat!(
+        "export function need(a: string): void {}\n",
+        "export function f() {\n",
+        "  // @ts-expect-error\n",
+        "  need();\n",
+        "  need();\n",
+        "}\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert_eq!(codes(&diagnostics), vec!["TS2554"]);
+}
+
+#[test]
+fn namespace_member_generic_call_infers_type_arguments() {
+    // The namespace value object models only the member *set*, so the call must
+    // resolve through the qualified `ns.member` binding to infer `U`.
+    let source = concat!(
+        "export namespace util {\n",
+        "  export const arrayToEnum = <T extends string, U extends [T, ...T[]]>(\n",
+        "    items: U\n",
+        "  ): { [k in U[number]]: k } => ({}) as any;\n",
+        "}\n",
+        "const codes = util.arrayToEnum([\"a\", \"b\"]);\n",
+        "export const bad: 1 = codes.a;\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert!(
+        diagnostics[0].message.contains('"') && diagnostics[0].message.contains('a'),
+        "{}",
+        diagnostics[0].message
+    );
+}
+
+#[test]
+fn namespace_member_generic_call_resolves_through_an_import() {
+    let util = concat!(
+        "export namespace util {\n",
+        "  export function first<T>(items: T[]): T {\n",
+        "    return items[0];\n",
+        "  }\n",
+        "}\n",
+    );
+    let consumer = concat!(
+        "import { util } from \"./util.js\";\n",
+        "export const bad: 1 = util.first([\"a\"]);\n",
+    );
+    let diagnostics = program(&[("util.ts", util), ("consumer.ts", consumer)]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn never_parameter_argument_is_not_reported() {
+    // `assertNever`-style exhaustiveness helpers depend on narrowing that surge
+    // only under-approximates, so a residual argument must not report TS2345.
+    let source = concat!(
+        "export function assertNever(_x: never): never {\n",
+        "  throw new Error();\n",
+        "}\n",
+        "export function f(value: \"a\" | \"b\"): string {\n",
+        "  if (value === \"a\") return \"a\";\n",
+        "  assertNever(value);\n",
+        "}\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS2345"),
+        "{:?}",
+        codes(&diagnostics)
+    );
+}
+
+fn ts6196_program_codes(source: &str) -> Vec<String> {
+    let options = CheckerOptions {
+        no_unused_locals: true,
+        ..Default::default()
+    };
+    let diagnostics = program_with_options(&[("a.ts", source)], options);
+    codes(&diagnostics)
+        .into_iter()
+        .filter(|code| code == "TS6196")
+        .collect()
+}
+
+#[test]
+fn no_unused_locals_reports_unused_body_local_type_alias() {
+    let source = "export function f() {\n  type Unused = string;\n  return 1;\n}\n";
+    assert_eq!(ts6196_program_codes(source), vec!["TS6196"]);
+}
+
+#[test]
+fn no_unused_locals_reports_unused_body_local_interface() {
+    let source = "export function f() {\n  interface Unused { a: string }\n  return 1;\n}\n";
+    assert_eq!(ts6196_program_codes(source), vec!["TS6196"]);
+}
+
+#[test]
+fn no_unused_locals_exempts_used_body_local_type_alias() {
+    let source =
+        "export function f() {\n  type Used = string;\n  const v: Used = \"a\";\n  return v;\n}\n";
+    assert!(ts6196_program_codes(source).is_empty());
 }
 
 #[test]
@@ -1456,6 +1711,8 @@ fn program_order_parser_before_type_prepass() {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
         },
     );
@@ -2048,6 +2305,8 @@ fn program_module_export_function_parameter_no_implicit_any() {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
         },
     );
@@ -2078,6 +2337,8 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
         },
     );
@@ -2105,6 +2366,8 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
         },
     );
@@ -2932,6 +3195,149 @@ fn module_namespace_import_qualified_member_resolves_through_namespace() {
     assert_eq!(codes(&diagnostics), vec!["TS2322"]);
 }
 
+/// A JSX component whose props type could not be modelled offers no contextual
+/// type for an inline callback attribute, so reporting implicit-any there would
+/// describe surge's own gap rather than the source — the radix
+/// `ComponentProps<typeof Primitive.Root>` cluster. A component with a real
+/// props type still reports.
+#[test]
+fn unmodelled_jsx_props_do_not_report_implicit_any() {
+    let mut options = CheckerOptions::default();
+    options.no_implicit_any = true;
+    let diagnostics = program_with_options(
+        &[(
+            "src/index.tsx",
+            "type Unmodelled = keyof number;\n\
+             declare function Widget(props: Unmodelled): null;\n\
+             export const a = <Widget onPick={(value) => value} />;\n",
+        )],
+        options,
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+
+    let mut options = CheckerOptions::default();
+    options.no_implicit_any = true;
+    let diagnostics = program_with_options(
+        &[(
+            "src/index.tsx",
+            "declare function Widget(props: { label: string }): null;\n\
+             export const a = <Widget onPick={(value) => value} />;\n",
+        )],
+        options,
+    );
+    assert!(
+        codes(&diagnostics).contains(&"TS7006".to_string()),
+        "{:?}",
+        codes(&diagnostics)
+    );
+}
+
+/// `keyof {}` is `never`, so the empty-interface escape hatch React uses for
+/// `Key`/`ReactNode` (`T[keyof T]` over a members-less interface) contributes
+/// nothing to its union instead of degrading it. A type surge could not model
+/// still yields the `unknown` sentinel rather than a closed `never`.
+#[test]
+fn keyof_empty_interface_is_never() {
+    let diagnostics = check_source(
+        "interface Escape {}\n\
+         type Key = string | number | Escape[keyof Escape];\n\
+         declare const k: Key;\n\
+         export const s: string | number = k;\n\
+         export const bad: string = k;\n",
+        "example.ts",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+/// `ComponentProps<typeof Component>` matches `JSXElementConstructor<infer P>`
+/// against a nominal reference (`ForwardRefExoticComponent<Props>`) whose own
+/// arguments are empty — the props live in its resolved call signature. The
+/// positional reference shortcut has nothing to line up there, so it must fall
+/// through to the structural expansion instead of leaving every capture at its
+/// seeded placeholder (which collapsed the whole conditional to `unknown`).
+#[test]
+fn infer_capture_binds_through_argumentless_reference() {
+    let diagnostics = dependency_program(
+        "node_modules/dep/index.d.ts",
+        "interface Exotic { (props: { checked: boolean }): string }\n\
+         type Ctor<P> = (props: P) => string;\n\
+         type PropsOf<T extends Ctor<any>> = T extends Ctor<infer P> ? P : {};\n\
+         declare const Widget: Exotic;\n\
+         export { Widget, type PropsOf };\n",
+        "import { Widget, type PropsOf } from 'dep';\n\
+         declare const p: PropsOf<typeof Widget>;\n\
+         export const ok: boolean = p.checked;\n\
+         export const bad: string = p.checked;\n",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+/// A dependency `.d.ts` resolves its own imported names when its declarations
+/// are forced later (a lazy value annotation peels inside an environment
+/// captured before the per-file scope map existed). Without the program-wide
+/// scope fallback, `SVGProps` here missed and the annotation degraded.
+#[test]
+fn dependency_declaration_resolves_its_own_imports_when_forced_late() {
+    let mut options = CheckerOptions::default();
+    options
+        .resolved_modules
+        .insert("dep".to_string(), "node_modules/dep/index.d.ts".to_string());
+    options.resolved_modules.insert(
+        "shapes".to_string(),
+        "node_modules/shapes/index.d.ts".to_string(),
+    );
+    let diagnostics = program_with_options(
+        &[
+            (
+                "node_modules/shapes/index.d.ts",
+                "export interface Shape { size: number }\n",
+            ),
+            (
+                "node_modules/dep/index.d.ts",
+                "import { Shape } from 'shapes';\n\
+                 declare const widget: Shape;\n\
+                 export { widget };\n",
+            ),
+            (
+                "src/index.ts",
+                "import { widget } from 'dep';\n\
+                 export const ok: number = widget.size;\n\
+                 export const bad: string = widget.size;\n",
+            ),
+        ],
+        options,
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+/// An `export =` namespace imported under a different alias binds its members
+/// under that alias (`react.Forward` for `React.Forward`). The interface's own
+/// `extends` clause names its siblings unqualified, so the sibling lookup has to
+/// use the *declared* namespace prefix, not the alias — resolving it under the
+/// alias missed the base and silently dropped its call signature (lucide's
+/// `import * as react from "react"` view of `ForwardRefExoticComponent`).
+#[test]
+fn renamed_namespace_import_resolves_interface_heritage_siblings() {
+    let diagnostics = program(&[
+        (
+            "core.d.ts",
+            "declare namespace React {\n\
+                 interface ExoticComponent { (props: number): string }\n\
+                 interface Forward extends ExoticComponent { tag?: string }\n\
+             }\n\
+             export = React;\n",
+        ),
+        (
+            "index.ts",
+            "import * as react from \"./core\";\n\
+             declare const c: react.Forward;\n\
+             export const r: string = c(1);\n",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
 /// The flattened `ns.Member` spelling is not a real name for a namespace
 /// member; resolving it would hide a genuine error behind an open type.
 #[test]
@@ -3371,7 +3777,11 @@ fn module_re_export_type_named_value_only_missing_type() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    // `export type { Foo }` over a value-only export is legal and republishes
+    // the symbol, so the re-export itself is not TS2305. Using the value as a
+    // type is the error; tsc 7.0.2 reports TS2749 there, which surge does not
+    // implement yet and reports as TS2304.
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
 }
 
 #[test]
@@ -4408,6 +4818,56 @@ fn ambient_overload_lowering_preserves_contextual_source_order() {
 }
 
 #[test]
+fn intersection_distributes_a_union_operand_over_the_object_merge() {
+    // `(A | B) & C` is `(A & C) | (B & C)`. The object merge only reads
+    // `Type::Object` operands, so an undistributed union contributed nothing and
+    // every member of A/B was reported as an excess property.
+    let source = concat!(
+        "type U = { data: number; error: undefined } | { data: undefined; error: string };\n",
+        "type I = { request: string };\n",
+        "export const c: U & I = { data: undefined, error: 'x', request: 'r' };\n",
+    );
+    let diagnostics = check_source(source, "a.ts");
+    assert!(
+        codes(&diagnostics).is_empty(),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn intersection_with_a_wide_union_operand_stays_open_instead_of_distributing() {
+    // Past the distribution arity bound the merge is kept single, but the surface
+    // must stay open — a closed merge would report every union-arm member as an
+    // excess property.
+    let source = concat!(
+        "type W = { a: 1 } | { b: 1 } | { c: 1 } | { d: 1 } | { e: 1 }\n",
+        "  | { f: 1 } | { g: 1 } | { h: 1 } | { i: 1 } | { j: 1 };\n",
+        "type I = { request: string };\n",
+        "export const w: W & I = { a: 1, request: 'r' };\n",
+    );
+    let diagnostics = check_source(source, "a.ts");
+    assert!(
+        codes(&diagnostics).is_empty(),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn intersection_distribution_keeps_the_missing_required_property_report() {
+    // Distribution must not silently widen the target: every arm still requires
+    // the non-union operand's members.
+    let source = concat!(
+        "type U = { data: number } | { error: string };\n",
+        "type I = { request: string };\n",
+        "export const c: U & I = { data: 1 };\n",
+    );
+    let diagnostics = check_source(source, "a.ts");
+    assert_eq!(codes(&diagnostics), vec!["TS2322"], "{:?}", diagnostics);
+}
+
+#[test]
 fn ambient_global_typeof_global_this_intersection_resolves_to_left() {
     // `declare const w: Win & typeof globalThis` (the lib shape of `window`/`self`)
     // resolves `typeof globalThis` before the global object symbol is installed.
@@ -4581,9 +5041,11 @@ fn class_static_access_of_instance_member_reports_ts2339() {
 }
 
 #[test]
-fn declaration_file_unsupported_enum_still_reports() {
+fn declaration_file_enum_is_supported() {
+    // Enums lower to a member-literal union plus an ambient value binding; an
+    // empty one is inert, matching tsc which reports nothing here.
     let diagnostics = native_program(&[("types/globals.d.ts", "declare enum E {}")]);
-    assert_eq!(codes(&diagnostics), vec!["surge::unsupported-declaration"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
@@ -6044,6 +6506,8 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             types: Vec::new(),
         },
     );
@@ -7170,6 +7634,71 @@ fn nullish_equality_guard_narrows_identifier_and_property() {
     assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
+// `a !== undefined && a <= b` narrows the right operand of the `&&` too, not
+// only the guarded branch — including through a chain of guards and on one
+// property of an identifier (the `ky` retry-timing shape).
+#[test]
+fn nullish_equality_guard_narrows_the_and_operand() {
+    let diagnostics = check_source(
+        "declare const make: (n: number) => number | undefined;\n\
+         export function a(limit: number): number | undefined {\n\
+             let result: number | undefined;\n\
+             for (const year of [1, 2, 3]) {\n\
+                 const candidate = make(year);\n\
+                 if (candidate !== undefined && candidate <= limit) { result = candidate; }\n\
+             }\n\
+             return result;\n\
+         }\n\
+         export function b(limit: number | undefined): number {\n\
+             const candidate = make(1);\n\
+             if (candidate !== undefined && limit !== undefined && candidate <= limit) {\n\
+                 return candidate;\n\
+             }\n\
+             return 0;\n\
+         }\n\
+         export function c(input: { s?: number }, limit: number): boolean {\n\
+             return input.s !== undefined && input.s <= limit;\n\
+         }\n",
+        "example.ts",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+
+    // The guard is what makes it clean; without it the comparison still reports.
+    let diagnostics = check_source(
+        "declare const make: (n: number) => number | undefined;\n\
+         export function d(limit: number): boolean {\n\
+             const candidate = make(1);\n\
+             return candidate <= limit;\n\
+         }\n",
+        "example.ts",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2365"]);
+}
+
+// `+` concatenates a string with a `bigint` (and with a `number | bigint`, the
+// zod issue-`minimum` shape) exactly as tsc does, while the arithmetic
+// `number + bigint` stays an error — bigint is deliberately concatenation-only.
+#[test]
+fn string_concatenation_accepts_bigint_operands() {
+    let diagnostics = check_source(
+        "declare const mixed: number | bigint;\n\
+         declare const big: bigint;\n\
+         export const a: string = \"Min: \" + mixed;\n\
+         export const b: string = \"Min: \" + big;\n\
+         export const c: string = big + \" units\";\n",
+        "example.ts",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+
+    let diagnostics = check_source(
+        "declare const mixed: number | bigint;\n\
+         declare const n: number;\n\
+         export const a = n + mixed;\n",
+        "example.ts",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2365"]);
+}
+
 // Without `exactOptionalPropertyTypes` an optional target property accepts an
 // explicit `undefined`, so a required `T | undefined` source property satisfies
 // it. The reverse (a genuinely wrong type) must still report.
@@ -7216,4 +7745,104 @@ fn rest_infer_captures_the_parameter_tuple() {
         "example.ts",
     );
     assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+}
+
+fn umd_program(extra: &[(&str, &str)]) -> Vec<surge_ts_diagnostics::Diagnostic> {
+    let mut files: Vec<(&str, &str)> = vec![(
+        "legacy.d.ts",
+        "export declare function greet(name: string): string;\nexport as namespace Legacy;\n",
+    )];
+    files.extend_from_slice(extra);
+    program(&files)
+}
+
+#[test]
+fn umd_global_read_from_a_module_reports_ts2686() {
+    let diagnostics = umd_program(&[("consumer.ts", "export const greeting = Legacy.greet(\"x\");\n")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2686"]);
+    assert_eq!(file_names(&diagnostics), vec!["consumer.ts"]);
+}
+
+#[test]
+fn umd_global_reports_once_per_reference_not_per_file() {
+    let diagnostics = umd_program(&[(
+        "consumer.ts",
+        "export const a = Legacy.greet(\"x\");\nexport const b = Legacy;\n",
+    )]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2686", "TS2686"]);
+}
+
+#[test]
+fn umd_global_type_query_reports_ts2686_without_a_missing_name() {
+    let diagnostics = umd_program(&[("consumer.ts", "export type Q = typeof Legacy;\n")]);
+
+    assert_eq!(codes(&diagnostics), vec!["TS2686"]);
+}
+
+#[test]
+fn umd_global_read_from_a_script_is_allowed() {
+    // No import or export, so the file is a script and the UMD global is in
+    // scope for it. Whether surge can resolve the name is a separate question —
+    // this pins only that the module-only diagnostic stays off.
+    let diagnostics = umd_program(&[("script.ts", "const greeting = Legacy.greet(\"x\");\n")]);
+
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS2686"),
+        "{:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn umd_global_shadowed_by_a_local_declaration_is_not_reported() {
+    let diagnostics = umd_program(&[(
+        "consumer.ts",
+        "const Legacy = { greet: (name: string) => name };\nexport const greeting = Legacy.greet(\"x\");\n",
+    )]);
+
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn umd_global_shadowed_by_a_type_only_default_import_is_not_reported() {
+    // tsc reports using such a binding as a value as TS1361, never as a UMD
+    // reference, so the name must read as bound here.
+    let diagnostics = umd_program(&[
+        ("other.d.ts", "declare const value: number;\nexport default value;\n"),
+        (
+            "consumer.ts",
+            "import type Legacy from \"./other\";\nexport type Q = Legacy;\n",
+        ),
+    ]);
+
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS2686"),
+        "{:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn umd_global_is_not_reported_under_allow_umd_global_access() {
+    let mut options = CheckerOptions::default();
+    options.allow_umd_global_access = true;
+
+    let diagnostics = program_with_options(
+        &[
+            (
+                "legacy.d.ts",
+                "export declare function greet(name: string): string;\nexport as namespace Legacy;\n",
+            ),
+            ("consumer.ts", "export const greeting = Legacy.greet(\"x\");\n"),
+        ],
+        options,
+    );
+
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS2686"),
+        "{:?}",
+        codes(&diagnostics)
+    );
 }
