@@ -55,9 +55,13 @@ pub fn record_loader_rss_stage(label: &str) {
 /// whose pages otherwise stay dirty in malloc freelists, get compressed under
 /// pressure, and keep counting against the process physical footprint through
 /// the check-phase peak. Called at the few lifecycle boundaries where a large
-/// generation has just been dropped; a no-op outside macOS.
+/// generation has just been dropped.
 pub(crate) fn release_free_memory() {
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "mimalloc")]
+    unsafe {
+        libmimalloc_sys::mi_collect(true);
+    }
+    #[cfg(all(not(feature = "mimalloc"), target_os = "macos"))]
     {
         unsafe extern "C" {
             fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;

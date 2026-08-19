@@ -88,7 +88,7 @@ impl CheckerArena {
     pub(crate) fn new() -> Self {
         Self {
             allocator: Arc::new(CheckerArenaInner {
-                allocator: Allocator::default(),
+                allocator: Allocator::with_capacity(1024),
                 frozen: AtomicBool::new(false),
                 pending_drops: std::sync::Mutex::new(Vec::new()),
                 #[cfg(debug_assertions)]
@@ -100,6 +100,11 @@ impl CheckerArena {
     /// Bytes bump-allocated into this arena. Retention-census accounting only.
     pub(crate) fn used_bytes(&self) -> usize {
         self.allocator.allocator.used_bytes()
+    }
+
+    /// Bytes reserved by the bump allocator. Retention-census accounting only.
+    pub(crate) fn capacity(&self) -> usize {
+        self.allocator.allocator.capacity()
     }
 
     /// Stable identity for census dedup across the many table handles that

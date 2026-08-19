@@ -102,7 +102,6 @@ struct Walker {
     declaration_parsed_bytes: u64,
     span_map_entries: u64,
     span_map_bytes: u64,
-    arena_bytes_by_identity: FxHashMap<usize, u64>,
     scope_self_cycle_declarations: u64,
     scope_attached_declarations: u64,
 }
@@ -148,7 +147,6 @@ impl Walker {
             declaration_parsed_bytes: 0,
             span_map_entries: 0,
             span_map_bytes: 0,
-            arena_bytes_by_identity: FxHashMap::default(),
             scope_self_cycle_declarations: 0,
             scope_attached_declarations: 0,
         }
@@ -430,11 +428,6 @@ impl Walker {
         self.declaration_index_bytes += table.index_heap_bytes();
         self.add(table.index_heap_bytes());
         self.sub("decl_index", table.index_heap_bytes());
-        for arena in table.census_arenas() {
-            self.arena_bytes_by_identity
-                .entry(arena.identity())
-                .or_insert_with(|| arena.used_bytes() as u64);
-        }
         for (_, declaration) in table.iter() {
             // Cycle probe: a payload whose attached resolution scope carries
             // the payload's own table as a layer forms a strong
@@ -1619,10 +1612,7 @@ pub(crate) fn emit_retention_census(
         walker.declaration_index_bytes,
     );
     eprintln!(
-        "  checker_arenas={} checker_arena_bytes={} scope_attached_decls={} scope_self_cycles={}",
-        walker.arena_bytes_by_identity.len(),
-        walker.arena_bytes_by_identity.values().sum::<u64>(),
-        walker.scope_attached_declarations,
-        walker.scope_self_cycle_declarations,
+        "  scope_attached_decls={} scope_self_cycles={}",
+        walker.scope_attached_declarations, walker.scope_self_cycle_declarations,
     );
 }

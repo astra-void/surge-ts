@@ -6,11 +6,6 @@ use surge_ts_syntax::{
     TextSpan,
 };
 
-use crate::arena::{ArenaStr, CheckerArena};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct TypeDeclarationId(u32);
-
 /// The heavy, immutable payload of a type alias declaration.
 ///
 /// Held behind an `Arc` in [`TypeAliasInfo`] so that re-export/import rebinding,
@@ -350,65 +345,44 @@ pub(crate) fn merge_type_declaration_into_table(
     }
 }
 
-/// Merge every declaration of `source` into `dest`, following the same
-/// declaration-merging rules as [`merge_type_declaration_into_table`] but moving
-/// payloads by arena pointer instead of deep-cloning them.
-///
-/// `dest` and `source` must share one [`CheckerArena`] (see
-/// [`TypeDeclarationTable::with_arena`]): a fresh insert then becomes a pointer
-/// copy of the payload `source` already allocated, and an interface merge
-/// allocates the merged result back into the same arena. This is the bulk merge
-/// path for ambient/global declaration files, where every lib and `@types`
-/// declaration would otherwise be deep-cloned into the global table.
-pub(crate) fn merge_shared_arena_table_into(
+/// Merge every declaration of `source` into `dest`, sharing unchanged payloads
+/// and allocating a fresh payload only for merged interfaces.
+pub(crate) fn merge_shared_table_into(
     dest: &mut TypeDeclarationTable,
     source: &TypeDeclarationTable,
 ) {
-    debug_assert!(
-        dest.arena.ptr_eq(&source.arena),
-        "shared-arena merge requires dest and source to share one arena"
-    );
-
     enum Action {
         Merge(Box<InterfaceInfo>),
         KeepFirst,
-        CopyPayload(usize, Option<CheckerArena>),
+        Share(Arc<TypeDeclarationInfo>),
     }
 
-    for (name, id) in source.declarations.iter() {
+    for (name, incoming) in source.declarations.iter() {
         let name_ref = name.as_ref();
-        let incoming = source.get_by_id(*id);
-        let action = match (dest.get(name_ref), incoming) {
+        let action = match (dest.get(name_ref), incoming.as_ref()) {
             (
                 Some(TypeDeclarationInfo::Interface(existing)),
                 TypeDeclarationInfo::Interface(incoming),
             ) => Action::Merge(Box::new(merge_interface_infos(existing, incoming))),
             (Some(_), _) => Action::KeepFirst,
-            (None, _) => Action::CopyPayload(
-                source.payload_ptr(*id),
-                source.foreign_payload_arenas.get(&id.0).cloned(),
-            ),
+            (None, _) => Action::Share(incoming.clone()),
         };
 
         match action {
             Action::Merge(merged) => dest.upsert(name_ref, TypeDeclarationInfo::Interface(*merged)),
             Action::KeepFirst => {}
-            Action::CopyPayload(payload_ptr, foreign_arena) => {
-                dest.push_shared_payload_with_arena(name_ref, payload_ptr, foreign_arena)
-            }
+            Action::Share(declaration) => dest.insert_shared_handle(name.clone(), declaration),
         }
     }
 }
 
-/// Bulk variant of [`merge_shared_arena_table_into`] that merges many sources into
+/// Bulk variant of [`merge_shared_table_into`] that merges many sources into
 /// `dest` in one pass. Applying the single-source merge once per source rebuilds a
 /// growing interface's member list on every merge, so a global interface split
 /// across N files (`declare global { interface X { ... } }`) was O(N^2). Here each
 /// interface is folded into one owned accumulator whose property set is maintained
-/// incrementally, making the whole merge O(total members). The observable result
-/// is identical: same first-property-wins merge order, same first-wins for
-/// cross-kind names. Every source must share `dest`'s arena.
-pub(crate) fn merge_shared_arena_tables_into(
+/// incrementally, making the whole merge O(total members).
+pub(crate) fn merge_shared_tables_into(
     dest: &mut TypeDeclarationTable,
     sources: &[TypeDeclarationTable],
 ) {
@@ -418,22 +392,16 @@ pub(crate) fn merge_shared_arena_tables_into(
         HashMap::new();
 
     for source in sources {
-        debug_assert!(
-            dest.arena.ptr_eq(&source.arena),
-            "shared-arena merge requires dest and source to share one arena"
-        );
-
-        for (name, id) in source.declarations.iter() {
+        for (name, incoming) in source.declarations.iter() {
             let name_ref = name.as_ref();
-            let incoming = source.get_by_id(*id);
 
-            let TypeDeclarationInfo::Interface(incoming_interface) = incoming else {
+            let TypeDeclarationInfo::Interface(incoming_interface) = incoming.as_ref() else {
                 // A later non-interface never overrides an earlier binding (first
                 // wins), and an interface already accumulated for this name keeps it.
                 if dest.get(name_ref).is_some() || interfaces.contains_key(name_ref) {
                     continue;
                 }
-                dest.push_shared_payload(name_ref, source.payload_ptr(*id));
+                dest.insert_shared_handle(name.clone(), incoming.clone());
                 continue;
             };
 
@@ -526,30 +494,14 @@ fn fold_interface_declaration(
     }
 }
 
-/// A borrowed, context-independent view of an arena-allocated declaration
-/// payload.
-///
-/// The payload lives in a [`CheckerArena`] — an append-only bump allocator
-/// behind an `Arc` — so its address is stable for the lifetime of that arena and
-/// is never moved by later allocations. Holding a clone of the arena handle keeps
-/// the backing memory alive for as long as the handle exists, which lets
-/// resolution own a stable `&TypeDeclarationInfo` while the `CheckerContext` the
-/// lookup came from is borrowed mutably, without deep-cloning the (often large)
-/// interface/alias payload.
 #[derive(Clone)]
 pub(crate) struct TypeDeclarationHandle {
-    _arena: CheckerArena,
-    ptr: *const TypeDeclarationInfo,
+    declaration: Arc<TypeDeclarationInfo>,
 }
-
-// The pointer is into append-only arena memory kept alive by `_arena`; it is
-// only ever read, never written, after the payload is inserted.
-unsafe impl Send for TypeDeclarationHandle {}
-unsafe impl Sync for TypeDeclarationHandle {}
 
 impl TypeDeclarationHandle {
     pub(crate) fn get(&self) -> &TypeDeclarationInfo {
-        unsafe { &*self.ptr }
+        self.declaration.as_ref()
     }
 }
 
@@ -614,15 +566,8 @@ impl TypeDeclarationScope {
 /// The first declaration wins; later duplicates are reported by the caller and
 /// must not replace the original entry.
 pub(crate) struct TypeDeclarationTable {
-    arena: CheckerArena,
-    declarations: surge_ts_types::fx::FxHashMap<ArenaStr, TypeDeclarationId>,
-    payloads: Vec<usize>,
-    /// Payload index → owning arena, for payloads shared from another table's
-    /// arena (see [`Self::insert_shared_from`]). Only foreign payloads have an
-    /// entry; everything else lives in `self.arena`. Keeping the owning arena
-    /// per payload makes `get_handle` hand out handles that genuinely keep
-    /// their payload alive.
-    foreign_payload_arenas: surge_ts_types::fx::FxHashMap<u32, CheckerArena>,
+    declarations:
+        Arc<surge_ts_types::fx::FxHashMap<Arc<str>, Arc<TypeDeclarationInfo>>>,
     /// Instance identity + mutation counter. `(instance_id, version)` equality
     /// proves this exact table instance is bytewise-unchanged since a previous
     /// observation, letting the declaration-environment capture reuse one
@@ -640,10 +585,7 @@ fn next_table_instance_id() -> u64 {
 impl Default for TypeDeclarationTable {
     fn default() -> Self {
         Self {
-            arena: CheckerArena::default(),
-            declarations: Default::default(),
-            payloads: Vec::new(),
-            foreign_payload_arenas: Default::default(),
+            declarations: Arc::new(Default::default()),
             instance_id: next_table_instance_id(),
             version: 0,
         }
@@ -653,10 +595,7 @@ impl Default for TypeDeclarationTable {
 impl Clone for TypeDeclarationTable {
     fn clone(&self) -> Self {
         Self {
-            arena: self.arena.clone(),
             declarations: self.declarations.clone(),
-            payloads: self.payloads.clone(),
-            foreign_payload_arenas: self.foreign_payload_arenas.clone(),
             instance_id: next_table_instance_id(),
             version: 0,
         }
@@ -668,27 +607,9 @@ impl TypeDeclarationTable {
         Self::default()
     }
 
-    /// Create an empty table backed by an existing arena. Payloads collected into
-    /// this table can then be moved into another table sharing the same arena by
-    /// pointer (see [`merge_shared_arena_table_into`]) without a deep clone.
-    pub(crate) fn with_arena(arena: CheckerArena) -> Self {
-        Self {
-            arena,
-            declarations: Default::default(),
-            payloads: Vec::new(),
-            foreign_payload_arenas: Default::default(),
-            instance_id: next_table_instance_id(),
-            version: 0,
-        }
-    }
-
     /// See the `instance_id` field: equal pairs prove an unchanged instance.
     pub(crate) fn snapshot_identity(&self) -> (u64, u64) {
         (self.instance_id, self.version)
-    }
-
-    pub(crate) fn arena_handle(&self) -> CheckerArena {
-        self.arena.clone()
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&TypeDeclarationInfo> {
@@ -697,37 +618,12 @@ impl TypeDeclarationTable {
     }
 
     fn get_without_lookup_record(&self, name: &str) -> Option<&TypeDeclarationInfo> {
-        let id = self.declarations.get(name)?;
-        Some(self.get_by_id(*id))
+        self.declarations.get(name).map(Arc::as_ref)
     }
 
-    fn get_by_id(&self, id: TypeDeclarationId) -> &TypeDeclarationInfo {
-        let index = id.0 as usize;
-        let ptr = self
-            .payloads
-            .get(index)
-            .expect("type declaration id must point to a stored payload");
-        unsafe { &*(*ptr as *const TypeDeclarationInfo) }
-    }
-
-    /// Returns a context-independent handle to the payload for `name`, keeping
-    /// the backing arena alive without deep-cloning the declaration. See
-    /// [`TypeDeclarationHandle`].
     pub(crate) fn get_handle(&self, name: &str) -> Option<TypeDeclarationHandle> {
-        let id = *self.declarations.get(name)?;
-        let index = id.0 as usize;
-        let ptr = *self
-            .payloads
-            .get(index)
-            .expect("type declaration id must point to a stored payload")
-            as *const TypeDeclarationInfo;
         Some(TypeDeclarationHandle {
-            _arena: self
-                .foreign_payload_arenas
-                .get(&id.0)
-                .cloned()
-                .unwrap_or_else(|| self.arena.clone()),
-            ptr,
+            declaration: self.declarations.get(name)?.clone(),
         })
     }
 
@@ -735,33 +631,23 @@ impl TypeDeclarationTable {
         self.declarations.len()
     }
 
-    /// Census-only identity for this table *instance* (each clone owns its own
-    /// index memory, so per-instance identity is the honest unit for charging
-    /// index bytes; the arena payloads behind it are deduplicated separately by
-    /// payload address).
+    /// Census-only identity of the shared COW map backing this table.
     pub(crate) fn identity_address(&self) -> usize {
-        self.payloads.as_ptr() as usize
+        Arc::as_ptr(&self.declarations) as usize
     }
 
-    /// Census-only estimate of this instance's owned index memory (the
-    /// declarations map and payload-pointer vector; arena payloads excluded).
+    /// Census-only estimate of this map backing's owned index memory.
     pub(crate) fn index_heap_bytes(&self) -> u64 {
         (self.declarations.capacity()
-            * (std::mem::size_of::<ArenaStr>() + std::mem::size_of::<TypeDeclarationId>() + 16)
-            + self.payloads.capacity() * std::mem::size_of::<usize>()) as u64
+            * (std::mem::size_of::<Arc<str>>()
+                + std::mem::size_of::<Arc<TypeDeclarationInfo>>()
+                + 16)) as u64
     }
 
-    /// Census-only view of every arena this table can reach (its own plus the
-    /// owners of foreign shared payloads). Callers dedup by
-    /// [`CheckerArena::identity`].
-    pub(crate) fn census_arenas(&self) -> impl Iterator<Item = &CheckerArena> + '_ {
-        std::iter::once(&self.arena).chain(self.foreign_payload_arenas.values())
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&ArenaStr, &TypeDeclarationInfo)> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Arc<str>, &TypeDeclarationInfo)> + '_ {
         self.declarations
             .iter()
-            .map(move |(name, id)| (name, self.get_by_id(*id)))
+            .map(|(name, declaration)| (name, declaration.as_ref()))
     }
 
     pub(crate) fn insert(
@@ -774,9 +660,8 @@ impl TypeDeclarationTable {
             return Some(declaration);
         }
 
-        let declaration_id = self.alloc_declaration_payload(declaration);
-        let key = ArenaStr::new(name_ref, &self.arena);
-        self.declarations.insert(key, declaration_id);
+        let key = declaration_key(name_ref, &declaration);
+        Arc::make_mut(&mut self.declarations).insert(key, Arc::new(declaration));
         self.version += 1;
         None
     }
@@ -784,65 +669,34 @@ impl TypeDeclarationTable {
     /// Insert `declaration`, replacing any existing entry for `name`.
     ///
     /// Unlike [`insert`](Self::insert) (which is first-wins), this overwrites the
-    /// id mapping with a freshly allocated payload. The previous payload remains
-    /// in the append-only arena but is no longer referenced. Used by the default
-    /// library declaration-merging path, where later interface declarations must
-    /// contribute their members rather than being dropped.
+    /// existing payload. Used by declaration-merging paths.
     pub(crate) fn upsert(&mut self, name: impl AsRef<str>, declaration: TypeDeclarationInfo) {
         let name_ref = name.as_ref();
-        let declaration_id = self.alloc_declaration_payload(declaration);
-        if let Some(existing) = self.declarations.get_mut(name_ref) {
-            *existing = declaration_id;
+        let declarations = Arc::make_mut(&mut self.declarations);
+        if let Some(existing) = declarations.get_mut(name_ref) {
+            *existing = Arc::new(declaration);
         } else {
-            let key = ArenaStr::new(name_ref, &self.arena);
-            self.declarations.insert(key, declaration_id);
+            let key = declaration_key(name_ref, &declaration);
+            declarations.insert(key, Arc::new(declaration));
         }
         self.version += 1;
     }
 
-    fn payload_ptr(&self, id: TypeDeclarationId) -> usize {
-        *self
-            .payloads
-            .get(id.0 as usize)
-            .expect("type declaration id must point to a stored payload")
-    }
-
-    /// Map `name` to a payload pointer that already lives in this table's arena,
-    /// first-wins. The pointer must originate from the same arena as `self`;
-    /// callers guarantee this via [`merge_shared_arena_table_into`].
-    fn push_shared_payload(&mut self, name: &str, payload_ptr: usize) {
-        self.push_shared_payload_with_arena(name, payload_ptr, None);
-    }
-
-    /// [`Self::push_shared_payload`] for a payload owned by another table's
-    /// arena; `owning_arena` is retained so handles to the entry stay valid.
-    fn push_shared_payload_with_arena(
+    fn insert_shared_handle(
         &mut self,
-        name: &str,
-        payload_ptr: usize,
-        owning_arena: Option<CheckerArena>,
+        name: Arc<str>,
+        declaration: Arc<TypeDeclarationInfo>,
     ) {
-        if self.declarations.contains_key(name) {
+        if self.declarations.contains_key(name.as_ref()) {
             return;
         }
-        let id = TypeDeclarationId(self.payloads.len() as u32);
-        if let Some(arena) = owning_arena
-            && !arena.ptr_eq(&self.arena)
-        {
-            self.foreign_payload_arenas.insert(id.0, arena);
-        }
-        self.payloads.push(payload_ptr);
-        let key = ArenaStr::new(name, &self.arena);
-        self.declarations.insert(key, id);
+        Arc::make_mut(&mut self.declarations).insert(name, declaration);
         self.version += 1;
     }
 
     /// Share `source`'s payload for `source_name` under `name`, first-wins,
-    /// without cloning the declaration: the payload pointer is adopted and the
-    /// payload's owning arena is retained so the entry (and handles to it)
-    /// stay valid for this table's lifetime. This is the per-importer
-    /// qualified-namespace binding path, where the declaration content is
-    /// byte-identical for every importer.
+    /// without cloning the declaration. This is the per-importer qualified
+    /// namespace binding path, where the declaration content is byte-identical.
     pub(crate) fn insert_shared_from(
         &mut self,
         name: &str,
@@ -852,25 +706,23 @@ impl TypeDeclarationTable {
         if self.declarations.contains_key(name) {
             return false;
         }
-        let Some(source_id) = source.declarations.get(source_name).copied() else {
+        let Some(declaration) = source.declarations.get(source_name).cloned() else {
             return false;
         };
-        let payload_ptr = source.payload_ptr(source_id);
-        let owning_arena = source
-            .foreign_payload_arenas
-            .get(&source_id.0)
-            .cloned()
-            .unwrap_or_else(|| source.arena.clone());
-        self.push_shared_payload_with_arena(name, payload_ptr, Some(owning_arena));
+        self.insert_shared_handle(Arc::from(name), declaration);
         true
     }
+}
 
-    fn alloc_declaration_payload(&mut self, declaration: TypeDeclarationInfo) -> TypeDeclarationId {
-        let declaration = self.arena.alloc_type_declaration_payload(declaration);
-        let id = TypeDeclarationId(self.payloads.len() as u32);
-        self.payloads
-            .push(declaration as *const TypeDeclarationInfo as usize);
-        id
+fn declaration_key(name: &str, declaration: &TypeDeclarationInfo) -> Arc<str> {
+    let declared_name = match declaration {
+        TypeDeclarationInfo::Alias(alias) => &alias.name,
+        TypeDeclarationInfo::Interface(interface) => &interface.name,
+    };
+    if declared_name.as_ref() == name {
+        declared_name.clone()
+    } else {
+        Arc::from(name)
     }
 }
 
