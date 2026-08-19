@@ -42,6 +42,9 @@ pub struct NormalizedCompilerOptions {
     pub skip_lib_check: bool,
     pub es_module_interop: bool,
     pub allow_synthetic_default_imports: bool,
+    /// `compilerOptions.allowUmdGlobalAccess`. When true, referencing a UMD
+    /// global from a module is permitted and TS2686 is suppressed.
+    pub allow_umd_global_access: bool,
     pub no_lib: bool,
     pub lib: Vec<String>,
     pub paths: Vec<PathMapping>,
@@ -88,6 +91,7 @@ impl Default for NormalizedCompilerOptions {
             skip_lib_check: false,
             es_module_interop: false,
             allow_synthetic_default_imports: false,
+            allow_umd_global_access: false,
             no_lib: false,
             lib: Vec::new(),
             paths: Vec::new(),

@@ -105,6 +105,11 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.allow_synthetic_default_imports);
             }
+            "allowUmdGlobalAccess" => {
+                normalized.allow_umd_global_access =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.allow_umd_global_access);
+            }
             "noLib" => {
                 normalized.no_lib = parse_bool_option(key, value, config_dir, diagnostics)
                     .unwrap_or(normalized.no_lib);

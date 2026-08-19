@@ -343,6 +343,61 @@ fn include_selects_matching_ts_files() {
 }
 
 #[test]
+fn include_wildcards_skip_dot_segments() {
+    let root = temp_dir("include-dot-segments");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["src", "gen/*/*.ts"] }"#);
+    write_file(&root, "src/index.ts", "const a = 1;");
+    write_file(&root, "src/.hidden/skipped.ts", "const b = 2;");
+    write_file(&root, "src/.dotfile.ts", "const c = 3;");
+    write_file(&root, "gen/plain/kept.ts", "const d = 4;");
+    write_file(&root, "gen/.hidden/skipped.ts", "const e = 5;");
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert_eq!(
+        loaded.files,
+        vec![root.join("gen/plain/kept.ts"), root.join("src/index.ts")]
+    );
+}
+
+#[test]
+fn include_pattern_spelling_a_dot_segment_still_matches() {
+    let root = temp_dir("include-literal-dot-segment");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "include": ["src/.generated/**/*", "src/.dotfile.ts"] }"#,
+    );
+    write_file(&root, "src/.generated/api.ts", "const a = 1;");
+    write_file(&root, "src/.generated/deep/more.ts", "const b = 2;");
+    write_file(&root, "src/.dotfile.ts", "const c = 3;");
+    write_file(&root, "src/other.ts", "const d = 4;");
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert_eq!(
+        loaded.files,
+        vec![
+            root.join("src/.dotfile.ts"),
+            root.join("src/.generated/api.ts"),
+            root.join("src/.generated/deep/more.ts"),
+        ]
+    );
+}
+
+#[test]
+fn include_bare_dot_directory_entry_is_not_a_recursive_root() {
+    // `isImplicitGlob` only expands an entry whose last component has no `.`, so
+    // `src/.generated` is a file spec that matches nothing.
+    let root = temp_dir("include-bare-dot-directory");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["src/.generated"] }"#);
+    write_file(&root, "src/.generated/api.ts", "const a = 1;");
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.files.is_empty());
+}
+
+#[test]
 fn include_treats_directories_as_recursive_roots_and_keeps_source_extensions() {
     let root = temp_dir("include-directory-roots");
     write_file(

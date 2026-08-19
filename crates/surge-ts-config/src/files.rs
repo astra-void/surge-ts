@@ -50,14 +50,18 @@ pub(crate) fn resolve_source_files(
         ));
     }
 
-    let include_set = build_globset(&include_patterns, diagnostics, root_dir);
+    let (include_set, include_depths) = build_include_globset(&include_patterns, diagnostics, root_dir);
     let exclude_set = build_globset(&exclude_patterns, diagnostics, root_dir);
 
     let mut files = Vec::new();
+    let mut matched = Vec::new();
     for entry in WalkDir::new(root_dir)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| !should_prune(entry.path(), root_dir, exclude_set.as_ref()))
+        .filter_entry(|entry| {
+            !should_prune(entry.path(), root_dir, exclude_set.as_ref())
+                && !is_unreachable_dot_directory(entry, root_dir, &include_depths, &include_roots)
+        })
     {
         let Ok(entry) = entry else {
             continue;
@@ -73,7 +77,11 @@ pub(crate) fn resolve_source_files(
         };
 
         if let Some(set) = include_set.as_ref() {
-            if !set.is_match(relative) && !is_under_any_include_root(relative, &include_roots) {
+            set.matches_into(relative, &mut matched);
+            let by_pattern = matched
+                .iter()
+                .any(|&index| wildcard_segments_are_visible(relative, include_depths[index]));
+            if !by_pattern && !is_under_any_include_root(relative, &include_roots) {
                 continue;
             }
         }
@@ -100,6 +108,18 @@ fn literal_include_root(root_dir: &Path, pattern: &str) -> Option<PathBuf> {
         return None;
     }
 
+    // `isImplicitGlob`: tsc only expands a bare entry to `<entry>/**/*` when its
+    // last component has no `.`, `*` or `?`. `include: ["src/.generated"]` is
+    // therefore a *file* spec that matches nothing, not a directory root.
+    let last_component = Path::new(pattern)
+        .components()
+        .next_back()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if last_component.contains('.') {
+        return None;
+    }
+
     let candidate = resolve_path(root_dir, pattern);
     if candidate.exists() && candidate.is_dir() {
         return Some(
@@ -119,8 +139,66 @@ fn contains_glob_metacharacters(pattern: &str) -> bool {
         .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
 }
 
+/// How many leading components an include pattern spells out literally, i.e. the
+/// index of its first component containing a wildcard.
+fn literal_component_depth(pattern: &str) -> usize {
+    Path::new(pattern)
+        .components()
+        .position(|component| {
+            contains_glob_metacharacters(&component.as_os_str().to_string_lossy())
+        })
+        .unwrap_or_else(|| Path::new(pattern).components().count())
+}
+
+/// tsc's include matcher never lets a wildcard match a path segment starting with
+/// `.`: its recursive fragment is `[^/.][^/]*` and a leading-`*` component is
+/// compiled as `([^./][^/]*)?`. Segments the pattern spells out literally are
+/// exempt, which is why `include: ["src/.generated/**/*"]` still works while
+/// `include: ["src"]` skips `src/.generated` entirely.
+fn wildcard_segments_are_visible(relative: &Path, literal_depth: usize) -> bool {
+    relative
+        .components()
+        .skip(literal_depth)
+        .all(|component| !component.as_os_str().to_string_lossy().starts_with('.'))
+}
+
 fn is_under_any_include_root(relative: &Path, include_roots: &[PathBuf]) -> bool {
-    include_roots.iter().any(|root| relative.starts_with(root))
+    include_roots.iter().any(|root| {
+        relative.starts_with(root)
+            && wildcard_segments_are_visible(relative, root.components().count())
+    })
+}
+
+/// Prune a dot-directory no include pattern can reach. Walking it would only
+/// produce files the wildcard rule rejects, so this is a pure saving; a pattern
+/// that names the directory literally keeps it alive.
+fn is_unreachable_dot_directory(
+    entry: &walkdir::DirEntry,
+    root_dir: &Path,
+    include_depths: &[usize],
+    include_roots: &[PathBuf],
+) -> bool {
+    if !entry.file_type().is_dir() {
+        return false;
+    }
+    let Ok(relative) = entry.path().strip_prefix(root_dir) else {
+        return false;
+    };
+    let depth = relative.components().count();
+    if depth == 0 {
+        return false;
+    }
+    if !entry.file_name().to_string_lossy().starts_with('.') {
+        return false;
+    }
+
+    // The directory sits at index `depth - 1`; any pattern whose literal prefix
+    // reaches at least that far may still spell it out.
+    let literal_reach = depth - 1;
+    !include_depths.iter().any(|&d| d > literal_reach)
+        && !include_roots
+            .iter()
+            .any(|root| root.components().count() > literal_reach)
 }
 
 fn resolve_explicit_files(
@@ -183,6 +261,42 @@ fn parse_pattern_list(
         patterns.push(pattern.to_string());
     }
     patterns
+}
+
+/// Like [`build_globset`], but also returns each accepted pattern's literal
+/// component depth, positionally aligned with the globset's match indices.
+fn build_include_globset(
+    patterns: &[String],
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    file_name: &Path,
+) -> (Option<GlobSet>, Vec<usize>) {
+    let mut accepted = Vec::new();
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        match Glob::new(pattern) {
+            Ok(glob) => {
+                builder.add(glob);
+                accepted.push(literal_component_depth(pattern));
+            }
+            Err(error) => diagnostics.push(ConfigDiagnostic {
+                code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
+                message: format!("invalid glob `{pattern}`: {error}"),
+                file_name: file_name.to_path_buf(),
+            }),
+        }
+    }
+
+    match builder.build() {
+        Ok(set) => (Some(set), accepted),
+        Err(error) => {
+            diagnostics.push(ConfigDiagnostic {
+                code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
+                message: format!("failed to build globset: {error}"),
+                file_name: file_name.to_path_buf(),
+            });
+            (None, Vec::new())
+        }
+    }
 }
 
 fn build_globset(
