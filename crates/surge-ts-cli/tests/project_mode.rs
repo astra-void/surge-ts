@@ -4870,3 +4870,49 @@ fn project_mode_default_export_expression_reexport() {
     // republishes it.
     assert!(run_compat_fixture_codes("default-export-expression-reexport-basic").is_empty());
 }
+
+#[test]
+fn cli_reports_removed_compiler_options_with_tsc_spans() {
+    let root = temp_dir("cli_removed_options");
+    write_file(
+        &root,
+        "tsconfig.json",
+        "{\n  \"include\": [\"*.ts\"],\n  \"compilerOptions\": {\n    \"esModuleInterop\": false,\n    \"outFile\": \"out.js\"\n  }\n}\n",
+    );
+    write_file(&root, "index.ts", "export const x = 1;\n");
+
+    let (stdout, _stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+    ]);
+
+    assert!(
+        stdout.contains(
+            "tsconfig.json(4,24): error TS5108: Option 'esModuleInterop=false' has been removed."
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("tsconfig.json(5,5): error TS5102: Option 'outFile' has been removed."),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn cli_does_not_report_supported_compiler_options_as_removed() {
+    let root = temp_dir("cli_removed_options_clean");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "include": ["*.ts"], "compilerOptions": { "esModuleInterop": true, "target": "es2022" } }"#,
+    );
+    write_file(&root, "index.ts", "export const x = 1;\n");
+
+    let (stdout, _stderr) = run_cli(&[
+        "--project",
+        root.join("tsconfig.json").to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!stdout.contains("TS5102"), "{stdout}");
+    assert!(!stdout.contains("TS5108"), "{stdout}");
+}

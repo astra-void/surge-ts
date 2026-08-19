@@ -8,6 +8,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS5102",
+    "category": "Error",
+    "message": "Option '{0}' has been removed. Please remove it from your configuration.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS5108",
+    "category": "Error",
+    "message": "Option '{0}={1}' has been removed. Please remove it from your configuration.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS1360",
     "category": "Error",
     "message": "Type '{0}' does not satisfy the expected type '{1}'.",

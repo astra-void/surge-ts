@@ -1,3 +1,23 @@
+[TS5102]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "crates/surge-ts-config/src/tests.rs",
+]
+oracle = [
+  "CLI tests",
+]
+
+[TS5108]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "crates/surge-ts-config/src/tests.rs",
+]
+oracle = [
+  "CLI tests",
+]
+
 [TS5112]
 status = "emitted"
 fixtures = [

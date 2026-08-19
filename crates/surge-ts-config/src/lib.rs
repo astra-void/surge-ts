@@ -9,12 +9,14 @@ mod normalize;
 mod options;
 mod parse;
 mod paths;
+mod removed_options;
 
 pub use diagnostics::*;
 pub use mapping::select_path_mapping_targets;
 pub use model::*;
 pub use options::*;
 pub use parse::load_tsconfig;
+pub use removed_options::RemovedCompilerOption;
 pub use paths::{
     CanonicalizeIoSnapshot, absolutize, canonicalize_if_exists, canonicalize_if_exists_string,
     canonicalize_io_snapshot, clear_canonicalize_cache, cycle_key, normalize_path_buf,

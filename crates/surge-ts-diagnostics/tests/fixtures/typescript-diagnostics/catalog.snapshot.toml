@@ -9,6 +9,22 @@ message = "tsconfig.json is present but will not be loaded if files are specifie
 arity = 0
 
 [[diagnostic]]
+code = "TS5102"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Option '{0}' has been removed. Please remove it from your configuration."
+arity = 1
+
+[[diagnostic]]
+code = "TS5108"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Option '{0}={1}' has been removed. Please remove it from your configuration."
+arity = 2
+
+[[diagnostic]]
 code = "TS1360"
 category = "Error"
 source = "typescript"

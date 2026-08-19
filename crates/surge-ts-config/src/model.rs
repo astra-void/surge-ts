@@ -14,6 +14,9 @@ pub struct LoadedTsConfig {
     pub files: Vec<PathBuf>,
     pub compiler_options: NormalizedCompilerOptions,
     pub diagnostics: Vec<ConfigDiagnostic>,
+    /// Options TypeScript 7 removed, resolved against the root config's source
+    /// ranges so the caller can report `TS5102`/`TS5108` where tsc does.
+    pub removed_options: Vec<crate::RemovedCompilerOption>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
