@@ -81,9 +81,17 @@ pub(crate) fn parse_import_declaration(
 
     let is_type_only = matches!(declaration.import_kind, ImportOrExportKind::Type);
 
-    if is_type_only && parsed_default_specifier.is_some() {
+    if is_type_only
+        && let Some(ParsedImportKind::Default {
+            local_name,
+            name_span,
+        }) = parsed_default_specifier
+    {
         return Some(ParsedImportDeclaration {
-            kind: ParsedImportKind::Unsupported,
+            kind: ParsedImportKind::TypeOnlyDefault {
+                local_name,
+                name_span,
+            },
             module_specifier,
             module_specifier_span,
             span,

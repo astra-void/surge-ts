@@ -1,10 +1,11 @@
-//! Collects every value-position identifier name read within a function body,
-//! walking the full oxc AST. Because it runs over the original AST (not the
-//! lossy `Parsed*` tree), it sees reads inside spreads, `for-in` loops, object
-//! methods, and nested functions — the over-approximation that backs FP-free
-//! unused-binding diagnostics (TS6133).
+//! Collects every identifier name read within a function body — value positions
+//! and type positions alike — walking the full oxc AST. Because it runs over the
+//! original AST (not the lossy `Parsed*` tree), it sees reads inside spreads,
+//! `for-in` loops, object methods, nested functions, and type annotations — the
+//! over-approximation that backs FP-free unused-binding diagnostics (TS6133,
+//! TS6196).
 
-use oxc_ast::ast::{FunctionBody, IdentifierReference, Program};
+use oxc_ast::ast::{FunctionBody, IdentifierReference, Program, TSTypeName};
 use oxc_ast_visit::Visit;
 
 #[derive(Default)]
@@ -15,6 +16,23 @@ struct ReadCollector {
 impl<'a> Visit<'a> for ReadCollector {
     fn visit_identifier_reference(&mut self, reference: &IdentifierReference<'a>) {
         self.names.push(reference.name.to_string());
+    }
+
+    /// Type-position names count as reads too: they are what makes a body-local
+    /// `type`/`interface` used (TS6196), and a value named in `typeof x` is read
+    /// by tsc even though it never appears in value position.
+    fn visit_ts_type_name(&mut self, name: &TSTypeName<'a>) {
+        let mut current = name;
+        loop {
+            match current {
+                TSTypeName::IdentifierReference(identifier) => {
+                    self.names.push(identifier.name.to_string());
+                    return;
+                }
+                TSTypeName::QualifiedName(qualified) => current = &qualified.left,
+                TSTypeName::ThisExpression(_) => return,
+            }
+        }
     }
 }
 

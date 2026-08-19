@@ -1,5 +1,5 @@
 use oxc_ast::ast::{
-    Class, ClassElement, Expression, MethodDefinitionKind, MethodDefinitionType,
+    Class, ClassElement, MethodDefinitionKind, MethodDefinitionType,
     PropertyDefinitionType, PropertyKey,
 };
 
@@ -39,7 +39,10 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
 }
 
 fn parse_class_heritage(class: &Class<'_>) -> Vec<ParsedNamedType> {
-    let Some(Expression::Identifier(identifier)) = class.super_class.as_ref() else {
+    let Some(super_class) = class.super_class.as_ref() else {
+        return Vec::new();
+    };
+    let Some((name, span)) = super::types::flatten_heritage_expression(super_class) else {
         return Vec::new();
     };
 
@@ -50,8 +53,8 @@ fn parse_class_heritage(class: &Class<'_>) -> Vec<ParsedNamedType> {
         .unwrap_or_default();
 
     vec![ParsedNamedType {
-        name: identifier.name.to_string(),
-        span: Some(text_span_from_oxc_span(identifier.span)),
+        name,
+        span: Some(span),
         type_arguments,
     }]
 }

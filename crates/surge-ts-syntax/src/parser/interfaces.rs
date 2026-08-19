@@ -37,15 +37,20 @@ pub(crate) fn parse_interface_declaration(
         .next_back();
 
     // A bare call signature (`(value?: any): number`) makes the interface
-    // callable. When an interface declares multiple call-signature overloads we
-    // keep the first that parses; the call checker only needs one viable arity.
+    // callable. Multiple overloads fold into one permissive signature the same
+    // way a type literal's do — keeping only the first made every call matching
+    // a *later* overload a false TS2554 (execa's `(file, args?, options?)`
+    // behind its template-tag signature).
     let call_signature = declaration
         .body
         .body
         .iter()
-        .find_map(|member| match member {
+        .filter_map(|member| match member {
             TSSignature::TSCallSignatureDeclaration(signature) => parse_call_signature(signature),
             _ => None,
+        })
+        .reduce(|merged, signature| {
+            super::types::merge_parsed_call_signatures(&merged, &signature)
         });
 
     // Construct signatures (`new <T>(...): Promise<T>`) make the interface usable
@@ -81,9 +86,7 @@ pub(crate) fn parse_interface_declaration(
 }
 
 fn parse_interface_heritage(heritage: &TSInterfaceHeritage<'_>) -> Option<crate::ParsedNamedType> {
-    let oxc_ast::ast::Expression::Identifier(identifier) = &heritage.expression else {
-        return None;
-    };
+    let (name, span) = super::types::flatten_heritage_expression(&heritage.expression)?;
 
     let type_arguments = heritage
         .type_arguments
@@ -92,8 +95,8 @@ fn parse_interface_heritage(heritage: &TSInterfaceHeritage<'_>) -> Option<crate:
         .unwrap_or_default();
 
     Some(crate::ParsedNamedType {
-        name: identifier.name.to_string(),
-        span: Some(text_span_from_oxc_span(identifier.span)),
+        name,
+        span: Some(span),
         type_arguments,
     })
 }
@@ -114,6 +117,7 @@ fn parse_interface_member(member: &TSSignature<'_>) -> Option<ParsedInterfaceMem
         name_span: property.name_span,
         optional: property.optional,
         is_abstract: false,
+        is_method: property.is_method,
         ty: property.ty,
     })
 }

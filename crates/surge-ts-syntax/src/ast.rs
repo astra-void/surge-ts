@@ -11,6 +11,15 @@ pub struct ParsedSource {
     /// Backs unused-import / unused-local diagnostics (TS6133): a top-level
     /// binding whose name never appears here and is not exported is unused.
     pub module_reads: Vec<String>,
+    /// Byte ranges of lines suppressed by an `@ts-expect-error`/`@ts-ignore`
+    /// directive on the preceding line. Diagnostics starting inside one are
+    /// dropped, matching tsc.
+    pub suppressed_ranges: Vec<TextSpan>,
+    /// Module specifiers written as `import("...")` — type-position import
+    /// types and dynamic import expressions — deduplicated in source order.
+    /// They belong to the module graph exactly like declaration specifiers do,
+    /// but the lossy `Parsed*` tree does not model either form.
+    pub import_call_specifiers: Vec<String>,
 }
 
 /// A leading `/// <reference types="..." />` directive. Only the `types` form is
@@ -355,6 +364,9 @@ pub struct ParsedInterfaceMember {
     pub name_span: Option<TextSpan>,
     pub optional: bool,
     pub is_abstract: bool,
+    /// Declared with method syntax (`m(): T`). tsc checks such a member's
+    /// parameters bivariantly even under `strictFunctionTypes`.
+    pub is_method: bool,
     pub ty: ParsedType,
 }
 
@@ -465,6 +477,13 @@ pub enum ParsedImportKind {
         local_name: String,
         name_span: Option<TextSpan>,
     },
+    /// `import type Foo from "specifier"` — a default import that binds only in
+    /// type space. Kept distinct from `Default` so the value side stays unbound
+    /// while the name still counts as declared (shadowing, unused-locals).
+    TypeOnlyDefault {
+        local_name: String,
+        name_span: Option<TextSpan>,
+    },
     Namespace {
         local_name: String,
         name_span: Option<TextSpan>,
@@ -521,6 +540,13 @@ pub enum ParsedExportDeclaration {
     Empty {
         span: Option<TextSpan>,
     },
+    /// `export as namespace Foo` — the UMD global declaration. Names the global
+    /// this module is exposed under when loaded via a script tag.
+    NamespaceExport {
+        exported_name: String,
+        exported_name_span: Option<TextSpan>,
+        span: Option<TextSpan>,
+    },
     /// `export = identifier` — declaration-lite CommonJS export assignment.
     /// Only a bare identifier target is represented here; any other expression
     /// target remains `Unsupported`.
@@ -564,6 +590,8 @@ pub struct ParsedObjectTypeProperty {
     pub name_span: Option<TextSpan>,
     pub ty: ParsedType,
     pub optional: bool,
+    /// See [`ParsedInterfaceMember::is_method`].
+    pub is_method: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -819,6 +847,11 @@ pub struct ParsedObjectProperty {
     /// is the spread argument expression; inference merges the argument's own
     /// object properties into the result.
     pub is_spread: bool,
+    /// True for a `get`/`set` accessor (`{ get value() { … } }`). The `value` is
+    /// lowered to an arrow like method shorthand, but the property's type is the
+    /// accessor's *value* type — the getter's return type, or the setter's
+    /// parameter type — not the accessor function itself.
+    pub is_accessor: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -875,6 +908,15 @@ pub struct TextSpan {
 pub struct ParsedVariableDeclaration {
     pub is_declare: bool,
     pub kind: ParsedVariableKind,
+    /// Whether this binding came from a destructuring pattern rather than a
+    /// plain `const x = …`. tsc exempts an `_`-prefixed *destructured* binding
+    /// from `noUnusedLocals` (the idiom for dropping properties out of a rest
+    /// spread) but not a plain one, so the two must stay distinguishable after
+    /// the pattern is flattened into one declaration per binding.
+    pub from_binding_pattern: bool,
+    /// `let x!: T` — a definite-assignment assertion. The binding is asserted to
+    /// be initialized elsewhere, so definite-assignment analysis skips it.
+    pub has_definite_assertion: bool,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub declared_type: Option<ParsedType>,
@@ -936,6 +978,16 @@ pub enum ParsedFunctionBodyStatement {
     /// `break;` — exits the enclosing loop/switch. Modelled for the same
     /// flow-divergence reason as [`ParsedFunctionBodyStatement::Continue`].
     Break,
+    /// A body-local `type` alias. Bound ahead of the statement loop so a
+    /// forward reference from an earlier statement still resolves; inert for
+    /// control flow.
+    TypeAlias(Box<ParsedTypeAliasDeclaration>),
+    /// A body-local `interface`. Bound and treated like
+    /// [`ParsedFunctionBodyStatement::TypeAlias`].
+    Interface(Box<ParsedInterfaceDeclaration>),
+    /// A body-local `class`. Contributes both a type and a value binding; its
+    /// member bodies are not separately checked.
+    Class(Box<ParsedClassDeclaration>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

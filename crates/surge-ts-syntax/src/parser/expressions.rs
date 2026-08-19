@@ -717,6 +717,10 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                 .unwrap_or(ParsedExpression::Unknown),
             argument.span(),
         ),
+        Argument::ChainExpression(chain_expression) => (
+            parse_chain_expression(chain_expression).unwrap_or(ParsedExpression::Unknown),
+            argument.span(),
+        ),
         Argument::StaticMemberExpression(member_expression) => (
             parse_static_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown),
             argument.span(),
@@ -945,6 +949,20 @@ pub(crate) fn parse_unary_expression(
 pub(crate) fn parse_object_properties(
     object_expression: &ObjectExpression<'_>,
 ) -> Vec<ParsedObjectProperty> {
+    let getter_names: Vec<&str> = object_expression
+        .properties
+        .iter()
+        .filter_map(|property_kind| match property_kind {
+            ObjectPropertyKind::ObjectProperty(property) if property.kind == PropertyKind::Get => {
+                match &property.key {
+                    PropertyKey::StaticIdentifier(key) => Some(key.name.as_str()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+
     object_expression
         .properties
         .iter()
@@ -961,11 +979,30 @@ pub(crate) fn parse_object_properties(
                         span: Some(text_span_from_oxc_span(spread.span)),
                         is_method: false,
                         is_spread: true,
+                        is_accessor: false,
                     });
                 }
             };
 
-            if property.kind != PropertyKind::Init || property.computed {
+            if property.computed {
+                return None;
+            }
+
+            // `get value() { … }` / `set value(v) { … }` declare the property
+            // just as a written one does; only their *value* type differs from
+            // the accessor function. A setter is dropped when the same literal
+            // also declares a getter, whose type wins.
+            if matches!(property.kind, PropertyKind::Get | PropertyKind::Set) {
+                let PropertyKey::StaticIdentifier(key) = &property.key else {
+                    return None;
+                };
+                if property.kind == PropertyKind::Set && getter_names.contains(&key.name.as_str()) {
+                    return None;
+                }
+                return parse_object_accessor(key, property);
+            }
+
+            if property.kind != PropertyKind::Init {
                 return None;
             }
 
@@ -998,9 +1035,23 @@ pub(crate) fn parse_object_properties(
                 span: Some(text_span_from_oxc_span(property.span)),
                 is_method: false,
                 is_spread: false,
+                is_accessor: false,
             })
         })
         .collect()
+}
+
+/// Lowers a `get`/`set` accessor into a property carrying the accessor's arrow.
+/// The checker reads the arrow's return type (getter) or parameter type (setter)
+/// as the property's type.
+fn parse_object_accessor(
+    key: &oxc_ast::ast::IdentifierName<'_>,
+    property: &oxc_ast::ast::ObjectProperty<'_>,
+) -> Option<ParsedObjectProperty> {
+    let mut parsed = parse_object_method_shorthand(key, property)?;
+    parsed.is_method = false;
+    parsed.is_accessor = true;
+    Some(parsed)
 }
 
 /// Lowers object literal method shorthand (`{ foo(arg): R { ... } }`) into a property whose
@@ -1014,12 +1065,17 @@ fn parse_object_method_shorthand(
         return None;
     };
 
-    let parameters = function
+    let mut parameters = function
         .params
         .items
         .iter()
         .filter_map(parse_function_parameter)
         .collect::<Vec<_>>();
+    if let Some(rest) = function.params.rest.as_deref()
+        && let Some(rest_parameter) = super::functions::parse_rest_function_parameter(rest)
+    {
+        parameters.push(rest_parameter);
+    }
 
     let return_type = function
         .return_type
@@ -1054,6 +1110,7 @@ fn parse_object_method_shorthand(
         span: Some(text_span_from_oxc_span(property.span)),
         is_method: true,
         is_spread: false,
+        is_accessor: false,
     })
 }
 

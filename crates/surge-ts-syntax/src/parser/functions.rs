@@ -157,6 +157,22 @@ fn parse_function_body_statement(
                     .map(|function| {
                         vec![ParsedFunctionBodyStatement::Function(Box::new(function))]
                     }),
+                Declaration::TSTypeAliasDeclaration(alias) => {
+                    super::types::parse_type_alias_declaration(alias)
+                        .map(|alias| vec![ParsedFunctionBodyStatement::TypeAlias(Box::new(alias))])
+                }
+                Declaration::TSInterfaceDeclaration(interface) => {
+                    super::interfaces::parse_interface_declaration(interface).map(|interface| {
+                        vec![ParsedFunctionBodyStatement::Interface(Box::new(interface))]
+                    })
+                }
+                Declaration::ClassDeclaration(class) => {
+                    super::classes::parse_class_declaration(class)
+                        .map(|class| vec![ParsedFunctionBodyStatement::Class(Box::new(class))])
+                }
+                Declaration::TSEnumDeclaration(enum_declaration) => Some(
+                    super::enums::parse_enum_declaration_as_function_body(enum_declaration),
+                ),
                 _ => None,
             }
         }

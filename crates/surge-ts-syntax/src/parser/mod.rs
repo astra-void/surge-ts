@@ -12,15 +12,18 @@ use crate::{
 
 mod classes;
 mod entry;
+mod enums;
 mod exports;
 mod expressions;
 mod function_types;
 mod functions;
+mod import_calls;
 mod imports;
 mod interfaces;
 mod reads;
 mod reference_directives;
 mod spans;
+mod suppressions;
 mod types;
 
 use self::classes::parse_class_declaration;
@@ -73,7 +76,9 @@ fn parse_module_declaration(
         ModuleDeclaration::TSExportAssignment(export) => parse_export_assignment(export),
         ModuleDeclaration::TSNamespaceExportDeclaration(export) => {
             Some(vec![ParsedStatement::ExportDeclaration(Box::new(
-                ParsedExportDeclaration::Unsupported {
+                ParsedExportDeclaration::NamespaceExport {
+                    exported_name: export.id.name.to_string(),
+                    exported_name_span: Some(text_span_from_oxc_span(export.id.span)),
                     span: Some(text_span_from_oxc_span(export.span)),
                 },
             ))])
@@ -94,6 +99,9 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
             .map(|interface| vec![ParsedStatement::InterfaceDeclaration(Box::new(interface))]),
         Declaration::ClassDeclaration(class) => parse_class_declaration(class)
             .map(|class| vec![ParsedStatement::ClassDeclaration(Box::new(class))]),
+        Declaration::TSEnumDeclaration(enum_declaration) => {
+            Some(enums::parse_enum_declaration(enum_declaration))
+        }
         Declaration::TSModuleDeclaration(module) => Some(parse_ts_module_declaration(module)),
         Declaration::TSGlobalDeclaration(global) => Some(parse_ts_global_declaration(global)),
         Declaration::TSImportEqualsDeclaration(import_equals) => {
@@ -125,13 +133,14 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 .as_ref()
                 .and_then(|annotation| parse_type_annotation(annotation));
             let Some(init) = declarator.init.as_ref() else {
-                return parse_binding_pattern_declarations(
+                return parse_binding_pattern_declarations_with_definite(
                     &declarator.id,
                     None,
                     None,
                     declaration.declare,
                     kind,
                     declared_type,
+                    declarator.definite,
                 );
             };
 
@@ -213,12 +222,35 @@ fn parse_binding_pattern_declarations(
     kind: ParsedVariableKind,
     declared_type: Option<crate::ParsedType>,
 ) -> Vec<ParsedStatement> {
+    parse_binding_pattern_declarations_with_definite(
+        binding,
+        initializer,
+        initializer_span,
+        is_declare,
+        kind,
+        declared_type,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_binding_pattern_declarations_with_definite(
+    binding: &BindingPattern<'_>,
+    initializer: Option<ParsedExpression>,
+    initializer_span: Option<crate::TextSpan>,
+    is_declare: bool,
+    kind: ParsedVariableKind,
+    declared_type: Option<crate::ParsedType>,
+    has_definite_assertion: bool,
+) -> Vec<ParsedStatement> {
     match binding {
         BindingPattern::BindingIdentifier(binding_identifier) => {
             vec![ParsedStatement::VariableDeclaration(Box::new(
                 ParsedVariableDeclaration {
                     is_declare,
                     kind,
+                    from_binding_pattern: false,
+                    has_definite_assertion,
                     name: binding_identifier.name.to_string(),
                     name_span: Some(text_span_from_oxc_span(binding_identifier.span)),
                     declared_type,
@@ -228,30 +260,64 @@ fn parse_binding_pattern_declarations(
             ))]
         }
         BindingPattern::AssignmentPattern(assignment_pattern) => {
-            parse_binding_pattern_declarations(
+            // `const { a = 0 } = o` binds `o.a ?? 0`: the default applies exactly
+            // when the property is absent, so the binding is never `undefined`.
+            let initializer = match initializer {
+                Some(initializer) => {
+                    let (default_value, default_span) = parse_expression(&assignment_pattern.right);
+                    Some(ParsedExpression::NullishCoalescing {
+                        left: Box::new(initializer),
+                        left_span: initializer_span,
+                        right: Box::new(default_value),
+                        right_span: Some(text_span_from_oxc_span(default_span)),
+                    })
+                }
+                None => None,
+            };
+            parse_binding_pattern_declarations_with_definite(
                 &assignment_pattern.left,
                 initializer,
                 initializer_span,
                 is_declare,
                 kind,
                 declared_type,
+                has_definite_assertion,
             )
         }
-        BindingPattern::ObjectPattern(object_pattern) => parse_object_pattern_declarations(
-            object_pattern,
-            initializer,
-            initializer_span,
-            is_declare,
-            kind,
-        ),
-        BindingPattern::ArrayPattern(array_pattern) => parse_array_pattern_declarations(
-            array_pattern,
-            initializer,
-            initializer_span,
-            is_declare,
-            kind,
-        ),
+        BindingPattern::ObjectPattern(object_pattern) => {
+            mark_binding_pattern_declarations(parse_object_pattern_declarations(
+                object_pattern,
+                initializer,
+                initializer_span,
+                is_declare,
+                kind,
+            ))
+        }
+        BindingPattern::ArrayPattern(array_pattern) => {
+            mark_binding_pattern_declarations(parse_array_pattern_declarations(
+                array_pattern,
+                initializer,
+                initializer_span,
+                is_declare,
+                kind,
+            ))
+        }
     }
+}
+
+/// Flags every binding produced by a destructuring pattern, including the ones
+/// nested inside it.
+fn mark_binding_pattern_declarations(statements: Vec<ParsedStatement>) -> Vec<ParsedStatement> {
+    statements
+        .into_iter()
+        .map(|statement| match statement {
+            ParsedStatement::VariableDeclaration(mut variable) => {
+                variable.from_binding_pattern = true;
+                ParsedStatement::VariableDeclaration(variable)
+            }
+            other => other,
+        })
+        .collect()
 }
 
 fn parse_object_pattern_declarations(
