@@ -115,6 +115,14 @@ impl ModuleImportBindings {
         layers.extend(self.namespace_alias_layers.iter().cloned());
         layers
     }
+
+    /// Whether an import in this file binds `name` at all, as a value or as a
+    /// type. A type-only import binds the name too: it shadows a same-named
+    /// global, and tsc reports using it as a value as TS1361 rather than as a
+    /// UMD-global reference.
+    pub(crate) fn binds_name(&self, name: &str) -> bool {
+        self.symbols.get_handle(name).is_some() || self.type_declarations.get(name).is_some()
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +147,7 @@ mod tests {
                     is_module: parsed.is_module,
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
+                    suppressed_ranges: parsed.suppressed_ranges,
                 }
             })
             .collect()

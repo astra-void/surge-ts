@@ -59,6 +59,7 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 name_span: property.name_span,
                 optional: property.optional,
                 is_abstract: property.is_abstract,
+                is_method: false,
                 ty: property.declared_type.clone().unwrap_or(ParsedType::Any),
             })
         }
@@ -67,6 +68,7 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
             name_span: method.name_span,
             optional: false,
             is_abstract: method.is_abstract,
+            is_method: true,
             ty: method_function_type(method),
         }),
         ParsedClassMember::Accessor(accessor) if !accessor.is_static => {
@@ -75,6 +77,7 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 name_span: accessor.name_span,
                 optional: false,
                 is_abstract: accessor.is_abstract,
+                is_method: false,
                 ty: accessor_property_type(accessor),
             })
         }
@@ -110,6 +113,7 @@ fn constructor_parameter_property_members(
                         name_span: *span,
                         optional: parameter.optional,
                         is_abstract: false,
+                        is_method: false,
                         ty: parameter.declared_type.clone().unwrap_or(ParsedType::Any),
                     })
                 })
@@ -267,6 +271,15 @@ fn class_construct_signature(
         }
     }
 
+    if !class.extends.is_empty() {
+        // The constructor is inherited from the base class, whose declaration is
+        // not reachable from here (classes are bound as instance-side interfaces,
+        // which exclude the constructor). Accept any argument list rather than
+        // report the base's arity as zero: `new ZodString({ … })` on a derived
+        // class was TS2554 "Expected 0 arguments".
+        return FunctionType::new(vec![Type::Any], instance_type, true, 0);
+    }
+
     // A class with no explicit constructor is constructible with zero arguments.
     FunctionType::new(vec![], instance_type, false, 0)
 }
@@ -294,7 +307,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                 let function_type =
                     map_function_signature(&constructor.parameters, None, &[], None, ctx);
                 check_function_body_with_signature_and_this(
-                    "constructor".to_string(),
+                    None,
                     constructor.parameters.clone(),
                     constructor.body.clone(),
                     &function_type,
@@ -322,7 +335,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     instance_type.clone()
                 };
                 check_function_body_with_signature_and_this(
-                    method.name.clone(),
+                    None,
                     method.parameters.clone(),
                     method.body.clone(),
                     &function_type,

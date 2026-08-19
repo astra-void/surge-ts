@@ -14,7 +14,14 @@ pub(crate) fn export_local_type_name(
     // clone. The rename/scope rewrite there still takes one owned copy; this
     // removes the redundant second clone this path previously paid per
     // re-exported type.
-    let Some(handle) = local_type_declarations.get_handle(local_name) else {
+    // `export { X }` / `export type { X }` may name an IMPORTED type, which
+    // lives in the resolution scope's import layers rather than this file's own
+    // declaration table. The scope is layer-ordered local-first, so this is a
+    // pure miss-path fallback: a name declared here still resolves identically.
+    let Some(handle) = local_type_declarations
+        .get_handle(local_name)
+        .or_else(|| resolution_scope.and_then(|scope| scope.get_handle(local_name)))
+    else {
         push_unresolved_export_diagnostic(ctx, local_name, *name_span);
         return;
     };
@@ -132,17 +139,38 @@ pub(crate) fn copy_qualified_type_exports(
     let prefix = format!("{imported_name}.");
     let mut copied_any = false;
     for (key, _) in export_table.type_declarations.iter() {
-        if let Some(member) = key.as_str().strip_prefix(&prefix) {
+        if let Some(member) = key.strip_prefix(&prefix) {
             copied_any = true;
             let local_key = format!("{local_name}.{member}");
             let _ = type_declarations.insert_shared_from(
                 &local_key,
                 &export_table.type_declarations,
-                key.as_str(),
+                key.as_ref(),
             );
         }
     }
     copied_any
+}
+
+/// Value-side twin of [`copy_qualified_type_exports`]: copies an exported
+/// namespace's `ns.member` value entries under the importer's local binding
+/// name, so a qualified call (`util.arrayToEnum(…)`) can find the member's real
+/// signature through the local alias.
+pub(crate) fn copy_qualified_value_exports(
+    export_table: &ModuleExportTable,
+    imported_name: &str,
+    local_name: &str,
+    symbols: &mut SymbolTable,
+) {
+    let prefix = format!("{imported_name}.");
+    for (key, symbol) in export_table.symbols.iter_shared() {
+        if let Some(member) = key.strip_prefix(&prefix) {
+            let local_key = format!("{local_name}.{member}");
+            if symbols.get(&local_key).is_none() {
+                symbols.insert_shared(local_key, symbol.clone());
+            }
+        }
+    }
 }
 
 pub(crate) fn lookup_value_export(
@@ -153,5 +181,41 @@ pub(crate) fn lookup_value_export(
         return export_table.get_shared_value("default");
     }
 
-    export_table.get_shared_value(local_name)
+    export_table
+        .get_shared_value(local_name)
+        .or_else(|| lookup_export_assignment_member(export_table, local_name))
+}
+
+/// A module whose surface is `export = X` publishes no named exports, but tsc
+/// lets a named import reach the members of the assigned value's type
+/// (`import { join } from "path"` over `export = path`). Peel the assignment —
+/// it can sit behind a lazy nominal reference — and read the member off the
+/// object shape, mirroring what `compute_namespace_export_object_type` already
+/// does for namespace imports.
+///
+/// Miss path only: the module's own named exports always win, and nothing is
+/// materialized into `symbols` (that would make the members visible to
+/// `export *`, which tsc does not do).
+fn lookup_export_assignment_member(
+    export_table: &ModuleExportTable,
+    local_name: &str,
+) -> Option<Arc<SymbolInfo>> {
+    let export_assignment_symbol = export_table.export_assignment_symbol.as_ref()?;
+    let assignment_ty = export_assignment_symbol.ty.peeled();
+    let ty = match &assignment_ty {
+        // A generic class's value side is modelled as `any`, so its statics are
+        // unavailable; `any` answers every member, which is also what an
+        // `export = <any>` surface means.
+        Type::Any => Type::Any,
+        // Declared properties only — `Object.prototype` members are not module
+        // exports, so `import { toString } from "path"` must stay TS2305.
+        Type::Object(object) => object.properties.get(local_name)?.ty.clone(),
+        _ => return None,
+    };
+
+    Some(Arc::new(SymbolInfo {
+        ty,
+        kind: SymbolKind::Const,
+        function_signature: None,
+    }))
 }

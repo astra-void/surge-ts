@@ -69,6 +69,9 @@ pub(crate) struct ParsedProgramFile {
     /// Module-wide identifier reads (see [`surge_ts_syntax::ParsedSource`]),
     /// retained only when `noUnusedLocals` is enabled; empty otherwise.
     pub(crate) module_reads: Vec<String>,
+    /// Byte ranges of the lines an `@ts-expect-error`/`@ts-ignore` directive
+    /// suppresses (see [`surge_ts_syntax::ParsedSource::suppressed_ranges`]).
+    pub(crate) suppressed_ranges: Vec<surge_ts_syntax::TextSpan>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +107,7 @@ struct FileCheckResult {
 pub(crate) struct ModuleAnalysis {
     local_type_declarations: Arc<TypeDeclarationTable>,
     local_symbols: SymbolTable,
+    local_symbol_names: Option<Arc<surge_ts_types::fx::FxHashSet<Arc<str>>>>,
     local_export_table: ModuleExportTable,
 }
 
@@ -114,6 +118,22 @@ impl ModuleAnalysis {
 
     pub(crate) fn local_symbols(&self) -> &SymbolTable {
         &self.local_symbols
+    }
+
+    fn has_local_symbol(&self, name: &str) -> bool {
+        self.local_symbol_names
+            .as_ref()
+            .map_or_else(|| self.local_symbols.get(name).is_some(), |names| names.contains(name))
+    }
+
+    fn release_local_symbols_to_names(&mut self) {
+        let names = self
+            .local_symbols
+            .iter_shared()
+            .map(|(name, _)| name.clone())
+            .collect();
+        self.local_symbol_names = Some(Arc::new(names));
+        self.local_symbols = SymbolTable::new();
     }
 
     pub(crate) fn local_export_table(&self) -> &ModuleExportTable {
@@ -611,6 +631,7 @@ fn check_program_with_stats_and_jobs_inner(
     emit_parser_diagnostics(&parsed_files, &mut ctx);
     ctx.begin_resolution_stage();
     collect_ambient_globals(&parsed_files, &mut ctx, timings.as_ref());
+    collect_umd_global_names(&parsed_files, &mut ctx);
     crate::driver::collect_global_augmentations(&parsed_files, &mut ctx);
     collect_ambient_modules(&parsed_files, &mut ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
@@ -656,6 +677,12 @@ fn check_program_with_stats_and_jobs_inner(
     for diagnostic in preliminary_type_diagnostics {
         ctx.push(diagnostic);
     }
+    if ctx.options.skip_lib_check && !eq_probe_enabled() {
+        for parsed_file in parsed_files.iter_mut() {
+            release_lowered_declaration_type_bodies(parsed_file);
+        }
+        crate::metrics::release_free_memory();
+    }
     record_program_timing(timings.as_ref(), |timings| {
         timings.preliminary_module_type_binding_collection += type_collection_start.elapsed()
     });
@@ -699,7 +726,7 @@ fn check_program_with_stats_and_jobs_inner(
         )
     } else {
         collect_module_analyses_with_bindings(
-            &parsed_files,
+            &mut parsed_files,
             &local_type_declarations_by_module,
             &preliminary_module_import_bindings,
             false,
@@ -866,7 +893,7 @@ fn check_program_with_stats_and_jobs_inner(
         )
     } else {
         collect_module_analyses_with_bindings(
-            &parsed_files,
+            &mut parsed_files,
             &local_type_declarations_by_module,
             &module_import_bindings,
             true,
@@ -921,19 +948,7 @@ fn check_program_with_stats_and_jobs_inner(
     // below. The eq-stats probe re-reads full analyses, so it keeps them.
     if ctx.options.skip_lib_check && !eq_probe_enabled() {
         for parsed_file in parsed_files.iter_mut() {
-            if !parsed_file.file_kind.is_declaration() {
-                continue;
-            }
-            parsed_file.statements.retain(|statement| match statement {
-                ParsedStatement::ImportDeclaration(_) => true,
-                ParsedStatement::ExportDeclaration(export) => !matches!(
-                    export.as_ref(),
-                    ParsedExportDeclaration::Statement { .. }
-                        | ParsedExportDeclaration::Default { .. }
-                ),
-                _ => false,
-            });
-            parsed_file.statements.shrink_to_fit();
+            retain_declaration_binding_surface(parsed_file);
         }
         crate::metrics::release_free_memory();
     }
@@ -1159,11 +1174,6 @@ fn check_program_with_stats_and_jobs_inner(
     let file_results = if worker_count <= 1 {
         check_program_files_serial(&mut parsed_files, &mut shared_state, &ctx, timings.clone())
     } else {
-        // From here on, workers only read arena-backed tables. Freezing makes a
-        // late allocation — a data race on the non-thread-safe bump allocator —
-        // fail loudly instead of corrupting memory. Serial checking is exempt:
-        // single-threaded allocation is sound.
-        freeze_worker_reachable_arenas(&shared_state, &ctx);
         check_program_files_parallel(
             &parsed_files,
             &shared_state,
@@ -1395,6 +1405,7 @@ fn parse_program_file(
         is_module: parsed.is_module,
         file_kind: classify_file_kind(&file_name),
         module_reads: parsed.module_reads,
+        suppressed_ranges: parsed.suppressed_ranges,
     }
 }
 
@@ -1701,41 +1712,6 @@ fn resolve_worker_count(jobs: usize, parsed_files: &[ParsedProgramFile]) -> usiz
     };
 
     requested.max(1).min(file_count)
-}
-
-/// Freeze every arena directly reachable by check-phase workers (through
-/// `shared_state` or the cloned worker contexts) so that any allocation after
-/// the fan-out panics deterministically. Clones of a table share the arena, so
-/// freezing one handle freezes every clone. See [`CheckerArena::freeze`].
-fn freeze_worker_reachable_arenas(shared_state: &ProgramCheckSharedState, ctx: &CheckerContext) {
-    shared_state
-        .global_type_declarations
-        .arena_handle()
-        .freeze();
-    shared_state
-        .script_type_declarations
-        .arena_handle()
-        .freeze();
-    ctx.type_declarations.arena_handle().freeze();
-    ctx.ambient_global_type_declarations.arena_handle().freeze();
-    for analysis in shared_state.module_analyses.iter().flatten() {
-        analysis.local_type_declarations.arena_handle().freeze();
-        analysis
-            .local_export_table
-            .type_declarations
-            .arena_handle()
-            .freeze();
-    }
-    for bindings in shared_state.module_import_bindings.iter().flatten() {
-        for layer in bindings.scope_layers() {
-            layer.arena_handle().freeze();
-        }
-    }
-    for scope in shared_state.module_resolution_scopes.iter().flatten() {
-        for layer in scope.layers() {
-            layer.arena_handle().freeze();
-        }
-    }
 }
 
 fn check_program_files_parallel(
@@ -2323,6 +2299,41 @@ pub(crate) fn in_check_phase() -> bool {
     IN_CHECK_PHASE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Program-global copy of the authoritative per-file scope map, published when
+/// the driving context installs it. Same reason as [`IN_CHECK_PHASE`]: a lazy
+/// value/signature annotation resolves inside an environment-RECOVERED context,
+/// and an environment captured before the map existed (module analysis takes it
+/// away — see `binding.rs`) would otherwise resolve the declaring file's own
+/// imports against an empty map. A dependency `.d.ts` that names an imported
+/// type (lucide's `import { SVGProps } from 'react'`) then missed at check time.
+/// Keyed by file name and rebuilt per program, so consulting it is the same
+/// authoritative fallback `module_scope_for_file` already provides. Released in
+/// the end-of-run teardown.
+static PROGRAM_MODULE_SCOPES: std::sync::Mutex<
+    Option<Arc<surge_ts_types::fx::FxHashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>>>>,
+> = std::sync::Mutex::new(None);
+
+pub(crate) fn publish_program_module_scopes(
+    scopes: &Arc<surge_ts_types::fx::FxHashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>>>,
+) {
+    if let Ok(mut slot) = PROGRAM_MODULE_SCOPES.lock() {
+        *slot = Some(scopes.clone());
+    }
+}
+
+pub(crate) fn program_module_scope_for_file(
+    file_name: &str,
+) -> Option<Arc<crate::symbols::TypeDeclarationScope>> {
+    let slot = PROGRAM_MODULE_SCOPES.lock().ok()?;
+    slot.as_ref()?.get(file_name).cloned()
+}
+
+pub(crate) fn clear_program_module_scopes() {
+    if let Ok(mut slot) = PROGRAM_MODULE_SCOPES.lock() {
+        *slot = None;
+    }
+}
+
 fn local_values_typeof_filter_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("SURGE_LV_FILTER").as_deref() != Ok("0"))
@@ -2511,6 +2522,16 @@ fn check_program_file(
             merged_symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
         );
 
+        if !ctx.umd_global_names.is_empty() {
+            let declared = module_scope_declared_names(&parsed_file.statements);
+            ctx.set_file_umd_global_names(true, |name| {
+                declared.contains(name)
+                    || module_analysis.local_symbols.get_handle(name).is_some()
+                    || module_analysis.local_type_declarations.get(name).is_some()
+                    || imported_bindings.is_some_and(|bindings| bindings.binds_name(name))
+            });
+        }
+
         let current_type_declarations = ctx.type_declarations.clone();
         let current_symbols = ctx
             .symbols
@@ -2667,7 +2688,8 @@ fn check_program_file(
         });
     }
 
-    let diagnostics = std::mem::take(&mut ctx.diagnostics);
+    let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
+    drop_suppressed_diagnostics(&mut diagnostics, &parsed_file.suppressed_ranges);
     let stats = std::mem::take(&mut ctx.stats);
 
     FileCheckResult {
@@ -2675,6 +2697,26 @@ fn check_program_file(
         diagnostics,
         stats,
     }
+}
+
+/// Drops the diagnostics an `@ts-expect-error`/`@ts-ignore` directive suppresses:
+/// every one whose span starts on the directive's following line. A diagnostic
+/// with no span cannot be attributed to a line and is kept.
+pub(crate) fn drop_suppressed_diagnostics(
+    diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
+    suppressed_ranges: &[surge_ts_syntax::TextSpan],
+) {
+    if suppressed_ranges.is_empty() || diagnostics.is_empty() {
+        return;
+    }
+    diagnostics.retain(|diagnostic| {
+        let Some(span) = diagnostic.span.as_ref() else {
+            return true;
+        };
+        !suppressed_ranges
+            .iter()
+            .any(|range| span.start >= range.start && span.start <= range.end)
+    });
 }
 
 fn clone_type_declaration_table(

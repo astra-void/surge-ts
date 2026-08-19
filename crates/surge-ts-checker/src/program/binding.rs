@@ -131,7 +131,7 @@ pub(crate) fn collect_preliminary_module_type_bindings(
             parsed_files,
             &preliminary_module_export_tables,
             &preliminary_module_resolution_scopes,
-            &SymbolTable::new(), // empty local symbols
+            &|_| false,
             ctx,
         );
         preliminary_module_import_bindings.push(Some(imported_bindings));
@@ -423,6 +423,7 @@ fn analyze_module(
     let analysis = ModuleAnalysis {
         local_type_declarations: local_type_declarations.clone(),
         local_symbols,
+        local_symbol_names: None,
         local_export_table: export_table,
     };
     ctx.type_declaration_scope = saved_type_declaration_scope;
@@ -476,7 +477,7 @@ fn analyze_module(
 }
 
 pub(crate) fn collect_module_analyses_with_bindings(
-    parsed_files: &[ParsedProgramFile],
+    parsed_files: &mut [ParsedProgramFile],
     local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
     preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
     lower_global_augmentation_values: bool,
@@ -487,8 +488,12 @@ pub(crate) fn collect_module_analyses_with_bindings(
     let memory_trace_threshold = module_memory_trace_threshold();
     let mut type_dedup_cache = TypeDedupCache::new();
     let analysis_round = next_analysis_round();
+    let release_declaration_bodies = lower_global_augmentation_values
+        && ctx.options.skip_lib_check
+        && !super::eq_probe_enabled();
 
-    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+    for file_index in 0..parsed_files.len() {
+        let parsed_file = &parsed_files[file_index];
         if !parsed_file.is_module && parsed_file.file_kind != FileKind::DependencyDeclaration {
             analyses.push(None);
             continue;
@@ -518,7 +523,17 @@ pub(crate) fn collect_module_analyses_with_bindings(
             &parsed_file.file_name,
             retained_module_analysis_type_nodes(&analysis),
         );
+        if ctx.options.skip_lib_check
+            && !super::eq_probe_enabled()
+            && parsed_file.file_kind.is_declaration()
+            && !parsed_file.contains_typeof
+        {
+            analysis.release_local_symbols_to_names();
+        }
         analyses.push(Some(analysis));
+        if release_declaration_bodies {
+            retain_declaration_binding_surface(&mut parsed_files[file_index]);
+        }
         if (file_index + 1) % 256 == 0 {
             crate::metrics::release_free_memory();
         }
@@ -526,6 +541,59 @@ pub(crate) fn collect_module_analyses_with_bindings(
     analyze_split_report(analysis_round);
 
     analyses
+}
+
+pub(crate) fn retain_declaration_binding_surface(parsed_file: &mut ParsedProgramFile) {
+    if !parsed_file.file_kind.is_declaration() {
+        return;
+    }
+    parsed_file.statements.retain(|statement| match statement {
+        ParsedStatement::ImportDeclaration(_) => true,
+        ParsedStatement::ExportDeclaration(export) => !matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Statement { .. } | ParsedExportDeclaration::Default { .. }
+        ),
+        _ => false,
+    });
+    parsed_file.statements.shrink_to_fit();
+}
+
+pub(crate) fn release_lowered_declaration_type_bodies(parsed_file: &mut ParsedProgramFile) {
+    if !parsed_file.file_kind.is_declaration() {
+        return;
+    }
+    release_lowered_type_bodies_from_statements(&mut parsed_file.statements);
+}
+
+fn release_lowered_type_bodies_from_statements(statements: &mut [ParsedStatement]) {
+    for statement in statements {
+        match statement {
+            ParsedStatement::TypeAliasDeclaration(alias) => {
+                alias.type_parameters = Vec::new();
+                alias.ty = surge_ts_syntax::ParsedType::Unknown;
+            }
+            ParsedStatement::InterfaceDeclaration(interface) => {
+                interface.type_parameters = Vec::new();
+                interface.extends = Vec::new();
+                interface.members = Vec::new();
+                interface.string_index_type = None;
+                interface.call_signature = None;
+                interface.construct_signatures = Vec::new();
+            }
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_mut() {
+                    release_lowered_type_bodies_from_statements(std::slice::from_mut(declaration));
+                }
+            }
+            ParsedStatement::DeclareModuleDeclaration(module) => {
+                release_lowered_type_bodies_from_statements(&mut module.statements);
+            }
+            ParsedStatement::NamespaceDeclaration(namespace) => {
+                release_lowered_type_bodies_from_statements(&mut namespace.statements);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Parallel counterpart of [`collect_module_analyses_with_bindings`] for the
@@ -788,20 +856,6 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
     let mut logs = Vec::new();
     for (outcomes, worker_logs) in worker_outputs {
         for outcome in outcomes {
-            // The worker threads are joined: this thread now has exclusive
-            // access to the arenas their analyses created (export tables), and
-            // later serial phases (the binding fixpoint) allocate into them.
-            if let Some(analysis) = outcome.analysis.as_ref() {
-                analysis
-                    .local_export_table
-                    .type_declarations
-                    .arena_handle()
-                    .adopt_current_thread_as_owner();
-                analysis
-                    .local_type_declarations
-                    .arena_handle()
-                    .adopt_current_thread_as_owner();
-            }
             let file_index = outcome.file_index;
             slots[file_index] = Some(outcome);
         }
@@ -938,17 +992,6 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                     ctx.resolved_named_types = fresh_ctx.resolved_named_types.clone();
                     ctx.resolved_named_types_identity =
                         fresh_ctx.resolved_named_types_identity.clone();
-                    if let Some(analysis) = outcome_analysis.as_ref() {
-                        analysis
-                            .local_export_table
-                            .type_declarations
-                            .arena_handle()
-                            .adopt_current_thread_as_owner();
-                        analysis
-                            .local_type_declarations
-                            .arena_handle()
-                            .adopt_current_thread_as_owner();
-                    }
                     for fresh_log in session.take_file_logs() {
                         if probed(file_index) {
                             for line in fresh_log.debug_value_lines() {
@@ -1680,7 +1723,7 @@ pub(crate) fn collect_module_import_bindings(
             parsed_files,
             module_export_tables,
             module_resolution_scopes,
-            &module_analysis.local_symbols,
+            &|name| module_analysis.has_local_symbol(name),
             ctx,
         );
         module_import_bindings.push(Some(imported_bindings));

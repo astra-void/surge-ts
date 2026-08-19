@@ -109,6 +109,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 is_module: parsed.is_module,
                 file_kind: FileKind::GeneratedDeclaration,
                 module_reads: parsed.module_reads,
+                suppressed_ranges: parsed.suppressed_ranges,
             }
         })
         .collect();
@@ -147,7 +148,7 @@ pub(crate) fn collect_global_augmentations(
             },
         );
     }
-    crate::symbols::merge_shared_arena_tables_into(
+    crate::symbols::merge_shared_tables_into(
         std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
         &block_tables,
     );
@@ -177,7 +178,7 @@ pub(crate) fn collect_global_augmentations_from_statements(
             ctx,
         ));
     });
-    crate::symbols::merge_shared_arena_tables_into(
+    crate::symbols::merge_shared_tables_into(
         std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
         &block_tables,
     );
@@ -231,18 +232,18 @@ fn for_each_global_augmentation_block(
     }
 }
 
-/// Collect one `declare global` block's type declarations into a fresh table that
-/// shares the ambient arena, so the result can later be merged into the ambient
-/// table by pointer. The caller merges every block's table together in one pass
+/// Collect one `declare global` block's type declarations into a fresh table, so
+/// the result can later be merged into the ambient table by sharing payload
+/// handles. The caller merges every block's table together in one pass
 /// (see [`collect_global_augmentations`]).
 fn collect_global_augmentation_block_types(
     block_statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) -> crate::symbols::TypeDeclarationTable {
-    let shared = crate::symbols::TypeDeclarationTable::with_arena(
-        ctx.ambient_global_type_declarations.arena_handle(),
+    let saved_type_declarations = std::mem::replace(
+        &mut ctx.type_declarations,
+        crate::symbols::TypeDeclarationTable::new(),
     );
-    let saved_type_declarations = std::mem::replace(&mut ctx.type_declarations, shared);
     let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
     ctx.type_declaration_scope = None;
 
@@ -676,6 +677,27 @@ fn collect_namespace_type_declarations_prefixed(
                     register(format!("{}.{}", bare_prefix, alias.name));
                 }
             }
+            // A class inside a namespace contributes an instance type under the
+            // qualified key just as an interface does; without this a
+            // `namespace NS { class C {} }` member is reachable as a value but
+            // never as a type.
+            ParsedStatement::ClassDeclaration(class) => {
+                let mut register = |key: String| {
+                    let mut info = crate::program::class_instance_interface_info(
+                        class,
+                        ctx.file_name_arc(),
+                    );
+                    info.declared_name = Some(info.name.clone());
+                    info.name = key.as_str().into();
+                    let _ = ctx
+                        .type_declarations
+                        .insert(key, TypeDeclarationInfo::Interface(info));
+                };
+                register(format!("{}.{}", prefix, class.name));
+                if prefix != bare_prefix {
+                    register(format!("{}.{}", bare_prefix, class.name));
+                }
+            }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
                 let inner_prefix = format!("{}.{}", prefix, inner_namespace.name);
                 collect_namespace_type_declarations_prefixed(inner_namespace, &inner_prefix, ctx);
@@ -976,6 +998,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             }
             ParsedExportDeclaration::Empty { .. } => {}
             ParsedExportDeclaration::Equals { .. } => {}
+            ParsedExportDeclaration::NamespaceExport { .. } => {}
             ParsedExportDeclaration::Unsupported { span } => {
                 let mut diagnostic =
                     Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
@@ -1051,11 +1074,18 @@ fn validate_direct_utility_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
         return;
     }
 
-    let _ = crate::infer::map_parsed_type_with_substitution(
-        alias.ty.clone(),
-        ctx,
-        &crate::infer::TypeParameterSubstitution::new(),
-    );
+    // The alias's own type parameters are in scope for its body. Seeding them as
+    // placeholders keeps the utility's argument probe from reporting them as
+    // unknown names, while the constraints-only push leaves the value scope empty
+    // so the concrete-instantiation short-circuit still applies.
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    for type_parameter in &alias.type_parameters {
+        substitution
+            .insert_placeholder(type_parameter.name.clone(), surge_ts_types::Type::Unknown);
+    }
+    ctx.push_type_parameter_constraints_only(&alias.type_parameters);
+    let _ = crate::infer::map_parsed_type_with_substitution(alias.ty.clone(), ctx, &substitution);
+    ctx.pop_type_parameter_scope();
 }
 
 fn classify_file_kind(file_name: &str) -> FileKind {

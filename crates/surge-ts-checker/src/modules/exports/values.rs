@@ -27,10 +27,14 @@ fn collect_exportable_value_symbols_thin(
     local_symbols: &SymbolTable,
     ctx: &CheckerContext,
 ) -> SymbolTable {
-    fn walk(statement: &ParsedStatement, exportable_values: &mut SymbolTable) {
+    fn walk(
+        statement: &ParsedStatement,
+        exportable_values: &mut SymbolTable,
+        ctx: &CheckerContext,
+    ) {
         match statement {
             ParsedStatement::VariableDeclaration(variable) => {
-                if exportable_values.get_shared(&variable.name).is_none() {
+                if exportable_values.get_own_shared(&variable.name).is_none() {
                     let kind = match variable.kind {
                         surge_ts_syntax::ParsedVariableKind::Var => SymbolKind::Var,
                         surge_ts_syntax::ParsedVariableKind::Let => SymbolKind::Let,
@@ -48,11 +52,11 @@ fn collect_exportable_value_symbols_thin(
             }
             ParsedStatement::ExportDeclaration(export) => {
                 if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
-                    walk(declaration.as_ref(), exportable_values);
+                    walk(declaration.as_ref(), exportable_values, ctx);
                 }
             }
             ParsedStatement::NamespaceDeclaration(namespace) => {
-                if exportable_values.get(&namespace.name).is_none() {
+                if exportable_values.get_own(&namespace.name).is_none() {
                     let _ = exportable_values.insert(
                         namespace.name.clone(),
                         SymbolInfo {
@@ -62,8 +66,113 @@ fn collect_exportable_value_symbols_thin(
                         },
                     );
                 }
+                // The qualified `ns.member` keys are part of the name surface a
+                // thin round must reproduce: a consumer that finds the key with a
+                // thin `Unknown` type degrades (and re-resolves later), while one
+                // that misses it entirely reads the namespace object's permissive
+                // `any` member and *caches* that answer.
+                thin_namespace_member_names(namespace, &namespace.name, exportable_values, ctx);
             }
             _ => {}
+        }
+    }
+
+    /// The qualified members a thin round publishes. Their *shape* stays
+    /// permissive (no annotation is resolved here), but the parsed signature is
+    /// carried so a consumer bound against this round still instantiates the
+    /// member correctly — the import bindings taken here are what the check
+    /// phase reads, so a thin round that omitted them silently pinned every
+    /// consumer to the namespace object's `any` member.
+    fn thin_namespace_member_names(
+        namespace: &surge_ts_syntax::ParsedNamespaceDeclaration,
+        prefix: &str,
+        exportable_values: &mut SymbolTable,
+        ctx: &CheckerContext,
+    ) {
+        for statement in &namespace.statements {
+            let inner = peel_exported_statement(statement);
+            let (name, kind, signature) = match inner {
+                ParsedStatement::FunctionDeclaration(function) => {
+                    if !publishable_member_signature(
+                        &function.type_parameters,
+                        function
+                            .parameters
+                            .iter()
+                            .filter_map(|p| p.declared_type.as_ref()),
+                        function.return_type.as_ref(),
+                        ctx,
+                    ) {
+                        continue;
+                    }
+                    (
+                        function.name.as_str(),
+                        SymbolKind::Function,
+                        crate::checks::function::function_signature_info(
+                            &function.type_parameters,
+                            &function.parameters,
+                            function.return_type.as_ref(),
+                            &ctx.file_name,
+                        ),
+                    )
+                }
+                ParsedStatement::VariableDeclaration(variable) => {
+                    let Some(surge_ts_syntax::ParsedExpression::ArrowFunction(arrow)) =
+                        variable.initializer.as_ref()
+                    else {
+                        continue;
+                    };
+                    if variable.declared_type.is_some()
+                        || !publishable_member_signature(
+                            &arrow.type_parameters,
+                            arrow
+                                .parameters
+                                .iter()
+                                .filter_map(|p| p.declared_type.as_ref()),
+                            arrow.return_type.as_ref(),
+                            ctx,
+                        )
+                    {
+                        continue;
+                    }
+                    (
+                        variable.name.as_str(),
+                        SymbolKind::Const,
+                        crate::checks::function::function_signature_info(
+                            &arrow.type_parameters,
+                            &arrow.parameters,
+                            arrow.return_type.as_ref(),
+                            &ctx.file_name,
+                        ),
+                    )
+                }
+                ParsedStatement::NamespaceDeclaration(inner_namespace) => {
+                    let inner_prefix = format!("{prefix}.{}", inner_namespace.name);
+                    thin_namespace_member_names(
+                        inner_namespace,
+                        &inner_prefix,
+                        exportable_values,
+                        ctx,
+                    );
+                    continue;
+                }
+                _ => continue,
+            };
+            let key = format!("{prefix}.{name}");
+            if exportable_values.get_own_shared(&key).is_none() {
+                let _ = exportable_values.insert(
+                    key,
+                    SymbolInfo {
+                        ty: Type::Function(surge_ts_types::FunctionType::new(
+                            vec![Type::Any],
+                            Type::Any,
+                            true,
+                            0,
+                        )),
+                        kind,
+                        function_signature: Some(signature),
+                    },
+                );
+            }
         }
     }
 
@@ -75,10 +184,183 @@ fn collect_exportable_value_symbols_thin(
         ctx.ambient_global_symbols
             .clone_with_reason(TypeCopyReason::ModuleExport),
     ));
+    let merging_namespaces = merging_namespace_value_members(statements);
     for statement in statements {
-        walk(statement, &mut exportable_values);
+        if is_merging_namespace_statement(statement, &merging_namespaces) {
+            continue;
+        }
+        walk(statement, &mut exportable_values, ctx);
     }
+    apply_merging_namespace_value_members(&merging_namespaces, &mut exportable_values);
     exportable_values
+}
+
+/// Namespaces in `statements` that declaration-merge with a same-named
+/// variable/function/class in the same list, paired with their accumulated
+/// value members (merged across every block of the name, in first-appearance
+/// order).
+///
+/// TypeScript merges `namespace X` into a same-named value declaration; surge
+/// used to let whichever came first win outright, so `@types/node`'s
+/// `namespace path { interface PlatformPath … } const path: path.PlatformPath`
+/// bound `path` to the namespace's *empty* value object and collapsed every
+/// `path.resolve(…)` to a missing property on `{}`.
+fn merging_namespace_value_members(
+    statements: &[ParsedStatement],
+) -> Vec<(String, surge_ts_types::PropertyMap)> {
+    let declares_namespace = statements.iter().any(|statement| {
+        matches!(
+            peel_exported_statement(statement),
+            ParsedStatement::NamespaceDeclaration(_)
+        )
+    });
+    if !declares_namespace {
+        return Vec::new();
+    }
+
+    let mut value_names = surge_ts_types::fx::FxHashSet::default();
+    for statement in statements {
+        match peel_exported_statement(statement) {
+            ParsedStatement::VariableDeclaration(variable) => {
+                value_names.insert(variable.name.as_str());
+            }
+            ParsedStatement::FunctionDeclaration(function) => {
+                value_names.insert(function.name.as_str());
+            }
+            ParsedStatement::ClassDeclaration(class) => {
+                value_names.insert(class.name.as_str());
+            }
+            _ => {}
+        }
+    }
+
+    if value_names.is_empty() {
+        return Vec::new();
+    }
+
+    let mut merged: Vec<(String, surge_ts_types::PropertyMap)> = Vec::new();
+    for statement in statements {
+        let ParsedStatement::NamespaceDeclaration(namespace) = peel_exported_statement(statement)
+        else {
+            continue;
+        };
+        if !value_names.contains(namespace.name.as_str()) {
+            continue;
+        }
+        let index = match merged.iter().position(|(name, _)| name == &namespace.name) {
+            Some(index) => index,
+            None => {
+                merged.push((
+                    namespace.name.clone(),
+                    surge_ts_types::PropertyMap::default(),
+                ));
+                merged.len() - 1
+            }
+        };
+        fill_namespace_value_properties(namespace, &mut merged[index].1);
+    }
+    merged
+}
+
+fn peel_exported_statement(statement: &ParsedStatement) -> &ParsedStatement {
+    match statement {
+        ParsedStatement::ExportDeclaration(export) => {
+            if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
+                peel_exported_statement(declaration.as_ref())
+            } else {
+                statement
+            }
+        }
+        other => other,
+    }
+}
+
+fn is_merging_namespace_statement(
+    statement: &ParsedStatement,
+    merging_namespaces: &[(String, surge_ts_types::PropertyMap)],
+) -> bool {
+    if merging_namespaces.is_empty() {
+        return false;
+    }
+    let ParsedStatement::NamespaceDeclaration(namespace) = peel_exported_statement(statement)
+    else {
+        return false;
+    };
+    merging_namespaces
+        .iter()
+        .any(|(name, _)| name == &namespace.name)
+}
+
+/// Overlays each merging namespace's value members onto the value symbol the
+/// walk produced, without displacing members the value already carries.
+/// The value symbol is left alone when the namespace contributes no value
+/// members (the `@types/node` shape: the namespace holds types only).
+fn apply_merging_namespace_value_members(
+    merging_namespaces: &[(String, surge_ts_types::PropertyMap)],
+    exportable_values: &mut SymbolTable,
+) {
+    for (name, members) in merging_namespaces {
+        let Some(symbol) = exportable_values.get_shared(name) else {
+            // The value declaration bound nothing (an unsupported binding form);
+            // fall back to the namespace object so the name stays a value.
+            let _ = exportable_values.insert(
+                name.clone(),
+                SymbolInfo {
+                    ty: Type::Object(crate::arena::alloc_object_type(members.clone(), None)),
+                    kind: SymbolKind::Const,
+                    function_signature: None,
+                },
+            );
+            continue;
+        };
+
+        if members.is_empty() {
+            continue;
+        }
+
+        let merged_type = match &symbol.ty {
+            Type::Object(object) => Type::Object(object_with_namespace_members(object, members)),
+            Type::Function(function) => Type::Object(
+                crate::arena::alloc_object_type(members.clone(), None)
+                    .with_call_signature(function.clone()),
+            ),
+            Type::Unknown => Type::Object(crate::arena::alloc_object_type(members.clone(), None)),
+            _ => continue,
+        };
+
+        let _ = exportable_values.insert(
+            name.clone(),
+            SymbolInfo {
+                ty: merged_type,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+        );
+    }
+}
+
+fn object_with_namespace_members(
+    object: &surge_ts_types::ObjectType,
+    members: &surge_ts_types::PropertyMap,
+) -> surge_ts_types::ObjectType {
+    let mut properties = (*object.properties).clone();
+    for (member_name, member) in members.iter() {
+        properties
+            .entry(member_name.clone())
+            .or_insert_with(|| member.clone());
+    }
+
+    let mut merged = crate::arena::alloc_object_type(
+        properties,
+        object.string_index_type.as_ref().map(|ty| (**ty).clone()),
+    );
+    merged.alias_name = object.alias_name.clone();
+    merged.alias_id = object.alias_id.clone();
+    merged.construct_signature = object.construct_signature.clone();
+    merged.call_signature = object.call_signature.clone();
+    merged.is_intersection = object.is_intersection;
+    merged.synthetic_open_index = object.synthetic_open_index;
+    merged
 }
 
 pub(crate) fn collect_exportable_value_symbols(
@@ -134,6 +416,11 @@ pub(crate) fn collect_exportable_value_symbols(
         // environment; the shadow's own store dies with the shadow, so the
         // capture must intern into the caller's persistent store or every
         // force degrades to `Unknown` (`checker_context()` -> None).
+        //
+        // Source files deliberately do *not* share it: an interleaved A/B on zod
+        // measured +180 MB peak RSS (585 -> 766 MB) for eight diagnostics, so the
+        // references those files leave behind are handled where they are read
+        // instead — a receiver that peels to the sentinel reports nothing.
         shadow_ctx.declaration_environment_store = ctx.declaration_environment_store.clone();
     }
     shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
@@ -167,7 +454,11 @@ pub(crate) fn collect_exportable_value_symbols(
             .clone_with_reason(TypeCopyReason::ModuleExport),
     ));
 
+    let merging_namespaces = merging_namespace_value_members(statements);
     for statement in statements {
+        if is_merging_namespace_statement(statement, &merging_namespaces) {
+            continue;
+        }
         collect_exportable_value_symbols_from_statement(
             statement,
             &mut exportable_values,
@@ -175,6 +466,7 @@ pub(crate) fn collect_exportable_value_symbols(
             !library_file,
         );
     }
+    apply_merging_namespace_value_members(&merging_namespaces, &mut exportable_values);
 
     exportable_values
 }
@@ -233,23 +525,19 @@ fn annotation_contains_typeof(annotation: &surge_ts_syntax::ParsedType) -> bool 
         }
         ParsedType::Tuple(elements)
         | ParsedType::Union(elements)
-        | ParsedType::Intersection(elements) => {
-            elements.iter().any(annotation_contains_typeof)
-        }
+        | ParsedType::Intersection(elements) => elements.iter().any(annotation_contains_typeof),
         ParsedType::Object(object) => {
             object
                 .properties
                 .iter()
                 .any(|property| annotation_contains_typeof(&property.ty))
-                || object.call_signature.as_ref().is_some_and(|signature| {
-                    function_type_contains_typeof(signature)
-                })
+                || object
+                    .call_signature
+                    .as_ref()
+                    .is_some_and(|signature| function_type_contains_typeof(signature))
         }
         ParsedType::Function(function) => function_type_contains_typeof(function),
-        ParsedType::Named(named) => named
-            .type_arguments
-            .iter()
-            .any(annotation_contains_typeof),
+        ParsedType::Named(named) => named.type_arguments.iter().any(annotation_contains_typeof),
         ParsedType::IndexedAccess(indexed) => {
             annotation_contains_typeof(&indexed.object_type)
                 || annotation_contains_typeof(&indexed.index_type)
@@ -306,6 +594,12 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                     .is_some_and(defer_value_annotation)
                 && let Some(annotation) = variable.declared_type.clone()
             {
+                // Deliberately a parent-traversing lookup, unlike the sibling
+                // guards: switching this one to `get_own_shared` measured +26
+                // false positives on tRPC (TS2304 on names that are declared,
+                // TS2339 on `path.join`) with no offsetting win, so the lazy
+                // annotation path depends on seeing the global. Tracked
+                // separately from the same-name clobber the other guards fix.
                 if exportable_values.get_shared(&variable.name).is_none() {
                     let kind = match variable.kind {
                         surge_ts_syntax::ParsedVariableKind::Var => SymbolKind::Var,
@@ -329,7 +623,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                 }
                 return;
             }
-            let existing_symbol = exportable_values.get_shared(&variable.name);
+            let existing_symbol = exportable_values.get_own_shared(&variable.name);
             let _ = check_variable_declaration_with_symbols(
                 variable.as_ref().clone(),
                 exportable_values,
@@ -367,7 +661,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
             }
         }
         ParsedStatement::NamespaceDeclaration(namespace) => {
-            if exportable_values.get(&namespace.name).is_none() {
+            if exportable_values.get_own(&namespace.name).is_none() {
                 let _ = exportable_values.insert(
                     namespace.name.clone(),
                     SymbolInfo {
@@ -377,8 +671,242 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                     },
                 );
             }
+            collect_namespace_member_value_symbols(
+                namespace,
+                &namespace.name,
+                exportable_values,
+                ctx,
+            );
         }
         _ => {}
+    }
+}
+
+/// Whether a namespace member's signature can be re-resolved from a *consumer's*
+/// site. Instantiation re-resolves the written annotations under the declaring
+/// file's module scope, which does not see the namespace's own body: zod's
+/// `util.assertEqual = <A, B>(_: AssertEqual<A, B>) => void` names a
+/// namespace-local alias, and publishing its signature turns every call into a
+/// `TS2304` for that alias. Only self-contained signatures — every named type is
+/// either one of the member's own type parameters or a declaration visible at
+/// file scope — get one; the rest keep the pre-existing permissive behavior.
+fn publishable_member_signature<'a>(
+    type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
+    parameter_types: impl Iterator<Item = &'a surge_ts_syntax::ParsedType>,
+    return_type: Option<&surge_ts_syntax::ParsedType>,
+    ctx: &CheckerContext,
+) -> bool {
+    // Only *generic* members need the qualified entry: a non-generic one is
+    // already callable through the namespace object, and publishing every member
+    // of every ambient namespace measured +300 MB peak RSS on tRPC.
+    if type_parameters.is_empty() {
+        return false;
+    }
+    let mut scan = SignatureNameScan::default();
+    for parameter_type in parameter_types {
+        collect_signature_type_names(parameter_type, &mut scan);
+    }
+    if let Some(return_type) = return_type {
+        collect_signature_type_names(return_type, &mut scan);
+    }
+    for type_parameter in type_parameters {
+        if let Some(constraint) = type_parameter.constraint.as_ref() {
+            collect_signature_type_names(constraint, &mut scan);
+        }
+        if let Some(default_type) = type_parameter.default_type.as_ref() {
+            collect_signature_type_names(default_type, &mut scan);
+        }
+    }
+    if scan.has_type_query {
+        return false;
+    }
+    scan.names.iter().all(|name| {
+        type_parameters
+            .iter()
+            .any(|type_parameter| type_parameter.name == **name)
+            || scan.bound.iter().any(|bound| bound == name)
+            || ctx.lookup_type_declaration(name).is_some()
+    })
+}
+
+/// Names referenced by a signature, split into free references and the ones a
+/// mapped type's key or an `infer` capture binds locally.
+#[derive(Default)]
+struct SignatureNameScan<'a> {
+    names: Vec<&'a str>,
+    bound: Vec<&'a str>,
+    has_type_query: bool,
+}
+
+fn collect_signature_type_names<'a>(
+    ty: &'a surge_ts_syntax::ParsedType,
+    scan: &mut SignatureNameScan<'a>,
+) {
+    use surge_ts_syntax::ParsedType;
+    match ty {
+        ParsedType::Named(named) => {
+            scan.names.push(named.name.as_str());
+            for argument in &named.type_arguments {
+                collect_signature_type_names(argument, scan);
+            }
+        }
+        ParsedType::TypeOf(_) => scan.has_type_query = true,
+        ParsedType::Infer(name) => scan.bound.push(name.as_str()),
+        ParsedType::Array(inner) | ParsedType::KeyOf(inner) => {
+            collect_signature_type_names(inner, scan);
+        }
+        ParsedType::Tuple(members)
+        | ParsedType::Union(members)
+        | ParsedType::Intersection(members) => {
+            for member in members.iter() {
+                collect_signature_type_names(member, scan);
+            }
+        }
+        ParsedType::Object(object) => {
+            for property in &object.properties {
+                collect_signature_type_names(&property.ty, scan);
+            }
+        }
+        ParsedType::Function(function) => {
+            for parameter in &function.parameters {
+                collect_signature_type_names(&parameter.ty, scan);
+            }
+            collect_signature_type_names(&function.return_type, scan);
+        }
+        ParsedType::IndexedAccess(indexed) => {
+            collect_signature_type_names(&indexed.object_type, scan);
+            collect_signature_type_names(&indexed.index_type, scan);
+        }
+        ParsedType::Mapped(mapped) => {
+            // The mapped key (`[k in …]`) binds `k` over the value type.
+            scan.bound.push(mapped.key_name.as_str());
+            collect_signature_type_names(&mapped.constraint, scan);
+            collect_signature_type_names(&mapped.value_type, scan);
+        }
+        ParsedType::Conditional(conditional) => {
+            collect_signature_type_names(&conditional.check_type, scan);
+            collect_signature_type_names(&conditional.extends_type, scan);
+            collect_signature_type_names(&conditional.true_type, scan);
+            collect_signature_type_names(&conditional.false_type, scan);
+        }
+        _ => {}
+    }
+}
+
+/// Publishes a namespace's value members under qualified `ns.member` keys, the
+/// value-side twin of the `ns.Member` type exports. The namespace object itself
+/// stays permissive (member *set* only), so a call through it would otherwise
+/// lose the member's arity, return type, and — for a generic member like zod's
+/// `util.arrayToEnum` — any chance of inferring its type arguments. The
+/// qualified entry carries the real signature, which the property-call path
+/// consults by name.
+pub(crate) fn collect_namespace_member_value_symbols(
+    namespace: &ParsedNamespaceDeclaration,
+    prefix: &str,
+    exportable_values: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for statement in &namespace.statements {
+        let inner = peel_exported_statement(statement);
+        match inner {
+            ParsedStatement::FunctionDeclaration(function) => {
+                if !publishable_member_signature(
+                    &function.type_parameters,
+                    function
+                        .parameters
+                        .iter()
+                        .filter_map(|p| p.declared_type.as_ref()),
+                    function.return_type.as_ref(),
+                    ctx,
+                ) {
+                    continue;
+                }
+                let key = format!("{prefix}.{}", function.name);
+                if exportable_values.get_own(&key).is_some() {
+                    continue;
+                }
+                let function_type = crate::checks::function::map_function_signature(
+                    &function.parameters,
+                    function.return_type.as_ref(),
+                    &function.type_parameters,
+                    None,
+                    ctx,
+                );
+                let function_signature = crate::checks::function::function_signature_info(
+                    &function.type_parameters,
+                    &function.parameters,
+                    function.return_type.as_ref(),
+                    &ctx.file_name,
+                );
+                let _ = exportable_values.insert(
+                    key,
+                    SymbolInfo {
+                        ty: Type::Function(function_type),
+                        kind: SymbolKind::Function,
+                        function_signature: Some(function_signature),
+                    },
+                );
+            }
+            ParsedStatement::VariableDeclaration(variable) => {
+                let Some(surge_ts_syntax::ParsedExpression::ArrowFunction(arrow)) =
+                    variable.initializer.as_ref()
+                else {
+                    continue;
+                };
+                if variable.declared_type.is_some()
+                    || !publishable_member_signature(
+                        &arrow.type_parameters,
+                        arrow
+                            .parameters
+                            .iter()
+                            .filter_map(|p| p.declared_type.as_ref()),
+                        arrow.return_type.as_ref(),
+                        ctx,
+                    )
+                {
+                    continue;
+                }
+                let key = format!("{prefix}.{}", variable.name);
+                if exportable_values.get_own(&key).is_some() {
+                    continue;
+                }
+                let function_type = crate::checks::function::map_function_signature(
+                    &arrow.parameters,
+                    arrow.return_type.as_ref(),
+                    &arrow.type_parameters,
+                    None,
+                    ctx,
+                );
+                let function_signature = crate::checks::function::function_signature_info(
+                    &arrow.type_parameters,
+                    &arrow.parameters,
+                    arrow.return_type.as_ref(),
+                    &ctx.file_name,
+                );
+                let _ = exportable_values.insert(
+                    key,
+                    SymbolInfo {
+                        ty: Type::Function(function_type),
+                        kind: match variable.kind {
+                            surge_ts_syntax::ParsedVariableKind::Var => SymbolKind::Var,
+                            surge_ts_syntax::ParsedVariableKind::Let => SymbolKind::Let,
+                            surge_ts_syntax::ParsedVariableKind::Const => SymbolKind::Const,
+                        },
+                        function_signature: Some(function_signature),
+                    },
+                );
+            }
+            ParsedStatement::NamespaceDeclaration(inner_namespace) => {
+                let inner_prefix = format!("{prefix}.{}", inner_namespace.name);
+                collect_namespace_member_value_symbols(
+                    inner_namespace,
+                    &inner_prefix,
+                    exportable_values,
+                    ctx,
+                );
+            }
+            _ => {}
+        }
     }
 }
 
