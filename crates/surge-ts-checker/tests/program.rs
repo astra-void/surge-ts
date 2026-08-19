@@ -7846,3 +7846,56 @@ fn umd_global_is_not_reported_under_allow_umd_global_access() {
         codes(&diagnostics)
     );
 }
+
+#[test]
+fn module_default_import_binds_class_type() {
+    let diagnostics = program(&[
+        (
+            "dispatcher.ts",
+            "declare class Dispatcher { id: string }\nexport default Dispatcher;",
+        ),
+        (
+            "index.ts",
+            "import Dispatcher from \"./dispatcher\";\nlet value: Dispatcher = 1 as any;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn module_default_import_re_export_carries_type() {
+    let diagnostics = program(&[
+        (
+            "dispatcher.ts",
+            "declare class Dispatcher { id: string }\nexport default Dispatcher;",
+        ),
+        (
+            "mid.ts",
+            "import Dispatcher from \"./dispatcher\";\nexport { Dispatcher };",
+        ),
+        (
+            "index.ts",
+            "import type { Dispatcher } from \"./mid\";\nlet value: Dispatcher = 1 as any;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+
+#[test]
+fn ambient_module_namespace_class_export_assignment_is_importable() {
+    let diagnostics = program(&[
+        (
+            "ambient.d.ts",
+            "declare module \"mystream\" {\n  namespace Stream {\n    class Readable { ended: boolean }\n  }\n  export = Stream;\n}",
+        ),
+        (
+            "index.ts",
+            "import type { Readable } from \"mystream\";\nlet value: Readable = 1 as any;",
+        ),
+    ]);
+
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
