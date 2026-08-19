@@ -223,19 +223,31 @@ pub(crate) fn explicit_type_argument_substitution(
     ctx: &mut CheckerContext,
 ) -> TypeParameterSubstitution {
     let mut substitution = TypeParameterSubstitution::new();
-    for (type_parameter, type_argument) in function_signature
-        .type_parameters
-        .iter()
-        .zip(type_arguments.iter())
-    {
-        substitution.insert(
-            type_parameter.name.clone(),
-            map_parsed_type_with_substitution(
+    for (index, type_parameter) in function_signature.type_parameters.iter().enumerate() {
+        // A call may supply fewer type arguments than the signature declares;
+        // the rest take their declared default. Leaving them out of the
+        // substitution let the *name* survive into the instantiated
+        // parameter/return types, where it read as an unknown type
+        // (`registry<GlobalMeta>()` against `registry<T, S>(): Registry<T, S>`
+        // reported a false TS2304 for `S`). Defaults resolve under the
+        // substitution built so far, so one that names an earlier parameter
+        // (`S extends T = T`) sees it.
+        let resolved = match type_arguments.get(index) {
+            Some(type_argument) => map_parsed_type_with_substitution(
                 type_argument.clone(),
                 ctx,
                 &TypeParameterSubstitution::new(),
             ),
-        );
+            None => match type_parameter.default_type.clone() {
+                Some(default_type) => {
+                    map_parsed_type_with_substitution(default_type, ctx, &substitution)
+                }
+                // No default: the parameter is genuinely unconstrained here, so
+                // it degrades rather than leaking its name.
+                None => Type::Unknown,
+            },
+        };
+        substitution.insert(type_parameter.name.clone(), resolved);
     }
     substitution
 }

@@ -5263,6 +5263,11 @@ path = "tests/smoke/function_type_literal_parameter_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "partial-explicit-type-arguments"
+path = "tests/smoke/partial_explicit_type_arguments.ts"
+expected_diagnostics = []
+
+[[case]]
 name = "member-assignment-narrowing"
 path = "tests/smoke/member_assignment_narrowing.ts"
 expected_diagnostics = ["TS2322"]
