@@ -193,6 +193,22 @@ impl Type {
             // property, where the old eager `any` shape emitted nothing.
             Type::Any => Some(Type::Any),
             Type::Reference(reference) => reference.resolve().get_property_access_type(name),
+            // Every member must declare the property, and the read is their
+            // union. Without this a nominal reference that *resolves* to a union
+            // answered `None` for every property, which the callers report as a
+            // missing member (zod's `$ZodInternalIssue<T>`, a union of 12
+            // `Identity<…>` references that all carry `path`).
+            Type::Union(union) => {
+                let mut members = Vec::with_capacity(union.types().len());
+                for member in union.types().iter() {
+                    if matches!(member, Type::Undefined) {
+                        members.push(Type::Undefined);
+                        continue;
+                    }
+                    members.push(member.get_property_access_type(name)?);
+                }
+                (!members.is_empty()).then(|| crate::union_type(members))
+            }
             _ => None,
         }
     }
