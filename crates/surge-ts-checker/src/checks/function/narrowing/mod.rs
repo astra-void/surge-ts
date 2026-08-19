@@ -242,17 +242,24 @@ impl ReferenceGuard<'_> {
                 let Type::Union(union) = &effective else {
                     return None;
                 };
-                let kept: Vec<Type> = union
+                // Same scan-before-clone rule as the truthiness split: an
+                // assignment that rules nothing out must not rebuild the union.
+                let kept_count = union
                     .types()
                     .iter()
                     .filter(|member| surge_ts_types::is_assignable_to(assigned, member))
-                    .cloned()
-                    .collect();
-                let narrowed = if kept.is_empty() {
+                    .count();
+                if kept_count == 0 || kept_count == union.types().len() {
                     return None;
-                } else {
-                    union_type(kept)
-                };
+                }
+                let narrowed = union_type(
+                    union
+                        .types()
+                        .iter()
+                        .filter(|member| surge_ts_types::is_assignable_to(assigned, member))
+                        .cloned()
+                        .collect(),
+                );
                 (narrowed != *ty).then_some((narrowed, false))
             }
         }
@@ -1357,15 +1364,23 @@ fn narrow_union_by_property_truthiness_in_scope(
     let Type::Union(union) = &peeled else {
         return;
     };
+    // Decide before cloning: the overwhelmingly common case is a union the test
+    // does not partition at all, and building the kept vector first paid a full
+    // member clone for every one of them.
+    let dropped = union
+        .types()
+        .iter()
+        .filter(|member| path_truthiness(member, path) == Some(!branch_is_true))
+        .count();
+    if dropped == 0 || dropped == union.types().len() {
+        return;
+    }
     let kept: Vec<Type> = union
         .types()
         .iter()
         .filter(|member| path_truthiness(member, path) != Some(!branch_is_true))
         .cloned()
         .collect();
-    if kept.is_empty() || kept.len() == union.types().len() {
-        return;
-    }
     let declared = symbol.ty.clone();
     let narrowed_symbol = SymbolInfo {
         ty: union_type(kept),
