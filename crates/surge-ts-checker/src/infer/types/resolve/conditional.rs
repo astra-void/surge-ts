@@ -298,6 +298,28 @@ fn bind_infer_captures(
                 );
             }
         }
+        // `T extends { File: infer F }` — line up each written member with the
+        // check type's property of the same name. zod's `File` fallback
+        // (`typeof globalThis extends { File: infer F … }`) captures this way.
+        ParsedType::Object(pattern) => {
+            let peeled = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::ConditionalType,
+                || check.peeled(),
+            );
+            for property in &pattern.properties {
+                if let Some(check_property) = peeled.get_property_access_type(&property.name) {
+                    bind_infer_captures(
+                        &property.ty,
+                        &check_property,
+                        substitution,
+                        ctx,
+                        resolving,
+                        depth,
+                        reference_positional,
+                    );
+                }
+            }
+        }
         // `(props: infer P) => infer R` matched against a concrete function type:
         // line up value parameters and the return position so captures inside a
         // function pattern bind. This recovers the props type for
@@ -389,7 +411,19 @@ fn bind_infer_captures(
                 );
                 return;
             }
-            if reference_positional && let Type::Reference(reference) = check {
+            // A same-shaped reference (`Box<infer T>` against `Ref(Box<number>)`)
+            // binds positionally off the reference's own arguments. A reference
+            // that carries NO arguments has nothing to line up, so it must fall
+            // through to the structural expansion below instead of returning with
+            // every capture still unbound — `ComponentProps<typeof Component>`
+            // matches `JSXElementConstructor<infer Props>` against a
+            // `ForwardRefExoticComponent` reference whose arguments live in its
+            // resolved body, and returning here left `Props` as the seeded
+            // placeholder, collapsing the whole conditional to `unknown`.
+            if reference_positional
+                && let Type::Reference(reference) = check
+                && !reference.arguments.is_empty()
+            {
                 for (pattern_argument, check_argument) in
                     named.type_arguments.iter().zip(reference.arguments.iter())
                 {
@@ -531,6 +565,11 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
                 collect_infer_names(argument, names);
             }
         }
+        ParsedType::Object(object) => {
+            for property in &object.properties {
+                collect_infer_names(&property.ty, names);
+            }
+        }
         _ => {}
     }
 }
@@ -541,6 +580,10 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
 fn parsed_type_contains_infer(ty: &ParsedType) -> bool {
     match ty {
         ParsedType::Infer(_) => true,
+        ParsedType::Object(object) => object
+            .properties
+            .iter()
+            .any(|property| parsed_type_contains_infer(&property.ty)),
         ParsedType::Array(inner) | ParsedType::KeyOf(inner) => parsed_type_contains_infer(inner),
         ParsedType::Union(members)
         | ParsedType::Intersection(members)

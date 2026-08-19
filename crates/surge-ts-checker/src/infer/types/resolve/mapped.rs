@@ -112,15 +112,17 @@ pub(crate) fn resolve_mapped_type(
             had_error = true;
         }
 
-        let source_optional = homomorphic_source
+        let source_property = homomorphic_source
             .as_ref()
-            .and_then(|object| object.get_property(&key))
-            .is_some_and(|property| property.is_optional());
+            .and_then(|object| object.get_property(&key));
+        let source_optional = source_property.is_some_and(|property| property.is_optional());
+        let source_method = source_property.is_some_and(|property| property.is_method());
         properties.insert(
             key.into(),
             ObjectProperty {
                 ty: resolved_value.ty,
                 optional: mapped.optional || source_optional,
+                method: source_method,
             },
         );
     }

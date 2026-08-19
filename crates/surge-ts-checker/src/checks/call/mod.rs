@@ -51,6 +51,31 @@ pub(crate) fn check_call_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    check_call_like_with_expected_type(
+        callee_name,
+        callee_span,
+        call_span,
+        type_arguments,
+        arguments,
+        None,
+        symbols,
+        ctx,
+    )
+}
+
+/// `check_call_like` with the call's contextual type, so a type parameter that
+/// occurs only in the return type (`const c: Ctor<MyZ> = make("x", (inst) => …)`)
+/// can be inferred from it instead of degrading every callback parameter it types.
+pub(crate) fn check_call_like_with_expected_type(
+    callee_name: &str,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
     record_call_resolution();
     let call_start = Instant::now();
     // A call may target a module-scope binding declared later in the file when it
@@ -80,6 +105,19 @@ pub(crate) fn check_call_like(
         return None;
     }
 
+    // The global `Function` interface is callable with any arguments in tsc even
+    // though it declares no call signature, so it has to be answered before the
+    // peel below turns it into a signature-less object.
+    if surge_ts_types::is_global_function_interface(&symbol.ty) {
+        for argument in arguments {
+            let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+        }
+        record_program_timing(ctx.timings.as_ref(), |timings| {
+            timings.call_expression_checking += call_start.elapsed()
+        });
+        return Some(Type::Any);
+    }
+
     // A callee typed by a named declaration (`declare var Number: NumberConstructor`)
     // is a nominal reference; peel it so its call/construct signature is visible.
     let callee_ty =
@@ -97,6 +135,7 @@ pub(crate) fn check_call_like(
                     type_arguments,
                     callee_span,
                     arguments,
+                    expected_return_type,
                     symbols,
                     ctx,
                 );
@@ -600,7 +639,13 @@ pub(crate) fn check_function_type_call(
                     continue;
                 }
 
-                if !type_contains_unknown(&parameter_type)
+                // A `never` parameter is an exhaustiveness assertion
+                // (`util.assertNever(check)`): reporting it requires having
+                // narrowed the argument to `never`, which surge's narrowing only
+                // under-approximates, so every incompletely-narrowed residual
+                // would read as a false positive.
+                if !matches!(parameter_type, Type::Never)
+                    && !type_contains_unknown(&parameter_type)
                     && !type_contains_unknown(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {

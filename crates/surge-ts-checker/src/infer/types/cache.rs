@@ -54,6 +54,19 @@ pub(crate) fn type_declaration_alias_id(
     }
 }
 
+thread_local! {
+    /// Bumped every time the named-type memo reports a declaration that is
+    /// *mid-resolution on another frame* as degraded. That answer depends on
+    /// which resolutions are in flight, not on the declaration, so any
+    /// expansion that observed one is not a pure function of its own inputs
+    /// and must not be memoized for reuse at a different site.
+    static IN_FLIGHT_DEGRADED_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn in_flight_degraded_read_epoch() -> u64 {
+    IN_FLIGHT_DEGRADED_READS.get()
+}
+
 pub(crate) fn get_cached_named_type_resolution(
     ctx: &CheckerContext,
     key: &DeclarationResolutionKey,
@@ -73,6 +86,7 @@ pub(crate) fn get_cached_named_type_resolution(
             if resolving.iter().any(|current| current == key) {
                 None
             } else {
+                IN_FLIGHT_DEGRADED_READS.with(|reads| reads.set(reads.get().wrapping_add(1)));
                 Some(ResolvedType {
                     ty: Type::Unknown,
                     had_error: true,
@@ -80,6 +94,87 @@ pub(crate) fn get_cached_named_type_resolution(
             }
         }
         None => None,
+    }
+}
+
+/// Module-scoped instantiation memo: the same interface declaration expanded
+/// again under the *same* substitution, inside the same module-analysis (or
+/// file-check) region that owns `resolved_named_types`.
+///
+/// The eager expansion of a mutually recursive user interface cluster is
+/// combinatorial: zod's v3 `ZodType` hierarchy re-expands `ZodEffectsDef` 47.5k
+/// times per run under only three distinct substitutions, because the cluster
+/// degrades (an unmodelled `enum` member type in `typeName`) and a degraded
+/// expansion is uncacheable program-wide by design. This tier is not
+/// program-wide: it lives in the same map, with the same lifetime and the same
+/// environment stamp, as the non-generic named-type memo that already stores
+/// `had_error` results — `replace_resolved_named_types` drops it whenever the
+/// owning module or file changes, so a degraded shape can never outlive the
+/// scope that produced it.
+///
+/// Entries are stored under [`DeclarationNamespace::TypeSignatureContext`] with
+/// a substitution fingerprint appended to the name, so they cannot collide with
+/// the non-generic entries the same map holds under `Type`.
+pub(crate) fn module_instantiation_memo_key(
+    declaration_key: &DeclarationResolutionKey,
+    fingerprint: u64,
+) -> DeclarationResolutionKey {
+    DeclarationResolutionKey {
+        file_name: declaration_key.file_name.clone(),
+        name: Arc::from(format!("{}\u{2}{fingerprint:016x}", declaration_key.name)),
+        namespace: DeclarationNamespace::TypeSignatureContext,
+    }
+}
+
+pub(crate) fn get_module_instantiation_memo(
+    ctx: &CheckerContext,
+    key: &DeclarationResolutionKey,
+) -> Option<ResolvedType> {
+    let cache = ctx.resolved_named_types.lock().ok()?;
+    match cache.get(key) {
+        Some(DeclarationResolutionState::Resolved { ty, had_error }) => Some(ResolvedType {
+            ty: ty.clone(),
+            had_error: *had_error,
+        }),
+        _ => None,
+    }
+}
+
+/// Upper bound on entries one module-scoped memo map may hold, overridable via
+/// `SURGE_MODULE_MEMO_CAP`. An over-cap expansion is simply not stored (it is
+/// re-derived on demand), so any cap produces identical diagnostics — only time
+/// and memory change. Sized well above what a large module needs: zod's whole
+/// run distinguishes 11.4k `(declaration, substitution)` pairs across *every*
+/// module, so the cap exists to bound a pathological declaration rather than to
+/// shape normal projects.
+const MODULE_INSTANTIATION_MEMO_CAP: usize = 65_536;
+
+fn module_instantiation_memo_cap() -> usize {
+    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("SURGE_MODULE_MEMO_CAP")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(MODULE_INSTANTIATION_MEMO_CAP)
+    })
+}
+
+pub(crate) fn store_module_instantiation_memo(
+    ctx: &CheckerContext,
+    key: DeclarationResolutionKey,
+    resolved: &ResolvedType,
+) {
+    if let Ok(mut cache) = ctx.resolved_named_types.lock() {
+        if cache.len() >= module_instantiation_memo_cap() {
+            return;
+        }
+        cache.insert(
+            key,
+            DeclarationResolutionState::Resolved {
+                ty: resolved.ty.clone(),
+                had_error: resolved.had_error,
+            },
+        );
     }
 }
 
@@ -1986,6 +2081,7 @@ mod physical_interface_cache_tests {
                 }),
                 optional: false,
                 is_abstract: false,
+                is_method: true,
                 ty: ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
                     parameters: Vec::new(),
                     return_type: Box::new(ParsedType::String),

@@ -15,6 +15,111 @@ fn extended_interface_cache_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_IFACE_CACHE_ALL").is_some())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModuleInstantiationMemoMode {
+    Off,
+    /// Default. The module-analysis phase only, where 99% of the repeated
+    /// expansions are (measured on zod: 1.14M of 1.15M degradation events).
+    Analysis,
+    /// Opt-in `SURGE_IFACE_MODULE_MEMO=all`: also memoize during the check
+    /// phase. Measured as diagnostic-affecting on trpc — it removes the
+    /// `Type 'QueryClient' is not assignable to type 'QueryClient'` false
+    /// positive by making the two package copies' expansions agree — so it is
+    /// not the default until that nominal-identity gap is resolved on its own
+    /// terms.
+    All,
+}
+
+fn module_instantiation_memo_mode() -> ModuleInstantiationMemoMode {
+    static MODE: std::sync::OnceLock<ModuleInstantiationMemoMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(
+        || match std::env::var("SURGE_IFACE_MODULE_MEMO").as_deref().ok() {
+            Some("0") => ModuleInstantiationMemoMode::Off,
+            Some("all") => ModuleInstantiationMemoMode::All,
+            _ => ModuleInstantiationMemoMode::Analysis,
+        },
+    )
+}
+
+fn module_instantiation_memo_active() -> bool {
+    match module_instantiation_memo_mode() {
+        ModuleInstantiationMemoMode::Off => false,
+        ModuleInstantiationMemoMode::Analysis => !crate::program::in_check_phase(),
+        ModuleInstantiationMemoMode::All => true,
+    }
+}
+
+/// Identity of everything outside `(declaration, substitution)` that a body
+/// expansion can read. The components mirror `DeclarationEnvironmentKey`, which
+/// is the checker's existing statement of what makes two resolution contexts
+/// interchangeable:
+///
+/// * the phase and stage/attempt counters;
+/// * whether any type-parameter scope is open — that flips
+///   `concrete_instantiation` for every nested reference, and so whether they
+///   defer or expand;
+/// * the versioned identity of the live declaration table and of every layer of
+///   the scope the body actually resolves under. An interface merged by a later
+///   augmentation, or a scope layer that gained declarations between binding
+///   rounds, bumps a version and lands in a different bucket — without this,
+///   `NodeJS.ProcessEnv` (merged from several files, its index signature
+///   inherited through `extends Dict<string>`) reused a pre-merge expansion;
+/// * the per-file module-scope map, which `module_scope_for_file` falls back to
+///   when a declaration has no pre-attached scope, and which
+///   `with_type_declaration_scope` leaves as the *caller's* scope when the
+///   declaration's own is `None`.
+fn module_instantiation_memo_fingerprint(
+    interface: &InterfaceInfo,
+    local_substitution: &TypeParameterSubstitution,
+    declaration_effective_scope: &Option<Arc<crate::symbols::TypeDeclarationScope>>,
+    ctx: &CheckerContext,
+) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = surge_ts_types::fx::FxHasher::default();
+    hasher.write_u8(u8::from(crate::program::in_check_phase()));
+    hasher.write_u8(u8::from(
+        ctx.type_parameter_scopes
+            .iter()
+            .all(|scope| scope.is_empty()),
+    ));
+    hasher.write_u64(ctx.resolution_stage_counter);
+    hasher.write_u64(ctx.environment_attempt);
+    let (table_instance, table_version) = ctx.type_declarations.snapshot_identity();
+    hasher.write_u64(table_instance);
+    hasher.write_u64(table_version);
+    hasher.write_usize(if ctx.module_scope_by_file.is_empty() {
+        0
+    } else {
+        Arc::as_ptr(&ctx.module_scope_by_file) as *const () as usize
+    });
+    let effective_scope = declaration_effective_scope
+        .as_ref()
+        .or(ctx.type_declaration_scope.as_ref());
+    match effective_scope {
+        None => hasher.write_u8(0),
+        Some(scope) => {
+            hasher.write_u8(1);
+            for layer in scope.layers() {
+                let (instance, version) = layer.snapshot_identity();
+                hasher.write_u64(instance);
+                hasher.write_u64(version);
+            }
+        }
+    }
+    for (name, ty) in local_substitution.iter() {
+        hasher.write(name.as_bytes());
+        hasher.write_u8(u8::from(local_substitution.is_placeholder(name)));
+        // Display-inclusive: `Type` equality compares references by
+        // (id, arguments), so two nominally equal argument tuples that *render*
+        // differently must not share an entry (the canonical-store
+        // display-substitution class).
+        hasher.write_u64(crate::speculative::display_type_fingerprint(ty));
+    }
+    hasher.write(interface.name.as_bytes());
+    hasher.write(interface.file_name.as_bytes());
+    hasher.finish()
+}
+
 /// Opt-in (`SURGE_TRACE_HAD_ERROR=1`) per-origin trace of every `had_error`
 /// creation site: lookup misses (with scope/phase provenance), interface
 /// base/member/argument taint, alias cycles/arguments, conditional failures,
@@ -261,8 +366,37 @@ pub(crate) fn resolve_interface(
         }
     }
 
+    let module_memo_key = module_instantiation_memo_active().then(|| {
+        module_instantiation_memo_key(
+            &declaration_key,
+            module_instantiation_memo_fingerprint(
+                interface,
+                &local_substitution,
+                &declaration_effective_scope,
+                ctx,
+            ),
+        )
+    });
+    if let Some(key) = module_memo_key.as_ref()
+        && let Some(memoized) = get_module_instantiation_memo(ctx, key)
+    {
+        resolving.pop();
+        return memoized;
+    }
+    let in_flight_reads_before = in_flight_degraded_read_epoch();
+
+    // Derive the namespace prefix from the *original* declared name, not the
+    // local binding (see the matching comment in `resolve_type_alias`). A member
+    // rebound under a differently-spelled namespace alias — lucide's
+    // `import * as react from "react"` registers React's
+    // `ForwardRefExoticComponent` as `react.ForwardRefExoticComponent` — would
+    // otherwise look its siblings up under the alias prefix, so
+    // `extends NamedExoticComponent` missed and the interface silently lost the
+    // inherited call signature that makes it a component type.
     let namespace_prefix = interface
-        .name
+        .declared_name
+        .as_deref()
+        .unwrap_or(&interface.name)
         .rsplit_once('.')
         .map(|(prefix, _)| prefix.to_string());
     let is_namespace_member = namespace_prefix.is_some();
@@ -326,7 +460,11 @@ pub(crate) fn resolve_interface(
 
     let had_error = resolved.had_error || arguments_had_error;
     if arguments_had_error && !resolved.had_error && had_error_trace_enabled() {
-        eprintln!("[had-error] iface-args '{}' cp={}", interface.name, crate::program::in_check_phase());
+        eprintln!(
+            "[had-error] iface-args '{}' cp={}",
+            interface.name,
+            crate::program::in_check_phase()
+        );
     }
     let emitted_diagnostics = ctx.diagnostics().len() != diagnostics_before
         || ctx.utility_diagnostic_keys.len() != utility_keys_before;
@@ -376,7 +514,29 @@ pub(crate) fn resolve_interface(
         creation_before,
     );
 
-    ResolvedType { ty, had_error }
+    let resolved = ResolvedType { ty, had_error };
+    // Store only an expansion that is a pure function of its own inputs:
+    //   - `cycle_free` — no re-entry below this frame, so nothing on the
+    //     caller's `resolving` stack shaped the result;
+    //   - no diagnostics (a reused entry cannot re-emit them);
+    //   - the expansion-degradation epoch is unchanged, so no nested lazy peel
+    //     was cut short by *this consumer's* peel-stack depth (the transient
+    //     `unknown` class that drifted zod diagnostics when it was interned);
+    //   - no named-type memo entry was read while it was mid-resolution on
+    //     another frame.
+    // `had_error` on its own is allowed: a name that is absent from this
+    // declaration's own resolution scope (an unmodelled `enum` member type, a
+    // dotted namespace reference) misses identically at every site inside the
+    // region this map covers, and the miss emits nothing.
+    if let Some(key) = module_memo_key
+        && cycle_free
+        && !emitted_diagnostics
+        && !degraded_during_expansion
+        && in_flight_degraded_read_epoch() == in_flight_reads_before
+    {
+        store_module_instantiation_memo(ctx, key, &resolved);
+    }
+    resolved
 }
 
 pub(crate) fn resolve_interface_declaration(
@@ -430,7 +590,12 @@ pub(crate) fn resolve_interface_declaration(
         );
         had_error |= resolved_base.had_error;
         if resolved_base.had_error && had_error_trace_enabled() {
-            eprintln!("[had-error] base '{}' cp={} in file {}", base.name, crate::program::in_check_phase(), ctx.file_name);
+            eprintln!(
+                "[had-error] base '{}' cp={} in file {}",
+                base.name,
+                crate::program::in_check_phase(),
+                ctx.file_name
+            );
         }
         // A base that resolved with errors may be missing members surge could
         // not model; the derived member set is incomplete, so keep it open
@@ -512,8 +677,17 @@ pub(crate) fn resolve_interface_declaration(
         }
     }
 
-    let mut own_method_group_contaminated = surge_ts_types::fx::FxHashMap::<String, bool>::default();
+    let mut own_method_group_contaminated =
+        surge_ts_types::fx::FxHashMap::<String, bool>::default();
     let mut own_method_group_clean = surge_ts_types::fx::FxHashMap::<String, bool>::default();
+    // Names this body has already contributed. Same-named members *within* one
+    // body (or across declaration-merged bodies) are overloads and fold together;
+    // an *inherited* same-named member is instead replaced, since a derived
+    // class/interface member shadows the base's. Folding across the heritage
+    // boundary blended `Bench.addEventListener<K, T = EventsMap[K]>` with the
+    // `EventTarget` one it overrides and cost the callback its contextual type.
+    let mut own_member_names =
+        surge_ts_types::fx::FxHashSet::<&str>::with_hasher(Default::default());
     for (member_index, member) in members.iter().enumerate() {
         let is_method = matches!(member.ty, ParsedType::Function(_));
         let reason = if is_method {
@@ -652,7 +826,9 @@ pub(crate) fn resolve_interface_declaration(
         if property_type.had_error && had_error_trace_enabled() {
             eprintln!(
                 "[had-error] member '{}' cp={} in file {}",
-                member.name, crate::program::in_check_phase(), ctx.file_name
+                member.name,
+                crate::program::in_check_phase(),
+                ctx.file_name
             );
         }
 
@@ -675,8 +851,9 @@ pub(crate) fn resolve_interface_declaration(
         // gaining `from` overloads in lib.es2015.core). Collapse them into one
         // permissive signature so a call matching any overload's arity is
         // accepted, rather than last-wins dropping every overload but one.
-        if let (Some(existing), Type::Function(incoming)) =
-            (properties.get(member.name.as_str()), &property_type.ty)
+        if own_member_names.contains(member.name.as_str())
+            && let (Some(existing), Type::Function(incoming)) =
+                (properties.get(member.name.as_str()), &property_type.ty)
             && let Type::Function(existing_fn) = &existing.ty
         {
             let overload_key = member_template
@@ -753,8 +930,10 @@ pub(crate) fn resolve_interface_declaration(
                     ObjectProperty::optional(Type::Function(merged))
                 } else {
                     ObjectProperty::required(Type::Function(merged))
-                },
+                }
+                .with_method(existing.method || member.is_method),
             );
+            own_member_names.insert(member.name.as_str());
             continue;
         }
 
@@ -762,9 +941,11 @@ pub(crate) fn resolve_interface_declaration(
             ObjectProperty::optional(property_type.ty)
         } else {
             ObjectProperty::required(property_type.ty)
-        };
+        }
+        .with_method(member.is_method);
 
         properties.insert(member.name.as_str().into(), object_property);
+        own_member_names.insert(member.name.as_str());
     }
 
     // An own index signature takes precedence; otherwise inherit one from a
@@ -873,6 +1054,27 @@ pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> F
         .enumerate()
         .map(|(index, ty)| match shorter.parameters().get(index) {
             Some(other) if other == ty => ty.clone(),
+            // Two callback parameters that differ only in their *return* fold
+            // the same way the overloads themselves do. Collapsing them to `any`
+            // instead threw away the callback's own parameter types, so an arrow
+            // written at the call site (`schema.refine((d) => …)`, whose
+            // overloads are `(arg: Output) => arg is R` and `(arg: Output) =>
+            // unknown`) lost its contextual type and every parameter became an
+            // implicit any. Differing *parameter* lists still collapse: merging
+            // those changes which arguments the slot accepts, which measured as
+            // a new false TS2741 on ofetch.
+            Some(Type::Function(other))
+                if matches!(ty, Type::Function(current)
+                    if current.parameters() == other.parameters()
+                        && current.is_variadic() == other.is_variadic()
+                        && current.required_parameter_count()
+                            == other.required_parameter_count()) =>
+            {
+                let Type::Function(current) = ty else {
+                    unreachable!("guarded above")
+                };
+                Type::Function(merge_overload_signatures(current, other))
+            }
             Some(_) => Type::Any,
             None => ty.clone(),
         })
@@ -883,14 +1085,13 @@ pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> F
         .required_parameter_count()
         .min(b.required_parameter_count());
     // Which overload's return applies depends on the arguments, which a single
-    // merged signature cannot express. When one overload's return did not
-    // resolve (`createElement<K>(…): HTMLElementTagNameMap[K]` alongside the
-    // plain `createElement(…): HTMLElement`), committing to the *resolved* one
-    // reports the other overload's calls against a type they never had — so the
-    // group degrades instead. Two concrete returns keep the existing choice.
-    let return_type = if a.return_type() != b.return_type()
-        && (a.return_type().is_unknown() || b.return_type().is_unknown())
-    {
+    // merged signature cannot express, so *any* disagreement degrades the merged
+    // return rather than committing to one overload's answer: picking the
+    // shorter one reported `err.format(mapper)` (whose overload returns
+    // `$ZodFormattedError<T, U>`) against the no-argument overload's
+    // `$ZodFormattedError<T>`. Extending this from the one-unresolved-return case
+    // to every disagreement cost no false negatives on any corpus.
+    let return_type = if a.return_type() != b.return_type() {
         Type::Unknown
     } else {
         shorter.return_type().clone()

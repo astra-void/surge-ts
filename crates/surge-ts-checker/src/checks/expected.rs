@@ -52,6 +52,43 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
     fallback_span: Option<SyntaxTextSpan>,
     target_span: Option<SyntaxTextSpan>,
     expected_type: Option<&Type>,
+    expected_diagnostic: ExpectedTypeDiagnostic,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    // A degraded expectation carries no contextual parameter types, so any
+    // callback or method written against it would be reported implicit-any for
+    // a shape surge failed to model rather than one the source omits.
+    if matches!(expected_type, Some(Type::Unknown)) {
+        ctx.degraded_expected_type_depth += 1;
+        let result = evaluate_expression_with_expected_type_inner(
+            expression,
+            fallback_span,
+            target_span,
+            expected_type,
+            expected_diagnostic,
+            symbols,
+            ctx,
+        );
+        ctx.degraded_expected_type_depth -= 1;
+        return result;
+    }
+    evaluate_expression_with_expected_type_inner(
+        expression,
+        fallback_span,
+        target_span,
+        expected_type,
+        expected_diagnostic,
+        symbols,
+        ctx,
+    )
+}
+
+fn evaluate_expression_with_expected_type_inner(
+    expression: &ParsedExpression,
+    fallback_span: Option<SyntaxTextSpan>,
+    target_span: Option<SyntaxTextSpan>,
+    expected_type: Option<&Type>,
     _expected_diagnostic: ExpectedTypeDiagnostic,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -82,6 +119,33 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
             ctx,
         ) {
             Some(result_type) => InferredExpression::Known(result_type),
+            None => InferredExpression::Unknown,
+        };
+    }
+
+    // A generic call whose type parameter occurs only in the return type
+    // (`const c: Ctor<MyZ> = make("x", (inst) => …)`) can infer it from the
+    // contextual type alone. Route the call through the expected-type entry with
+    // the *un-peeled* expected type, so the inference matches type argument for
+    // type argument against the declared return reference.
+    if let ParsedExpression::Call {
+        callee_name,
+        callee_span,
+        type_arguments,
+        arguments,
+    } = expression
+    {
+        return match super::call::check_call_like_with_expected_type(
+            callee_name,
+            *callee_span,
+            None,
+            type_arguments,
+            arguments,
+            Some(expected_type),
+            symbols,
+            ctx,
+        ) {
+            Some(return_type) => InferredExpression::Known(return_type),
             None => InferredExpression::Unknown,
         };
     }
@@ -128,6 +192,28 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
         }
     }
 
+    // A function contextually typed by a union (`Hook | Hook[]`, the shape hook
+    // options take) draws its signature from the union's single callable member,
+    // mirroring tsc's `getContextualSignature`. Without it the arrow is evaluated
+    // context-free and its parameters become implicit any (false TS7006). A union
+    // with several callable members stays context-free: picking one there needs
+    // signature matching and guessing wrong types the parameters as the wrong shape.
+    if let (Type::Union(union), ParsedExpression::ArrowFunction(_)) = (expected_type, expression) {
+        let mut callable = union.types().iter().filter(|member| is_contextual_callable(member));
+        if let (Some(member), None) = (callable.next(), callable.next()) {
+            let member = with_type_copy_reason(TypeCopyReason::ExpectedType, || member.clone());
+            return evaluate_expression_with_expected_type_anchored(
+                expression,
+                fallback_span,
+                target_span,
+                Some(&member),
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            );
+        }
+    }
+
     if let ParsedExpression::ConstAssertion {
         expression: inner, ..
     } = expression
@@ -140,6 +226,58 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
             _expected_diagnostic,
             symbols,
             ctx,
+        );
+    }
+
+    // `fallback ?? (…)` and `fallback || (…)` produce the whole expression's
+    // value from either operand, so tsc hands the contextual type to the right
+    // one just as it does to a ternary's branches. Without this an arrow written
+    // as the default (`opts.onSuccess ?? ((options) => …)`) is evaluated
+    // context-free and its parameters become implicit any (false TS7006). The
+    // left operand keeps driving its own narrowing and stays context-free.
+    if let ParsedExpression::NullishCoalescing {
+        left,
+        left_span,
+        right,
+        right_span,
+    } = expression
+    {
+        let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+        let right_result = evaluate_expression_with_expected_type_anchored(
+            right,
+            right_span.or(fallback_span),
+            target_span,
+            Some(expected_type),
+            _expected_diagnostic,
+            symbols,
+            ctx,
+        );
+        return join_nullish_coalescing(left_result, right_result);
+    }
+
+    if let ParsedExpression::Logical {
+        left,
+        left_span,
+        operator: operator @ surge_ts_syntax::ParsedLogicalOperator::Or,
+        right,
+        right_span,
+        ..
+    } = expression
+    {
+        let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+        let right_result = evaluate_expression_with_expected_type_anchored(
+            right,
+            right_span.or(fallback_span),
+            target_span,
+            Some(expected_type),
+            _expected_diagnostic,
+            symbols,
+            ctx,
+        );
+        return crate::checks::ops::evaluate_logical_expression(
+            *operator,
+            left_result,
+            right_result,
         );
     }
 
@@ -217,8 +355,20 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
                 .iter()
                 .any(|name| member.get_property_access_type(name).is_some())
         });
+        // The sole match must also *declare* one of the written properties: a
+        // string index signature answers every name, so a member that only
+        // index-accesses them models nothing about the literal and typing it
+        // against that member reports the member's own required properties as
+        // missing.
         let unambiguous = match (matching.next(), matching.next()) {
-            (Some(member), None) if !written.is_empty() => Some(member),
+            (Some(member), None)
+                if !written.is_empty()
+                    && written
+                        .iter()
+                        .any(|name| member_declares_property(member, name)) =>
+            {
+                Some(member)
+            }
             _ => None,
         };
         if let Some(member) = unambiguous {
@@ -231,6 +381,18 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
                 symbols,
                 ctx,
             );
+        }
+
+        // Several members declare the written properties (an overload group's
+        // merged parameter, where every member extends the same base). tsc types
+        // the literal by the union of each property across those members; surge
+        // cannot pick a member, so it evaluates context-free — but an
+        // implicit-any report there would describe that gap, not the source.
+        if union_members_are_all_objects(union) {
+            ctx.degraded_expected_type_depth += 1;
+            let result = evaluate_expression(expression, fallback_span, symbols, ctx);
+            ctx.degraded_expected_type_depth -= 1;
+            return result;
         }
     }
 
@@ -259,6 +421,78 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
     }
 
     evaluate_expression(expression, fallback_span, symbols, ctx)
+}
+
+/// Whether `member` declares `name` as a real property.
+///
+/// A string index signature (and the `Object.prototype` member fallback) answers
+/// every name, so `get_property_access_type` cannot tell the member that models
+/// the written property from one that merely permits it. Picking the latter
+/// types the literal against the wrong shape — e.g. an object literal against
+/// `ReadableStream | ... | Record<string, any>` was reported as missing
+/// `ReadableStream`'s members once a `.d.ts` merge gave that interface a
+/// degraded index signature.
+fn member_declares_property(member: &Type, name: &str) -> bool {
+    matches!(member.peeled(), Type::Object(object) if object.properties.contains_key(name))
+}
+
+/// Whether every member of a union is an object type — the shape where a
+/// written object literal is genuinely contextually typed by tsc even though
+/// surge cannot pick a single member to check against.
+fn union_members_are_all_objects(union: &surge_ts_types::UnionType) -> bool {
+    let mut object_members = 0usize;
+    for member in union.types() {
+        // An optional parameter contributes `undefined`; it is not a shape the
+        // literal could be typed by, so it does not disqualify the union.
+        if matches!(member, Type::Undefined | Type::Void) {
+            continue;
+        }
+        if !matches!(member.peeled(), Type::Object(_)) {
+            return false;
+        }
+        object_members += 1;
+    }
+    object_members >= 2
+}
+
+/// The `??` result rule, mirroring the context-free arm in
+/// `checks::expr::evaluate`: the left operand contributes only its non-nullish
+/// part, and either side failing to resolve degrades the whole expression.
+fn join_nullish_coalescing(
+    left_result: InferredExpression,
+    right_result: InferredExpression,
+) -> InferredExpression {
+    match (left_result, right_result) {
+        (InferredExpression::Known(left_type), InferredExpression::Known(right_type)) => {
+            if left_type == Type::Any || left_type.is_unknown() {
+                InferredExpression::Known(left_type)
+            } else if left_type == Type::Undefined {
+                InferredExpression::Known(right_type)
+            } else {
+                InferredExpression::Known(surge_ts_types::union_type(vec![
+                    surge_ts_types::remove_nullish(&left_type),
+                    right_type,
+                ]))
+            }
+        }
+        _ => InferredExpression::Unknown,
+    }
+}
+
+fn is_contextual_callable(ty: &Type) -> bool {
+    let peeled;
+    let ty = match ty {
+        Type::Reference(reference) => {
+            peeled = reference.resolve().peeled();
+            &peeled
+        }
+        other => other,
+    };
+    match ty {
+        Type::Function(_) => true,
+        Type::Object(object) => object.call_signature().is_some(),
+        _ => false,
+    }
 }
 
 fn evaluate_array_literal_with_expected_type(
@@ -415,6 +649,21 @@ fn evaluate_object_literal_with_expected_type(
             !property.is_spread && !expected_object_type.contains_property(&property.name)
         })
     {
+        if std::env::var("SURGE_DBG_EXCESS").is_ok() {
+            eprintln!(
+                "[EXCESS] {} missing={} is_intersection={} props=[{}] index={:?}",
+                ctx.file_name,
+                property.name,
+                expected_object_type.is_intersection,
+                expected_object_type
+                    .properties
+                    .keys()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                expected_object_type.string_index_type.is_some()
+            );
+        }
         let diagnostic = Diagnostic::ts2353(
             &property.name,
             &Type::Object(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
@@ -466,14 +715,41 @@ fn evaluate_object_literal_with_expected_type(
             })
         };
 
+        // A `get`/`set` accessor is written as a function but *is* the property:
+        // contextually type it as one returning the expected type, then compare
+        // the accessor's value type (getter return / setter parameter) rather
+        // than the accessor function itself.
+        let accessor_contextual_type = property.is_accessor.then(|| {
+            Type::Function(surge_ts_types::FunctionType::new(
+                Vec::new(),
+                with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+                    contextual_property_type.clone()
+                }),
+                false,
+                0,
+            ))
+        });
         let inferred_property = evaluate_expression_with_expected_type(
             &property.value,
             property.value_span.or(property.span),
-            Some(&contextual_property_type),
+            Some(
+                accessor_contextual_type
+                    .as_ref()
+                    .unwrap_or(&contextual_property_type),
+            ),
             ExpectedTypeDiagnostic::TypeNotAssignable,
             symbols,
             ctx,
         );
+        let inferred_property = match inferred_property {
+            InferredExpression::Known(Type::Function(function_type)) if property.is_accessor => {
+                InferredExpression::Known(match function_type.parameters().first() {
+                    Some(parameter) => parameter.clone(),
+                    None => function_type.return_type().clone(),
+                })
+            }
+            other => other,
+        };
 
         match inferred_property {
             InferredExpression::Known(actual_type) => {

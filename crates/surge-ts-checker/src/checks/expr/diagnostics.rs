@@ -20,6 +20,7 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
                     surge_ts_types::ObjectProperty {
                         ty: widen_type(&v.ty),
                         optional: v.optional,
+                        method: v.method,
                     },
                 );
             }

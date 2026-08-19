@@ -17,6 +17,17 @@ pub(crate) fn report_inferred_expression(
                 return;
             }
 
+            // The name is unresolved *here* but a UMD global resolves it for
+            // tsc, so the reference reports as TS2686 rather than as a missing
+            // name.
+            if crate::checks::emit_umd_global_reference_diagnostic(
+                &name,
+                choose_span(span, fallback_span),
+                ctx,
+            ) {
+                return;
+            }
+
             if is_missing_node_like_global(&name, ctx) {
                 let diagnostic = if ctx.options.types_uses_wildcard() {
                     Diagnostic::ts2580(&name, ctx.file_name.clone())

@@ -7,6 +7,7 @@ pub(crate) fn evaluate_expression(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     record_expression_check();
+    crate::checks::check_umd_global_value_reference(expression, fallback_span, ctx);
     match expression {
         ParsedExpression::ArrayLiteral { elements, .. } => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
@@ -135,8 +136,22 @@ pub(crate) fn evaluate_expression(
             right_span,
         } => {
             let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
-            let right_result =
-                evaluate_expression(right, right_span.or(fallback_span), symbols, ctx);
+            // With no outer contextual type, tsc contextually types the right
+            // operand from the left's — that is what gives `opts.uri ?? ((id) =>
+            // id)`'s parameter a type instead of a false TS7006.
+            let right_result = match contextual_default_operand_type(&left_result) {
+                Some(contextual) => {
+                    crate::checks::expected::evaluate_expression_with_expected_type(
+                        right,
+                        right_span.or(fallback_span),
+                        Some(&contextual),
+                        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                        symbols,
+                        ctx,
+                    )
+                }
+                None => evaluate_expression(right, right_span.or(fallback_span), symbols, ctx),
+            };
 
             match (left_result, right_result) {
                 (InferredExpression::Known(left_type), InferredExpression::Known(right_type)) => {
@@ -178,14 +193,39 @@ pub(crate) fn evaluate_expression(
             // x.p`) plus each identifier/property the `&&` chain proves non-nullish
             // (`a.b && a.b > c`).
             let narrowed = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::And)
-                .then(|| crate::checks::function::narrow_truthy_operand_symbol_table(left, symbols))
+                .then(|| {
+                    let guarded =
+                        crate::checks::function::narrow_truthy_operand_symbol_table(left, symbols);
+                    // That path only knows the syntactic guards; a user-defined
+                    // predicate call in the chain still has to stop its subject
+                    // from reading as a genuine-unknown receiver on the right.
+                    let downgraded = downgrade_predicate_guarded_genuine_unknown(
+                        left,
+                        guarded.as_ref().unwrap_or(symbols),
+                    );
+                    downgraded.or(guarded)
+                })
                 .flatten();
-            let right_result = evaluate_expression(
-                right,
-                right_span.or(fallback_span),
-                narrowed.as_ref().unwrap_or(symbols),
-                ctx,
-            );
+            let right_symbols = narrowed.as_ref().unwrap_or(symbols);
+            // `a || b` hands `b` the same contextual type `a ?? b` does.
+            let right_contextual = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::Or)
+                .then(|| contextual_default_operand_type(&left_result))
+                .flatten();
+            let right_result = match right_contextual {
+                Some(contextual) => {
+                    crate::checks::expected::evaluate_expression_with_expected_type(
+                        right,
+                        right_span.or(fallback_span),
+                        Some(&contextual),
+                        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                        right_symbols,
+                        ctx,
+                    )
+                }
+                None => {
+                    evaluate_expression(right, right_span.or(fallback_span), right_symbols, ctx)
+                }
+            };
 
             ops::evaluate_logical_expression(*operator, left_result, right_result)
         }
@@ -242,8 +282,22 @@ pub(crate) fn evaluate_expression(
             // x.b` checks `x.a` against the `"a"` member only.
             let true_symbols =
                 crate::checks::function::narrow_condition_symbol_table(condition, symbols, true);
+            // The branch where the guard holds also sees a guarded `unknown` as
+            // narrowed, exactly as the `if` form does.
+            let true_symbols = downgrade_guarded_genuine_unknown(
+                condition,
+                true_symbols.as_ref().unwrap_or(symbols),
+                true,
+            )
+            .or(true_symbols);
             let false_symbols =
                 crate::checks::function::narrow_condition_symbol_table(condition, symbols, false);
+            let false_symbols = downgrade_guarded_genuine_unknown(
+                condition,
+                false_symbols.as_ref().unwrap_or(symbols),
+                false,
+            )
+            .or(false_symbols);
             let true_result = evaluate_expression(
                 when_true,
                 when_true_span.or(fallback_span),
@@ -377,8 +431,17 @@ pub(crate) fn evaluate_expression(
                             | surge_ts_syntax::ParsedExpression::Conditional { .. }
                     );
 
+                    // Either side reaching the degradation sentinel anywhere —
+                    // not just at the top — means surge failed to model part of
+                    // the shape, so a mismatch says nothing about the source.
+                    // Same no-cascade rule the assignment checks apply, and
+                    // checked only after assignability already failed: the deep
+                    // walk forces lazy references, which perturbs later
+                    // resolutions when run on every clean check.
                     if needs_top_level_check
                         && !surge_ts_types::is_assignable_to(actual_type, &resolved_target_type)
+                        && !crate::checks::function::type_contains_unknown(actual_type)
+                        && !crate::checks::function::type_contains_unknown(&resolved_target_type)
                     {
                         top_level_failed = true;
                         let actual_type_name = actual_type.name();
@@ -529,6 +592,7 @@ pub(crate) fn evaluate_expression(
             children,
             span,
         } => {
+            crate::checks::jsx::check_jsx_factory_reference(*tag_name_span, fallback_span, ctx);
             crate::checks::jsx::check_jsx_element(
                 tag_name,
                 *tag_name_span,
@@ -544,7 +608,8 @@ pub(crate) fn evaluate_expression(
 
             infer_expression(expression, symbols, ctx)
         }
-        ParsedExpression::JsxFragment { children, .. } => {
+        ParsedExpression::JsxFragment { children, span } => {
+            crate::checks::jsx::check_jsx_factory_reference(*span, fallback_span, ctx);
             for child in children {
                 evaluate_jsx_child(child, fallback_span, symbols, ctx);
             }
@@ -629,9 +694,22 @@ fn is_pure_literal_tree(expression: &ParsedExpression) -> bool {
         ParsedExpression::ArrayLiteral { elements, .. } => elements
             .iter()
             .all(|element| is_pure_literal_tree(&element.expression)),
-        ParsedExpression::ObjectLiteral { properties, .. } => properties
-            .iter()
-            .all(|property| !property.is_spread && !property.is_method && is_pure_literal_tree(&property.value)),
+        ParsedExpression::ObjectLiteral { properties, .. } => properties.iter().all(|property| {
+            !property.is_spread && !property.is_method && is_pure_literal_tree(&property.value)
+        }),
         _ => false,
     }
+}
+
+/// The contextual type a `??`/`||` default operand inherits from the operand it
+/// falls back from. Only a function-typed left operand qualifies: that is the
+/// case whose parameters would otherwise become implicit `any`, and widening it
+/// further would start excess-property-checking object-literal defaults against
+/// a type the author never wrote.
+fn contextual_default_operand_type(left: &InferredExpression) -> Option<Type> {
+    let InferredExpression::Known(left_type) = left else {
+        return None;
+    };
+    let stripped = surge_ts_types::remove_nullish(left_type);
+    matches!(stripped.peeled(), Type::Function(_)).then_some(stripped)
 }

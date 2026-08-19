@@ -1,10 +1,14 @@
 mod diagnostics;
 mod evaluate;
+mod guarded_unknown;
 mod index_access;
 mod inferred;
 
 pub(crate) use diagnostics::*;
 pub(crate) use evaluate::*;
+use guarded_unknown::{
+    downgrade_guarded_genuine_unknown, downgrade_predicate_guarded_genuine_unknown,
+};
 use index_access::*;
 pub(crate) use inferred::*;
 
@@ -86,6 +90,7 @@ pub(crate) fn evaluate_const_expression(
                     surge_ts_types::ObjectProperty {
                         ty,
                         optional: false,
+                        method: false,
                     },
                 );
             }

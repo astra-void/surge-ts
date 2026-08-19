@@ -145,7 +145,8 @@ pub(crate) fn resolve_object_type(
             ObjectProperty::optional(property_type.ty)
         } else {
             ObjectProperty::required(property_type.ty)
-        };
+        }
+        .with_method(property.is_method);
 
         properties.insert(property.name.into(), object_property);
     }

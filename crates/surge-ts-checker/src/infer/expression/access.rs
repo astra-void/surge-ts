@@ -166,6 +166,16 @@ pub(crate) fn infer_property_access(
             Type::Any => InferredExpression::Known(Type::Any),
             Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
             Type::Union(union_type) => {
+                // A sentinel member means part of the receiver is unmodelled, so
+                // a miss on any *other* member says nothing about the source —
+                // the same no-cascade rule a wholly-sentinel receiver gets.
+                if union_type
+                    .types()
+                    .iter()
+                    .any(surge_ts_types::Type::is_unknown)
+                {
+                    return InferredExpression::Unknown;
+                }
                 let mut result_types = vec![];
                 for ty in union_type.types() {
                     if *ty == Type::Undefined {
@@ -192,6 +202,12 @@ pub(crate) fn infer_property_access(
                 .unwrap_or_else(|| {
                     if no_lib_array_member(&object_type, ctx) {
                         InferredExpression::Known(Type::Any)
+                    // A nominal reference that peels to the sentinel is a shape
+                    // surge could not reconstruct (a cross-module `Set<string>`
+                    // annotation whose lazy environment is gone), not a type
+                    // without the member.
+                    } else if object_type.peeled().is_unknown() {
+                        InferredExpression::Unknown
                     } else {
                         InferredExpression::MissingProperty {
                             property_name: property_name.to_string(),
@@ -208,11 +224,70 @@ pub(crate) fn infer_property_access(
     result
 }
 
+/// The symbol bound to a qualified `ns.member` value key, using the same lookup
+/// chain a bare call resolves through.
+pub(crate) fn qualified_namespace_member(
+    qualified_name: &str,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<std::sync::Arc<crate::symbols::SymbolInfo>> {
+    if let Some(symbol) = symbols.get_shared(qualified_name) {
+        return Some(symbol);
+    }
+    if let Some(symbol) = ctx
+        .module_value_fallback
+        .as_ref()
+        .and_then(|fallback| fallback.get_shared(qualified_name))
+    {
+        return Some(symbol);
+    }
+    let file_name = ctx.file_name.clone();
+    ctx.module_local_values_for_file(&file_name)
+        .and_then(|table| table.get_shared(qualified_name))
+}
+
+/// Inference-side twin of `try_qualified_namespace_call`: instantiates the
+/// member's return type through its qualified `ns.member` signature. `None` when
+/// no such binding exists.
+fn infer_qualified_namespace_call(
+    object_name: &str,
+    property_name: &str,
+    property_span: Option<TextSpan>,
+    type_arguments: &[surge_ts_syntax::ParsedType],
+    arguments: &[surge_ts_syntax::ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<InferredExpression> {
+    let qualified_name = format!("{object_name}.{property_name}");
+    let symbol = qualified_namespace_member(&qualified_name, symbols, ctx)?;
+    // The qualified binding is authoritative once it exists: answering from the
+    // namespace object's permissive `any` member instead would bake that into
+    // whatever declaration is being resolved.
+    let Type::Function(function_type) = &symbol.ty else {
+        return Some(InferredExpression::Unknown);
+    };
+    let function_type = function_type.clone();
+    let function_signature = symbol.function_signature.clone();
+    Some(InferredExpression::Known(
+        crate::checks::call::instantiate_function_return_type_for_call(
+            &function_type,
+            function_signature.as_deref(),
+            type_arguments,
+            property_span,
+            arguments,
+            symbols,
+            ctx,
+        ),
+    ))
+}
+
 pub(crate) fn infer_property_call(
     object: &ParsedExpression,
     _object_span: &Option<TextSpan>,
     property_name: &str,
-    _property_span: &Option<TextSpan>,
+    property_span: &Option<TextSpan>,
+    type_arguments: &[surge_ts_syntax::ParsedType],
+    arguments: &[surge_ts_syntax::ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
@@ -227,6 +302,26 @@ pub(crate) fn infer_property_call(
             return InferredExpression::Unknown;
         }
     };
+
+    if matches!(
+        object_type,
+        Type::Any | Type::Unknown | Type::GenuineUnknown
+    ) && let ParsedExpression::Identifier { name, .. } = object
+        && let Some(inferred) = infer_qualified_namespace_call(
+            name,
+            property_name,
+            *property_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        )
+    {
+        record_program_timing(ctx.timings.as_ref(), |timings| {
+            timings.property_access_checking += property_call_start.elapsed()
+        });
+        return inferred;
+    }
 
     let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
@@ -267,6 +362,36 @@ pub(crate) fn infer_property_call(
             InferredExpression::Known(surge_ts_types::union_type(result_types))
         }
         _ => match object_type.get_property_access_type(property_name) {
+            // A generic namespace member call resolves through its qualified
+            // `ns.member` binding, which carries the real signature the namespace
+            // object does not — the inference-side twin of the routing in
+            // `check_property_call_like`, gated the same way on the permissive
+            // member shape so the lookup stays off the ordinary path.
+            Some(member_type)
+                if crate::checks::call::is_permissive_member_type(&member_type)
+                    && matches!(object, ParsedExpression::Identifier { .. }) =>
+            {
+                let ParsedExpression::Identifier { name, .. } = object else {
+                    unreachable!("guarded by the match arm")
+                };
+                match infer_qualified_namespace_call(
+                    name,
+                    property_name,
+                    *property_span,
+                    type_arguments,
+                    arguments,
+                    symbols,
+                    ctx,
+                ) {
+                    Some(inferred) => inferred,
+                    None => match member_type {
+                        Type::Function(function_type) => {
+                            InferredExpression::Known(function_type.return_type().clone())
+                        }
+                        _ => InferredExpression::Known(Type::Any),
+                    },
+                }
+            }
             Some(Type::Function(function_type)) => {
                 InferredExpression::Known(function_type.return_type().clone())
             }
@@ -419,6 +544,11 @@ pub(crate) fn infer_optional_property_access(
         }
     };
 
+    // `a?.b` only widens to `| undefined` when `a` can actually be nullish. After
+    // a guard proves it is not (`if (!a.result) throw;` then `a.result?.mean`),
+    // tsc types the access exactly as `a.b`, so an unconditional widen turned
+    // guarded arithmetic into TS2362/TS2363.
+    let object_is_nullish = optional_chain_can_short_circuit(&object_type);
     let base_type = surge_ts_types::remove_undefined(&object_type);
 
     let result_type = match base_type {
@@ -450,10 +580,7 @@ pub(crate) fn infer_optional_property_access(
             if !saw_known || result_types.is_empty() {
                 InferredExpression::Unknown
             } else {
-                InferredExpression::Known(surge_ts_types::union_type(vec![
-                    surge_ts_types::union_type(result_types),
-                    Type::Undefined,
-                ]))
+                InferredExpression::Known(surge_ts_types::union_type(result_types))
             }
         }
         _ => base_type
@@ -467,7 +594,7 @@ pub(crate) fn infer_optional_property_access(
     };
 
     let result = match result_type {
-        InferredExpression::Known(ty) => {
+        InferredExpression::Known(ty) if object_is_nullish => {
             InferredExpression::Known(union_type(vec![ty, Type::Undefined]))
         }
         other => other,
@@ -509,5 +636,19 @@ pub(crate) fn infer_new_expression(
             InferredExpression::UnresolvedIdentifier { name, span }
         }
         _ => InferredExpression::Unknown,
+    }
+}
+
+/// Whether an optional chain over a receiver of this type can short-circuit, and
+/// so contributes `undefined` to the access's type. The degradation sentinel and
+/// `any` are left alone: their result is already the sentinel/`any`.
+fn optional_chain_can_short_circuit(object_type: &Type) -> bool {
+    match object_type {
+        Type::Undefined | Type::Void | Type::GenuineUnknown => true,
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| matches!(member, Type::Undefined | Type::Void)),
+        _ => false,
     }
 }

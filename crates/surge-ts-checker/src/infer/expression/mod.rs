@@ -280,12 +280,16 @@ pub(crate) fn infer_expression(
             object_span,
             property_name,
             property_span,
+            type_arguments,
+            arguments,
             ..
         } => infer_property_call(
             object,
             object_span,
             property_name,
             property_span,
+            type_arguments,
+            arguments,
             symbols,
             ctx,
         ),
