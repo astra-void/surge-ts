@@ -360,6 +360,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2686",
+    "category": "Error",
+    "message": "'{0}' refers to a UMD global, but the current file is a module. Consider adding an import instead.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2741",
     "category": "Error",
     "message": "Property '{0}' is missing in type '{1}' but required in type '{2}'.",
@@ -416,6 +424,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS7016",
+    "category": "Error",
+    "message": "Could not find a declaration file for module '{0}'. '{1}' implicitly has an 'any' type.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS7019",
     "category": "Error",
     "message": "Rest parameter '{0}' implicitly has an 'any[]' type.",
@@ -435,6 +451,14 @@
     "code": "TS6133",
     "category": "Error",
     "message": "'{0}' is declared but its value is never read.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6196",
+    "category": "Error",
+    "message": "'{0}' is declared but never used.",
     "source": "typescript",
     "arity": 1,
     "support": "emitted"
