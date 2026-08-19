@@ -485,6 +485,7 @@ fn same_tuple_element_type(left: &ParsedType, right: &ParsedType) -> bool {
 
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
+    let mut string_index_type: Option<Box<ParsedType>> = None;
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
     let getters = getter_accessor_names(&type_literal.members);
 
@@ -517,12 +518,13 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 }
                 continue;
             }
-            // An index signature (and anything else unmodelled) degrades the
-            // whole literal. Modelling `[k: string]: T` here was measured three
-            // times on 2026-08-19; the last blocker is assignment narrowing
-            // (`json.items = {…}` then `json.items.anyOf`), and with quoted keys,
-            // the `?? {}` idiom, impossible-guard narrowing and array-literal
-            // union targets all landed it is still net +1 (trpc).
+            TSSignature::TSIndexSignature(index_signature) => {
+                // The last index signature wins, matching the interface path.
+                if let Some(value_type) = parse_index_signature_value_type(index_signature) {
+                    string_index_type = Some(Box::new(value_type));
+                }
+                continue;
+            }
             _ => return ParsedType::Unknown,
         };
 
@@ -535,6 +537,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
 
     ParsedType::Object(ParsedObjectType {
         properties,
+        string_index_type,
         call_signature,
     })
 }

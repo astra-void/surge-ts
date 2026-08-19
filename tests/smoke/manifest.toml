@@ -5263,6 +5263,31 @@ path = "tests/smoke/function_type_literal_parameter_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "member-assignment-narrowing"
+path = "tests/smoke/member_assignment_narrowing.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "boolean-discriminant-throw-guard"
+path = "tests/smoke/boolean_discriminant_throw_guard.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "optional-call-guard-narrows-receiver"
+path = "tests/smoke/optional_call_guard_narrows_receiver.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-literal-index-signature"
+path = "tests/smoke/type_literal_index_signature.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-literal-union-target"
+path = "tests/smoke/array_literal_union_target.ts"
+expected_diagnostics = []
+
+[[case]]
 name = "isarray-impossible-branch"
 path = "tests/smoke/isarray_impossible_branch.ts"
 expected_diagnostics = []

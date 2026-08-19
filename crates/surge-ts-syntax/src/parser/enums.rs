@@ -110,6 +110,7 @@ fn lower_enum_declaration(
             name_span,
             declared_type: Some(ParsedType::Object(ParsedObjectType {
                 properties,
+                string_index_type: None,
                 call_signature: None,
             })),
             initializer: None,

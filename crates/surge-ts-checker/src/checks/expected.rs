@@ -199,7 +199,10 @@ fn evaluate_expression_with_expected_type_inner(
     // with several callable members stays context-free: picking one there needs
     // signature matching and guessing wrong types the parameters as the wrong shape.
     if let (Type::Union(union), ParsedExpression::ArrowFunction(_)) = (expected_type, expression) {
-        let mut callable = union.types().iter().filter(|member| is_contextual_callable(member));
+        let mut callable = union
+            .types()
+            .iter()
+            .filter(|member| is_contextual_callable(member));
         if let (Some(member), None) = (callable.next(), callable.next()) {
             let member = with_type_copy_reason(TypeCopyReason::ExpectedType, || member.clone());
             return evaluate_expression_with_expected_type_anchored(
@@ -337,6 +340,30 @@ fn evaluate_expression_with_expected_type_inner(
     // most of the written properties, mirroring how tsc picks the overload the
     // argument fits. Without it the literal is evaluated context-free and its
     // method/callback parameters lose their types (false TS7006).
+    // An array literal against a union target takes the union's lone array/tuple
+    // member as its contextual type, so the elements are checked against the
+    // element type rather than widened context-free (`items: [{ type: "string" }]`
+    // against `_JSONSchema | _JSONSchema[]` widened the literal's `type` to
+    // `string` and then rejected it).
+    if let (Type::Union(union), ParsedExpression::ArrayLiteral { .. }) = (expected_type, expression)
+    {
+        let mut array_members = union
+            .types()
+            .iter()
+            .filter(|member| matches!(member, Type::Array(_) | Type::Tuple(_)));
+        if let (Some(member), None) = (array_members.next(), array_members.next()) {
+            return evaluate_expression_with_expected_type_anchored(
+                expression,
+                fallback_span,
+                target_span,
+                Some(member),
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            );
+        }
+    }
+
     if let (Type::Union(union), ParsedExpression::ObjectLiteral { properties, .. }) =
         (expected_type, expression)
     {
