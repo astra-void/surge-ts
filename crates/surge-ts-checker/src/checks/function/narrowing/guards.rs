@@ -29,6 +29,39 @@ fn literal_expression_value(expression: &ParsedExpression) -> Option<Type> {
     }
 }
 
+/// A case/comparison operand written as a member of a const-enum-like object
+/// (`ZodIssueCode.invalid_string`, `Codes.a`) still denotes a unit literal, so
+/// it must discriminate exactly like the literal spelled inline. Reads the
+/// member type out of scope instead of inferring the expression, which keeps
+/// this free of diagnostics and of re-entrant inference.
+pub(super) fn const_member_literal_value(
+    expression: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<Type> {
+    let ParsedExpression::PropertyAccess {
+        object,
+        property_name,
+        ..
+    } = expression
+    else {
+        return None;
+    };
+    let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+        return None;
+    };
+    let symbol_ty = symbols.get(name)?.ty.peeled();
+    let Type::Object(object_type) = &symbol_ty else {
+        return None;
+    };
+    let property = object_type.properties.get(property_name.as_str())?;
+    match &property.ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
+            Some(property.ty.clone())
+        }
+        _ => None,
+    }
+}
+
 fn discriminant_match(member: &Type, property: &str, literal: &Type) -> DiscriminantMatch {
     // A discriminated-union member is often a named type (nominal reference);
     // peel it to read its discriminant property.
@@ -40,9 +73,12 @@ fn discriminant_match(member: &Type, property: &str, literal: &Type) -> Discrimi
         // A member without the discriminant property cannot equal the literal.
         return DiscriminantMatch::No;
     };
-    match &property_type.ty {
+    // The discriminant is often written as `typeof Codes.a`, which resolves to a
+    // lazy reference around the literal rather than the literal itself.
+    let property_ty = property_type.ty.peeled();
+    match &property_ty {
         Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
-            if &property_type.ty == literal {
+            if &property_ty == literal {
                 DiscriminantMatch::Yes
             } else {
                 DiscriminantMatch::No
@@ -147,7 +183,11 @@ pub(super) fn narrow_union_by_nullish(ty: &Type, keep_matching: bool) -> Option<
     let Type::Union(union) = ty else {
         return None;
     };
-    if !union.types().iter().any(|member| *member == Type::Undefined) {
+    if !union
+        .types()
+        .iter()
+        .any(|member| *member == Type::Undefined)
+    {
         return None;
     }
     if keep_matching {
@@ -165,12 +205,104 @@ pub(super) fn narrow_union_by_nullish(ty: &Type, keep_matching: bool) -> Option<
     Some(union_type(kept))
 }
 
+/// Symbol-table counterpart of the `ScopeStack` nullish-equality narrowing, for
+/// the operands of `&&`/`||` and the arms of a conditional expression
+/// (`x !== undefined && x <= y`). Handles a bare identifier or one property of
+/// one.
+pub(super) fn narrow_nullish_equality_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let (subject, eq) = parse_nullish_equality_condition(condition)?;
+    let keep_matching = branch_is_true == eq;
+
+    match subject {
+        ParsedExpression::Identifier { name, .. } => {
+            let symbol = symbols.get(name)?;
+            let narrowed = narrow_union_by_nullish(&symbol.ty, keep_matching)?;
+            let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+            narrowed_symbols.insert_narrowed(
+                name.clone(),
+                SymbolInfo {
+                    ty: narrowed,
+                    kind: symbol.kind,
+                    function_signature: symbol.function_signature.clone(),
+                },
+                symbol.ty.clone(),
+            );
+            Some(narrowed_symbols)
+        }
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+                return None;
+            };
+            let symbol = symbols.get(name)?;
+            let symbol_ty = symbol.ty.peeled();
+            let Type::Object(object_type) = &symbol_ty else {
+                return None;
+            };
+            let property = object_type.properties.get(property_name.as_str())?;
+            // An optional property carries its `undefined` in the `optional` flag
+            // rather than the type, so splitting on it also clears the flag.
+            let (narrowed_ty, narrowed_optional) =
+                match narrow_union_by_nullish(&property.ty, keep_matching) {
+                    Some(narrowed) => (narrowed, property.optional && keep_matching),
+                    None if property.optional => {
+                        if keep_matching {
+                            (Type::Undefined, true)
+                        } else {
+                            (property.ty.clone(), false)
+                        }
+                    }
+                    None => return None,
+                };
+
+            let mut new_object = object_type.clone();
+            let properties = std::sync::Arc::make_mut(&mut new_object.properties);
+            properties.insert(
+                property_name.as_str().into(),
+                surge_ts_types::ObjectProperty {
+                    ty: narrowed_ty,
+                    optional: narrowed_optional,
+                    method: false,
+                },
+            );
+            let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+            narrowed_symbols.insert_narrowed(
+                name.clone(),
+                SymbolInfo {
+                    ty: Type::Object(new_object),
+                    kind: symbol.kind,
+                    function_signature: symbol.function_signature.clone(),
+                },
+                symbol.ty.clone(),
+            );
+            Some(narrowed_symbols)
+        }
+        _ => None,
+    }
+}
+
 /// Parses a `base.property === literal` (or `!==`) discriminant test. Returns the
 /// discriminant object expression, the property name, the literal type, and
 /// whether the operator is an equality (`===`/`==`) vs inequality test.
 pub(super) fn parse_discriminant_condition(
     condition: &ParsedExpression,
 ) -> Option<(&ParsedExpression, &str, Type, bool)> {
+    parse_discriminant_condition_with(condition, &|_| None)
+}
+
+/// `parse_discriminant_condition` with an extra resolver for operands that are
+/// not literal tokens but still denote a unit literal type.
+pub(super) fn parse_discriminant_condition_with<'a>(
+    condition: &'a ParsedExpression,
+    resolve_literal: &dyn Fn(&ParsedExpression) -> Option<Type>,
+) -> Option<(&'a ParsedExpression, &'a str, Type, bool)> {
     use surge_ts_syntax::ParsedBinaryOperator;
     let ParsedExpression::Binary {
         left,
@@ -191,8 +323,9 @@ pub(super) fn parse_discriminant_condition(
         access: &'a ParsedExpression,
         value: &ParsedExpression,
         eq: bool,
+        resolve_literal: &dyn Fn(&ParsedExpression) -> Option<Type>,
     ) -> Option<(&'a ParsedExpression, &'a str, Type, bool)> {
-        let literal = literal_expression_value(value)?;
+        let literal = literal_expression_value(value).or_else(|| resolve_literal(value))?;
         if let ParsedExpression::PropertyAccess {
             object,
             property_name,
@@ -204,7 +337,8 @@ pub(super) fn parse_discriminant_condition(
         None
     }
 
-    discriminant_side(left, right, eq).or_else(|| discriminant_side(right, left, eq))
+    discriminant_side(left, right, eq, resolve_literal)
+        .or_else(|| discriminant_side(right, left, eq, resolve_literal))
 }
 
 /// Builds a symbol table with the discriminated union narrowed for the given
@@ -216,7 +350,10 @@ pub(crate) fn narrow_discriminant_symbol_table(
     symbols: &SymbolTable,
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
-    let (discriminant_object, property, literal, eq) = parse_discriminant_condition(condition)?;
+    let (discriminant_object, property, literal, eq) =
+        parse_discriminant_condition_with(condition, &|expression| {
+            const_member_literal_value(expression, symbols)
+        })?;
     let keep_matching = branch_is_true == eq;
 
     match discriminant_object {
@@ -225,13 +362,14 @@ pub(crate) fn narrow_discriminant_symbol_table(
             let narrowed =
                 narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)?;
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
-            narrowed_symbols.insert(
+            narrowed_symbols.insert_narrowed(
                 name.clone(),
                 SymbolInfo {
                     ty: narrowed,
                     kind: symbol.kind,
                     function_signature: symbol.function_signature.clone(),
                 },
+                symbol.ty.clone(),
             );
             Some(narrowed_symbols)
         }
@@ -265,16 +403,18 @@ pub(crate) fn narrow_discriminant_symbol_table(
                 surge_ts_types::ObjectProperty {
                     ty: narrowed_property,
                     optional: base_property_type.optional,
+                    method: base_property_type.method,
                 },
             );
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
-            narrowed_symbols.insert(
+            narrowed_symbols.insert_narrowed(
                 name.clone(),
                 SymbolInfo {
                     ty: Type::Object(new_object),
                     kind: symbol.kind,
                     function_signature: symbol.function_signature.clone(),
                 },
+                symbol.ty.clone(),
             );
             Some(narrowed_symbols)
         }
@@ -282,28 +422,107 @@ pub(crate) fn narrow_discriminant_symbol_table(
     }
 }
 
+/// What a union member proves about `"prop" in value`.
+enum PropertyPresence {
+    /// Declared and required: every value of the member has the key.
+    Required,
+    /// Declared optional: the key may or may not be there at runtime, so the
+    /// member survives *both* branches (tsc keeps `{ a?: X }` in the else branch
+    /// of `if ("a" in v)`).
+    Optional,
+    Absent,
+    /// Not statically decidable (a string index signature, a non-object member).
+    Undecidable,
+}
+
+fn property_presence_of(member: &Type, property: &str) -> PropertyPresence {
+    match member {
+        Type::Object(object) => match object.get_property(property) {
+            Some(existing) if existing.is_optional() => PropertyPresence::Optional,
+            Some(_) => PropertyPresence::Required,
+            None if object.allows_string_index_access() => PropertyPresence::Undecidable,
+            None => PropertyPresence::Absent,
+        },
+        _ => PropertyPresence::Undecidable,
+    }
+}
+
+enum PresenceNarrowing {
+    Kept,
+    Removed,
+    Narrowed(Type),
+}
+
+/// Decides a single union member. Named aliases and interfaces arrive as nominal
+/// `Type::Reference` wrappers, and an alias to a union stays a nested union after
+/// peeling — both must be looked through, or every member is "undecidable" and
+/// the guard narrows nothing. The unpeeled member is what the caller keeps when
+/// nothing was dropped, so nominal display names survive in diagnostics.
+fn narrow_member_by_property_presence(
+    member: &Type,
+    property: &str,
+    keep_present: bool,
+) -> PresenceNarrowing {
+    let peeled = member.peeled();
+    if let Type::Union(inner) = &peeled {
+        let mut kept = Vec::new();
+        let mut changed = false;
+        for constituent in inner.types().iter() {
+            match narrow_member_by_property_presence(constituent, property, keep_present) {
+                PresenceNarrowing::Kept => kept.push(constituent.clone()),
+                PresenceNarrowing::Removed => changed = true,
+                PresenceNarrowing::Narrowed(narrowed) => {
+                    changed = true;
+                    kept.push(narrowed);
+                }
+            }
+        }
+        if !changed {
+            return PresenceNarrowing::Kept;
+        }
+        if kept.is_empty() {
+            return PresenceNarrowing::Removed;
+        }
+        return PresenceNarrowing::Narrowed(union_type(kept));
+    }
+
+    let survives = match property_presence_of(&peeled, property) {
+        PropertyPresence::Required => keep_present,
+        PropertyPresence::Absent => !keep_present,
+        PropertyPresence::Optional | PropertyPresence::Undecidable => true,
+    };
+    if survives {
+        PresenceNarrowing::Kept
+    } else {
+        PresenceNarrowing::Removed
+    }
+}
+
 /// Narrows a union by whether each member has `property` (`"prop" in obj`).
 /// `keep_present` selects members that have it (the `in` true branch).
-fn narrow_union_by_property_presence(
+pub(super) fn narrow_union_by_property_presence(
     ty: &Type,
     property: &str,
     keep_present: bool,
 ) -> Option<Type> {
-    let Type::Union(union) = ty else {
+    let peeled = ty.peeled();
+    let Type::Union(union) = &peeled else {
         return None;
     };
-    let kept: Vec<Type> = union
-        .types()
-        .iter()
-        .filter(|member| match member {
-            Type::Object(object) => object.properties.contains_key(property) == keep_present,
-            // Non-object members: cannot decide presence; keep conservatively.
-            _ => true,
-        })
-        .cloned()
-        .collect();
+    let mut kept = Vec::new();
+    let mut changed = false;
+    for member in union.types().iter() {
+        match narrow_member_by_property_presence(member, property, keep_present) {
+            PresenceNarrowing::Kept => kept.push(member.clone()),
+            PresenceNarrowing::Removed => changed = true,
+            PresenceNarrowing::Narrowed(narrowed) => {
+                changed = true;
+                kept.push(narrowed);
+            }
+        }
+    }
 
-    if kept.is_empty() || kept.len() == union.types().len() {
+    if !changed || kept.is_empty() {
         return None;
     }
     Some(union_type(kept))
@@ -311,7 +530,9 @@ fn narrow_union_by_property_presence(
 
 /// Parses a `"property" in object` test, returning the object expression and the
 /// property name.
-fn parse_in_condition(condition: &ParsedExpression) -> Option<(&ParsedExpression, &str)> {
+pub(super) fn parse_in_condition(
+    condition: &ParsedExpression,
+) -> Option<(&ParsedExpression, &str)> {
     use surge_ts_syntax::ParsedBinaryOperator;
     let ParsedExpression::Binary {
         left,
@@ -341,13 +562,14 @@ pub(super) fn narrow_property_presence_symbol_table(
     let symbol = symbols.get(name)?;
     let narrowed = narrow_union_by_property_presence(&symbol.ty, property, branch_is_true)?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
-    narrowed_symbols.insert(
+    narrowed_symbols.insert_narrowed(
         name.clone(),
         SymbolInfo {
             ty: narrowed,
             kind: symbol.kind,
             function_signature: symbol.function_signature.clone(),
         },
+        symbol.ty.clone(),
     );
     Some(narrowed_symbols)
 }
@@ -356,6 +578,9 @@ pub(super) fn narrow_property_presence_symbol_table(
 /// not statically decidable (`any`/`unknown`/`never`) — such members are kept in
 /// both branches so narrowing never drops a value it cannot classify.
 fn typeof_tag_of(member: &Type) -> Option<&'static str> {
+    if surge_ts_types::is_global_function_interface(member) {
+        return Some("function");
+    }
     match member.peeled() {
         Type::Number | Type::NumberLiteral(_) => Some("number"),
         Type::String | Type::StringLiteral(_) => Some("string"),
@@ -364,6 +589,13 @@ fn typeof_tag_of(member: &Type) -> Option<&'static str> {
         Type::Symbol => Some("symbol"),
         Type::Undefined | Type::Void => Some("undefined"),
         Type::Function(_) => Some("function"),
+        // A callable/constructible object (`typeof SomeClass`, an interface with
+        // a call signature) reports `"function"` at runtime, not `"object"`.
+        Type::Object(object)
+            if object.call_signature().is_some() || object.construct_signature().is_some() =>
+        {
+            Some("function")
+        }
         Type::Object(_) | Type::Array(_) | Type::Tuple(_) => Some("object"),
         _ => None,
     }
@@ -449,13 +681,14 @@ pub(super) fn narrow_typeof_symbol_table(
     let symbol = symbols.get(name)?;
     let narrowed = narrow_union_by_typeof(&symbol.ty, tag, branch_is_true == eq)?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
-    narrowed_symbols.insert(
+    narrowed_symbols.insert_narrowed(
         name.clone(),
         SymbolInfo {
             ty: narrowed,
             kind: symbol.kind,
             function_signature: symbol.function_signature.clone(),
         },
+        symbol.ty.clone(),
     );
     Some(narrowed_symbols)
 }
@@ -562,13 +795,14 @@ pub(super) fn narrow_instanceof_symbol_table(
     let symbol = symbols.get(name)?;
     let narrowed = narrow_union_by_instanceof(&symbol.ty, ctor_name, branch_is_true)?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
-    narrowed_symbols.insert(
+    narrowed_symbols.insert_narrowed(
         name.clone(),
         SymbolInfo {
             ty: narrowed,
             kind: symbol.kind,
             function_signature: symbol.function_signature.clone(),
         },
+        symbol.ty.clone(),
     );
     Some(narrowed_symbols)
 }
@@ -608,6 +842,16 @@ pub(super) fn narrow_union_by_arrayness(ty: &Type, keep_arrays: bool) -> Option<
         .filter(|member| match member {
             Type::Any | Type::Unknown | Type::GenuineUnknown => true,
             Type::Array(_) | Type::Tuple(_) => keep_arrays,
+            // `Array<T>` / `ReadonlyArray<T>` written in generic form stays a
+            // nominal reference rather than `Type::Array`, so match by name too.
+            Type::Reference(reference)
+                if matches!(
+                    reference.id.split('\u{0}').next_back(),
+                    Some("Array" | "ReadonlyArray")
+                ) =>
+            {
+                keep_arrays
+            }
             _ => !keep_arrays,
         })
         .cloned()
@@ -632,13 +876,14 @@ pub(super) fn narrow_array_isarray_symbol_table(
     let symbol = symbols.get(name)?;
     let narrowed = narrow_union_by_arrayness(&symbol.ty, branch_is_true)?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
-    narrowed_symbols.insert(
+    narrowed_symbols.insert_narrowed(
         name.clone(),
         SymbolInfo {
             ty: narrowed,
             kind: symbol.kind,
             function_signature: symbol.function_signature.clone(),
         },
+        symbol.ty.clone(),
     );
     Some(narrowed_symbols)
 }
@@ -736,7 +981,10 @@ pub(super) struct PredicateGuardInfo {
 /// and the argument in the tested position must be a bare identifier.
 pub(super) fn parse_type_predicate_condition(
     condition: &ParsedExpression,
-    signature_of: &mut dyn FnMut(&str) -> Option<std::sync::Arc<crate::symbols::FunctionSignatureInfo>>,
+    signature_of: &mut dyn FnMut(
+        &str,
+    )
+        -> Option<std::sync::Arc<crate::symbols::FunctionSignatureInfo>>,
 ) -> Option<PredicateGuardInfo> {
     let ParsedExpression::Call {
         callee_name,
@@ -783,7 +1031,11 @@ pub(super) fn parse_type_predicate_condition(
 /// subject narrows to `T` in the true branch when `T` is a subtype of it.
 /// Returns `None` when the guard proves nothing new (or would empty the type —
 /// stay conservative rather than model `never`).
-pub(super) fn narrow_by_predicate(ty: &Type, predicate: &Type, keep_matching: bool) -> Option<Type> {
+pub(super) fn narrow_by_predicate(
+    ty: &Type,
+    predicate: &Type,
+    keep_matching: bool,
+) -> Option<Type> {
     let peeled = ty.peeled();
     if let Type::Union(union) = &peeled {
         let members = union.types();
@@ -837,6 +1089,8 @@ pub(super) fn guard_operand_identifier(condition: &ParsedExpression) -> Option<&
     } else if let Some(operand) = parse_array_isarray_condition(condition) {
         operand
     } else if let Some(operand) = parse_arraybuffer_isview_condition(condition) {
+        operand
+    } else if let Some((operand, _)) = parse_in_condition(condition) {
         operand
     } else {
         return None;

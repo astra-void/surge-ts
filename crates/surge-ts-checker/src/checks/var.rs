@@ -181,11 +181,30 @@ pub(crate) fn check_variable_declaration_against_symbols(
         inferred_symbol_type = Some(Type::Any);
     }
 
+    // A generic arrow assigned to a binding (`const arrayToEnum = <T, U>(…) => …`,
+    // the shape every namespace-scoped helper takes) is still a generic call
+    // target: without its signature the call site cannot infer type arguments and
+    // the result degrades to the sentinel. Only the un-annotated form carries it;
+    // an explicit annotation already supplies the callable type.
+    let function_signature = match (&declared_type, variable.initializer.as_ref()) {
+        (None, Some(surge_ts_syntax::ParsedExpression::ArrowFunction(arrow)))
+            if !arrow.type_parameters.is_empty() =>
+        {
+            Some(crate::checks::function::function_signature_info(
+                &arrow.type_parameters,
+                &arrow.parameters,
+                arrow.return_type.as_ref(),
+                &ctx.file_name,
+            ))
+        }
+        _ => None,
+    };
+
     declared_type.or(inferred_symbol_type).map(|ty| {
         Arc::new(SymbolInfo {
             ty,
             kind: symbol_kind,
-            function_signature: None,
+            function_signature,
         })
     })
 }

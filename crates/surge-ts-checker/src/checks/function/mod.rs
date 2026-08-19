@@ -221,7 +221,11 @@ pub(crate) fn check_function_declaration_body(
         ..
     } = function;
 
-    if is_declare {
+    // A bodyless declaration is ambient or an overload signature; checking the
+    // absent body would report TS2355 on a non-void return type that the
+    // implementation below actually satisfies. Mirrors the guard in
+    // `check_function_declaration`.
+    if is_declare || !has_body {
         return;
     }
 
@@ -246,6 +250,52 @@ pub(crate) fn check_function_declaration_body(
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.function_declaration_checking += start.elapsed()
     });
+}
+
+/// The contextual type a written parameter takes at each position of
+/// `expected_type`. A rest parameter is not one positional slot: a tuple-typed
+/// one (`(...args: [value: number, message?: string]) => void`, the shape TS
+/// variadic-tuple reconstruction produces) declares those elements positionally,
+/// and an array-typed one supplies its element type at every trailing position.
+/// Reading `parameters()` by index instead leaves every position past the rest
+/// slot uncontextualized, which is a false TS7006/TS7031 on the callback.
+/// The tuple expansion mirrors `expanded_signature` in the assignability
+/// relation, so a callback typed here still compares against its slot.
+fn contextual_parameter_types(expected_type: &FunctionType, parameter_count: usize) -> Vec<Type> {
+    let parameters = expected_type.parameters();
+    if !expected_type.is_variadic() {
+        return parameters.to_vec();
+    }
+
+    let Some((rest, leading)) = parameters.split_last() else {
+        return Vec::new();
+    };
+    let peeled;
+    let rest = match rest {
+        Type::Reference(reference) => {
+            peeled = reference.resolve().peeled();
+            &peeled
+        }
+        other => other,
+    };
+
+    let mut expanded = leading.to_vec();
+    match rest {
+        Type::Tuple(elements) => expanded.extend(elements.iter().cloned()),
+        // The resolver already unwraps an array rest annotation to its element
+        // type, but a signature mapped from source keeps the array; accept both.
+        other => {
+            let element = match other {
+                Type::Array(element) => element.as_ref(),
+                other => other,
+            };
+            let fill_to = parameter_count.max(leading.len() + 1);
+            while expanded.len() < fill_to {
+                expanded.push(element.clone());
+            }
+        }
+    }
+    expanded
 }
 
 pub(crate) fn check_arrow_function_expression(
@@ -273,8 +323,15 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
     } = arrow;
     let _ = is_async;
 
-    let contextual_parameter_types = expected_type.map(|expected_type| expected_type.parameters());
+    let expanded_contextual_parameter_types = expected_type
+        .map(|expected_type| contextual_parameter_types(expected_type, parameters.len()));
+    let contextual_parameter_types = expanded_contextual_parameter_types.as_deref();
     with_type_parameter_scope(&type_parameters, ctx, |ctx| {
+        // Resolve the arrow's annotations against the value symbols visible at
+        // the arrow site, mirroring `check_variable_declaration_against_symbols`:
+        // `(x: typeof localConst) => …` must see the enclosing function body's
+        // locals, which live in the scope stack and never reach `ctx.symbols`.
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
         let function_type = map_function_signature(
             &parameters,
             return_type.as_ref(),
@@ -282,6 +339,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
             contextual_parameter_types,
             ctx,
         );
+        ctx.symbols = saved_symbols;
         let source_type_name = function_type.name();
         let has_explicit_return_type = return_type.is_some();
         let mut parameter_types = function_type.parameters().to_vec();
@@ -290,7 +348,12 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
         });
 
         if let Some(expected_type) = expected_type {
-            for (index, parameter_type) in expected_type.parameters().iter().cloned().enumerate() {
+            for (index, parameter_type) in contextual_parameter_types
+                .unwrap_or_default()
+                .iter()
+                .cloned()
+                .enumerate()
+            {
                 if index < parameter_types.len() && parameters[index].declared_type.is_none() {
                     parameter_types[index] = parameter_type;
                 }

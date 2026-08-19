@@ -138,6 +138,7 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
                     surge_ts_types::ObjectProperty {
                         ty: surge_ts_types::remove_undefined(&existing.ty),
                         optional: false,
+                        method: existing.method,
                     },
                 );
             }
@@ -155,12 +156,323 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
     }
 }
 
+/// A guard applied to one reference (`o.p`, `this.a.b`, or a bare identifier).
+#[derive(Debug, Clone, Copy)]
+enum ReferenceGuard<'a> {
+    Truthy,
+    Typeof {
+        tag: &'a str,
+        keep_matching: bool,
+    },
+    PropertyPresence {
+        property: &'a str,
+        keep_present: bool,
+    },
+    Instanceof {
+        ctor_name: &'a str,
+        keep_matching: bool,
+    },
+    Arrayness {
+        keep_arrays: bool,
+    },
+    ArrayBufferView {
+        keep_views: bool,
+    },
+    Nullish {
+        keep_matching: bool,
+    },
+}
+
+impl ReferenceGuard<'_> {
+    /// Narrows one leaf — a property's type plus its `optional` flag, or a whole
+    /// binding's type with `optional = false`. `None` leaves the leaf alone.
+    fn narrow_leaf(&self, ty: &Type, optional: bool) -> Option<(Type, bool)> {
+        match self {
+            Self::Truthy => {
+                let narrowed = surge_ts_types::remove_nullish(ty);
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            // An optional property carries its `undefined` in the `optional` flag
+            // rather than the type, so the tag test has to see it put back.
+            Self::Typeof { tag, keep_matching } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed = narrow_union_by_typeof(&effective, tag, *keep_matching)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            Self::PropertyPresence {
+                property,
+                keep_present,
+            } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed =
+                    narrow_union_by_property_presence(&effective, property, *keep_present)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            Self::Instanceof {
+                ctor_name,
+                keep_matching,
+            } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed = narrow_union_by_instanceof(&effective, ctor_name, *keep_matching)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            Self::Arrayness { keep_arrays } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed = narrow_union_by_arrayness(&effective, *keep_arrays)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            Self::ArrayBufferView { keep_views } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed = narrow_union_by_arraybufferview(&effective, *keep_views)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            Self::Nullish { keep_matching } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed = narrow_union_by_nullish(&effective, *keep_matching)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+        }
+    }
+
+    /// An optional property's `undefined` lives in its `optional` flag, not its
+    /// type; a guard has to see it put back to split on it correctly.
+    fn effective_leaf_type(ty: &Type, optional: bool) -> Type {
+        if optional {
+            union_type(vec![ty.clone(), Type::Undefined])
+        } else {
+            ty.clone()
+        }
+    }
+}
+
+/// The base symbol name and property chain of a plain reference expression:
+/// `x` → `("x", [])`, `this.a.b` → `("this", ["a", "b"])`. `None` for anything
+/// that is not a static reference (a call, a computed index, a literal).
+fn reference_path(expression: &ParsedExpression) -> Option<(String, Vec<String>)> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => Some((name.clone(), Vec::new())),
+        ParsedExpression::This { .. } => Some(("this".to_string(), Vec::new())),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        }
+        | ParsedExpression::OptionalPropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let (base, mut path) = reference_path(object)?;
+            path.push(property_name.clone());
+            Some((base, path))
+        }
+        ParsedExpression::NonNullAssertion { expression, .. } => reference_path(expression),
+        _ => None,
+    }
+}
+
+/// Rebuilds `ty` with the property reached by `path` replaced by the guard's
+/// narrowing, distributing over unions and peeling named references. `None` when
+/// the path does not exist or nothing narrows, so the caller leaves the binding
+/// untouched.
+fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceGuard<'_>) -> Option<Type> {
+    let (head, rest) = path.split_first()?;
+
+    match ty.peeled() {
+        Type::Object(mut object_type) => {
+            let existing = object_type.properties.get(head.as_str())?.clone();
+            let (narrowed_ty, narrowed_optional) = if rest.is_empty() {
+                guard.narrow_leaf(&existing.ty, existing.optional)?
+            } else {
+                (
+                    narrow_property_path(&existing.ty, rest, guard)?,
+                    existing.optional,
+                )
+            };
+            let properties = Arc::make_mut(&mut object_type.properties);
+            properties.insert(
+                head.as_str().into(),
+                surge_ts_types::ObjectProperty {
+                    ty: narrowed_ty,
+                    optional: narrowed_optional,
+                    method: false,
+                },
+            );
+            Some(Type::Object(object_type))
+        }
+        Type::Union(union) => {
+            let mut narrowed_any = false;
+            let members: Vec<Type> = union
+                .types()
+                .iter()
+                .map(|member| match narrow_property_path(member, path, guard) {
+                    Some(narrowed) => {
+                        narrowed_any = true;
+                        narrowed
+                    }
+                    None => member.clone(),
+                })
+                .collect();
+            narrowed_any.then(|| union_type(members))
+        }
+        _ => None,
+    }
+}
+
+/// The narrowed type of `base` under `guard` applied at `path`, or `None` when
+/// nothing changes. An empty `path` guards the binding itself.
+fn narrowed_reference_type(ty: &Type, path: &[String], guard: ReferenceGuard<'_>) -> Option<Type> {
+    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        if path.is_empty() {
+            guard.narrow_leaf(ty, false).map(|(narrowed, _)| narrowed)
+        } else {
+            narrow_property_path(ty, path, guard)
+        }
+    })?;
+    (narrowed != *ty).then_some(narrowed)
+}
+
+/// Applies `guard` to `base`'s `path` in the *current* scope frame — see the
+/// shadowing note in [`narrow_discriminant_in_scope`].
+fn narrow_reference_in_scope(
+    base: &str,
+    path: &[String],
+    guard: ReferenceGuard<'_>,
+    scopes: &mut ScopeStack,
+) {
+    let Some(symbol) = scopes.resolve(base) else {
+        return;
+    };
+    let Some(narrowed) = narrowed_reference_type(&symbol.ty, path, guard) else {
+        return;
+    };
+    let declared = symbol.ty.clone();
+    let narrowed_symbol = SymbolInfo {
+        ty: narrowed,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let _ = scopes.insert_current_narrowed(base.to_string(), narrowed_symbol, declared);
+}
+
+/// The reference guards a condition establishes for `branch_is_true`: a `typeof`
+/// test on a reference, or every reference an `&&` chain proves truthy. Only
+/// truthiness of the true branch is modelled — the falsy complement (`""`, `0`,
+/// …) is not.
+fn collect_reference_guards<'a>(
+    condition: &'a ParsedExpression,
+    branch_is_true: bool,
+    guards: &mut Vec<(String, Vec<String>, ReferenceGuard<'a>)>,
+) {
+    if let ParsedExpression::Logical {
+        left,
+        operator: ParsedLogicalOperator::And,
+        right,
+        ..
+    } = condition
+    {
+        if branch_is_true {
+            collect_reference_guards(left, true, guards);
+            collect_reference_guards(right, true, guards);
+        }
+        return;
+    }
+
+    if let Some((operand, tag, eq)) = parse_typeof_condition(condition) {
+        if let Some((base, path)) = reference_path(operand) {
+            guards.push((
+                base,
+                path,
+                ReferenceGuard::Typeof {
+                    tag,
+                    keep_matching: branch_is_true == eq,
+                },
+            ));
+        }
+        return;
+    }
+
+    if let Some((operand, ctor_name)) = parse_instanceof_condition(condition) {
+        if let Some((base, path)) = reference_path(operand) {
+            guards.push((
+                base,
+                path,
+                ReferenceGuard::Instanceof {
+                    ctor_name,
+                    keep_matching: branch_is_true,
+                },
+            ));
+        }
+        return;
+    }
+
+    if let Some(operand) = parse_array_isarray_condition(condition) {
+        if let Some((base, path)) = reference_path(operand) {
+            guards.push((
+                base,
+                path,
+                ReferenceGuard::Arrayness {
+                    keep_arrays: branch_is_true,
+                },
+            ));
+        }
+        return;
+    }
+
+    if let Some(operand) = parse_arraybuffer_isview_condition(condition) {
+        if let Some((base, path)) = reference_path(operand) {
+            guards.push((
+                base,
+                path,
+                ReferenceGuard::ArrayBufferView {
+                    keep_views: branch_is_true,
+                },
+            ));
+        }
+        return;
+    }
+
+    if let Some((subject, eq)) = parse_nullish_equality_condition(condition) {
+        if let Some((base, path)) = reference_path(subject) {
+            guards.push((
+                base,
+                path,
+                ReferenceGuard::Nullish {
+                    keep_matching: branch_is_true == eq,
+                },
+            ));
+        }
+        return;
+    }
+
+    if let Some((object, property)) = parse_in_condition(condition) {
+        if let Some((base, path)) = reference_path(object) {
+            guards.push((
+                base,
+                path,
+                ReferenceGuard::PropertyPresence {
+                    property,
+                    keep_present: branch_is_true,
+                },
+            ));
+        }
+        return;
+    }
+
+    if branch_is_true && let Some((base, path)) = reference_path(condition) {
+        guards.push((base, path, ReferenceGuard::Truthy));
+    }
+}
+
 /// Resolves a predicate guard's target type under the predicate's declaring
 /// file (see [`crate::symbols::FunctionSignatureInfo::declaring_file`]). A
 /// resolution that degrades (`had_error` or the `Unknown` sentinel) proves
 /// nothing — narrowing on it would manufacture facts from a modeling gap — so
 /// it yields `None`.
-fn resolve_predicate_guard_type(guard: &PredicateGuardInfo, ctx: &mut CheckerContext) -> Option<Type> {
+fn resolve_predicate_guard_type(
+    guard: &PredicateGuardInfo,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
     let declaring_file = guard
         .declaring_file
         .as_deref()
@@ -219,13 +531,14 @@ fn narrow_predicate_call_in_scope(
     }) else {
         return true;
     };
-    let _ = scopes.insert_current(
+    let _ = scopes.insert_current_narrowed(
         guard.subject,
         SymbolInfo {
             ty: narrowed,
             kind,
             function_signature,
         },
+        subject_ty,
     );
     true
 }
@@ -307,7 +620,9 @@ fn narrow_type_for_identifier(
                 narrow_type_for_identifier(right, var_name, ty, false, scopes, ctx)?;
             Some(union_type(vec![left_narrowed, right_narrowed]))
         }
-        _ => narrow_single_guard_for_identifier(condition, var_name, ty, branch_is_true, scopes, ctx),
+        _ => {
+            narrow_single_guard_for_identifier(condition, var_name, ty, branch_is_true, scopes, ctx)
+        }
     }
 }
 
@@ -364,6 +679,12 @@ fn narrow_single_guard_for_identifier(
         && name == var_name
     {
         return narrow_union_by_nullish(ty, branch_is_true == eq);
+    }
+    if let Some((ParsedExpression::Identifier { name, .. }, property)) =
+        parse_in_condition(condition)
+        && name == var_name
+    {
+        return narrow_union_by_property_presence(ty, property, branch_is_true);
     }
     None
 }
@@ -488,7 +809,16 @@ fn narrow_logical_guard_in_scope(
             kind,
             function_signature,
         };
-        let _ = scopes.insert_current(name, narrowed_symbol);
+        let _ = scopes.insert_current_narrowed(name, narrowed_symbol, symbol_ty);
+    }
+
+    // Every operand of an `&&` holds in its true branch, so the chain also proves
+    // each truthy-tested reference (`o.p && o.p.q`) non-nullish — which
+    // `narrow_type_for_identifier` above, keyed on a whole binding, cannot express.
+    let mut reference_guards = Vec::new();
+    collect_reference_guards(condition, branch_is_true, &mut reference_guards);
+    for (base, path, guard) in reference_guards {
+        narrow_reference_in_scope(&base, &path, guard, scopes);
     }
     true
 }
@@ -571,8 +901,9 @@ fn collect_guard_operand_identifiers(condition: &ParsedExpression, names: &mut V
 
 /// Narrows for a branch by any recognized type guard: a discriminated-union
 /// equality test (`x.kind === "a"`), a `typeof x === "tag"` test, an
-/// `x instanceof Ctor` test, an `Array.isArray(x)` test, or an `in`
-/// property-presence test (`"prop" in x`). Returns `None` if none apply.
+/// `x instanceof Ctor` test, an `Array.isArray(x)` test, an `in`
+/// property-presence test (`"prop" in x`), or a nullish equality test
+/// (`x !== undefined`). Returns `None` if none apply.
 pub(crate) fn narrow_condition_symbol_table(
     condition: &ParsedExpression,
     symbols: &SymbolTable,
@@ -588,11 +919,65 @@ pub(crate) fn narrow_condition_symbol_table(
         return narrow_condition_symbol_table(operand, symbols, !branch_is_true);
     }
 
+    // Every operand of an `&&` holds in its true branch, so a chain narrows by
+    // all of them (`a !== undefined && b !== undefined && a <= b`). The false
+    // branch proves nothing about any individual operand.
+    if branch_is_true
+        && let ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And,
+            right,
+            ..
+        } = condition
+    {
+        let left_narrowed = narrow_condition_symbol_table(left, symbols, true);
+        let base = left_narrowed.as_ref().unwrap_or(symbols);
+        return narrow_condition_symbol_table(right, base, true).or(left_narrowed);
+    }
+
     narrow_discriminant_symbol_table(condition, symbols, branch_is_true)
         .or_else(|| narrow_typeof_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_instanceof_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_array_isarray_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_property_presence_symbol_table(condition, symbols, branch_is_true))
+        .or_else(|| narrow_nullish_equality_symbol_table(condition, symbols, branch_is_true))
+        .or_else(|| narrow_reference_guard_symbol_table(condition, symbols, branch_is_true))
+}
+
+/// Narrows `symbols` by a truthy or `typeof` guard on a reference the
+/// identifier-keyed guards above do not reach — `o.p ? o.p : …`,
+/// `typeof o.p === "string" ? o.p : …`. Returns `None` when nothing narrows.
+fn narrow_reference_guard_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let mut guards = Vec::new();
+    collect_reference_guards(condition, branch_is_true, &mut guards);
+    if guards.is_empty() {
+        return None;
+    }
+
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    let mut changed = false;
+    for (base, path, guard) in guards {
+        let Some(symbol) = narrowed_symbols.get(&base) else {
+            continue;
+        };
+        let Some(narrowed) = narrowed_reference_type(&symbol.ty, &path, guard) else {
+            continue;
+        };
+        let declared = symbol.ty.clone();
+        let narrowed_symbol = SymbolInfo {
+            ty: narrowed,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        narrowed_symbols.insert_narrowed(base, narrowed_symbol, declared);
+        changed = true;
+    }
+
+    changed.then_some(narrowed_symbols)
 }
 
 /// Collects the identifiers/properties an `&&` chain proves truthy, so the right
@@ -693,14 +1078,13 @@ pub(crate) fn narrow_truthy_operand_symbol_table(
             continue;
         }
         changed = true;
-        narrowed.insert(
-            base_name.clone(),
-            SymbolInfo {
-                ty: new_ty,
-                kind: symbol.kind,
-                function_signature: symbol.function_signature.clone(),
-            },
-        );
+        let declared = symbol.ty.clone();
+        let narrowed_symbol = SymbolInfo {
+            ty: new_ty,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        narrowed.insert_narrowed(base_name.clone(), narrowed_symbol, declared);
     }
 
     changed.then_some(narrowed)
@@ -750,24 +1134,31 @@ pub(crate) fn narrow_discriminant_in_scope(
     if narrow_arraybuffer_isview_in_scope(condition, scopes, branch_is_true) {
         return;
     }
+    if narrow_property_presence_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
     if narrow_predicate_call_in_scope(condition, scopes, branch_is_true, ctx) {
         return;
     }
-    if narrow_truthy_identifier_in_scope(condition, scopes, branch_is_true) {
+    if narrow_truthy_reference_in_scope(condition, scopes, branch_is_true) {
         return;
     }
     if narrow_nullish_equality_in_scope(condition, scopes, branch_is_true) {
         return;
     }
 
-    let Some((discriminant_object, property, literal, eq)) =
-        parse_discriminant_condition(condition)
-    else {
+    let parsed = {
+        let symbols = scopes.visible_symbols();
+        parse_discriminant_condition_with(condition, &|expression| {
+            const_member_literal_value(expression, symbols)
+        })
+    };
+    let Some((discriminant_object, property, literal, eq)) = parsed else {
         return;
     };
     let keep_matching = branch_is_true == eq;
 
-    let (base_name, narrowed_symbol) = match discriminant_object {
+    let (base_name, narrowed_symbol, declared) = match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let Some(symbol) = scopes.resolve(name) else {
                 return;
@@ -784,6 +1175,7 @@ pub(crate) fn narrow_discriminant_in_scope(
                     kind: symbol.kind,
                     function_signature: symbol.function_signature.clone(),
                 },
+                symbol.ty.clone(),
             )
         }
         ParsedExpression::PropertyAccess {
@@ -822,6 +1214,7 @@ pub(crate) fn narrow_discriminant_in_scope(
                 surge_ts_types::ObjectProperty {
                     ty: narrowed_property,
                     optional: base_property_type.optional,
+                    method: base_property_type.method,
                 },
             );
             (
@@ -831,6 +1224,7 @@ pub(crate) fn narrow_discriminant_in_scope(
                     kind: symbol.kind,
                     function_signature: symbol.function_signature.clone(),
                 },
+                symbol.ty.clone(),
             )
         }
         _ => return,
@@ -841,50 +1235,35 @@ pub(crate) fn narrow_discriminant_in_scope(
     // its pushed child scope, or it leaks into the parent and corrupts the
     // else/fall-through branch (which would then narrow an already-narrowed
     // non-union to nothing). `pop_child` restores the shadow.
-    let _ = scopes.insert_current(base_name, narrowed_symbol);
+    let _ = scopes.insert_current_narrowed(base_name, narrowed_symbol, declared);
 }
 
-/// Positive truthy narrowing of a bare-identifier guard (`if (x) { … }`): the
-/// true branch drops the nullish members (`undefined`/`void`) the truthy test
-/// excludes, so a `T | undefined` callee/value resolves to `T` inside the block.
-/// Only the true branch narrows; the falsy complement (`""`, `0`, `false`, …) is
-/// not modelled, so the false branch keeps the original type. The `!guard` unwrap
-/// in [`narrow_discriminant_in_scope`] routes `if (!x)` else/fall-through here
-/// with `branch_is_true` already flipped. Returns whether the condition was a
-/// bare identifier (always handled, so equality-discriminant parsing is skipped).
-fn narrow_truthy_identifier_in_scope(
+/// Positive truthy narrowing of a reference guard (`if (x) { … }`,
+/// `if (o.p) { … }`, `if (this.p) { … }`): the true branch drops the nullish
+/// members (`undefined`/`void`) the truthy test excludes, so a `T | undefined`
+/// callee/value/property resolves to `T` inside the block. Only the true branch
+/// narrows; the falsy complement (`""`, `0`, `false`, …) is not modelled, so the
+/// false branch keeps the original type. The `!guard` unwrap in
+/// [`narrow_discriminant_in_scope`] routes `if (!x)` else/fall-through here with
+/// `branch_is_true` already flipped. Returns whether the condition was such a
+/// reference (always handled, so equality-discriminant parsing is skipped).
+fn narrow_truthy_reference_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
 ) -> bool {
-    let ParsedExpression::Identifier { name, .. } = condition else {
+    let Some((base, path)) = reference_path(condition) else {
         return false;
     };
-    if !branch_is_true {
-        return true;
+    if branch_is_true {
+        narrow_reference_in_scope(&base, &path, ReferenceGuard::Truthy, scopes);
     }
-    let Some(symbol) = scopes.resolve(name) else {
-        return true;
-    };
-    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        surge_ts_types::remove_nullish(&symbol.ty)
-    });
-    if narrowed == symbol.ty {
-        return true;
-    }
-    let _ = scopes.insert_current(
-        name.clone(),
-        SymbolInfo {
-            ty: narrowed,
-            kind: symbol.kind,
-            function_signature: symbol.function_signature.clone(),
-        },
-    );
     true
 }
 
-/// Applies `typeof x === "tag"` narrowing in place to a `ScopeStack` (the if-body
-/// and early-return paths). Returns whether the condition was a typeof guard.
+/// Applies `typeof x === "tag"` / `typeof o.p === "tag"` narrowing in place to a
+/// `ScopeStack` (the if-body and early-return paths). Returns whether the
+/// condition was a typeof guard over a reference.
 fn narrow_typeof_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
@@ -893,29 +1272,20 @@ fn narrow_typeof_in_scope(
     let Some((operand, tag, eq)) = parse_typeof_condition(condition) else {
         return false;
     };
-    let ParsedExpression::Identifier { name, .. } = operand else {
+    let Some((base, path)) = reference_path(operand) else {
         return false;
     };
-    let Some(symbol) = scopes.resolve(name) else {
-        return true;
+    let guard = ReferenceGuard::Typeof {
+        tag,
+        keep_matching: branch_is_true == eq,
     };
-    let Some(narrowed) = narrow_union_by_typeof(&symbol.ty, tag, branch_is_true == eq) else {
-        return true;
-    };
-    let narrowed_symbol = SymbolInfo {
-        ty: narrowed,
-        kind: symbol.kind,
-        function_signature: symbol.function_signature.clone(),
-    };
-    let name = name.clone();
-    // Shadow in the current frame, not the owning frame — see the note in
-    // `narrow_discriminant_in_scope`.
-    let _ = scopes.insert_current(name, narrowed_symbol);
+    narrow_reference_in_scope(&base, &path, guard, scopes);
     true
 }
 
-/// Applies `x instanceof Ctor` narrowing in place to a `ScopeStack`. Returns
-/// whether the condition was an instanceof guard over a bare identifier.
+/// Applies `x instanceof Ctor` / `o.p instanceof Ctor` narrowing in place to a
+/// `ScopeStack`. Returns whether the condition was an instanceof guard over a
+/// reference.
 fn narrow_instanceof_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
@@ -924,27 +1294,24 @@ fn narrow_instanceof_in_scope(
     let Some((operand, ctor_name)) = parse_instanceof_condition(condition) else {
         return false;
     };
-    let ParsedExpression::Identifier { name, .. } = operand else {
+    let Some((base, path)) = reference_path(operand) else {
         return false;
     };
-    let Some(symbol) = scopes.resolve(name) else {
-        return true;
-    };
-    let Some(narrowed) = narrow_union_by_instanceof(&symbol.ty, ctor_name, branch_is_true) else {
-        return true;
-    };
-    let narrowed_symbol = SymbolInfo {
-        ty: narrowed,
-        kind: symbol.kind,
-        function_signature: symbol.function_signature.clone(),
-    };
-    let name = name.clone();
-    let _ = scopes.insert_current(name, narrowed_symbol);
+    narrow_reference_in_scope(
+        &base,
+        &path,
+        ReferenceGuard::Instanceof {
+            ctor_name,
+            keep_matching: branch_is_true,
+        },
+        scopes,
+    );
     true
 }
 
-/// Applies `Array.isArray(x)` narrowing in place to a `ScopeStack`. Returns
-/// whether the condition was such a guard over a bare identifier.
+/// Applies `Array.isArray(x)` / `Array.isArray(o.p)` narrowing in place to a
+/// `ScopeStack`. Returns whether the condition was such a guard over a
+/// reference.
 fn narrow_array_isarray_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
@@ -953,22 +1320,45 @@ fn narrow_array_isarray_in_scope(
     let Some(operand) = parse_array_isarray_condition(condition) else {
         return false;
     };
-    let ParsedExpression::Identifier { name, .. } = operand else {
+    let Some((base, path)) = reference_path(operand) else {
         return false;
     };
-    let Some(symbol) = scopes.resolve(name) else {
-        return true;
+    narrow_reference_in_scope(
+        &base,
+        &path,
+        ReferenceGuard::Arrayness {
+            keep_arrays: branch_is_true,
+        },
+        scopes,
+    );
+    true
+}
+
+/// Applies `"prop" in x` narrowing in place to a `ScopeStack` (the if-body and
+/// early-return paths). Returns whether the condition was such a test over a
+/// bare identifier.
+fn narrow_property_presence_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let Some((object, property)) = parse_in_condition(condition) else {
+        return false;
     };
-    let Some(narrowed) = narrow_union_by_arrayness(&symbol.ty, branch_is_true) else {
-        return true;
+    let Some((base, path)) = reference_path(object) else {
+        return false;
     };
-    let narrowed_symbol = SymbolInfo {
-        ty: narrowed,
-        kind: symbol.kind,
-        function_signature: symbol.function_signature.clone(),
-    };
-    let name = name.clone();
-    let _ = scopes.insert_current(name, narrowed_symbol);
+    // Shadows in the current frame, not the owning frame — see the note in
+    // `narrow_discriminant_in_scope`.
+    narrow_reference_in_scope(
+        &base,
+        &path,
+        ReferenceGuard::PropertyPresence {
+            property,
+            keep_present: branch_is_true,
+        },
+        scopes,
+    );
     true
 }
 
@@ -984,81 +1374,23 @@ fn narrow_nullish_equality_in_scope(
     let Some((subject, eq)) = parse_nullish_equality_condition(condition) else {
         return false;
     };
-    let keep_matching = branch_is_true == eq;
-
-    match subject {
-        ParsedExpression::Identifier { name, .. } => {
-            let Some(symbol) = scopes.resolve(name) else {
-                return true;
-            };
-            let Some(narrowed) = narrow_union_by_nullish(&symbol.ty, keep_matching) else {
-                return true;
-            };
-            let narrowed_symbol = SymbolInfo {
-                ty: narrowed,
-                kind: symbol.kind,
-                function_signature: symbol.function_signature.clone(),
-            };
-            let _ = scopes.insert_current(name.clone(), narrowed_symbol);
-        }
-        ParsedExpression::PropertyAccess {
-            object,
-            property_name,
-            ..
-        } => {
-            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
-                return true;
-            };
-            let Some(symbol) = scopes.resolve(name) else {
-                return true;
-            };
-            let symbol_ty = symbol.ty.peeled();
-            let Type::Object(object_type) = &symbol_ty else {
-                return true;
-            };
-            let Some(property) = object_type.properties.get(property_name.as_str()) else {
-                return true;
-            };
-            // An optional property carries its `undefined` in the `optional` flag
-            // rather than the type, so splitting on it also clears the flag.
-            let (narrowed_ty, narrowed_optional) = match narrow_union_by_nullish(
-                &property.ty,
-                keep_matching,
-            ) {
-                Some(narrowed) => (narrowed, property.optional && keep_matching),
-                None if property.optional => {
-                    if keep_matching {
-                        (Type::Undefined, true)
-                    } else {
-                        (property.ty.clone(), false)
-                    }
-                }
-                None => return true,
-            };
-
-            let mut new_object = object_type.clone();
-            let properties = Arc::make_mut(&mut new_object.properties);
-            properties.insert(
-                property_name.as_str().into(),
-                surge_ts_types::ObjectProperty {
-                    ty: narrowed_ty,
-                    optional: narrowed_optional,
-                },
-            );
-            let narrowed_symbol = SymbolInfo {
-                ty: Type::Object(new_object),
-                kind: symbol.kind,
-                function_signature: symbol.function_signature.clone(),
-            };
-            let _ = scopes.insert_current(name.clone(), narrowed_symbol);
-        }
-        _ => {}
-    }
+    let Some((base, path)) = reference_path(subject) else {
+        return false;
+    };
+    narrow_reference_in_scope(
+        &base,
+        &path,
+        ReferenceGuard::Nullish {
+            keep_matching: branch_is_true == eq,
+        },
+        scopes,
+    );
     true
 }
 
-/// Applies `ArrayBuffer.isView(x)` narrowing in place to a `ScopeStack`. Returns
-/// whether the condition was such a guard over a bare identifier.
+/// Applies `ArrayBuffer.isView(x)` / `ArrayBuffer.isView(o.p)` narrowing in place
+/// to a `ScopeStack`. Returns whether the condition was such a guard over a
+/// reference.
 fn narrow_arraybuffer_isview_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
@@ -1067,22 +1399,17 @@ fn narrow_arraybuffer_isview_in_scope(
     let Some(operand) = parse_arraybuffer_isview_condition(condition) else {
         return false;
     };
-    let ParsedExpression::Identifier { name, .. } = operand else {
+    let Some((base, path)) = reference_path(operand) else {
         return false;
     };
-    let Some(symbol) = scopes.resolve(name) else {
-        return true;
-    };
-    let Some(narrowed) = narrow_union_by_arraybufferview(&symbol.ty, branch_is_true) else {
-        return true;
-    };
-    let narrowed_symbol = SymbolInfo {
-        ty: narrowed,
-        kind: symbol.kind,
-        function_signature: symbol.function_signature.clone(),
-    };
-    let name = name.clone();
-    let _ = scopes.insert_current(name, narrowed_symbol);
+    narrow_reference_in_scope(
+        &base,
+        &path,
+        ReferenceGuard::ArrayBufferView {
+            keep_views: branch_is_true,
+        },
+        scopes,
+    );
     true
 }
 
@@ -1155,14 +1482,13 @@ pub(crate) fn narrow_truthy_guarded_symbol_table(
             continue;
         }
 
-        narrowed_symbols.insert(
-            base_name.clone(),
-            SymbolInfo {
-                ty: narrowed,
-                kind: symbol.kind,
-                function_signature: symbol.function_signature.clone(),
-            },
-        );
+        let declared = symbol.ty.clone();
+        let narrowed_symbol = SymbolInfo {
+            ty: narrowed,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        narrowed_symbols.insert_narrowed(base_name.clone(), narrowed_symbol, declared);
     }
 
     narrowed_symbols
@@ -1256,6 +1582,123 @@ mod tests {
         assert_eq!(
             narrowed,
             union_type(vec![view_reference("ArrayBuffer"), Type::String])
+        );
+    }
+
+    fn object(properties: &[(&str, bool)]) -> Type {
+        let mut map = surge_ts_types::PropertyMap::default();
+        for (name, optional) in properties {
+            map.insert(
+                (*name).into(),
+                surge_ts_types::ObjectProperty {
+                    ty: Type::Number,
+                    optional: *optional,
+                    method: false,
+                },
+            );
+        }
+        Type::Object(surge_ts_types::ObjectType::new(map, None))
+    }
+
+    fn named_reference(display: &str, target: Type) -> Type {
+        Type::Reference(surge_ts_types::TypeReference::new(
+            format!("test.ts\u{0}{display}"),
+            display,
+            Vec::new(),
+            std::sync::Arc::new(FixedResolver(target)),
+        ))
+    }
+
+    #[test]
+    fn property_presence_narrows_through_nominal_references() {
+        // `Named` is an interface/alias wrapper, so the union has no bare
+        // `Type::Object` member to decide on without peeling.
+        let named = named_reference("Named", object(&[("a", false)]));
+        let other = named_reference("Other", object(&[("b", false)]));
+        let union = union_type(vec![named.clone(), other.clone()]);
+
+        assert_eq!(
+            narrow_union_by_property_presence(&union, "a", true).unwrap(),
+            named
+        );
+        assert_eq!(
+            narrow_union_by_property_presence(&union, "a", false).unwrap(),
+            other
+        );
+    }
+
+    #[test]
+    fn property_presence_flattens_an_alias_to_a_union() {
+        let o1 = object(&[("in", false), ("key", false)]);
+        let o2 = object(&[("key", false), ("map", false)]);
+        let field = named_reference("Field", union_type(vec![o1.clone(), o2.clone()]));
+        let fields = named_reference("Fields", object(&[("fields", false)]));
+        let union = union_type(vec![field.clone(), fields.clone()]);
+
+        assert_eq!(
+            narrow_union_by_property_presence(&union, "in", true).unwrap(),
+            o1
+        );
+        assert_eq!(
+            narrow_union_by_property_presence(&union, "in", false).unwrap(),
+            union_type(vec![o2, fields])
+        );
+        // Every constituent of `Field` has `key`, so the nominal wrapper survives
+        // intact rather than being spliced into its constituents.
+        assert_eq!(
+            narrow_union_by_property_presence(&union, "key", true).unwrap(),
+            field
+        );
+    }
+
+    #[test]
+    fn property_presence_narrows_an_alias_to_a_union_at_the_top_level() {
+        let o1 = object(&[("in", false)]);
+        let o2 = object(&[("map", false)]);
+        let field = named_reference("Field", union_type(vec![o1.clone(), o2.clone()]));
+
+        assert_eq!(
+            narrow_union_by_property_presence(&field, "map", true).unwrap(),
+            o2
+        );
+        assert_eq!(
+            narrow_union_by_property_presence(&field, "map", false).unwrap(),
+            o1
+        );
+    }
+
+    #[test]
+    fn property_presence_retains_an_optional_member_in_the_false_branch() {
+        // tsc keeps `{ a?: number }` in the else branch of `if ("a" in v)` — the
+        // key may legitimately be absent at runtime.
+        let optional = object(&[("a", true), ("z", false)]);
+        let without = object(&[("b", false)]);
+        let union = union_type(vec![optional.clone(), without.clone()]);
+
+        assert_eq!(
+            narrow_union_by_property_presence(&union, "a", true).unwrap(),
+            optional
+        );
+        assert!(narrow_union_by_property_presence(&union, "a", false).is_none());
+    }
+
+    #[test]
+    fn property_presence_keeps_undecidable_members() {
+        // A string index signature may supply the key, and a primitive member
+        // cannot be classified — neither branch may drop them.
+        let indexed = Type::Object(surge_ts_types::ObjectType::new(
+            surge_ts_types::PropertyMap::default(),
+            Some(Type::Number),
+        ));
+        let union = union_type(vec![indexed.clone(), Type::String]);
+        assert!(narrow_union_by_property_presence(&union, "a", true).is_none());
+        assert!(narrow_union_by_property_presence(&union, "a", false).is_none());
+
+        // A decidably-absent member alongside them still goes in the true branch.
+        let with_absent = union_type(vec![indexed, Type::String, object(&[("b", false)])]);
+        assert_eq!(
+            narrow_union_by_property_presence(&with_absent, "a", true).unwrap(),
+            union
         );
     }
 }
