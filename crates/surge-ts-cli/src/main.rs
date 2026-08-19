@@ -478,6 +478,8 @@ fn run_single_file_mode(
             resolved_modules_by_importer: Default::default(),
             types: Vec::new(),
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             diagnostic_profile,
         })
         .check_source(&source_text, &file_name);
