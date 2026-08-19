@@ -5263,6 +5263,11 @@ path = "tests/smoke/function_type_literal_parameter_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
+name = "reference-operand-arithmetic"
+path = "tests/smoke/reference_operand_arithmetic.ts"
+expected_diagnostics = []
+
+[[case]]
 name = "union-reference-property-access"
 path = "tests/smoke/union_reference_property_access.ts"
 expected_diagnostics = []

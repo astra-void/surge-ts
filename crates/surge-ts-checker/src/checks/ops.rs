@@ -182,6 +182,13 @@ fn evaluate_add_binary(
         return InferredExpression::Unknown;
     };
 
+    // The operands may be nominal references (`core.output<T>` around the
+    // awaited/inferred type). Every classification below matches on structure,
+    // so a reference that resolves to `any`/`string`/`number` has to be peeled
+    // first or it falls through to the report.
+    let left_type = left_type.peeled();
+    let right_type = right_type.peeled();
+
     if left_type.is_unknown() || right_type.is_unknown() {
         return InferredExpression::Unknown;
     }
