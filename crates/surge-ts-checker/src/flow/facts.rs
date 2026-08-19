@@ -67,7 +67,8 @@ pub(crate) fn collect_function_flow_facts_from_statement(
             facts.has_assignments = true;
             facts.has_identifier_reads = true;
         }
-        ParsedFunctionBodyStatement::ThisPropertyAssignment(_) => {
+        ParsedFunctionBodyStatement::ThisPropertyAssignment(_)
+        | ParsedFunctionBodyStatement::MemberAssignment(_) => {
             facts.has_assignments = true;
             facts.has_identifier_reads = true;
         }
@@ -328,6 +329,7 @@ pub(crate) fn summarize_function_statement_flow(
         ParsedFunctionBodyStatement::VariableDeclaration(_)
         | ParsedFunctionBodyStatement::Assignment(_)
         | ParsedFunctionBodyStatement::ThisPropertyAssignment(_)
+        | ParsedFunctionBodyStatement::MemberAssignment(_)
         | ParsedFunctionBodyStatement::Expression(_) => ReturnFlowSummary::default(),
     }
 }

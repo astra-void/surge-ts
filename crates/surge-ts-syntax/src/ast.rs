@@ -579,6 +579,8 @@ pub enum ParsedDefaultExportDeclaration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedObjectType {
     pub properties: Vec<ParsedObjectTypeProperty>,
+    /// A string/number index signature (`[k: string]: T`).
+    pub string_index_type: Option<Box<ParsedType>>,
     /// A bare call signature (`(value?: any): number`) on the object type,
     /// making values of this type callable without `new`.
     pub call_signature: Option<Box<ParsedFunctionType>>,
@@ -960,6 +962,7 @@ pub enum ParsedFunctionBodyStatement {
     /// A `this.<property> = <value>` assignment inside a class method or
     /// constructor body. Checked against the instance property's declared type.
     ThisPropertyAssignment(Box<ParsedThisPropertyAssignment>),
+    MemberAssignment(Box<ParsedMemberAssignment>),
     Expression(Box<ParsedExpression>),
     Block(Vec<ParsedFunctionBodyStatement>),
     /// A nested `function` declaration. Retained so identifier reads inside its
@@ -1027,6 +1030,17 @@ pub struct ParsedCatchClause {
     pub declared_type: Option<ParsedType>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,
+}
+
+/// `o.p = v` / `o.a.b = v` — an assignment whose target is a member of
+/// something other than `this`. The target keeps its full expression so the
+/// checker can recover the reference path (`o` plus `["a", "b"]`) it narrows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedMemberAssignment {
+    pub target: ParsedExpression,
+    pub target_span: Option<TextSpan>,
+    pub value: ParsedExpression,
+    pub value_span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -528,6 +528,13 @@ pub(crate) fn check_function_body_statement(
                 timings.assignability_checking += start.elapsed()
             });
         }
+        ParsedFunctionBodyStatement::MemberAssignment(assignment) => {
+            let start = Instant::now();
+            check_member_assignment(*assignment, scopes, ctx);
+            record_program_timing(ctx.timings.as_ref(), |timings| {
+                timings.assignability_checking += start.elapsed()
+            });
+        }
         ParsedFunctionBodyStatement::Expression(expression) => {
             let start = Instant::now();
             check_function_expression_statement(

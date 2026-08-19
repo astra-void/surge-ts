@@ -181,6 +181,9 @@ enum ReferenceGuard<'a> {
     Nullish {
         keep_matching: bool,
     },
+    Assigned {
+        assigned: &'a Type,
+    },
 }
 
 impl ReferenceGuard<'_> {
@@ -230,6 +233,27 @@ impl ReferenceGuard<'_> {
                 let effective = Self::effective_leaf_type(ty, optional);
                 let narrowed = narrow_union_by_nullish(&effective, *keep_matching)?;
                 (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            // An assignment narrows a union-declared slot to the members the
+            // assigned value can inhabit, as tsc does. A non-union slot is
+            // already as precise as the declaration allows, so it is left alone.
+            Self::Assigned { assigned } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let Type::Union(union) = &effective else {
+                    return None;
+                };
+                let kept: Vec<Type> = union
+                    .types()
+                    .iter()
+                    .filter(|member| surge_ts_types::is_assignable_to(assigned, member))
+                    .cloned()
+                    .collect();
+                let narrowed = if kept.is_empty() {
+                    return None;
+                } else {
+                    union_type(kept)
+                };
+                (narrowed != *ty).then_some((narrowed, false))
             }
         }
     }
@@ -330,6 +354,23 @@ fn narrowed_reference_type(ty: &Type, path: &[String], guard: ReferenceGuard<'_>
         }
     })?;
     (narrowed != *ty).then_some(narrowed)
+}
+
+/// Narrows the reference `target` (an `o.p` member expression) to what an
+/// assignment of `assigned` leaves it able to be. Block-scoped like every other
+/// in-scope narrowing, so a branch's assignment does not leak past `pop_child`.
+pub(crate) fn narrow_assignment_target_in_scope(
+    target: &ParsedExpression,
+    assigned: &Type,
+    scopes: &mut ScopeStack,
+) {
+    let Some((base, path)) = reference_path(target) else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    }
+    narrow_reference_in_scope(&base, &path, ReferenceGuard::Assigned { assigned }, scopes);
 }
 
 /// Applies `guard` to `base`'s `path` in the *current* scope frame — see the
@@ -1252,13 +1293,86 @@ fn narrow_truthy_reference_in_scope(
     scopes: &mut ScopeStack,
     branch_is_true: bool,
 ) -> bool {
+    // `if (a?.b())` proves `a` non-nullish in the true branch: had it been
+    // nullish the whole chain would short-circuit to `undefined` and the test
+    // would be false. `reference_path` stops at the call, so unwrap to its
+    // receiver first.
+    let condition = match condition {
+        ParsedExpression::OptionalPropertyCall { object, .. }
+        | ParsedExpression::OptionalCall { callee: object, .. } => object.as_ref(),
+        other => other,
+    };
     let Some((base, path)) = reference_path(condition) else {
         return false;
     };
+    // `if (!merged.valid) throw` discriminates a union by a boolean *literal*
+    // member, which the leaf-level truthy guard cannot express: it narrows the
+    // property in place instead of dropping the members the test rules out.
+    narrow_union_by_property_truthiness_in_scope(&base, &path, branch_is_true, scopes);
     if branch_is_true {
         narrow_reference_in_scope(&base, &path, ReferenceGuard::Truthy, scopes);
     }
     true
+}
+
+/// Whether the type at `path` inside `member` is always truthy (`Some(true)`),
+/// always falsy (`Some(false)`), or undecidable (`None`). Only unit types decide;
+/// everything else stays in both branches.
+fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
+    let mut current = member.peeled();
+    for segment in path {
+        let Type::Object(object) = &current else {
+            return None;
+        };
+        let property = object.properties.get(segment.as_str())?;
+        if property.is_optional() {
+            return None;
+        }
+        current = property.ty.peeled();
+    }
+    match &current {
+        Type::BooleanLiteral(value) => Some(*value),
+        Type::StringLiteral(value) => Some(!value.is_empty()),
+        Type::NumberLiteral(literal) => Some(literal.value.parse::<f64>().ok()? != 0.0),
+        Type::Undefined | Type::Void | Type::Never => Some(false),
+        _ => None,
+    }
+}
+
+/// Drops the union members a truthiness test on `path` rules out. Leaves a
+/// non-union base, and any member whose leaf is not a unit type, untouched.
+fn narrow_union_by_property_truthiness_in_scope(
+    base: &str,
+    path: &[String],
+    branch_is_true: bool,
+    scopes: &mut ScopeStack,
+) {
+    if path.is_empty() {
+        return;
+    }
+    let Some(symbol) = scopes.resolve(base) else {
+        return;
+    };
+    let peeled = symbol.ty.peeled();
+    let Type::Union(union) = &peeled else {
+        return;
+    };
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| path_truthiness(member, path) != Some(!branch_is_true))
+        .cloned()
+        .collect();
+    if kept.is_empty() || kept.len() == union.types().len() {
+        return;
+    }
+    let declared = symbol.ty.clone();
+    let narrowed_symbol = SymbolInfo {
+        ty: union_type(kept),
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let _ = scopes.insert_current_narrowed(base.to_string(), narrowed_symbol, declared);
 }
 
 /// Applies `typeof x === "tag"` / `typeof o.p === "tag"` narrowing in place to a

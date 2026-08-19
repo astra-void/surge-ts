@@ -6,9 +6,9 @@ use super::*;
 use surge_ts_diagnostics::{Diagnostic, DiagnosticCode};
 use surge_ts_syntax::{
     ParsedAssignment, ParsedBindingName, ParsedExpression, ParsedForOfStatement,
-    ParsedFunctionBodyStatement, ParsedIfStatement, ParsedReturnStatement, ParsedSwitchStatement,
-    ParsedThisPropertyAssignment, ParsedTryStatement, ParsedType, ParsedUnaryOperator,
-    ParsedVariableDeclaration, ParsedVariableKind, ParsedWhileStatement,
+    ParsedFunctionBodyStatement, ParsedIfStatement, ParsedMemberAssignment, ParsedReturnStatement,
+    ParsedSwitchStatement, ParsedThisPropertyAssignment, ParsedTryStatement, ParsedType,
+    ParsedUnaryOperator, ParsedVariableDeclaration, ParsedVariableKind, ParsedWhileStatement,
 };
 use surge_ts_types::{Type, TypeCopyReason, is_assignable_to, union_type, with_type_copy_reason};
 
@@ -905,6 +905,79 @@ pub(crate) fn check_function_assignment(
     if !target_blocked.is_blocked() && flow_state.tracked_local_count() > 0 {
         mark_assignment_state(&target_name, flow_state);
     }
+}
+
+/// Checks an `o.p = v` assignment against the target property's declared type
+/// and narrows the target for the code that follows. Nothing is reported when
+/// either side carries the degradation sentinel, and the narrowing is
+/// block-scoped exactly like the identifier-assignment one above.
+pub(crate) fn check_member_assignment(
+    assignment: ParsedMemberAssignment,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedExpression::PropertyAccess {
+        object,
+        object_span,
+        property_name,
+        ..
+    } = &assignment.target
+    else {
+        return;
+    };
+
+    let visible_symbols = visible_symbols(scopes);
+
+    // An assignment target is written, not read: it is resolved through the
+    // *inference* layer, which answers without reporting, so a receiver surge
+    // models incompletely (`Component.getInitialProps = …`, `X.prototype.m = …`)
+    // does not turn into a false TS2339 here.
+    let object_type = match crate::infer::infer_expression(object, &visible_symbols, ctx) {
+        InferredExpression::Known(ty) => ty,
+        _ => return,
+    };
+    let _ = object_span;
+
+    let Some(target_type) = object_type.get_property_access_type(property_name) else {
+        return;
+    };
+
+    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type(
+        &assignment.value,
+        assignment.value_span,
+        Some(&target_type),
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+        &visible_symbols,
+        ctx,
+    );
+
+    let InferredExpression::Known(value_type) = inferred_value else {
+        return;
+    };
+
+    if value_type.is_unknown() || target_type.is_unknown() {
+        return;
+    }
+
+    if !is_assignable_to(&value_type, &target_type) {
+        let diagnostic = Diagnostic::ts2322(
+            &crate::checks::expr::source_display_name(&value_type, &target_type),
+            &target_type.name(),
+            ctx.file_name.clone(),
+        );
+        let diagnostic = match assignment.target_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+        return;
+    }
+
+    crate::checks::function::narrowing::narrow_assignment_target_in_scope(
+        &assignment.target,
+        &value_type,
+        scopes,
+    );
 }
 
 /// Checks a `this.<property> = <value>` assignment against the instance
