@@ -18,7 +18,12 @@ exclude = ["/*.md"]
 [lib]
 doctest = false
 
+[features]
+default = []
+mimalloc = ["dep:libmimalloc-sys"]
+
 [dependencies]
+libmimalloc-sys = { version = "0.1.49", features = ["extended"], optional = true }
 oxc_allocator = "0.128.0"
 surge-ts-diagnostics = { version = "0.1.0", path = "../surge-ts-diagnostics" }
 surge-ts-syntax = { version = "0.1.0", path = "../surge-ts-syntax" }
