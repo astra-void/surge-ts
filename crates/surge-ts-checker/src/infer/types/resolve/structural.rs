@@ -129,8 +129,12 @@ pub(crate) fn resolve_function_type_parameter(
     }
 }
 
+/// Borrows the parsed object rather than consuming it: every `ParsedType`
+/// payload is `Arc`-backed, so cloning a member annotation is a refcount bump
+/// while unwrapping the shared object literal would deep-copy its whole
+/// property list on each of the hundreds of thousands of resolutions.
 pub(crate) fn resolve_object_type(
-    object_type: ParsedObjectType,
+    object_type: &ParsedObjectType,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
@@ -138,8 +142,8 @@ pub(crate) fn resolve_object_type(
     let mut properties = PropertyMap::default();
     let mut had_error = false;
 
-    for property in object_type.properties {
-        let property_type = resolve_parsed_type(property.ty, ctx, resolving, substitution);
+    for property in &object_type.properties {
+        let property_type = resolve_parsed_type(property.ty.clone(), ctx, resolving, substitution);
         had_error |= property_type.had_error;
         let object_property = if property.optional {
             ObjectProperty::optional(property_type.ty)
@@ -148,19 +152,19 @@ pub(crate) fn resolve_object_type(
         }
         .with_method(property.is_method);
 
-        properties.insert(property.name.into(), object_property);
+        properties.insert(property.name.as_str().into(), object_property);
     }
 
-    let string_index_type = object_type.string_index_type.and_then(|index_type| {
-        let resolved = resolve_parsed_type(*index_type, ctx, resolving, substitution);
+    let string_index_type = object_type.string_index_type.as_deref().and_then(|index_type| {
+        let resolved = resolve_parsed_type(index_type.clone(), ctx, resolving, substitution);
         had_error |= resolved.had_error;
         (!resolved.had_error).then_some(resolved.ty)
     });
 
     let mut resolved_object = alloc_object_type(properties, string_index_type);
-    if let Some(call_signature) = object_type.call_signature {
+    if let Some(call_signature) = object_type.call_signature.as_deref() {
         let resolved = resolve_parsed_type(
-            ParsedType::Function(std::sync::Arc::new(*call_signature)),
+            ParsedType::Function(std::sync::Arc::new(call_signature.clone())),
             ctx,
             resolving,
             substitution,

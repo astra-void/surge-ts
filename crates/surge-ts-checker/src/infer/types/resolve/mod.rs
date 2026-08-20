@@ -140,7 +140,7 @@ pub(crate) fn resolve_parsed_type(
             had_error: false,
         },
         ParsedType::Object(object_type) => {
-            resolve_object_type(object_type, ctx, resolving, substitution)
+            resolve_object_type(object_type.as_ref(), ctx, resolving, substitution)
         }
         ParsedType::Array(element_type) => {
             let resolved_element = resolve_parsed_type(
@@ -340,15 +340,35 @@ pub(crate) fn resolve_parsed_type(
                 had_error: false,
             }
         }
-        ParsedType::Mapped(mapped) => resolve_mapped_type(mapped, ctx, resolving, substitution),
+        ParsedType::Mapped(mapped) => resolve_mapped_type(
+            std::sync::Arc::unwrap_or_clone(mapped),
+            ctx,
+            resolving,
+            substitution,
+        ),
         ParsedType::IndexedAccess(indexed_access) => {
-            resolve_indexed_access_type(indexed_access, ctx, resolving, substitution)
+            resolve_indexed_access_type(
+                std::sync::Arc::unwrap_or_clone(indexed_access),
+                ctx,
+                resolving,
+                substitution,
+            )
         }
         ParsedType::Conditional(conditional) => {
-            resolve_conditional_type(conditional, ctx, resolving, substitution)
+            resolve_conditional_type(
+                std::sync::Arc::unwrap_or_clone(conditional),
+                ctx,
+                resolving,
+                substitution,
+            )
         }
         ParsedType::TemplateLiteral(template) => {
-            resolve_template_literal_type(template, ctx, resolving, substitution)
+            resolve_template_literal_type(
+                std::sync::Arc::unwrap_or_clone(template),
+                ctx,
+                resolving,
+                substitution,
+            )
         }
         // An `infer X` capture resolves to a permissive `any`: with no real
         // inference, the enclosing `extends` pattern (e.g. `Ctor<infer P>`) stays a

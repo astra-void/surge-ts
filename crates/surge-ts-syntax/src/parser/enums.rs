@@ -108,11 +108,11 @@ fn lower_enum_declaration(
             kind: ParsedVariableKind::Const,
             name: declaration.id.name.to_string(),
             name_span,
-            declared_type: Some(ParsedType::Object(ParsedObjectType {
+            declared_type: Some(ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
                 properties,
                 string_index_type: None,
                 call_signature: None,
-            })),
+            }))),
             initializer: None,
             initializer_span: None,
         },

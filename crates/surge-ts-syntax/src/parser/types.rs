@@ -146,11 +146,11 @@ fn parse_template_literal_type(
         interpolations.push(parsed);
     }
 
-    Some(ParsedType::TemplateLiteral(ParsedTemplateLiteralType {
+    Some(ParsedType::TemplateLiteral(std::sync::Arc::new(ParsedTemplateLiteralType {
         quasis,
         interpolations,
         span: Some(text_span_from_oxc_span(template_literal.span)),
-    }))
+    })))
 }
 
 /// Lowers `Check extends Extends ? True : False`. If any branch contains a
@@ -167,32 +167,32 @@ fn parse_conditional_type(conditional_type: &TSConditionalType<'_>) -> Option<Pa
         return Some(ParsedType::Unknown);
     };
 
-    Some(ParsedType::Conditional(ParsedConditionalType {
+    Some(ParsedType::Conditional(std::sync::Arc::new(ParsedConditionalType {
         check_type: Box::new(check_type),
         extends_type: Box::new(extends_type),
         true_type: Box::new(true_type),
         false_type: Box::new(false_type),
         span: Some(text_span_from_oxc_span(conditional_type.span)),
-    }))
+    })))
 }
 
 fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
     match &type_query.expr_name {
         TSTypeQueryExprName::IdentifierReference(identifier) => {
-            Some(ParsedType::TypeOf(ParsedTypeOfType {
+            Some(ParsedType::TypeOf(std::sync::Arc::new(ParsedTypeOfType {
                 name: identifier.name.to_string(),
                 name_span: Some(text_span_from_oxc_span(identifier.span)),
                 members: Vec::new(),
-            }))
+            })))
         }
         TSTypeQueryExprName::QualifiedName(qualified_name) => {
             let mut members = Vec::new();
             let (base, base_span) = flatten_qualified_type_name(qualified_name, &mut members)?;
-            Some(ParsedType::TypeOf(ParsedTypeOfType {
+            Some(ParsedType::TypeOf(std::sync::Arc::new(ParsedTypeOfType {
                 name: base,
                 name_span: Some(text_span_from_oxc_span(base_span)),
                 members,
-            }))
+            })))
         }
         // `typeof import('foo')` and `typeof this` are not modelled.
         _ => None,
@@ -236,11 +236,11 @@ fn parse_indexed_access_type(indexed_access: &TSIndexedAccessType<'_>) -> Option
     let object_type = parse_type(&indexed_access.object_type)?;
     let index_type = parse_type(&indexed_access.index_type)?;
 
-    Some(ParsedType::IndexedAccess(ParsedIndexedAccessType {
+    Some(ParsedType::IndexedAccess(std::sync::Arc::new(ParsedIndexedAccessType {
         object_type: Box::new(object_type),
         index_type: Box::new(index_type),
         span: Some(text_span_from_oxc_span(indexed_access.span)),
-    }))
+    })))
 }
 
 fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
@@ -260,14 +260,14 @@ fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
         None => ParsedType::Any, // Though typically TS requires a type, fall back to Any or Unknown
     };
 
-    Some(ParsedType::Mapped(ParsedMappedType {
+    Some(ParsedType::Mapped(std::sync::Arc::new(ParsedMappedType {
         key_name: mapped_type.key.name.to_string(),
         key_span: Some(text_span_from_oxc_span(mapped_type.key.span)),
         constraint: Box::new(constraint),
         value_type: Box::new(value_type),
         optional,
         span: Some(text_span_from_oxc_span(mapped_type.span)),
-    }))
+    })))
 }
 
 fn parse_type_reference(type_reference: &TSTypeReference<'_>) -> Option<ParsedType> {
@@ -535,11 +535,11 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         properties.push(property);
     }
 
-    ParsedType::Object(ParsedObjectType {
+    ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
         properties,
         string_index_type,
         call_signature,
-    })
+    }))
 }
 
 /// Lowers a bare call signature (`(value?: any): number`) into a
