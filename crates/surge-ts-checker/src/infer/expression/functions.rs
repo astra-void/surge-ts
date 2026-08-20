@@ -40,7 +40,7 @@ pub(crate) fn infer_arrow_function(
                 _ => Type::Unknown,
             }
         }
-        ParsedArrowFunctionBody::Block(_) => arrow_function
+        ParsedArrowFunctionBody::Block(body) => arrow_function
             .return_type
             .as_ref()
             .and_then(|ty| match ty {
@@ -53,6 +53,9 @@ pub(crate) fn infer_arrow_function(
                 surge_ts_syntax::ParsedType::Undefined => Some(Type::Undefined),
                 surge_ts_syntax::ParsedType::Void => Some(Type::Void),
                 _ => None,
+            })
+            .or_else(|| {
+                infer_block_body_return_type(body, &arrow_function.parameters, symbols, ctx)
             })
             .unwrap_or(Type::Unknown),
     };
@@ -80,4 +83,108 @@ pub(crate) fn required_parameter_count(
     }
 
     required
+}
+
+/// Infers an unannotated block-bodied arrow's return type from its `return`
+/// statements. Deliberately narrow: a run of local declarations followed by
+/// returns is the shape a callback argument almost always has, and it is what
+/// lets a lazy initializer (`useState(() => { const rows = …; return rows; })`)
+/// contribute its type to the call's inference. Anything with branching, a bare
+/// `return;`, or a binding pattern yields `None`, keeping the previous
+/// `Unknown` — the body would need real flow analysis to type honestly.
+fn infer_block_body_return_type(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    use surge_ts_syntax::{ParsedBindingName, ParsedFunctionBodyStatement};
+
+    let returns_here = body
+        .iter()
+        .any(|statement| matches!(statement, ParsedFunctionBodyStatement::Return(_)));
+    if !returns_here {
+        return None;
+    }
+    // Any statement that can carry control flow (or a return this walk would
+    // miss) disqualifies the body.
+    let straight_line = body.iter().all(|statement| {
+        matches!(
+            statement,
+            ParsedFunctionBodyStatement::VariableDeclaration(_)
+                | ParsedFunctionBodyStatement::Return(_)
+                | ParsedFunctionBodyStatement::Expression(_)
+                | ParsedFunctionBodyStatement::TypeAlias(_)
+        )
+    });
+    if !straight_line {
+        return None;
+    }
+
+    let mut locals = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    for parameter in parameters {
+        let ParsedBindingName::Identifier { name, .. } = &parameter.binding_name else {
+            return None;
+        };
+        let _ = locals.insert(
+            name.clone(),
+            crate::symbols::SymbolInfo {
+                ty: Type::Any,
+                kind: crate::symbols::SymbolKind::Parameter,
+                function_signature: None,
+            },
+        );
+    }
+
+    let mut returned = Vec::new();
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
+                if variable.declared_type.is_some() {
+                    return None;
+                }
+                let initializer = variable.initializer.as_ref()?;
+                let InferredExpression::Known(ty) = infer_expression(initializer, &locals, ctx)
+                else {
+                    return None;
+                };
+                let _ = locals.insert(
+                    variable.name.clone(),
+                    crate::symbols::SymbolInfo {
+                        ty,
+                        kind: match variable.kind {
+                            surge_ts_syntax::ParsedVariableKind::Var => {
+                                crate::symbols::SymbolKind::Var
+                            }
+                            surge_ts_syntax::ParsedVariableKind::Let => {
+                                crate::symbols::SymbolKind::Let
+                            }
+                            surge_ts_syntax::ParsedVariableKind::Const => {
+                                crate::symbols::SymbolKind::Const
+                            }
+                        },
+                        function_signature: None,
+                    },
+                );
+            }
+            ParsedFunctionBodyStatement::Return(statement) => {
+                let expression = statement.expression.as_ref()?;
+                let InferredExpression::Known(ty) = infer_expression(expression, &locals, ctx)
+                else {
+                    return None;
+                };
+                if ty.is_unknown() {
+                    return None;
+                }
+                returned.push(ty);
+            }
+            _ => {}
+        }
+    }
+
+    match returned.len() {
+        0 => None,
+        1 => returned.pop(),
+        _ => Some(surge_ts_types::union_type(returned)),
+    }
 }
