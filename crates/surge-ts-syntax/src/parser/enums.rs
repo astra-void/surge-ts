@@ -17,10 +17,39 @@ use super::text_span_from_oxc_span;
 
 pub(crate) fn parse_enum_declaration(declaration: &TSEnumDeclaration<'_>) -> Vec<ParsedStatement> {
     let (type_alias, value) = lower_enum_declaration(declaration);
-    vec![
-        ParsedStatement::TypeAliasDeclaration(Box::new(type_alias)),
-        ParsedStatement::VariableDeclaration(Box::new(value)),
-    ]
+    let mut statements: Vec<ParsedStatement> = member_type_aliases(&type_alias, &value)
+        .map(|alias| ParsedStatement::TypeAliasDeclaration(Box::new(alias)))
+        .collect();
+    statements.push(ParsedStatement::TypeAliasDeclaration(Box::new(type_alias)));
+    statements.push(ParsedStatement::VariableDeclaration(Box::new(value)));
+    statements
+}
+
+/// One alias per member, named `Enum.Member`, so an *enum member type* resolves
+/// (`type R = Color.Red`, or a discriminant `interface N { kind: Color.Red }`).
+/// Without them the annotation misses and the enclosing declaration degrades,
+/// which both loses the diagnostic and makes the expansion uncacheable.
+///
+/// An enum declared inside a `namespace` is registered qualified
+/// (`ts.SyntaxKind.SourceFile`), so a bare `SyntaxKind.SourceFile` written inside
+/// that namespace still misses — see the note in
+/// `docs/perf/NAMESPACE-INTERFACE-MERGE.md`.
+fn member_type_aliases<'a>(
+    type_alias: &'a ParsedTypeAliasDeclaration,
+    value: &'a ParsedVariableDeclaration,
+) -> impl Iterator<Item = ParsedTypeAliasDeclaration> + 'a {
+    let members: &'a [ParsedObjectTypeProperty] = match value.declared_type.as_ref() {
+        Some(ParsedType::Object(object)) => object.properties.as_slice(),
+        _ => &[],
+    };
+    members.iter().map(move |member| ParsedTypeAliasDeclaration {
+        is_declare: type_alias.is_declare,
+        name: format!("{}.{}", type_alias.name, member.name),
+        name_span: member.name_span,
+        type_parameters: Vec::new(),
+        ty: member.ty.clone(),
+        type_span: member.name_span,
+    })
 }
 
 pub(crate) fn parse_enum_declaration_as_function_body(

@@ -322,6 +322,7 @@ export const fixturePresets: Record<string, string> = {
   'combined-augmentation-generic-registry-basic': path.join(workspaceRoot, 'tests/compat-projects/combined-augmentation-generic-registry-basic/tsconfig.json'),
   'namespace-import-qualified-member-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-import-qualified-member-basic/tsconfig.json'),
   'namespace-member-signature-siblings-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-member-signature-siblings-basic/tsconfig.json'),
+  'enum-member-type-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-member-type-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
