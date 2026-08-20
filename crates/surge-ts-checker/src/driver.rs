@@ -617,12 +617,106 @@ fn collect_namespace_type_declarations(
 /// is ALSO registered under the bare immediate-namespace key (`JSX.IntrinsicElements`)
 /// so the JSX checker's literal lookup and the unqualified sibling references inside
 /// the library's own bodies keep resolving. First-wins (declaration merging).
+/// Opt-in `SURGE_NS_IFACE_MERGE=1`: fold a namespace's re-opened interfaces into
+/// one declaration. Correct and worth **33 fewer false positives on tRPC** (825
+/// -> 793, no new ones) — typescript.d.ts splits `Node`, `Type`, `Symbol`,
+/// `Identifier`, `SourceFile`, `Signature` and four more into two blocks each,
+/// and first-wins drops the block carrying their whole service-method half
+/// (`ts.Type.getProperty`, `ts.Symbol.getName`, `Node.getText`, `Identifier.text`).
+///
+/// Not the default because it costs **+223% wall on tRPC** (10.1s -> 32.7s,
+/// interleaved A/B). The cause is not the extra members but that they are
+/// *mutually cyclic*: merged `ts.Node` gains methods returning `SourceFile`,
+/// whose merged block returns `Node`. Counters say clean expansions are
+/// unchanged (7,997 -> 7,999) while degraded ones go 19,528 -> 1,266,359 (65x)
+/// and member visits 3.3M -> 26.2M — a degraded expansion is never cached, so
+/// every peel re-expands the cycle. Landing this by default needs cycle-tolerant
+/// interface resolution (a reference to a sibling interface must stay nominal
+/// during the enclosing body's own resolution), not a change here.
+fn namespace_interface_merge_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_NS_IFACE_MERGE").is_some())
+}
+
+/// Merges from the parsed blocks in one shot rather than folding into the table
+/// incrementally: the table is rebuilt for every consuming module, and folding an
+/// already-merged result into itself re-appends its whole method set each pass
+/// (measured as a further 4x on top of the cost above).
+fn register_merged_namespace_interfaces(
+    namespace: &ParsedNamespaceDeclaration,
+    prefix: &str,
+    bare_prefix: &str,
+    ctx: &mut CheckerContext,
+) {
+    let mut blocks: std::collections::HashMap<
+        &str,
+        Vec<&surge_ts_syntax::ParsedInterfaceDeclaration>,
+    > = std::collections::HashMap::new();
+    let mut order: Vec<&str> = Vec::new();
+    for statement in &namespace.statements {
+        let inner = match statement {
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
+                    declaration.as_ref()
+                } else {
+                    statement
+                }
+            }
+            other => other,
+        };
+        if let ParsedStatement::InterfaceDeclaration(interface) = inner {
+            let entry = blocks.entry(interface.name.as_str()).or_default();
+            if entry.is_empty() {
+                order.push(interface.name.as_str());
+            }
+            entry.push(interface);
+        }
+    }
+
+    for name in order {
+        let interfaces = &blocks[name];
+        if interfaces.len() < 2 {
+            continue;
+        }
+        let file_name = ctx.file_name_arc();
+        let build = |key: &str, interface: &surge_ts_syntax::ParsedInterfaceDeclaration| {
+            InterfaceInfo::new(
+                key.to_string(),
+                file_name.clone(),
+                interface.name_span,
+                interface.type_parameters.clone(),
+                interface.extends.clone(),
+                interface.members.clone(),
+                interface.string_index_type.clone(),
+                interface.call_signature.clone(),
+                interface.construct_signatures.clone(),
+                None,
+            )
+        };
+        let mut keys = vec![format!("{prefix}.{name}")];
+        if prefix != bare_prefix {
+            keys.push(format!("{bare_prefix}.{name}"));
+        }
+        for key in keys {
+            let mut merged = build(&key, interfaces[0]);
+            for interface in &interfaces[1..] {
+                merged = crate::symbols::merge_interface_infos(&merged, &build(&key, interface));
+            }
+            ctx.type_declarations
+                .upsert(key, TypeDeclarationInfo::Interface(merged));
+        }
+    }
+}
+
 fn collect_namespace_type_declarations_prefixed(
     namespace: &ParsedNamespaceDeclaration,
     prefix: &str,
     ctx: &mut CheckerContext,
 ) {
     let bare_prefix = namespace.name.as_str();
+    if namespace_interface_merge_enabled() {
+        register_merged_namespace_interfaces(namespace, prefix, bare_prefix, ctx);
+    }
     for statement in &namespace.statements {
         let inner = match statement {
             ParsedStatement::ExportDeclaration(export) => {
