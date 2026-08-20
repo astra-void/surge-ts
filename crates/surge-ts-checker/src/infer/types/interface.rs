@@ -664,6 +664,25 @@ pub(crate) fn resolve_interface_declaration(
                     base_is_open = true;
                 }
             }
+            // `interface NodeArray<T> extends ReadonlyArray<T>` — the array
+            // surface is a name lookup, not a property map, so materialize it
+            // here or every inherited `forEach`/`length` is a false TS2339.
+            Type::Array(element) => {
+                for name in surge_ts_types::array_property_names() {
+                    if properties.contains_key(*name) {
+                        continue;
+                    }
+                    let Some(member_ty) =
+                        surge_ts_types::array_member_type(name, element.as_ref())
+                    else {
+                        continue;
+                    };
+                    properties.insert(
+                        (*name).into(),
+                        surge_ts_types::ObjectProperty::required(member_ty),
+                    );
+                }
+            }
             Type::Any => base_is_open = true,
             // A degraded (sentinel-`Unknown`) base is surge's own resolution
             // failure — e.g. a base inside a cyclic module cluster — not a user

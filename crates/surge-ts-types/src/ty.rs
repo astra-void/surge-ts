@@ -508,6 +508,23 @@ fn element_or_undefined(element: &Type) -> Type {
     crate::union_type(vec![element.clone(), Type::Undefined])
 }
 
+/// Every member name [`array_property_access_type`] answers. An interface that
+/// `extends Array<T>`/`ReadonlyArray<T>` inherits a structural member set, and
+/// the array surface is modelled by a name lookup rather than a property map —
+/// this is what lets the heritage merge materialize it.
+pub fn array_property_names() -> &'static [&'static str] {
+    &[
+        "length", "map", "find", "findLast", "findIndex", "findLastIndex", "filter", "some",
+        "every", "forEach", "flatMap", "flat", "reduce", "reduceRight", "join", "concat", "slice",
+        "sort", "reverse", "fill", "splice", "push", "pop", "shift", "unshift", "at", "indexOf",
+        "lastIndexOf", "includes", "values", "keys", "entries",
+    ]
+}
+
+pub fn array_member_type(name: &str, element: &Type) -> Option<Type> {
+    array_property_access_type(name, element)
+}
+
 fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
