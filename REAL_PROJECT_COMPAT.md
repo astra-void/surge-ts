@@ -772,9 +772,9 @@ classes are understood and neither is a checker bug in the ordinary sense:
 the *second* `interface` block of a `declare namespace ts` declaration — directly
 for `Identifier`, and through inheritance from `Node` for `getText` — which
 declaration merging would fold in. The merge is implemented and correct — it removes 33 false
-positives with none added — but is gated off because it turns the merged
-interfaces into a mutual cycle whose expansions degrade and therefore cannot be
-cached. Enable with `SURGE_NS_IFACE_MERGE=1`; see
+positives with none added — but is gated off because the merged interfaces pull
+in a permanently-degraded, and therefore uncacheable, `typescript.d.ts`
+expansion. Enable with `SURGE_NS_IFACE_MERGE=1`; see
 [docs/perf/NAMESPACE-INTERFACE-MERGE.md](docs/perf/NAMESPACE-INTERFACE-MERGE.md)
 for the counter evidence and the cycle-tolerant-resolution fix it waits on.
 
