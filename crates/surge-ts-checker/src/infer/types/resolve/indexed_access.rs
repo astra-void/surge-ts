@@ -461,6 +461,19 @@ pub(super) fn resolve_indexed_access_type(
             }
         }
         (_, invalid_index) => {
+            // A receiver the checker marked open (`NonNullable<T>` is `T & {}`,
+            // and an intersection whose other operand degraded keeps the survivor
+            // open) has members surge never enumerated, so its index cannot be
+            // validated — degrade rather than emit a false TS2538.
+            if matches!(&resolved_object.ty, Type::Object(object) if object.synthetic_open_index) {
+                if generic_indexed_access {
+                    record_generic_indexed_access_unknown_fallback();
+                }
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: false,
+                };
+            }
             if let Type::Unknown = invalid_index {
                 // In a generic context (a type-parameter receiver/key or a
                 // substituted reference) an `unknown` index is a resolution
