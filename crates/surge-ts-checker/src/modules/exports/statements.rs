@@ -45,6 +45,23 @@ pub(crate) fn collect_exports_from_statement(
                 // the export table so a namespace import (`import * as React`) can
                 // re-expose them as qualified types (`React.ComponentProps<...>`).
                 let prefix = format!("{exported_name}.");
+                // The value twin of the qualified type carry below: a namespace
+                // member published under `<name>.<member>` holds the member's
+                // real signature, while the namespace object only models the
+                // member *set* with permissive `any`. Without this, every
+                // `import { useState } from "react"` bound React's permissive
+                // member and lost the hook's return type.
+                for (key, symbol) in exportable_values.iter_shared() {
+                    let Some(member_name) = key.strip_prefix(prefix.as_str()) else {
+                        continue;
+                    };
+                    if symbols.get_own_shared(key.as_ref()).is_none() {
+                        symbols.insert_shared(key.to_string(), symbol.clone());
+                    }
+                    if symbols.get_own_shared(member_name).is_none() {
+                        symbols.insert_shared(member_name.to_string(), symbol.clone());
+                    }
+                }
                 for (key, declaration) in local_type_declarations.iter() {
                     if key.starts_with(&prefix) {
                         let _ = type_declarations.insert(key.as_ref(), declaration.clone());

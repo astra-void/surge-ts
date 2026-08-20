@@ -100,6 +100,7 @@ fn collect_exportable_value_symbols_thin(
                             .iter()
                             .filter_map(|p| p.declared_type.as_ref()),
                         function.return_type.as_ref(),
+                        namespace,
                         ctx,
                     ) {
                         continue;
@@ -107,11 +108,12 @@ fn collect_exportable_value_symbols_thin(
                     (
                         function.name.as_str(),
                         SymbolKind::Function,
-                        crate::checks::function::function_signature_info(
+                        crate::checks::function::namespace_member_signature_info(
                             &function.type_parameters,
                             &function.parameters,
                             function.return_type.as_ref(),
                             &ctx.file_name,
+                            prefix,
                         ),
                     )
                 }
@@ -129,6 +131,7 @@ fn collect_exportable_value_symbols_thin(
                                 .iter()
                                 .filter_map(|p| p.declared_type.as_ref()),
                             arrow.return_type.as_ref(),
+                            namespace,
                             ctx,
                         )
                     {
@@ -137,11 +140,12 @@ fn collect_exportable_value_symbols_thin(
                     (
                         variable.name.as_str(),
                         SymbolKind::Const,
-                        crate::checks::function::function_signature_info(
+                        crate::checks::function::namespace_member_signature_info(
                             &arrow.type_parameters,
                             &arrow.parameters,
                             arrow.return_type.as_ref(),
                             &ctx.file_name,
+                            prefix,
                         ),
                     )
                 }
@@ -694,12 +698,17 @@ fn publishable_member_signature<'a>(
     type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
     parameter_types: impl Iterator<Item = &'a surge_ts_syntax::ParsedType>,
     return_type: Option<&surge_ts_syntax::ParsedType>,
+    namespace: &ParsedNamespaceDeclaration,
     ctx: &CheckerContext,
 ) -> bool {
     // Only *generic* members need the qualified entry: a non-generic one is
     // already callable through the namespace object, and publishing every member
     // of every ambient namespace measured +300 MB peak RSS on tRPC.
-    if type_parameters.is_empty() {
+    // The one exception is a type-predicate return (`node is ImportDeclaration`):
+    // the namespace object's permissive member drops the predicate, so every
+    // branch guarded by `ts.isImportDeclaration(node)` loses its narrowing.
+    let is_type_predicate = matches!(return_type, Some(surge_ts_syntax::ParsedType::Predicate(_)));
+    if type_parameters.is_empty() && !is_type_predicate {
         return false;
     }
     let mut scan = SignatureNameScan::default();
@@ -726,6 +735,57 @@ fn publishable_member_signature<'a>(
             .any(|type_parameter| type_parameter.name == **name)
             || scan.bound.iter().any(|bound| bound == name)
             || ctx.lookup_type_declaration(name).is_some()
+            || namespace_exports_sibling_type(namespace, name, ctx)
+    })
+}
+
+/// Whether a bare name in a namespace member's signature names a type the
+/// namespace *exports* — `React.useState`'s return `Dispatch<SetStateAction<S>>`
+/// names `React.Dispatch`, stored under the qualified key, and instantiation
+/// resolves it there through the member's namespace prefix. Such a signature is
+/// still self-contained.
+///
+/// A namespace-private type is not: zod's
+/// `util.assertEqual = <A, B>(_: AssertEqual<A, B>) => void` names an unexported
+/// `AssertEqual`, which no consumer can see. In a declaration file every member
+/// of an ambient namespace is exported, so the `export` keyword is not required
+/// there.
+fn namespace_exports_sibling_type(
+    namespace: &ParsedNamespaceDeclaration,
+    name: &str,
+    ctx: &CheckerContext,
+) -> bool {
+    if name.contains('.') {
+        return false;
+    }
+    let ambient = [".d.ts", ".d.mts", ".d.cts"]
+        .iter()
+        .any(|extension| {
+            ctx.file_name.len() >= extension.len()
+                && ctx.file_name[ctx.file_name.len() - extension.len()..]
+                    .eq_ignore_ascii_case(extension)
+        });
+    namespace.statements.iter().any(|statement| {
+        let (exported, inner) = match statement {
+            ParsedStatement::ExportDeclaration(export) => {
+                match export.as_ref() {
+                    ParsedExportDeclaration::Statement { declaration, .. } => {
+                        (true, declaration.as_ref())
+                    }
+                    _ => return false,
+                }
+            }
+            other => (ambient, other),
+        };
+        if !exported {
+            return false;
+        }
+        match inner {
+            ParsedStatement::TypeAliasDeclaration(alias) => alias.name == name,
+            ParsedStatement::InterfaceDeclaration(interface) => interface.name == name,
+            ParsedStatement::ClassDeclaration(class) => class.name == name,
+            _ => false,
+        }
     })
 }
 
@@ -817,6 +877,7 @@ pub(crate) fn collect_namespace_member_value_symbols(
                         .iter()
                         .filter_map(|p| p.declared_type.as_ref()),
                     function.return_type.as_ref(),
+                    namespace,
                     ctx,
                 ) {
                     continue;
@@ -825,18 +886,19 @@ pub(crate) fn collect_namespace_member_value_symbols(
                 if exportable_values.get_own(&key).is_some() {
                     continue;
                 }
-                let function_type = crate::checks::function::map_function_signature(
+                let function_type = map_member_signature_in_namespace_scope(
                     &function.parameters,
                     function.return_type.as_ref(),
                     &function.type_parameters,
-                    None,
+                    prefix,
                     ctx,
                 );
-                let function_signature = crate::checks::function::function_signature_info(
+                let function_signature = crate::checks::function::namespace_member_signature_info(
                     &function.type_parameters,
                     &function.parameters,
                     function.return_type.as_ref(),
                     &ctx.file_name,
+                    prefix,
                 );
                 let _ = exportable_values.insert(
                     key,
@@ -861,6 +923,7 @@ pub(crate) fn collect_namespace_member_value_symbols(
                             .iter()
                             .filter_map(|p| p.declared_type.as_ref()),
                         arrow.return_type.as_ref(),
+                        namespace,
                         ctx,
                     )
                 {
@@ -870,18 +933,19 @@ pub(crate) fn collect_namespace_member_value_symbols(
                 if exportable_values.get_own(&key).is_some() {
                     continue;
                 }
-                let function_type = crate::checks::function::map_function_signature(
+                let function_type = map_member_signature_in_namespace_scope(
                     &arrow.parameters,
                     arrow.return_type.as_ref(),
                     &arrow.type_parameters,
-                    None,
+                    prefix,
                     ctx,
                 );
-                let function_signature = crate::checks::function::function_signature_info(
+                let function_signature = crate::checks::function::namespace_member_signature_info(
                     &arrow.type_parameters,
                     &arrow.parameters,
                     arrow.return_type.as_ref(),
                     &ctx.file_name,
+                    prefix,
                 );
                 let _ = exportable_values.insert(
                     key,
@@ -1002,4 +1066,31 @@ pub(crate) fn fill_namespace_value_properties(
             _ => {}
         }
     }
+}
+
+/// Maps a member's written signature in the namespace's own scope: a bare
+/// sibling name (`Dispatch` inside `React.useState`) is stored under a qualified
+/// key, and one that stays unresolvable belongs to a surface only partially
+/// modelled here, so it degrades to `unknown` instead of cascading TS2304. The
+/// publishability decision deliberately runs *outside* this scope — see
+/// [`publishable_member_signature`].
+fn map_member_signature_in_namespace_scope(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    return_type: Option<&surge_ts_syntax::ParsedType>,
+    type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
+    prefix: &str,
+    ctx: &mut CheckerContext,
+) -> surge_ts_types::FunctionType {
+    ctx.namespace_member_resolution_depth += 1;
+    ctx.namespace_member_prefix_stack.push(prefix.to_string());
+    let function_type = crate::checks::function::map_function_signature(
+        parameters,
+        return_type,
+        type_parameters,
+        None,
+        ctx,
+    );
+    ctx.namespace_member_prefix_stack.pop();
+    ctx.namespace_member_resolution_depth -= 1;
+    function_type
 }

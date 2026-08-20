@@ -637,7 +637,25 @@ pub(crate) fn function_signature_info(
             .collect(),
         return_type: return_type.cloned(),
         declaring_file: Some(Arc::from(declaring_file)),
+        namespace_prefix: None,
     })
+}
+
+/// [`function_signature_info`] for a member published under a qualified
+/// `ns.member` key. Instantiation re-resolves the written annotations, whose
+/// bare sibling names (`Dispatch` inside `React.useState`) only resolve under
+/// the namespace prefix.
+pub(crate) fn namespace_member_signature_info(
+    type_parameters: &[ParsedTypeParameter],
+    parameters: &[ParsedFunctionParameter],
+    return_type: Option<&ParsedType>,
+    declaring_file: &str,
+    namespace_prefix: &str,
+) -> Arc<FunctionSignatureInfo> {
+    let base = function_signature_info(type_parameters, parameters, return_type, declaring_file);
+    let mut info = (*base).clone();
+    info.namespace_prefix = Some(Arc::from(namespace_prefix));
+    Arc::new(info)
 }
 
 pub(crate) fn with_type_parameter_scope<R>(

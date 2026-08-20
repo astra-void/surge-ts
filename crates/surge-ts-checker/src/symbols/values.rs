@@ -49,6 +49,12 @@ pub(crate) struct FunctionSignatureInfo {
     /// `module_scope_by_file` fallback keys on the active file name, so
     /// instantiation runs under this one.
     pub(crate) declaring_file: Option<Arc<str>>,
+    /// Namespace the signature was declared in (`React` for `React.useState`),
+    /// when it was published as a qualified namespace member. Its annotations
+    /// name siblings unqualified (`Dispatch<SetStateAction<S>>`), which are
+    /// stored under qualified keys, so instantiation re-resolves them under this
+    /// prefix.
+    pub(crate) namespace_prefix: Option<Arc<str>>,
 }
 
 #[derive(Debug, Default)]

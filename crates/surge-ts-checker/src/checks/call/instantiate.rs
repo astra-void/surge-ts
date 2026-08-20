@@ -145,6 +145,14 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
         ctx.set_file_name(file.to_string());
         saved
     });
+    // A namespace member's annotations name its siblings unqualified; they live
+    // under qualified keys, so re-resolution needs the declaring namespace's
+    // scope (the same one the type-member bodies expand in).
+    let namespace_prefix = function_signature.namespace_prefix.clone();
+    if let Some(prefix) = namespace_prefix.as_deref() {
+        ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix.to_string());
+    }
 
     let instantiated = with_type_copy_reason(TypeCopyReason::CallResolution, || {
         let mut instantiated_parameters = Vec::with_capacity(function_type.parameters().len());
@@ -186,6 +194,10 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
         ))
     });
 
+    if namespace_prefix.is_some() {
+        ctx.namespace_member_prefix_stack.pop();
+        ctx.namespace_member_resolution_depth -= 1;
+    }
     if let Some(saved) = saved_file_name {
         ctx.set_file_name(saved);
     }
@@ -605,6 +617,36 @@ pub(crate) fn collect_inferred_type_argument(
                 );
             }
         }
+        // A callback parameter (`factory: () => T`, `initialState: () => S`):
+        // match the argument's own signature so the type parameter is inferred
+        // from what the callback takes and returns.
+        ParsedType::Function(expected_function) => {
+            let Type::Function(actual_function) = argument_type else {
+                return;
+            };
+            for (expected_parameter, actual_parameter) in expected_function
+                .parameters
+                .iter()
+                .zip(actual_function.parameters().iter())
+            {
+                collect_inferred_type_argument(
+                    &expected_parameter.ty,
+                    actual_parameter,
+                    substitution,
+                    false,
+                    ctx,
+                    depth,
+                );
+            }
+            collect_inferred_type_argument(
+                &expected_function.return_type,
+                actual_function.return_type(),
+                substitution,
+                widen_literals,
+                ctx,
+                depth,
+            );
+        }
         ParsedType::Union(expected_types) => {
             if let Type::Union(actual_union) = argument_type
                 && expected_types.len() == actual_union.types().len()
@@ -621,9 +663,89 @@ pub(crate) fn collect_inferred_type_argument(
                         depth,
                     );
                 }
+                return;
+            }
+
+            // React's `SetStateAction<S>` shape: `S | (() => S)`. Each argument
+            // member goes to the union member whose *shape* it matches, and what
+            // matches none is what a naked type parameter stands for. The naked
+            // one is recorded first: candidates are first-wins, and a direct
+            // member (`resultOf(value)` binding `T` to the value itself) is a
+            // better answer than one read back out of a callback's return type.
+            let (naked, structured): (Vec<&ParsedType>, Vec<&ParsedType>) = expected_types
+                .iter()
+                .partition(|member| is_naked_type_parameter(member, substitution));
+            if structured.is_empty() {
+                return;
+            }
+            let argument_members: Vec<&Type> = match argument_type {
+                Type::Union(union) => union.types().iter().collect(),
+                other => vec![other],
+            };
+            let mut matches: Vec<(&ParsedType, &Type)> = Vec::new();
+            let mut unmatched: Vec<Type> = Vec::new();
+            for member in argument_members {
+                match structured
+                    .iter()
+                    .find(|target| parsed_shape_matches(target, member))
+                {
+                    Some(target) => matches.push((target, member)),
+                    None => unmatched.push(member.clone()),
+                }
+            }
+            if matches.is_empty() {
+                return;
+            }
+            if !unmatched.is_empty() {
+                let leftover = if unmatched.len() == 1 {
+                    unmatched.remove(0)
+                } else {
+                    surge_ts_types::union_type(unmatched)
+                };
+                for target in naked {
+                    collect_inferred_type_argument(
+                        target,
+                        &leftover,
+                        substitution,
+                        widen_literals,
+                        ctx,
+                        depth,
+                    );
+                }
+            }
+            for (target, member) in matches {
+                collect_inferred_type_argument(
+                    target,
+                    member,
+                    substitution,
+                    widen_literals,
+                    ctx,
+                    depth,
+                );
             }
         }
         _ => {}
+    }
+}
+
+/// A union member that names a type parameter directly (`S` in `S | (() => S)`),
+/// as opposed to one that gives the argument a shape to match against.
+fn is_naked_type_parameter(member: &ParsedType, substitution: &TypeParameterSubstitution) -> bool {
+    let ParsedType::Named(named) = member else {
+        return false;
+    };
+    named.type_arguments.is_empty() && substitution.get(&named.name).is_some()
+}
+
+/// Whether an argument type could inhabit this union member at all, by shape.
+/// Deliberately conservative: only the constructs that carry inference targets.
+fn parsed_shape_matches(member: &ParsedType, ty: &Type) -> bool {
+    match member {
+        ParsedType::Function(_) => matches!(ty, Type::Function(_)),
+        ParsedType::Array(_) => matches!(ty, Type::Array(_) | Type::Tuple(_)),
+        ParsedType::Tuple(_) => matches!(ty, Type::Tuple(_)),
+        ParsedType::Object(_) => matches!(ty, Type::Object(_)),
+        _ => false,
     }
 }
 
