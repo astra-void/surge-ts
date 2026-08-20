@@ -9,6 +9,22 @@ message = "tsconfig.json is present but will not be loaded if files are specifie
 arity = 0
 
 [[diagnostic]]
+code = "TS5102"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Option '{0}' has been removed. Please remove it from your configuration."
+arity = 1
+
+[[diagnostic]]
+code = "TS5108"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Option '{0}={1}' has been removed. Please remove it from your configuration."
+arity = 2
+
+[[diagnostic]]
 code = "TS1360"
 category = "Error"
 source = "typescript"
@@ -361,6 +377,14 @@ message = "'{0}' only refers to a type, but is being used as a value here."
 arity = 1
 
 [[diagnostic]]
+code = "TS2686"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' refers to a UMD global, but the current file is a module. Consider adding an import instead."
+arity = 1
+
+[[diagnostic]]
 code = "TS2741"
 category = "Error"
 source = "typescript"
@@ -417,6 +441,14 @@ message = "Parameter '{0}' implicitly has an 'any' type."
 arity = 1
 
 [[diagnostic]]
+code = "TS7016"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Could not find a declaration file for module '{0}'. '{1}' implicitly has an 'any' type."
+arity = 2
+
+[[diagnostic]]
 code = "TS7019"
 category = "Error"
 source = "typescript"
@@ -438,6 +470,14 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "'{0}' is declared but its value is never read."
+arity = 1
+
+[[diagnostic]]
+code = "TS6196"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is declared but never used."
 arity = 1
 
 [[diagnostic]]

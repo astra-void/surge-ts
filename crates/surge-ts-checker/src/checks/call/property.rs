@@ -16,6 +16,43 @@ use crate::modules::{PROMISE_LIKE_VALUE_PROPERTY, promise_like_type};
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 
+/// Whether a member reads as the permissive shape a namespace value object gives
+/// every member (`any`, or a function returning `any`). Used as the gate before
+/// the qualified `ns.member` lookup, which must not run on every property call.
+pub(crate) fn is_permissive_member_type(property_type: &Type) -> bool {
+    match property_type {
+        Type::Any => true,
+        Type::Function(function_type) => *function_type.return_type() == Type::Any,
+        _ => false,
+    }
+}
+
+/// Routes `ns.member(...)` through the qualified `ns.member` binding when one
+/// exists. `None` means no such binding — the caller keeps its own answer.
+#[allow(clippy::too_many_arguments)]
+fn try_qualified_namespace_call(
+    object_name: &str,
+    property_name: &str,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Option<Type>> {
+    let qualified_name = format!("{object_name}.{property_name}");
+    crate::infer::expression::qualified_namespace_member(&qualified_name, symbols, ctx)?;
+    Some(crate::checks::call::check_call_like(
+        &qualified_name,
+        callee_span,
+        call_span,
+        type_arguments,
+        arguments,
+        symbols,
+        ctx,
+    ))
+}
+
 pub(crate) fn check_property_call_like(
     object: &ParsedExpression,
     object_span: Option<SyntaxTextSpan>,
@@ -62,6 +99,25 @@ pub(crate) fn check_property_call_like(
         };
     }
 
+    // A namespace binding that has not resolved in this round reads as `any` or
+    // as the sentinel; the qualified `ns.member` entry still carries the member's
+    // real signature, so try it before answering from the degraded receiver.
+    if matches!(object_ty, Type::Any | Type::Unknown | Type::GenuineUnknown)
+        && let ParsedExpression::Identifier { name, .. } = object
+        && let Some(result) = try_qualified_namespace_call(
+            name,
+            property_name,
+            property_span.or(object_span),
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        )
+    {
+        return result;
+    }
+
     match object_ty {
         Type::Any => Some(Type::Any),
         Type::Unknown | Type::GenuineUnknown => None,
@@ -82,6 +138,12 @@ pub(crate) fn check_property_call_like(
             ctx,
         ),
         Type::Union(union_type) => {
+            // A sentinel member means part of the receiver is unmodelled, so a
+            // miss on any *other* member says nothing about the source — the
+            // same no-cascade rule a wholly-sentinel receiver gets.
+            if union_type.types().iter().any(Type::is_unknown) {
+                return None;
+            }
             let mut result_types = vec![];
             for ty in union_type.types() {
                 if *ty == Type::Undefined {
@@ -139,6 +201,9 @@ pub(crate) fn check_property_call_like(
                         result_types.push(Type::Any);
                         continue;
                     }
+                    if ty.peeled().is_unknown() {
+                        return None;
+                    }
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone()),
                         crate::spans::choose_span(property_span, object_span),
@@ -194,6 +259,12 @@ pub(crate) fn check_property_call_like(
                 if no_lib_array_member(&object_ty, ctx) {
                     return Some(Type::Any);
                 }
+                // See the matching guard in the property-access path: a nominal
+                // reference peeling to the sentinel is an unreconstructed shape,
+                // not a type without the member.
+                if object_ty.peeled().is_unknown() {
+                    return None;
+                }
                 let diagnostic =
                     Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone());
                 ctx.push(diagnostic_with_syntax_span(
@@ -202,6 +273,29 @@ pub(crate) fn check_property_call_like(
                 ));
                 return None;
             };
+
+            // A generic namespace member is published under a qualified
+            // `ns.member` key carrying its real signature; the namespace object
+            // models only the member *set*, so the member itself reads as the
+            // permissive `any`. Routing the call through the qualified binding
+            // restores arity, return type, and generic inference. Gated on that
+            // permissive shape — already in hand — so no ordinary property call
+            // pays for the lookup.
+            if let ParsedExpression::Identifier { name, .. } = object
+                && is_permissive_member_type(&property_type)
+                && let Some(result) = try_qualified_namespace_call(
+                    name,
+                    property_name,
+                    property_span.or(object_span),
+                    call_span,
+                    type_arguments,
+                    arguments,
+                    symbols,
+                    ctx,
+                )
+            {
+                return result;
+            }
 
             match callable_property_signature(property_type) {
                 Type::Function(function_type) => check_function_type_call(

@@ -1,6 +1,6 @@
 //! Ambient global and ambient-module (`declare module "..."`) collection passes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -18,6 +18,126 @@ pub(crate) struct AmbientModuleEntry {
     module_specifier: String,
     file: ParsedProgramFile,
     raw_export_table: ModuleExportTable,
+}
+
+/// Collects the program's UMD global names: every `export as namespace X` in a
+/// file that is itself a module. `X` is then reachable from script files but is
+/// TS2686 from a module, which is what [`CheckerContext::umd_global_names`]
+/// drives. A `export as namespace` in a script file declares nothing extra —
+/// the file's declarations are already global — so only modules contribute.
+pub(crate) fn collect_umd_global_names(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) {
+    let mut names: surge_ts_types::fx::FxHashSet<Arc<str>> = Default::default();
+
+    for parsed_file in parsed_files {
+        if !parsed_file.is_module {
+            continue;
+        }
+
+        for statement in &parsed_file.statements {
+            if let ParsedStatement::ExportDeclaration(export) = statement
+                && let surge_ts_syntax::ParsedExportDeclaration::NamespaceExport {
+                    exported_name,
+                    ..
+                } = export.as_ref()
+            {
+                names.insert(Arc::from(exported_name.as_str()));
+            }
+        }
+    }
+
+    ctx.umd_global_names = Arc::new(names);
+}
+
+/// Every name a file binds at module scope, by syntax alone. A UMD global is
+/// shadowed by any such declaration whether or not surge managed to bind it, so
+/// this must not be derived from the analysis tables.
+pub(crate) fn module_scope_declared_names(statements: &[ParsedStatement]) -> HashSet<&str> {
+    fn collect<'a>(statements: &'a [ParsedStatement], names: &mut HashSet<&'a str>) {
+        for statement in statements {
+            match statement {
+                ParsedStatement::VariableDeclaration(variable) => {
+                    names.insert(variable.name.as_str());
+                }
+                ParsedStatement::FunctionDeclaration(function) => {
+                    names.insert(function.name.as_str());
+                }
+                ParsedStatement::ClassDeclaration(class) => {
+                    names.insert(class.name.as_str());
+                }
+                ParsedStatement::InterfaceDeclaration(interface) => {
+                    names.insert(interface.name.as_str());
+                }
+                ParsedStatement::TypeAliasDeclaration(alias) => {
+                    names.insert(alias.name.as_str());
+                }
+                ParsedStatement::NamespaceDeclaration(namespace) => {
+                    names.insert(namespace.name.as_str());
+                }
+                ParsedStatement::ExportDeclaration(export) => {
+                    if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
+                    {
+                        collect(std::slice::from_ref(declaration.as_ref()), names);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut names = HashSet::new();
+    collect(statements, &mut names);
+    names.extend(import_bound_names(statements));
+    names
+}
+
+/// Every local name a file's imports bind, type-only imports included. A
+/// type-only binding still shadows a same-named global — tsc reports using it
+/// as a value as TS1361, not as a UMD-global reference — and an import whose
+/// module fails to resolve binds the name just as much, so this reads the
+/// syntax rather than the resolved binding tables.
+pub(crate) fn import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str> {
+    let mut names = HashSet::new();
+
+    for statement in statements {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+
+        match &import.kind {
+            surge_ts_syntax::ParsedImportKind::Named { specifiers, .. } => {
+                names.extend(
+                    specifiers
+                        .iter()
+                        .map(|specifier| specifier.local_name.as_str()),
+                );
+            }
+            surge_ts_syntax::ParsedImportKind::DefaultAndNamed {
+                local_name,
+                specifiers,
+                ..
+            } => {
+                names.insert(local_name.as_str());
+                names.extend(
+                    specifiers
+                        .iter()
+                        .map(|specifier| specifier.local_name.as_str()),
+                );
+            }
+            surge_ts_syntax::ParsedImportKind::Default { local_name, .. }
+            | surge_ts_syntax::ParsedImportKind::Namespace { local_name, .. }
+            | surge_ts_syntax::ParsedImportKind::Equals { local_name, .. }
+            | surge_ts_syntax::ParsedImportKind::TypeOnlyDefault { local_name, .. } => {
+                names.insert(local_name.as_str());
+            }
+            surge_ts_syntax::ParsedImportKind::SideEffect
+            | surge_ts_syntax::ParsedImportKind::Unsupported => {}
+        }
+    }
+
+    names
 }
 
 pub(crate) fn collect_ambient_globals(
@@ -41,9 +161,8 @@ pub(crate) fn collect_ambient_globals(
         let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
         ctx.type_declaration_scope = None;
 
-        let shared =
-            TypeDeclarationTable::with_arena(ctx.ambient_global_type_declarations.arena_handle());
-        let saved_type_declarations = std::mem::replace(&mut ctx.type_declarations, shared);
+        let saved_type_declarations =
+            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
         let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
         let ambient_td = std::mem::take(&mut ctx.type_declarations);
@@ -63,7 +182,7 @@ pub(crate) fn collect_ambient_globals(
         // interface (a default lib's `Window`, or a project's split global
         // `interface Env`) contributes members from every declaration rather
         // than being dropped first-wins.
-        crate::symbols::merge_shared_arena_table_into(
+        crate::symbols::merge_shared_table_into(
             Arc::make_mut(&mut ctx.ambient_global_type_declarations),
             &ambient_td,
         );
@@ -270,11 +389,22 @@ fn lower_ambient_namespace_values(parsed_files: &[ParsedProgramFile], ctx: &mut 
         }
     }
 
+    let global_augmentation_value_names = global_augmentation_value_names(parsed_files);
+
     for name in order {
         if ctx.ambient_global_symbols.get(&name).is_some() {
             continue;
         }
         let properties = merged.remove(&name).unwrap_or_default();
+        // A namespace with no value members contributes nothing but an empty
+        // object, and this pass runs before `declare global` blocks are lowered
+        // (`collect_global_augmentations`) — claiming the name here would freeze
+        // it at `{}` and turn every member access into TS2339. bun-types is
+        // exactly this shape: `declare namespace Bun { type … }` in one file,
+        // `declare global { var Bun: typeof import("bun") }` in another.
+        if properties.is_empty() && global_augmentation_value_names.contains(&name) {
+            continue;
+        }
         ctx.ambient_global_symbols.insert(
             name,
             crate::symbols::SymbolInfo {
@@ -284,6 +414,67 @@ fn lower_ambient_namespace_values(parsed_files: &[ParsedProgramFile], ctx: &mut 
             },
         );
     }
+}
+
+/// Names bound as a global *value* by a `declare global { … }` block anywhere in
+/// the program (including the `declare module "x" { global { … } }` nesting
+/// `@types/node` uses). Those blocks are lowered after this pass, so their
+/// values would otherwise lose the first-wins race against a same-named
+/// ambient namespace.
+fn global_augmentation_value_names(parsed_files: &[ParsedProgramFile]) -> HashSet<String> {
+    fn collect_block_value_names(
+        block_statements: &[ParsedStatement],
+        names: &mut HashSet<String>,
+    ) {
+        for statement in block_statements {
+            let inner = match statement {
+                ParsedStatement::ExportDeclaration(export) => {
+                    if let surge_ts_syntax::ParsedExportDeclaration::Statement {
+                        declaration, ..
+                    } = export.as_ref()
+                    {
+                        declaration.as_ref()
+                    } else {
+                        statement
+                    }
+                }
+                other => other,
+            };
+            match inner {
+                ParsedStatement::VariableDeclaration(var) => {
+                    names.insert(var.name.clone());
+                }
+                ParsedStatement::FunctionDeclaration(function) => {
+                    names.insert(function.name.clone());
+                }
+                ParsedStatement::ClassDeclaration(class) => {
+                    names.insert(class.name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut names = HashSet::new();
+    for parsed_file in parsed_files {
+        for statement in &parsed_file.statements {
+            let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
+                continue;
+            };
+            if module.module_specifier == "global" {
+                collect_block_value_names(&module.statements, &mut names);
+                continue;
+            }
+            for nested in &module.statements {
+                if let ParsedStatement::DeclareModuleDeclaration(inner) = nested
+                    && inner.module_specifier == "global"
+                {
+                    collect_block_value_names(&inner.statements, &mut names);
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Whether a parsed file contributes to the ambient global scope. Declaration
@@ -361,6 +552,39 @@ pub(crate) fn collect_ambient_modules(
                 std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
             let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
 
+            // `declare module "buffer" { global { var Buffer: … } export { Buffer }; }`
+            // resolves its own `export { … }` against the values its nested
+            // `global` block declares, so those join the block's local scope.
+            // Only the values: the block's *types* are merged program-wide by
+            // `collect_global_augmentations`, and a module-local copy would
+            // shadow that merge with one file's half of a split interface
+            // (`BufferConstructor` spans buffer.d.ts and buffer.buffer.d.ts).
+            // Nothing here reaches the export table on its own — only an
+            // explicit `export` clause pulls a name out.
+            let nested_global_statements: Vec<ParsedStatement> = module
+                .statements
+                .iter()
+                .filter_map(|statement| match statement {
+                    ParsedStatement::DeclareModuleDeclaration(nested)
+                        if nested.module_specifier == "global" =>
+                    {
+                        Some(nested.statements.iter().cloned().map(|statement| {
+                            // A `var` inside `declare global` is ambient by
+                            // context, not by an explicit `declare` keyword.
+                            match statement {
+                                ParsedStatement::VariableDeclaration(mut declaration) => {
+                                    declaration.is_declare = true;
+                                    ParsedStatement::VariableDeclaration(declaration)
+                                }
+                                other => other,
+                            }
+                        }))
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+
             let collect_start = Instant::now();
             collect_type_declarations(&module.statements, ctx);
             record_type_declaration_table_clone(
@@ -384,7 +608,7 @@ pub(crate) fn collect_ambient_modules(
             );
             ctx.symbols = current_symbols;
 
-            for stmt in &module.statements {
+            for stmt in module.statements.iter().chain(&nested_global_statements) {
                 match stmt {
                     ParsedStatement::VariableDeclaration(var) => {
                         if var.is_declare && ctx.symbols.get(&var.name).is_none() {

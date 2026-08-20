@@ -38,12 +38,19 @@ pub(crate) fn emit_unused_module_bindings(
         match statement {
             ParsedStatement::ImportDeclaration(import) => {
                 for (name, span) in import_local_bindings(&import.kind) {
-                    if !is_used(name) {
+                    // tsc exempts an `_`-prefixed *import* binding, the idiom for
+                    // importing a name only to assert it is exported. (A plain
+                    // `const _x` is still reported.)
+                    if !is_used(name) && !name.starts_with('_') {
                         push_unused(name, span, ctx);
                     }
                 }
             }
-            ParsedStatement::VariableDeclaration(variable) if !variable.is_declare => {
+            ParsedStatement::VariableDeclaration(variable)
+                if !variable.is_declare
+                    // See the matching exemption in `collect_local_var_declarations`.
+                    && !(variable.from_binding_pattern && variable.name.starts_with('_')) =>
+            {
                 if !is_used(&variable.name) {
                     push_unused(&variable.name, variable.name_span, ctx);
                 }
@@ -92,7 +99,9 @@ fn import_local_bindings(kind: &ParsedImportKind) -> Vec<(&str, Option<TextSpan>
             local_name,
             name_span,
         } => vec![(local_name.as_str(), *name_span)],
-        ParsedImportKind::SideEffect | ParsedImportKind::Unsupported => Vec::new(),
+        ParsedImportKind::SideEffect
+        | ParsedImportKind::Unsupported
+        | ParsedImportKind::TypeOnlyDefault { .. } => Vec::new(),
     }
 }
 

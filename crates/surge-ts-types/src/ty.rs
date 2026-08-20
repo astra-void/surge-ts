@@ -120,6 +120,24 @@ impl Type {
             Type::BigInt => Some(Type::BigInt),
             Type::Symbol => Some(Type::Symbol),
             Type::Reference(reference) => reference.resolve().base_primitive(),
+            // A union whose members share one base primitive behaves like that
+            // primitive for operand checks. `number | 0` arises from `x ?? 0`
+            // (TypeScript reduces it to `number`; surge keeps the literal), and
+            // rejecting it made `(x ?? 0) > 0` a false `TS2365`.
+            Type::Union(union) => {
+                let mut base: Option<Type> = None;
+                for member in union.types() {
+                    // Every member must share the base — a member without one
+                    // (`undefined`) makes the union something else entirely.
+                    let member_base = member.base_primitive()?;
+                    match &base {
+                        Some(existing) if *existing != member_base => return None,
+                        Some(_) => {}
+                        None => base = Some(member_base),
+                    }
+                }
+                base
+            }
             _ => None,
         }
     }
@@ -139,10 +157,17 @@ impl Type {
     /// a declared property — the condition for TS4111 under
     /// `noPropertyAccessFromIndexSignature`. References are peeled; other type
     /// shapes (no index signature) answer `false`.
+    ///
+    /// A checker-injected openness index (`synthetic_open_index`) does not count:
+    /// there the property really lives on an intersection operand surge could not
+    /// enumerate, and tsc — which does model that operand — sees a declared
+    /// property and reports nothing.
     pub fn property_only_from_string_index(&self, name: &str) -> bool {
         match self {
             Type::Object(object) => {
-                object.get_property(name).is_none() && object.allows_string_index_access()
+                object.get_property(name).is_none()
+                    && object.allows_string_index_access()
+                    && !object.synthetic_open_index
             }
             Type::Reference(reference) => reference.resolve().property_only_from_string_index(name),
             _ => false,
@@ -168,6 +193,22 @@ impl Type {
             // property, where the old eager `any` shape emitted nothing.
             Type::Any => Some(Type::Any),
             Type::Reference(reference) => reference.resolve().get_property_access_type(name),
+            // Every member must declare the property, and the read is their
+            // union. Without this a nominal reference that *resolves* to a union
+            // answered `None` for every property, which the callers report as a
+            // missing member (zod's `$ZodInternalIssue<T>`, a union of 12
+            // `Identity<…>` references that all carry `path`).
+            Type::Union(union) => {
+                let mut members = Vec::with_capacity(union.types().len());
+                for member in union.types().iter() {
+                    if matches!(member, Type::Undefined) {
+                        members.push(Type::Undefined);
+                        continue;
+                    }
+                    members.push(member.get_property_access_type(name)?);
+                }
+                (!members.is_empty()).then(|| crate::union_type(members))
+            }
             _ => None,
         }
     }
@@ -297,16 +338,31 @@ impl Type {
 fn string_property_access_type(name: &str) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
-        // `searchValue` may be a string or a `RegExp`, and `replacer` a string or
-        // a function, so both arguments are modelled permissively to avoid false
-        // `TS2345`s on regex/function arguments.
+        // `searchValue` may be a string or a `RegExp`, so it stays permissive.
+        // The replacement is a string *or* a replacer function; spelling that as
+        // a union rather than `Any` keeps argument checking just as permissive
+        // while giving an inline replacer its contextual parameter types.
         "replace" | "replaceAll" => Some(function_type(
-            vec![Type::Any, Type::Any],
+            vec![
+                Type::Any,
+                crate::union_type(vec![
+                    Type::String,
+                    function_type(vec![Type::String], Type::String, true, 1),
+                ]),
+            ],
             Type::String,
             false,
             2,
         )),
-        "indexOf" | "lastIndexOf" => Some(function_type(vec![Type::String], Type::Number, true, 1)),
+        // `(searchString, position?)` — the optional second argument is a number,
+        // so declaring only the string parameter made every positional call
+        // (`s.includes(v, from)`) a false TS2345.
+        "indexOf" | "lastIndexOf" => Some(function_type(
+            vec![Type::String, Type::Number],
+            Type::Number,
+            false,
+            1,
+        )),
         "search" => Some(function_type(vec![Type::Any], Type::Number, false, 1)),
         // `match`/`matchAll` return regex match data we do not model; `Any` keeps
         // any downstream access conservative rather than cascading.
@@ -320,13 +376,18 @@ fn string_property_access_type(name: &str) -> Option<Type> {
         "slice" | "substring" | "substr" => {
             Some(function_type(vec![Type::Number], Type::String, true, 1))
         }
-        "startsWith" | "endsWith" | "includes" => {
-            Some(function_type(vec![Type::String], Type::Boolean, true, 1))
-        }
+        "startsWith" | "endsWith" | "includes" => Some(function_type(
+            vec![Type::String, Type::Number],
+            Type::Boolean,
+            false,
+            1,
+        )),
         "toLowerCase" | "toUpperCase" | "toLocaleLowerCase" | "toLocaleUpperCase" | "trim"
-        | "trimStart" | "trimEnd" | "trimLeft" | "trimRight" | "normalize" => {
+        | "trimStart" | "trimEnd" | "trimLeft" | "trimRight" => {
             Some(function_type(vec![], Type::String, false, 0))
         }
+        // `normalize(form?)` takes the optional Unicode normalization form.
+        "normalize" => Some(function_type(vec![Type::String], Type::String, false, 0)),
         "toString" | "valueOf" => Some(function_type(vec![], Type::String, false, 0)),
         "repeat" => Some(function_type(vec![Type::Number], Type::String, false, 1)),
         "concat" => Some(function_type(vec![Type::String], Type::String, true, 0)),
@@ -474,14 +535,17 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             false,
             1,
         )),
+        // The predicate's return is `unknown` in the lib, not `boolean`: any
+        // truthy value filters (`lines.filter((x) => x)`), so demanding `boolean`
+        // reports a `TS2345` tsc never emits.
         "filter" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Boolean)],
+            vec![array_iteration_callback(element, Type::Any)],
             Type::Array(Box::new(element.clone())),
             false,
             1,
         )),
         "some" | "every" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Boolean)],
+            vec![array_iteration_callback(element, Type::Any)],
             Type::Boolean,
             false,
             1,
@@ -504,10 +568,29 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             true,
             0,
         )),
-        // `reduce`/`reduceRight` carry an accumulator type we do not infer; the
-        // callback and result degrade to `Any` so chained access stays
-        // conservative rather than cascading.
-        "reduce" | "reduceRight" => Some(function_type(vec![Type::Any], Type::Any, true, 1)),
+        // `reduce`/`reduceRight` carry an accumulator type we do not infer, so
+        // the accumulator and the result stay `Any` — but the callback's *shape*
+        // is known, and modelling it is what contextually types an inline
+        // reducer instead of reporting every parameter as an implicit any.
+        "reduce" | "reduceRight" => Some(function_type(
+            vec![
+                function_type(
+                    vec![
+                        Type::Any,
+                        element.clone(),
+                        Type::Number,
+                        Type::Array(Box::new(element.clone())),
+                    ],
+                    Type::Any,
+                    false,
+                    2,
+                ),
+                Type::Any,
+            ],
+            Type::Any,
+            false,
+            1,
+        )),
         "join" => Some(function_type(vec![Type::String], Type::String, true, 0)),
         "concat" => Some(function_type(
             vec![Type::Any],
@@ -898,5 +981,28 @@ mod tests {
             value,
             crate::union_type(vec![Type::Number, Type::Undefined])
         );
+    }
+}
+
+/// Whether `ty` is the global `Function` interface. tsc treats it as callable
+/// with any arguments (yielding `any`) and constructible, even though
+/// `lib.d.ts` declares no call signature on it — so every consumer that asks
+/// "is this callable?" has to special-case it. The `apply`/`call`/`bind` check
+/// pins this to the real lib interface rather than any same-named user type.
+pub fn is_global_function_interface(ty: &Type) -> bool {
+    let Type::Reference(reference) = ty else {
+        return false;
+    };
+    if reference.id.split('\u{0}').next_back() != Some("Function") {
+        return false;
+    }
+    match ty.peeled() {
+        Type::Object(object) => {
+            object.call_signature().is_none()
+                && ["apply", "call", "bind"]
+                    .iter()
+                    .all(|member| object.properties.get(*member).is_some())
+        }
+        _ => false,
     }
 }

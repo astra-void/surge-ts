@@ -1,5 +1,5 @@
 use oxc_ast::ast::{
-    PropertyKey, TSConditionalType, TSIndexedAccessType, TSIntersectionType, TSLiteral,
+    Expression, PropertyKey, TSConditionalType, TSIndexedAccessType, TSIntersectionType, TSLiteral,
     TSLiteralType, TSMappedType, TSMappedTypeModifierOperator, TSMethodSignature,
     TSMethodSignatureKind, TSPropertySignature, TSSignature, TSTupleElement, TSTupleType, TSType,
     TSTypeAliasDeclaration, TSTypeLiteral, TSTypeName, TSTypeOperator, TSTypeOperatorOperator,
@@ -302,6 +302,29 @@ fn flatten_type_name(type_name: &TSTypeName<'_>) -> Option<(String, crate::TextS
     }
 }
 
+/// Flatten a heritage clause expression (`extends NS.Member`) into the same
+/// dotted name [`flatten_type_name`] produces for type references, so a
+/// qualified base resolves through the namespace-member key instead of being
+/// dropped. Computed members and non-identifier heads have no such key.
+pub(super) fn flatten_heritage_expression(
+    expression: &Expression<'_>,
+) -> Option<(String, crate::TextSpan)> {
+    match expression {
+        Expression::Identifier(identifier) => Some((
+            identifier.name.to_string(),
+            text_span_from_oxc_span(identifier.span),
+        )),
+        Expression::StaticMemberExpression(member) => {
+            let (object_name, object_span) = flatten_heritage_expression(&member.object)?;
+            Some((
+                format!("{}.{}", object_name, member.property.name),
+                object_span,
+            ))
+        }
+        _ => None,
+    }
+}
+
 fn parse_literal_type(literal_type: &TSLiteralType<'_>) -> ParsedType {
     match &literal_type.literal {
         TSLiteral::StringLiteral(string_literal) => {
@@ -359,7 +382,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
         match element {
             TSTupleElement::TSNamedTupleMember(member) => {
                 if member.optional || matches!(member.element_type, TSTupleElement::TSRestType(_)) {
-                    return Some(ParsedType::Unknown);
+                    return Some(homogeneous_variadic_tuple(tuple_type));
                 }
                 let Some(inner) = member.element_type.as_ts_type() else {
                     return Some(ParsedType::Unknown);
@@ -371,7 +394,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
                 elements.push(parsed_element);
             }
             TSTupleElement::TSOptionalType(_) | TSTupleElement::TSRestType(_) => {
-                return Some(ParsedType::Unknown);
+                return Some(homogeneous_variadic_tuple(tuple_type));
             }
             _ => {
                 let Some(parsed_element) = parse_type(element.as_ts_type()?) else {
@@ -386,8 +409,83 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
     Some(ParsedType::Tuple(std::sync::Arc::new(elements)))
 }
 
+/// A variadic tuple whose fixed and rest elements are all the *same* type
+/// (`[T, ...T[]]`, the non-empty-array idiom every enum/tuple builder uses)
+/// carries no more information than `T[]` beyond a minimum length surge does
+/// not model, so it lowers to the array. A heterogeneous one (`[string,
+/// ...number[]]`) would lose its element types that way and stays degraded.
+fn homogeneous_variadic_tuple(tuple_type: &TSTupleType<'_>) -> ParsedType {
+    // `[...T]` spreads a tuple *type parameter*: it is `T` itself, not `T[]`.
+    if let [TSTupleElement::TSRestType(rest)] = tuple_type.element_types.as_slice()
+        && !matches!(rest.type_annotation, TSType::TSArrayType(_))
+    {
+        return parse_type(&rest.type_annotation).unwrap_or(ParsedType::Unknown);
+    }
+
+    let mut element_type: Option<ParsedType> = None;
+
+    for element in &tuple_type.element_types {
+        let inner = match element {
+            // A rest element only contributes an element type when it is written
+            // `...T[]`; `...T` spreads a whole tuple whose element types this
+            // shape cannot express.
+            TSTupleElement::TSNamedTupleMember(member) => match &member.element_type {
+                TSTupleElement::TSRestType(rest) => match &rest.type_annotation {
+                    TSType::TSArrayType(array) => Some(&array.element_type),
+                    _ => return ParsedType::Unknown,
+                },
+                other => other.as_ts_type(),
+            },
+            TSTupleElement::TSRestType(rest) => match &rest.type_annotation {
+                TSType::TSArrayType(array) => Some(&array.element_type),
+                _ => return ParsedType::Unknown,
+            },
+            TSTupleElement::TSOptionalType(optional) => Some(&optional.type_annotation),
+            other => other.as_ts_type(),
+        };
+        let Some(inner) = inner else {
+            return ParsedType::Unknown;
+        };
+        let Some(parsed) = parse_type(inner) else {
+            return ParsedType::Unknown;
+        };
+        match &element_type {
+            Some(existing) if !same_tuple_element_type(existing, &parsed) => {
+                return ParsedType::Unknown;
+            }
+            Some(_) => {}
+            None => element_type = Some(parsed),
+        }
+    }
+
+    match element_type {
+        Some(element_type) => ParsedType::Array(std::sync::Arc::new(element_type)),
+        None => ParsedType::Unknown,
+    }
+}
+
+/// Structural equality for tuple elements that ignores name spans: the `T` of
+/// `[T, ...T[]]` is the same type written twice, and `ParsedNamedType`'s derived
+/// equality would separate them on position alone.
+fn same_tuple_element_type(left: &ParsedType, right: &ParsedType) -> bool {
+    match (left, right) {
+        (ParsedType::Named(left), ParsedType::Named(right)) => {
+            left.name == right.name
+                && left.type_arguments.len() == right.type_arguments.len()
+                && left
+                    .type_arguments
+                    .iter()
+                    .zip(right.type_arguments.iter())
+                    .all(|(left, right)| same_tuple_element_type(left, right))
+        }
+        (ParsedType::Array(left), ParsedType::Array(right)) => same_tuple_element_type(left, right),
+        _ => left == right,
+    }
+}
+
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
+    let mut string_index_type: Option<Box<ParsedType>> = None;
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
     let getters = getter_accessor_names(&type_literal.members);
 
@@ -420,6 +518,13 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 }
                 continue;
             }
+            TSSignature::TSIndexSignature(index_signature) => {
+                // The last index signature wins, matching the interface path.
+                if let Some(value_type) = parse_index_signature_value_type(index_signature) {
+                    string_index_type = Some(Box::new(value_type));
+                }
+                continue;
+            }
             _ => return ParsedType::Unknown,
         };
 
@@ -432,6 +537,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
 
     ParsedType::Object(ParsedObjectType {
         properties,
+        string_index_type,
         call_signature,
     })
 }
@@ -444,7 +550,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
 /// The return type is taken from the first overload. This mirrors the checker's
 /// `merge_overload_signatures`, applied at parse time because a type literal
 /// stores a single call signature.
-fn merge_parsed_call_signatures(
+pub(crate) fn merge_parsed_call_signatures(
     a: &ParsedFunctionType,
     b: &ParsedFunctionType,
 ) -> ParsedFunctionType {
@@ -624,6 +730,7 @@ pub(crate) fn parse_type_method_signature(
             name: key.name.to_string(),
             name_span: Some(text_span_from_oxc_span(key.span)),
             optional: false,
+            is_method: false,
             ty: accessor_type,
         });
     }
@@ -653,6 +760,7 @@ pub(crate) fn parse_type_method_signature(
             type_parameters: parse_type_parameters(method_signature.type_parameters.as_deref()),
         })),
         optional: method_signature.optional,
+        is_method: true,
     })
 }
 
@@ -711,10 +819,13 @@ pub(crate) fn parse_type_property_signature(
     // drop the member — losing one collapses the whole type literal to
     // `unknown`, which then reports the index as invalid. Quoted string keys stay
     // unsupported: admitting them resolves shapes whose members surge models
-    // incompletely and churned zod by +38 for no measured gain.
+    // incompletely. Re-measured 2026-08-19 it is a wash (zod +1, trpc -1) — the
+    // `"~standard"` members it unblocks sit on interfaces whose `Parameters<…>`
+    // chain degrades to `{}` regardless.
     let (name, key_span) = match &property_signature.key {
         PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
         PropertyKey::NumericLiteral(literal) => (literal.raw_str().to_string(), literal.span),
+        PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
         _ => return None,
     };
 
@@ -728,6 +839,7 @@ pub(crate) fn parse_type_property_signature(
         name_span: Some(text_span_from_oxc_span(key_span)),
         ty: type_annotation,
         optional: property_signature.optional,
+        is_method: false,
     })
 }
 

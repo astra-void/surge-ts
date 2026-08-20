@@ -347,15 +347,22 @@ pub(crate) fn check_expression_flow_impl(
             statement_index,
             ctx,
         ),
+        // tsc reads a reference under a `NonNullExpression` with
+        // `assumeInitialized`, so `resolve!` never reports TS2454 — the assertion
+        // is the author stating the binding is set. Only the bare-identifier read
+        // is exempted; any nested reads keep their own flow checks.
         ParsedExpression::NonNullAssertion {
             expression, span, ..
-        } => check_expression_flow_impl(
-            expression,
-            span.or(fallback_span),
-            flow_state,
-            statement_index,
-            ctx,
-        ),
+        } => match expression.as_ref() {
+            ParsedExpression::Identifier { .. } => FlowCheck::Clear,
+            expression => check_expression_flow_impl(
+                expression,
+                span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            ),
+        },
         ParsedExpression::ConstAssertion {
             expression, span, ..
         } => check_expression_flow_impl(
@@ -543,11 +550,12 @@ pub(crate) fn apply_variable_declaration_state(
     }
 
     // tsc skips definite-assignment analysis for a binding whose declared type
-    // already permits `undefined` (`any`, or any union containing `undefined`):
-    // reading it before assignment yields `undefined`, which the type allows, so
-    // no TS2454. Track such a binding as already assigned so an unassigned read
-    // stays clear (a use-before-declaration TDZ read is still caught by position).
-    let state = if has_initializer || declared_type.is_some_and(type_permits_undefined) {
+    // already admits `undefined` — its `checkIdentifier` gate is
+    // `AnyOrUnknown | Void`, plus any union containing `undefined`. Reading such
+    // a binding before assignment yields `undefined`, which the type allows, so
+    // no TS2454. Track it as already assigned so an unassigned read stays clear
+    // (a use-before-declaration TDZ read is still caught by position).
+    let state = if has_initializer || declared_type.is_some_and(type_assumed_initialized) {
         AssignmentState::Assigned
     } else {
         AssignmentState::DeclaredUnassigned
@@ -556,11 +564,11 @@ pub(crate) fn apply_variable_declaration_state(
     flow_state.declare_current(variable_name, state);
 }
 
-fn type_permits_undefined(ty: &surge_ts_types::Type) -> bool {
+fn type_assumed_initialized(ty: &surge_ts_types::Type) -> bool {
     use surge_ts_types::Type;
     match ty {
-        Type::Any | Type::Undefined => true,
-        Type::Union(union) => union.types().iter().any(type_permits_undefined),
+        Type::Any | Type::Undefined | Type::Unknown | Type::GenuineUnknown | Type::Void => true,
+        Type::Union(union) => union.types().iter().any(type_assumed_initialized),
         _ => false,
     }
 }
@@ -574,18 +582,13 @@ pub(crate) fn check_obvious_truthiness_condition(
     // This is intentionally narrow: it only covers syntax the project already parses
     // and only emits the obvious truthiness diagnostics that the current checker supports.
     let (diagnostic, diagnostic_emitted) = match expression {
+        ParsedExpression::StringLiteral(value) if value.is_empty() => {
+            (Diagnostic::ts2873(ctx.file_name.clone()), false)
+        }
         ParsedExpression::StringLiteral(_) => (Diagnostic::ts2872(ctx.file_name.clone()), true),
-        ParsedExpression::NumberLiteral(value)
-            if value.parse::<f64>().map_or(false, |n| n == 0.0) =>
-        {
-            (Diagnostic::ts2873(ctx.file_name.clone()), false)
-        }
-        ParsedExpression::NumberLiteral(_) => (Diagnostic::ts2872(ctx.file_name.clone()), true),
-        ParsedExpression::BooleanLiteral(true) => (Diagnostic::ts2872(ctx.file_name.clone()), true),
-        ParsedExpression::BooleanLiteral(false) => {
-            (Diagnostic::ts2873(ctx.file_name.clone()), false)
-        }
-        ParsedExpression::UndefinedLiteral | ParsedExpression::NullLiteral => return false,
+        // Boolean and numeric literal conditions are deliberately absent: tsc
+        // exempts them from TS2872/TS2873 so that `while (true)` and `if (0)`
+        // stay clean.
         _ => return false,
     };
 

@@ -208,6 +208,11 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::KnownNoop,
     },
     TsConfigOptionDefinition {
+        name: "allowUmdGlobalAccess",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
         name: "forceConsistentCasingInFileNames",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::KnownNoop,

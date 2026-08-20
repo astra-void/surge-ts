@@ -6,9 +6,9 @@ use super::*;
 use surge_ts_diagnostics::{Diagnostic, DiagnosticCode};
 use surge_ts_syntax::{
     ParsedAssignment, ParsedBindingName, ParsedExpression, ParsedForOfStatement,
-    ParsedFunctionBodyStatement, ParsedIfStatement, ParsedReturnStatement, ParsedSwitchStatement,
-    ParsedThisPropertyAssignment, ParsedTryStatement, ParsedType, ParsedUnaryOperator,
-    ParsedVariableDeclaration, ParsedVariableKind, ParsedWhileStatement,
+    ParsedFunctionBodyStatement, ParsedIfStatement, ParsedMemberAssignment, ParsedReturnStatement,
+    ParsedSwitchStatement, ParsedThisPropertyAssignment, ParsedTryStatement, ParsedType,
+    ParsedUnaryOperator, ParsedVariableDeclaration, ParsedVariableKind, ParsedWhileStatement,
 };
 use surge_ts_types::{Type, TypeCopyReason, is_assignable_to, union_type, with_type_copy_reason};
 
@@ -36,6 +36,12 @@ pub(crate) fn check_function_variable_declaration(
     let local_name = variable.name.clone();
     let variable_kind = variable.kind;
     let has_initializer = variable.initializer.is_some();
+    // An ambient (`declare`) binding never carries an initializer but is not
+    // "unassigned" — it is provided from outside. Body-local `enum`s lower to
+    // one, so definite-assignment analysis must not report TS2454 on them. A
+    // `let x!: T` definite-assignment assertion says the same thing explicitly.
+    let definitely_assigned =
+        has_initializer || variable.is_declare || variable.has_definite_assertion;
 
     // Track a boolean alias of a guard expression (`const ok = error &&
     // isError(error) && …`) so a later `if (!ok) return;` can narrow the guarded
@@ -103,7 +109,7 @@ pub(crate) fn check_function_variable_declaration(
         apply_variable_declaration_state(
             variable_kind,
             local_name.as_str(),
-            has_initializer,
+            definitely_assigned,
             Some(&symbol.ty),
             flow_state,
         );
@@ -150,6 +156,92 @@ fn narrow_aliased_guard_after_exit(
     }
 }
 
+/// The bindings a branch body assigns at its own statement level. Deeper
+/// assignments are discarded with their own inner frame before the branch ends,
+/// so they cannot reach the join.
+fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Assignment(assignment) => {
+                if !names.iter().any(|name| *name == assignment.target_name) {
+                    names.push(assignment.target_name.clone());
+                }
+            }
+            ParsedFunctionBodyStatement::Block(block) => branch_assigned_names(block, names),
+            _ => {}
+        }
+    }
+}
+
+/// Joins a then-branch's end types with the fall-through (condition-false) types
+/// for the bindings it assigned. tsc types the code after `if (!x) { x = … }`
+/// from both incoming edges; surge's branch scope discards the assignment
+/// narrowing on `pop_child`, which otherwise leaves the declared union in place
+/// for every later use. The join only ever removes union members both edges
+/// rule out — a widening result is a modelling artifact and is dropped.
+fn join_branch_assignments(
+    branch_types: &[(String, Type)],
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    if branch_types.is_empty() {
+        return;
+    }
+
+    scopes.push_child();
+    narrow_discriminant_in_scope(condition, scopes, false, ctx);
+    let fallthrough_types: Vec<Option<Type>> = branch_types
+        .iter()
+        .map(|(name, _)| {
+            scopes.resolve(name).map(|symbol| {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
+            })
+        })
+        .collect();
+    scopes.pop_child();
+
+    for ((name, branch_ty), fallthrough_ty) in branch_types.iter().zip(fallthrough_types) {
+        let Some(fallthrough_ty) = fallthrough_ty else {
+            continue;
+        };
+        let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+            union_type(vec![branch_ty.clone(), fallthrough_ty])
+        });
+        let Some(symbol) = scopes.resolve(name) else {
+            continue;
+        };
+        if joined == symbol.ty || !is_assignable_to(&joined, &symbol.ty) {
+            continue;
+        }
+        let joined_symbol = SymbolInfo {
+            ty: joined,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        // Written to the owning frame, not shadowed in the current one: the join
+        // describes the binding from the `if` onward, and a block-local shadow
+        // would be dropped before a `break`/loop-exit edge that carries it.
+        let _ = scopes.update_visible(name, joined_symbol);
+    }
+}
+
+/// Snapshots the current type of each assigned binding at a branch's end, before
+/// its scope frame pops.
+fn branch_assignment_types(names: &[String], scopes: &ScopeStack) -> Vec<(String, Type)> {
+    names
+        .iter()
+        .filter_map(|name| {
+            scopes.resolve(name).map(|symbol| {
+                (
+                    name.clone(),
+                    with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone()),
+                )
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn check_function_if_statement(
     if_statement: ParsedIfStatement,
     statement_index: usize,
@@ -168,6 +260,11 @@ pub(crate) fn check_function_if_statement(
     // either keeps the old return-based behavior and adds early-`continue` guards.
     let then_diverts_control = then_guarantees_value_return || then_flow.guarantees_exit;
     let has_else_body = !if_statement.else_body.is_empty();
+
+    let mut joinable_assignments = Vec::new();
+    if !has_else_body && !then_diverts_control {
+        branch_assigned_names(&if_statement.then_body, &mut joinable_assignments);
+    }
 
     let flow_active = flow_state.tracked_local_count() > 0;
     let condition_blocked = if flow_active {
@@ -206,7 +303,9 @@ pub(crate) fn check_function_if_statement(
         );
         let mut then_delta = flow_state.finish_branch_capture();
         then_delta.continues = !then_diverts_control;
+        let then_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
+        join_branch_assignments(&then_assignment_types, &if_statement.condition, scopes, ctx);
         branch_deltas.push(then_delta);
 
         if has_else_body {
@@ -240,7 +339,9 @@ pub(crate) fn check_function_if_statement(
             flow_state,
             ctx,
         );
+        let then_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
+        join_branch_assignments(&then_assignment_types, &if_statement.condition, scopes, ctx);
 
         if has_else_body {
             scopes.push_child();
@@ -806,6 +907,79 @@ pub(crate) fn check_function_assignment(
     }
 }
 
+/// Checks an `o.p = v` assignment against the target property's declared type
+/// and narrows the target for the code that follows. Nothing is reported when
+/// either side carries the degradation sentinel, and the narrowing is
+/// block-scoped exactly like the identifier-assignment one above.
+pub(crate) fn check_member_assignment(
+    assignment: ParsedMemberAssignment,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedExpression::PropertyAccess {
+        object,
+        object_span,
+        property_name,
+        ..
+    } = &assignment.target
+    else {
+        return;
+    };
+
+    let visible_symbols = visible_symbols(scopes);
+
+    // An assignment target is written, not read: it is resolved through the
+    // *inference* layer, which answers without reporting, so a receiver surge
+    // models incompletely (`Component.getInitialProps = …`, `X.prototype.m = …`)
+    // does not turn into a false TS2339 here.
+    let object_type = match crate::infer::infer_expression(object, &visible_symbols, ctx) {
+        InferredExpression::Known(ty) => ty,
+        _ => return,
+    };
+    let _ = object_span;
+
+    let Some(target_type) = object_type.get_property_access_type(property_name) else {
+        return;
+    };
+
+    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type(
+        &assignment.value,
+        assignment.value_span,
+        Some(&target_type),
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+        &visible_symbols,
+        ctx,
+    );
+
+    let InferredExpression::Known(value_type) = inferred_value else {
+        return;
+    };
+
+    if value_type.is_unknown() || target_type.is_unknown() {
+        return;
+    }
+
+    if !is_assignable_to(&value_type, &target_type) {
+        let diagnostic = Diagnostic::ts2322(
+            &crate::checks::expr::source_display_name(&value_type, &target_type),
+            &target_type.name(),
+            ctx.file_name.clone(),
+        );
+        let diagnostic = match assignment.target_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+        return;
+    }
+
+    crate::checks::function::narrowing::narrow_assignment_target_in_scope(
+        &assignment.target,
+        &value_type,
+        scopes,
+    );
+}
+
 /// Checks a `this.<property> = <value>` assignment against the instance
 /// property's declared type. The `this` symbol is bound to the class instance
 /// type for the duration of the method/constructor body. When `this` or the
@@ -997,11 +1171,27 @@ pub(crate) fn check_function_return_statement(
 
     match inferred_expression {
         InferredExpression::Known(source_type) => {
+            // A sentinel anywhere in either side means surge lost part of the
+            // shape, so a mismatch reflects the modelling gap rather than the
+            // source — the same deep guard the variable-declaration check
+            // applies.
             if source_type.is_unknown() {
                 return;
             }
 
             if !is_assignable_to(&source_type, &return_type) {
+                // A sentinel anywhere in either side means surge lost part of
+                // the shape, so the mismatch reflects the modelling gap rather
+                // than the source — the same deep guard the variable
+                // declaration check applies. Checked only after assignability
+                // already failed: the deep walk forces lazy references, and
+                // doing that on every clean return measurably perturbs later
+                // resolutions (a false TS2554 on ky's `resolve()`).
+                if crate::checks::function::type_contains_unknown(&source_type)
+                    || crate::checks::function::type_contains_unknown(&return_type)
+                {
+                    return;
+                }
                 let source_type_name =
                     crate::checks::expr::source_display_name(&source_type, &return_type);
                 let target_type_name = return_type.name();

@@ -111,6 +111,7 @@ pub(crate) fn check_program_statement(
             ParsedExportDeclaration::All { .. } => {}
             ParsedExportDeclaration::Empty { .. } => {}
             ParsedExportDeclaration::Equals { .. } => {}
+            ParsedExportDeclaration::NamespaceExport { .. } => {}
             ParsedExportDeclaration::Unsupported { span } => {
                 let mut diagnostic =
                     Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
@@ -150,7 +151,10 @@ pub(crate) fn emit_unsupported_declaration_diagnostic_from_statement(
             emit_unsupported_declaration_diagnostic(ctx, *span);
         }
         ParsedStatement::ImportDeclaration(import)
-            if matches!(import.kind, ParsedImportKind::Unsupported) =>
+            if matches!(
+                import.kind,
+                ParsedImportKind::Unsupported | ParsedImportKind::TypeOnlyDefault { .. }
+            ) =>
         {
             emit_unsupported_declaration_diagnostic(
                 ctx,

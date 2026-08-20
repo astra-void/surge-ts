@@ -54,6 +54,89 @@ pub(crate) fn build_module_export_table(
     }
 }
 
+/// Stores a re-exported value under its exported name. `default` lives in its
+/// own slot (`ModuleExportTable::get_shared_value` reads only that slot for the
+/// name), so `export { default } from './m'` must land there rather than in
+/// `symbols` where no consumer would ever find it.
+fn republish_value_export(
+    resolved_export_table: &mut ModuleExportTable,
+    exported_name: &str,
+    value_export: Arc<SymbolInfo>,
+) {
+    if exported_name == "default" {
+        if resolved_export_table.default_symbol.is_none() {
+            resolved_export_table.default_symbol = Some(value_export);
+        }
+        return;
+    }
+
+    if resolved_export_table.symbols.get(exported_name).is_none() {
+        let _ = resolved_export_table
+            .symbols
+            .insert_shared(exported_name.to_string(), value_export);
+    }
+}
+
+/// The module specifier a `export = <local>` aliases when `<local>` is bound by
+/// `import <local> = require("<specifier>")`. `@types/node` builds every
+/// `node:*` module this way (`declare module "node:path" { import path =
+/// require("path"); export = path; }`), and the local pass binds nothing for it:
+/// the import-equals local is not a value declaration of this module.
+fn export_equals_import_alias_specifier(parsed_file: &ParsedProgramFile) -> Option<String> {
+    let exported_name = parsed_file.statements.iter().find_map(|statement| {
+        let ParsedStatement::ExportDeclaration(export) = statement else {
+            return None;
+        };
+        match export.as_ref() {
+            ParsedExportDeclaration::Equals { exported_name, .. } => Some(exported_name.as_str()),
+            _ => None,
+        }
+    })?;
+
+    parsed_file.statements.iter().find_map(|statement| {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            return None;
+        };
+        match &import.kind {
+            ParsedImportKind::Equals { local_name, .. } if local_name == exported_name => {
+                Some(import.module_specifier.clone())
+            }
+            _ => None,
+        }
+    })
+}
+
+/// Adopts the aliased module's whole export surface. Every slot is filled only
+/// when empty, so anything this module declared itself still wins.
+fn adopt_export_assignment_alias(
+    resolved_export_table: &mut ModuleExportTable,
+    target_export_table: &ModuleExportTable,
+) {
+    if resolved_export_table.export_assignment_symbol.is_none() {
+        resolved_export_table.export_assignment_symbol =
+            target_export_table.export_assignment_symbol.clone();
+    }
+
+    if resolved_export_table.default_symbol.is_none() {
+        resolved_export_table.default_symbol = target_export_table.default_symbol.clone();
+    }
+
+    let type_declarations = Arc::make_mut(&mut resolved_export_table.type_declarations);
+    for (name, declaration) in target_export_table.type_declarations.iter() {
+        if type_declarations.get(name.as_ref()).is_none() {
+            let _ = type_declarations.insert(name.clone(), declaration.clone());
+        }
+    }
+
+    for (name, symbol) in target_export_table.symbols.iter_shared() {
+        if resolved_export_table.symbols.get(name).is_none() {
+            resolved_export_table
+                .symbols
+                .insert_shared(name.clone(), symbol.clone());
+        }
+    }
+}
+
 pub(crate) fn resolve_module_export_tables(
     parsed_files: &[ParsedProgramFile],
     local_module_export_tables: &[Option<ModuleExportTable>],
@@ -93,7 +176,12 @@ pub(crate) fn try_resolve_module_export_table(
             .get(resolved_file_name.as_str())
             .copied()
         {
-            if let Some(export_table) = resolve_module_export_table(
+            if !crate::modules::imports::resolved_file_yields_to_ambient_module(
+                ctx,
+                parsed_files,
+                resolved_index,
+                module_specifier,
+            ) && let Some(export_table) = resolve_module_export_table(
                 resolved_index,
                 parsed_files,
                 local_module_export_tables,
@@ -269,6 +357,31 @@ pub(crate) fn resolve_module_export_table(
                             continue;
                         }
 
+                        // A type-only namespace publishes only qualified
+                        // `NS.Member` keys, so the direct lookup misses; the
+                        // import path already compensates the same way. Run the
+                        // scan only on that miss, where it belongs.
+                        if copy_qualified_type_exports(
+                            &target_export_table,
+                            &specifier.local_name,
+                            &specifier.exported_name,
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
+                        ) {
+                            continue;
+                        }
+
+                        // `export type { f } from './m'` over a value-only
+                        // export republishes the symbol: the name is legal in
+                        // type position through `typeof f`.
+                        if let Some(value_export) = value_export {
+                            republish_value_export(
+                                &mut resolved_export_table,
+                                &specifier.exported_name,
+                                value_export,
+                            );
+                            continue;
+                        }
+
                         emit_missing_export_diagnostic(
                             ctx,
                             module_specifier,
@@ -297,15 +410,22 @@ pub(crate) fn resolve_module_export_table(
                     }
 
                     if let Some(value_export) = value_export {
-                        if resolved_export_table
-                            .symbols
-                            .get(&specifier.exported_name)
-                            .is_none()
-                        {
-                            let _ = resolved_export_table
-                                .symbols
-                                .insert_shared(specifier.exported_name.clone(), value_export);
-                        }
+                        republish_value_export(
+                            &mut resolved_export_table,
+                            &specifier.exported_name,
+                            value_export,
+                        );
+                        found = true;
+                    }
+
+                    if !found
+                        && copy_qualified_type_exports(
+                            &target_export_table,
+                            &specifier.local_name,
+                            &specifier.exported_name,
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
+                        )
+                    {
                         found = true;
                     }
 
@@ -531,6 +651,21 @@ pub(crate) fn resolve_module_export_table(
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.re_export_expansion += re_export_start.elapsed()
     });
+
+    if let Some(alias_module_specifier) = export_equals_import_alias_specifier(parsed_file) {
+        if let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table(
+            &alias_module_specifier,
+            ctx,
+            parsed_files,
+            local_module_export_tables,
+            resolved_module_export_tables,
+            resolving,
+            &parsed_file.file_name,
+        ) {
+            ctx.set_file_name(parsed_file.file_name.clone());
+            adopt_export_assignment_alias(&mut resolved_export_table, &target_export_table);
+        }
+    }
 
     if let Some(slot) = resolving.get_mut(file_index) {
         *slot = false;

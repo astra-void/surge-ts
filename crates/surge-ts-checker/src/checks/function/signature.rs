@@ -32,6 +32,8 @@ pub(crate) fn emit_parameter_diagnostics(
     if !ctx.options.no_implicit_any
         || parameter.declared_type.is_some()
         || parameter.initializer.is_some()
+        || ctx.unmodelled_jsx_props_depth > 0
+        || ctx.degraded_expected_type_depth > 0
     {
         return;
     }
@@ -247,11 +249,13 @@ pub(crate) fn insert_object_binding_pattern_bindings(
     scopes: &mut ScopeStack,
 ) {
     for element in &pattern.elements {
-        insert_object_binding_element_binding(
-            element,
-            with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone()),
-            scopes,
-        );
+        let mut element_type = object_binding_element_type(&parameter_type, &element.property_name);
+        // `const { numRefs = 0 } = params` binds the default when the property is
+        // absent, so the binding is never `undefined`.
+        if element.has_default {
+            element_type = surge_ts_types::remove_undefined(&element_type);
+        }
+        insert_object_binding_element_binding(element, element_type, scopes);
     }
     // `{ a, ...rest }` binds `rest` to the remaining properties. The exact
     // `Omit<T, ...>` shape is not modelled; binding it to the source type keeps
@@ -262,6 +266,35 @@ pub(crate) fn insert_object_binding_pattern_bindings(
             with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone()),
             scopes,
         );
+    }
+}
+
+/// The type a `{ property }` destructuring position reads. A miss keeps the
+/// binding permissive rather than handing it the *source* type, which made every
+/// use of a destructured binding compare against the whole object
+/// (`for (const { schema } of items) schema.safeParse(…)`).
+fn object_binding_element_type(source: &Type, property_name: &str) -> Type {
+    match source {
+        Type::Any => Type::Any,
+        source if source.is_unknown() => {
+            with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || source.clone())
+        }
+        // `Type::get_property_access_type` does not distribute over a union, and
+        // an array of object literals is exactly that.
+        Type::Union(union) => {
+            let members: Option<Vec<Type>> = union
+                .types()
+                .iter()
+                .map(|member| member.get_property_access_type(property_name))
+                .collect();
+            match members {
+                Some(members) => surge_ts_types::union_type(members),
+                None => Type::Any,
+            }
+        }
+        source => source
+            .get_property_access_type(property_name)
+            .unwrap_or(Type::Any),
     }
 }
 
@@ -762,10 +795,11 @@ pub(crate) fn emit_unused_parameters(
     }
 }
 
-/// Reports TS6133 for each function-local `const`/`let`/`var` whose name never
-/// appears in the body's reads. Gated on `noUnusedLocals` in a root source file.
-/// Uses the function-wide read set, so a binding read in any nested scope counts
-/// (an over-approximation — never a false positive).
+/// Reports TS6133 for each function-local `const`/`let`/`var`, and TS6196 for
+/// each body-local `type`/`interface`, whose name never appears in the body's
+/// reads. Gated on `noUnusedLocals` in a root source file. Uses the
+/// function-wide read set, so a binding read in any nested scope counts (an
+/// over-approximation — never a false positive).
 pub(crate) fn emit_unused_locals(
     statements: &[ParsedFunctionBodyStatement],
     reads: &[String],
@@ -775,7 +809,9 @@ pub(crate) fn emit_unused_locals(
         return;
     }
     let mut locals: Vec<(&str, Option<TextSpan>)> = Vec::new();
+    let mut local_types: Vec<(&str, Option<TextSpan>)> = Vec::new();
     collect_local_var_declarations(statements, &mut locals);
+    collect_local_type_declarations(statements, &mut local_types);
     for (name, span) in locals {
         if reads.iter().any(|read| read == name) {
             continue;
@@ -786,6 +822,63 @@ pub(crate) fn emit_unused_locals(
             None => diagnostic,
         };
         ctx.push(diagnostic);
+    }
+    for (name, span) in local_types {
+        if reads.iter().any(|read| read == name) {
+            continue;
+        }
+        let diagnostic = Diagnostic::ts6196(name, ctx.file_name.clone());
+        let diagnostic = match span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+    }
+}
+
+/// Body-local `type`/`interface` declarations, recursing through control flow
+/// but not into nested functions, mirroring
+/// [`collect_local_var_declarations`]. A body-local `class` is a value and
+/// reports TS6133 through the declaration path instead.
+fn collect_local_type_declarations<'a>(
+    statements: &'a [ParsedFunctionBodyStatement],
+    out: &mut Vec<(&'a str, Option<TextSpan>)>,
+) {
+    for statement in statements {
+        match statement {
+            ParsedFunctionBodyStatement::TypeAlias(alias) if !alias.is_declare => {
+                out.push((alias.name.as_str(), alias.name_span));
+            }
+            ParsedFunctionBodyStatement::Interface(interface) if !interface.is_declare => {
+                out.push((interface.name.as_str(), interface.name_span));
+            }
+            ParsedFunctionBodyStatement::Block(body) => {
+                collect_local_type_declarations(body, out);
+            }
+            ParsedFunctionBodyStatement::If(statement) => {
+                collect_local_type_declarations(&statement.then_body, out);
+                collect_local_type_declarations(&statement.else_body, out);
+            }
+            ParsedFunctionBodyStatement::While(statement) => {
+                collect_local_type_declarations(&statement.body, out);
+            }
+            ParsedFunctionBodyStatement::ForOf(statement) => {
+                collect_local_type_declarations(&statement.body, out);
+            }
+            ParsedFunctionBodyStatement::Switch(statement) => {
+                for case in &statement.cases {
+                    collect_local_type_declarations(&case.consequent, out);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(statement) => {
+                collect_local_type_declarations(&statement.block, out);
+                if let Some(handler) = &statement.handler {
+                    collect_local_type_declarations(&handler.body, out);
+                }
+                collect_local_type_declarations(&statement.finalizer, out);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -798,7 +891,13 @@ fn collect_local_var_declarations<'a>(
 ) {
     for statement in statements {
         match statement {
-            ParsedFunctionBodyStatement::VariableDeclaration(variable) if !variable.is_declare => {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable)
+                if !variable.is_declare
+                    // tsc exempts an `_`-prefixed *destructured* binding: it is
+                    // the idiom for naming a property only to drop it from a
+                    // rest spread (`const { a: _a, ...rest } = x`).
+                    && !(variable.from_binding_pattern && variable.name.starts_with('_')) =>
+            {
                 out.push((variable.name.as_str(), variable.name_span));
             }
             ParsedFunctionBodyStatement::Block(body) => collect_local_var_declarations(body, out),
@@ -843,7 +942,7 @@ pub(crate) fn check_function_body_with_signature(
     ctx: &mut CheckerContext,
 ) {
     check_function_body_with_signature_and_this(
-        name,
+        Some(name),
         parameters,
         body,
         function_type,
@@ -862,8 +961,12 @@ pub(crate) fn check_function_body_with_signature(
 /// symbol (the class instance or static side) into the body scope so class
 /// method and constructor bodies can resolve `this.<member>` references.
 #[allow(clippy::too_many_arguments)]
+/// `name` is the body's *self* binding, so a function declaration can call
+/// itself. It is `None` for a class method or constructor: the name is a member,
+/// not a lexical binding, so an outer function of the same name must stay visible
+/// (zod's `process` method calls the imported `process`).
 pub(crate) fn check_function_body_with_signature_and_this(
-    name: String,
+    name: Option<String>,
     parameters: Vec<ParsedFunctionParameter>,
     body: Vec<ParsedFunctionBodyStatement>,
     function_type: &FunctionType,
@@ -880,17 +983,19 @@ pub(crate) fn check_function_body_with_signature_and_this(
     let flow_facts = collect_function_flow_facts(&body);
 
     let mut scopes = ScopeStack::from_root(merged_function_body_root_symbols(ctx));
-    scopes.insert_current(
-        name,
-        SymbolInfo {
-            ty: Type::Function(with_type_copy_reason(
-                TypeCopyReason::FunctionBodySetup,
-                || function_type.clone(),
-            )),
-            kind: SymbolKind::Function,
-            function_signature,
-        },
-    );
+    if let Some(name) = name {
+        scopes.insert_current(
+            name,
+            SymbolInfo {
+                ty: Type::Function(with_type_copy_reason(
+                    TypeCopyReason::FunctionBodySetup,
+                    || function_type.clone(),
+                )),
+                kind: SymbolKind::Function,
+                function_signature,
+            },
+        );
+    }
     if let Some(this_type) = this_type {
         scopes.insert_current(
             "this".to_string(),

@@ -1,3 +1,23 @@
+[TS5102]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "crates/surge-ts-config/src/tests.rs",
+]
+oracle = [
+  "CLI tests",
+]
+
+[TS5108]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+  "crates/surge-ts-config/src/tests.rs",
+]
+oracle = [
+  "CLI tests",
+]
+
 [TS5112]
 status = "emitted"
 fixtures = [
@@ -391,6 +411,15 @@ span_tests = [
   "crates/surge-ts-checker/tests/program.rs",
 ]
 
+[TS2686]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "tests/compat-projects/umd-global-module-reference-basic/tsconfig.json",
+]
+
 [TS2741]
 status = "emitted"
 fixtures = [
@@ -450,6 +479,15 @@ span_tests = [
   "crates/surge-ts-checker/tests/spans.rs",
 ]
 
+[TS7016]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-cli/tests/project_mode.rs",
+]
+oracle = [
+  "zod real-project parity (untyped .mjs import)",
+]
+
 [TS7019]
 status = "catalog-only"
 reason = "Cataloged for future coverage"
@@ -479,6 +517,15 @@ fixtures = [
 ]
 oracle = [
   "ky real-project parity (noUnusedParameters/noUnusedLocals)",
+]
+
+[TS6196]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "zod real-project parity (unused body-local type aliases and interfaces)",
 ]
 
 [TS7029]

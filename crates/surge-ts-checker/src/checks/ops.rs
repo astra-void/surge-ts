@@ -182,6 +182,13 @@ fn evaluate_add_binary(
         return InferredExpression::Unknown;
     };
 
+    // The operands may be nominal references (`core.output<T>` around the
+    // awaited/inferred type). Every classification below matches on structure,
+    // so a reference that resolves to `any`/`string`/`number` has to be peeled
+    // first or it falls through to the report.
+    let left_type = left_type.peeled();
+    let right_type = right_type.peeled();
+
     if left_type.is_unknown() || right_type.is_unknown() {
         return InferredExpression::Unknown;
     }
@@ -194,11 +201,11 @@ fn evaluate_add_binary(
         return InferredExpression::Known(Type::String);
     }
 
-    if is_string_like_for_add(&left_type) && is_number_like_for_add(&right_type) {
+    if is_string_like_for_add(&left_type) && is_numeric_like_for_add(&right_type) {
         return InferredExpression::Known(Type::String);
     }
 
-    if is_number_like_for_add(&left_type) && is_string_like_for_add(&right_type) {
+    if is_numeric_like_for_add(&left_type) && is_string_like_for_add(&right_type) {
         return InferredExpression::Known(Type::String);
     }
 
@@ -233,6 +240,17 @@ fn is_number_like_for_add(ty: &Type) -> bool {
         Type::Number | Type::NumberLiteral(_) => true,
         Type::Union(union) => union.types().iter().all(is_number_like_for_add),
         _ => false,
+    }
+}
+
+/// Concatenation-side numerics: `bigint` joins `number` here but deliberately not
+/// in [`is_number_like_for_add`], because tsc concatenates `"Min: " + bigint` (and
+/// `+ (number | bigint)`) while still rejecting the arithmetic `number + bigint`.
+fn is_numeric_like_for_add(ty: &Type) -> bool {
+    match ty {
+        Type::BigInt => true,
+        Type::Union(union) => union.types().iter().all(is_numeric_like_for_add),
+        other => is_number_like_for_add(other),
     }
 }
 
@@ -364,6 +382,14 @@ fn evaluate_equality_binary(
         return InferredExpression::Known(Type::Boolean);
     }
 
+    // tsc's `isTypeEqualityComparableTo` short-circuits when the *other* operand
+    // is nullable, so `x === undefined` / `x === null` never reports TS2367
+    // whatever `x` is. The test is on the operand as a whole, not on individual
+    // union constituents, so it stays here rather than inside the overlap walk.
+    if matches!(left_type, Type::Undefined) || matches!(right_type, Type::Undefined) {
+        return InferredExpression::Known(Type::Boolean);
+    }
+
     if !types_overlap_for_equality(left_type, right_type) {
         let file_name = ctx.file_name.clone();
         push_diagnostic(
@@ -419,6 +445,11 @@ fn types_overlap_for_equality(left: &Type, right: &Type) -> bool {
             .types()
             .iter()
             .any(|right_ty| types_overlap_for_equality(left_ty, right_ty)),
+        // `any`, `unknown` and `never` are comparable to everything, so a
+        // degraded operand — or a union that merely *contains* one — must never
+        // reach the disjointness verdict below.
+        (Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Never, _)
+        | (_, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Never) => true,
         (Type::StringLiteral(left_value), Type::StringLiteral(right_value)) => {
             left_value == right_value
         }
@@ -428,17 +459,77 @@ fn types_overlap_for_equality(left: &Type, right: &Type) -> bool {
         (Type::BooleanLiteral(left_value), Type::BooleanLiteral(right_value)) => {
             left_value == right_value
         }
-        (Type::StringLiteral(_), Type::String) | (Type::String, Type::StringLiteral(_)) => true,
-        (Type::NumberLiteral(_), Type::Number) | (Type::Number, Type::NumberLiteral(_)) => true,
-        (Type::BooleanLiteral(_), Type::Boolean) | (Type::Boolean, Type::BooleanLiteral(_)) => true,
-        (Type::String, Type::String)
-        | (Type::Number, Type::Number)
-        | (Type::Boolean, Type::Boolean)
-        | (Type::Undefined, Type::Undefined)
-        | (Type::Object(_), Type::Object(_))
-        | (Type::Function(_), Type::Function(_)) => true,
-        _ => false,
+        (Type::Array(left_element), Type::Array(right_element)) => {
+            types_overlap_for_equality(left_element, right_element)
+        }
+        (Type::Tuple(left_items), Type::Tuple(right_items)) => {
+            left_items.len() == right_items.len()
+                && left_items
+                    .iter()
+                    .zip(right_items.iter())
+                    .all(|(left_item, right_item)| {
+                        types_overlap_for_equality(left_item, right_item)
+                    })
+        }
+        (Type::Array(element), Type::Tuple(items)) | (Type::Tuple(items), Type::Array(element)) => {
+            items
+                .iter()
+                .all(|item| types_overlap_for_equality(item, element))
+        }
+        // Every non-nullish value is assignable to `{}`, so an empty object type
+        // is comparable to anything.
+        (Type::Object(object), _) | (_, Type::Object(object)) if is_empty_object_type(object) => {
+            true
+        }
+        // Everything else is disjoint only when *both* operands land in a kind
+        // whose inhabitants are known: comparing two different known kinds has
+        // no overlap, and anything unclassified (references, type parameters,
+        // …) is assumed comparable rather than reported, matching tsc, which
+        // issues TS2367 only for provably disjoint operands.
+        _ => match (equality_kind(left), equality_kind(right)) {
+            (Some(left_kind), Some(right_kind)) => left_kind == right_kind,
+            _ => true,
+        },
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EqualityKind {
+    String,
+    Number,
+    Boolean,
+    BigInt,
+    Symbol,
+    Undefined,
+    Void,
+    Object,
+    Function,
+    Array,
+    Tuple,
+}
+
+fn equality_kind(ty: &Type) -> Option<EqualityKind> {
+    match ty {
+        Type::String | Type::StringLiteral(_) => Some(EqualityKind::String),
+        Type::Number | Type::NumberLiteral(_) => Some(EqualityKind::Number),
+        Type::Boolean | Type::BooleanLiteral(_) => Some(EqualityKind::Boolean),
+        Type::BigInt => Some(EqualityKind::BigInt),
+        Type::Symbol => Some(EqualityKind::Symbol),
+        Type::Undefined => Some(EqualityKind::Undefined),
+        Type::Void => Some(EqualityKind::Void),
+        Type::Object(_) => Some(EqualityKind::Object),
+        Type::Function(_) => Some(EqualityKind::Function),
+        Type::Array(_) => Some(EqualityKind::Array),
+        Type::Tuple(_) => Some(EqualityKind::Tuple),
+        _ => None,
+    }
+}
+
+fn is_empty_object_type(object: &surge_ts_types::ObjectType) -> bool {
+    object.properties.is_empty()
+        && object.string_index_type.is_none()
+        && object.call_signature.is_none()
+        && object.construct_signature.is_none()
 }
 
 fn push_diagnostic(ctx: &mut CheckerContext, diagnostic: Diagnostic, span: Option<SyntaxTextSpan>) {

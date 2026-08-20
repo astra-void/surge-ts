@@ -55,11 +55,67 @@ fn unresolved_module_diagnostic(ctx: &CheckerContext, module_specifier: &str) ->
         .unwrap_or_else(|| Diagnostic::ts2307(module_specifier, ctx.file_name.clone()))
 }
 
+/// A relative specifier that names an *existing* JavaScript file with no
+/// adjacent declaration file is resolved by tsc — it is just untyped, which is
+/// TS7016 under `noImplicitAny` and silent otherwise. Reporting TS2307 there
+/// says the module is missing, which it is not. Only explicit `.js`/`.mjs`/
+/// `.cjs`/`.jsx` specifiers are recognized; extensionless resolution stays with
+/// the module loader.
+fn untyped_javascript_module_path(ctx: &CheckerContext, module_specifier: &str) -> Option<String> {
+    if !module_specifier.starts_with('.') {
+        return None;
+    }
+    let extension = Path::new(module_specifier).extension()?.to_str()?;
+    if !matches!(extension, "js" | "mjs" | "cjs" | "jsx") {
+        return None;
+    }
+    let resolved = Path::new(ctx.file_name.as_str())
+        .parent()?
+        .join(module_specifier);
+    let resolved = canonicalize_if_exists_string(&resolved);
+    if !Path::new(&resolved).is_file() {
+        return None;
+    }
+    let declaration = Path::new(&resolved).with_extension(match extension {
+        "mjs" => "d.mts",
+        "cjs" => "d.cts",
+        _ => "d.ts",
+    });
+    if declaration.is_file() {
+        return None;
+    }
+    Some(resolved)
+}
+
+/// Pushes the right diagnostic for a specifier the module loader did not
+/// resolve: TS7016 (or silence) for an existing untyped JavaScript file, and the
+/// caller's unresolved-module diagnostic otherwise.
+fn push_untyped_javascript_module_diagnostic(
+    ctx: &mut CheckerContext,
+    module_specifier: &str,
+    span: Option<TextSpan>,
+) -> bool {
+    let Some(resolved) = untyped_javascript_module_path(ctx, module_specifier) else {
+        return false;
+    };
+    if ctx.options.no_implicit_any {
+        let mut diagnostic = Diagnostic::ts7016(module_specifier, &resolved, ctx.file_name.clone());
+        if let Some(span) = span {
+            diagnostic = diagnostic.with_span(convert_span(span));
+        }
+        ctx.push(diagnostic);
+    }
+    true
+}
+
 pub(crate) fn emit_unresolved_export_module_diagnostic(
     ctx: &mut CheckerContext,
     module_specifier: &str,
     module_specifier_span: Option<TextSpan>,
 ) {
+    if push_untyped_javascript_module_diagnostic(ctx, module_specifier, module_specifier_span) {
+        return;
+    }
     let mut diagnostic = unresolved_module_diagnostic(ctx, module_specifier);
 
     if let Some(span) = module_specifier_span {
@@ -73,6 +129,15 @@ pub(crate) fn emit_unresolved_module_diagnostic(
     ctx: &mut CheckerContext,
     import: &ParsedImportDeclaration,
 ) {
+    if !matches!(import.kind, ParsedImportKind::SideEffect)
+        && push_untyped_javascript_module_diagnostic(
+            ctx,
+            &import.module_specifier,
+            import.module_specifier_span.or(import.span),
+        )
+    {
+        return;
+    }
     let mut diagnostic = match &import.kind {
         ParsedImportKind::SideEffect => {
             Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
@@ -170,7 +235,10 @@ pub(crate) fn statement_has_unsupported_declaration_surface(statement: &ParsedSt
     match statement {
         ParsedStatement::UnsupportedDeclaration { .. } => true,
         ParsedStatement::ImportDeclaration(import) => {
-            matches!(import.kind, ParsedImportKind::Unsupported)
+            matches!(
+                import.kind,
+                ParsedImportKind::Unsupported | ParsedImportKind::TypeOnlyDefault { .. }
+            )
         }
         ParsedStatement::ExportDeclaration(export) => matches!(
             export.as_ref(),

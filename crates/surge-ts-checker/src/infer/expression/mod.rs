@@ -192,7 +192,16 @@ pub(crate) fn infer_expression(
         ),
         ParsedExpression::NullishCoalescing { left, right, .. } => {
             let left_type = infer_expression(left, symbols, ctx);
-            let right_type = infer_expression(right, symbols, ctx);
+            let right_type = match &left_type {
+                InferredExpression::Known(known) => {
+                    let stripped = surge_ts_types::remove_nullish(known);
+                    match crate::checks::expr::empty_object_fallback_type(right, &stripped) {
+                        Some(fallback) => InferredExpression::Known(fallback),
+                        None => infer_expression(right, symbols, ctx),
+                    }
+                }
+                _ => infer_expression(right, symbols, ctx),
+            };
 
             match (left_type, right_type) {
                 (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty)) => {
@@ -280,12 +289,16 @@ pub(crate) fn infer_expression(
             object_span,
             property_name,
             property_span,
+            type_arguments,
+            arguments,
             ..
         } => infer_property_call(
             object,
             object_span,
             property_name,
             property_span,
+            type_arguments,
+            arguments,
             symbols,
             ctx,
         ),

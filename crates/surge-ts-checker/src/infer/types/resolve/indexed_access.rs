@@ -232,6 +232,17 @@ pub(super) fn resolve_indexed_access_type(
         };
     }
 
+    // `T[never]` is `never` in tsc — there is no key to select, so the access
+    // contributes nothing. This is the empty-interface escape hatch
+    // (`DO_NOT_USE_…[keyof DO_NOT_USE_…]` in React's `Key`/`ReactNode`), whose
+    // arm has to vanish from the enclosing union instead of reporting TS2538.
+    if matches!(resolved_index.ty, Type::Never) {
+        return ResolvedType {
+            ty: Type::Never,
+            had_error: false,
+        };
+    }
+
     match (&resolved_object.ty, &resolved_index.ty) {
         (Type::Object(object_type), Type::StringLiteral(key)) => {
             if let Some(property_ty) = object_type.get_property_access_type(&key) {

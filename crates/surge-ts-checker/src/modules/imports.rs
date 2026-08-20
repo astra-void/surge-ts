@@ -42,7 +42,7 @@ pub(crate) fn resolve_module_imports(
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
-    local_symbols: &SymbolTable,
+    local_symbol_exists: &dyn Fn(&str) -> bool,
     ctx: &mut CheckerContext,
 ) -> ModuleImportBindings {
     let mut type_declarations = TypeDeclarationTable::new();
@@ -59,7 +59,7 @@ pub(crate) fn resolve_module_imports(
             program_files,
             module_export_tables,
             module_resolution_scopes,
-            local_symbols,
+            local_symbol_exists,
             &mut type_declarations,
             &mut symbols,
             &mut namespace_alias_layers,
@@ -107,6 +107,24 @@ pub(crate) fn ambient_module_export_table<'a>(
     best.map(|(_, export_table)| export_table)
 }
 
+/// Whether a resolved file must yield to an ambient `declare module
+/// "<specifier>"` of the same name. A file with no top-level import/export is a
+/// global script, not an external module, so its (empty) export table must not
+/// shadow the ambient declaration — packages whose `types` entry is a wrapper
+/// containing only `declare module "pkg" { … }` depend on this. Only an exact
+/// specifier match counts; a wildcard pattern never outranks a resolved file.
+pub(crate) fn resolved_file_yields_to_ambient_module(
+    ctx: &CheckerContext,
+    program_files: &[ParsedProgramFile],
+    resolved_index: usize,
+    module_specifier: &str,
+) -> bool {
+    program_files
+        .get(resolved_index)
+        .is_some_and(|file| !file.is_module)
+        && ctx.ambient_modules.contains_key(module_specifier)
+}
+
 pub(crate) fn try_resolve_module(
     module_specifier: &str,
     ctx: &CheckerContext,
@@ -128,7 +146,16 @@ pub(crate) fn try_resolve_module(
             .module_file_index_by_identity
             .get(resolved_file_name.as_str())
         {
-            if let Some(Some(export_table)) = module_export_tables.get(*resolved_index) {
+            let yields_to_ambient = resolved_file_yields_to_ambient_module(
+                ctx,
+                program_files,
+                *resolved_index,
+                module_specifier,
+            );
+            if let Some(Some(export_table)) = module_export_tables
+                .get(*resolved_index)
+                .filter(|_| !yields_to_ambient)
+            {
                 let scope = module_resolution_scopes
                     .get(*resolved_index)
                     .and_then(|scope| scope.clone());
@@ -197,14 +224,14 @@ pub(crate) fn resolve_import_declaration(
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
-    local_symbols: &SymbolTable,
+    local_symbol_exists: &dyn Fn(&str) -> bool,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
     match &import.kind {
-        ParsedImportKind::Unsupported => {
+        ParsedImportKind::Unsupported | ParsedImportKind::TypeOnlyDefault { .. } => {
             if !is_declaration_file_name(&ctx.file_name) {
                 emit_unsupported_module_syntax_diagnostic(ctx, import);
             }
@@ -215,7 +242,7 @@ pub(crate) fn resolve_import_declaration(
             program_files,
             module_export_tables,
             module_resolution_scopes,
-            local_symbols,
+            local_symbol_exists,
             type_declarations,
             symbols,
             ctx,
@@ -225,7 +252,8 @@ pub(crate) fn resolve_import_declaration(
             program_files,
             module_export_tables,
             module_resolution_scopes,
-            local_symbols,
+            local_symbol_exists,
+            type_declarations,
             symbols,
             ctx,
         ),
@@ -234,7 +262,7 @@ pub(crate) fn resolve_import_declaration(
             program_files,
             module_export_tables,
             module_resolution_scopes,
-            local_symbols,
+            local_symbol_exists,
             type_declarations,
             symbols,
             namespace_alias_layers,
@@ -245,7 +273,7 @@ pub(crate) fn resolve_import_declaration(
             program_files,
             module_export_tables,
             module_resolution_scopes,
-            local_symbols,
+            local_symbol_exists,
             symbols,
             ctx,
         ),
@@ -289,7 +317,7 @@ fn resolve_default_and_named_import(
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
-    local_symbols: &SymbolTable,
+    local_symbol_exists: &dyn Fn(&str) -> bool,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
@@ -303,7 +331,7 @@ fn resolve_default_and_named_import(
     else {
         return;
     };
-    let Some((export_table, _, resolved_index)) = try_resolve_module(
+    let Some((export_table, default_scope, resolved_index)) = try_resolve_module(
         &import.module_specifier,
         ctx,
         program_files,
@@ -375,6 +403,13 @@ fn resolve_default_and_named_import(
     // is an incomplete declaration surface) and binds an unknown placeholder,
     // but never returns early: the named specifiers below must still bind so a
     // missing default does not cascade into TS2304 on their usages.
+    bind_default_type_import(
+        &export_table,
+        default_scope.as_ref(),
+        local_name,
+        type_declarations,
+    );
+
     match export_table.get_shared_value("default") {
         Some(default_symbol) => {
             if *is_type_only {
@@ -389,14 +424,14 @@ fn resolve_default_and_named_import(
                 if type_declarations.get(local_name).is_none() {
                     let _ = type_declarations.insert(local_name.clone(), declaration);
                 }
-            } else if local_symbols.get(local_name).is_none() {
+            } else if !local_symbol_exists(local_name) {
                 symbols.insert_shared(local_name.clone(), default_symbol);
             }
         }
         None => {
             if allows_synthetic_default_import(ctx, resolved_index, program_files) && !*is_type_only
             {
-                bind_synthetic_default_import(local_name, local_symbols, symbols);
+                bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
             } else if !should_bind_unknown_for_missing_export(
                 &export_table,
                 resolved_index,
@@ -453,6 +488,12 @@ fn resolve_default_and_named_import(
             &specifier.local_name,
             type_declarations,
         );
+        copy_qualified_value_exports(
+            &export_table,
+            &specifier.imported_name,
+            &specifier.local_name,
+            symbols,
+        );
 
         if *is_type_only {
             if let Some(type_export) = type_export {
@@ -469,6 +510,14 @@ fn resolve_default_and_named_import(
             // has no direct export entry, only qualified `ns.Member` ones; the
             // import is still valid.
             if has_qualified_type_exports {
+                continue;
+            }
+
+            // A value-only export is a legal `import type` target (`typeof f`).
+            if let Some(value_export) = value_export {
+                if symbols.get(&specifier.local_name).is_none() {
+                    symbols.insert_shared(specifier.local_name.clone(), value_export);
+                }
                 continue;
             }
 
@@ -554,7 +603,8 @@ fn resolve_default_import(
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
-    local_symbols: &SymbolTable,
+    local_symbol_exists: &dyn Fn(&str) -> bool,
+    type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
 ) {
@@ -565,7 +615,7 @@ fn resolve_default_import(
     else {
         return;
     };
-    let Some((export_table, _, resolved_index)) = try_resolve_module(
+    let Some((export_table, scope, resolved_index)) = try_resolve_module(
         &import.module_specifier,
         ctx,
         program_files,
@@ -590,7 +640,7 @@ fn resolve_default_import(
 
     let Some(default_symbol) = export_table.get_shared_value("default") else {
         if allows_synthetic_default_import(ctx, resolved_index, program_files) {
-            bind_synthetic_default_import(local_name, local_symbols, symbols);
+            bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
             return;
         }
 
@@ -604,10 +654,30 @@ fn resolve_default_import(
         return;
     };
 
-    if local_symbols.get(local_name).is_none() {
+    bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
+
+    if !local_symbol_exists(local_name) {
         symbols.insert_shared(local_name.clone(), default_symbol);
     }
     return;
+}
+
+/// A default-exported class contributes a type as well as a value, so
+/// `import D from "./m"` must bind both — otherwise `type X = D` and any
+/// re-export of `D` from this module lose the type side entirely.
+fn bind_default_type_import(
+    export_table: &ModuleExportTable,
+    scope: Option<&Arc<TypeDeclarationScope>>,
+    local_name: &str,
+    type_declarations: &mut TypeDeclarationTable,
+) {
+    let Some(type_export) = lookup_type_export(export_table, "default") else {
+        return;
+    };
+    if type_declarations.get(local_name).is_some() {
+        return;
+    }
+    insert_type_export(type_declarations, local_name, scope, type_export.clone());
 }
 
 fn resolve_import_equals(
@@ -615,7 +685,7 @@ fn resolve_import_equals(
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
-    local_symbols: &SymbolTable,
+    local_symbol_exists: &dyn Fn(&str) -> bool,
     symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
 ) {
@@ -649,7 +719,7 @@ fn resolve_import_equals(
     // diagnostic so an unsupported/unresolved export target does not cascade.
     match export_table.export_assignment_symbol.clone() {
         Some(symbol) => {
-            if local_symbols.get(local_name).is_none() {
+            if !local_symbol_exists(local_name) {
                 symbols.insert_shared(local_name.clone(), symbol);
             }
         }
@@ -659,10 +729,10 @@ fn resolve_import_equals(
 
 fn bind_synthetic_default_import(
     local_name: &str,
-    local_symbols: &SymbolTable,
+    local_symbol_exists: &dyn Fn(&str) -> bool,
     symbols: &mut SymbolTable,
 ) {
-    if local_symbols.get(local_name).is_some() {
+    if local_symbol_exists(local_name) {
         return;
     }
 
@@ -745,7 +815,7 @@ fn resolve_namespace_import(
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
-    local_symbols: &SymbolTable,
+    local_symbol_exists: &dyn Fn(&str) -> bool,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
@@ -779,7 +849,7 @@ fn resolve_namespace_import(
                 resolved_index,
             ));
 
-            if local_symbols.get(local_name).is_none() {
+            if !local_symbol_exists(local_name) {
                 let namespace_type = namespace_export_object_type(&export_table);
                 let namespace_type = match resolved_index.and_then(|index| program_files.get(index))
                 {
@@ -862,7 +932,7 @@ fn resolve_namespace_import(
         ));
     }
 
-    if local_symbols.get(local_name).is_none() {
+    if !local_symbol_exists(local_name) {
         symbols.insert(
             local_name.clone(),
             SymbolInfo {
@@ -1055,6 +1125,12 @@ fn resolve_named_import(
             &specifier.local_name,
             type_declarations,
         );
+        copy_qualified_value_exports(
+            &export_table,
+            &specifier.imported_name,
+            &specifier.local_name,
+            symbols,
+        );
         if *is_type_only {
             if let Some(type_export) = type_export {
                 insert_type_export(
@@ -1078,6 +1154,15 @@ fn resolve_named_import(
 
             // A type-only namespace exports only qualified `ns.Member` entries.
             if has_qualified_type_exports {
+                continue;
+            }
+
+            // `import type { f }` imports the SYMBOL, so a value-only export
+            // (function/const) is a legal target — it is usable in type
+            // position through `typeof f`. Binding the value here is what makes
+            // that query resolve instead of cascading TS2304.
+            if let Some(value_export) = value_export {
+                symbols.insert_shared(specifier.local_name.clone(), value_export);
                 continue;
             }
 

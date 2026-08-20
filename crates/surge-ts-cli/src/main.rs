@@ -478,6 +478,8 @@ fn run_single_file_mode(
             resolved_modules_by_importer: Default::default(),
             types: Vec::new(),
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             diagnostic_profile,
         })
         .check_source(&source_text, &file_name);
@@ -628,7 +630,10 @@ fn run_project_mode(
     }
 
     if loaded.files.is_empty() {
-        let diagnostics = vec![project_has_no_source_files_diagnostic(loaded)];
+        // A removed option is a config error in its own right; tsc reports it
+        // even when the project resolves to no files.
+        let mut diagnostics = removed_option_diagnostics(loaded);
+        diagnostics.push(project_has_no_source_files_diagnostic(loaded));
         let stats = surge_ts_checker::CompatibilityStats::default();
         let exit_code = render_project_mode_output(
             loaded,
@@ -687,9 +692,15 @@ fn run_project_mode(
         merge_project_timings(&mut timings, &result.timings);
     }
 
+    // tsc reports removed compiler options against the config file itself, so
+    // they lead the run's diagnostics rather than joining a source file's.
+    let mut diagnostics = removed_option_diagnostics(loaded);
+    let config_only_diagnostics = diagnostics.len();
+    diagnostics.extend(result.diagnostics.iter().cloned());
+
     let exit_code = render_project_mode_output(
         loaded,
-        &result.diagnostics,
+        &diagnostics,
         &result.sources,
         &result.stats,
         show_spans,
@@ -707,7 +718,7 @@ fn run_project_mode(
     if let Err(error) = run_report::emit_run_reports(
         &report_request,
         &result.sources,
-        result.diagnostics.len(),
+        result.diagnostics.len() + config_only_diagnostics,
         jobs,
         &timings,
     ) {
@@ -789,6 +800,13 @@ fn render_project_mode_output(
     let render_start = Instant::now();
     let json_output = matches!(style, DiagnosticStyle::Json);
 
+    // The renderers resolve a diagnostic's line/column by looking its file up in
+    // `sources`. A removed-option diagnostic lives in the config file, which is
+    // not a source file, so it is appended for rendering only — the
+    // compatibility report below still sees the real source list.
+    let config_backed_sources = config_backed_sources(loaded, diagnostics, sources);
+    let sources_for_diagnostics = config_backed_sources.as_deref().unwrap_or(sources);
+
     if compat_report {
         let report = build_project_compatibility_report(loaded, diagnostics, sources, stats);
         if json_output {
@@ -801,7 +819,7 @@ fn render_project_mode_output(
             println!("{}", render_project_compatibility_report_text(&report));
             let preview = render_project_diagnostics_preview(
                 diagnostics,
-                sources,
+                sources_for_diagnostics,
                 show_spans,
                 max_diagnostics,
             );
@@ -826,7 +844,7 @@ fn render_project_mode_output(
                 serde_json::to_string_pretty(&render_project_diagnostics_json(
                     loaded,
                     diagnostics,
-                    sources,
+                    sources_for_diagnostics,
                     max_diagnostics
                 ))
                 .unwrap()
@@ -835,7 +853,7 @@ fn render_project_mode_output(
         _ if force_custom => {
             let preview = render_project_diagnostics_preview(
                 diagnostics,
-                sources,
+                sources_for_diagnostics,
                 show_spans,
                 max_diagnostics,
             );
@@ -848,7 +866,7 @@ fn render_project_mode_output(
                 "{}",
                 render_project_diagnostics_tsc(
                     diagnostics,
-                    sources,
+                    sources_for_diagnostics,
                     pretty,
                     color,
                     max_diagnostics
@@ -1193,6 +1211,50 @@ fn build_show_config_json(loaded: &surge_ts_config::LoadedTsConfig) -> Value {
     );
 
     Value::Object(root)
+}
+
+/// `sources` plus the config file, when a diagnostic points into the config and
+/// the renderers would otherwise find no text to resolve its line/column
+/// against. `None` leaves the caller on the original slice.
+fn config_backed_sources(
+    loaded: &surge_ts_config::LoadedTsConfig,
+    diagnostics: &[Diagnostic],
+    sources: &[(PathBuf, String, String)],
+) -> Option<Vec<(PathBuf, String, String)>> {
+    let file_name = loaded.config_path.display().to_string();
+    if !diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.file_name == file_name)
+    {
+        return None;
+    }
+    let source_text = fs::read_to_string(&loaded.config_path).ok()?;
+
+    let mut extended = Vec::with_capacity(sources.len() + 1);
+    extended.push((loaded.config_path.clone(), file_name, source_text));
+    extended.extend(sources.iter().cloned());
+    Some(extended)
+}
+
+/// `TS5102`/`TS5108` for every compiler option TypeScript 7 removed, spanned
+/// inside the config file the way tsc spans them (the value node for the
+/// `name=value` form, the key node otherwise).
+fn removed_option_diagnostics(loaded: &surge_ts_config::LoadedTsConfig) -> Vec<Diagnostic> {
+    let file_name = loaded.config_path.display().to_string();
+    loaded
+        .removed_options
+        .iter()
+        .map(|option| {
+            let diagnostic = match &option.value {
+                Some(value) => Diagnostic::ts5108(&option.name, value, file_name.clone()),
+                None => Diagnostic::ts5102(&option.name, file_name.clone()),
+            };
+            diagnostic.with_span(surge_ts_diagnostics::TextSpan {
+                start: option.start,
+                end: option.end,
+            })
+        })
+        .collect()
 }
 
 fn project_has_no_source_files_diagnostic(loaded: &surge_ts_config::LoadedTsConfig) -> Diagnostic {

@@ -6,6 +6,7 @@ use surge_ts_checker::lowlevel::resolution_candidates::mapped_target_candidates;
 use surge_ts_config::PathMapping;
 use surge_ts_config::{canonicalize_if_exists_string, select_path_mapping_targets};
 
+use crate::specifier::is_external_specifier;
 use crate::specifier_scan::ModuleSpecifierScanner;
 
 /// Resolve `paths`/`baseUrl` specifiers against the loaded file set. The
@@ -82,13 +83,6 @@ fn try_resolve_base_url(
         }
     }
     None
-}
-
-fn is_external_specifier(specifier: &str) -> bool {
-    !specifier.starts_with("./")
-        && !specifier.starts_with("../")
-        && !specifier.starts_with(".\\")
-        && !specifier.starts_with("..\\")
 }
 
 fn try_resolve_path_mapping(

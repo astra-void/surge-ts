@@ -11,6 +11,7 @@ use crate::package_resolution::{
     ResolverOptions, select_export_target, select_export_targets, select_import_targets,
     types_versions_candidates,
 };
+use crate::specifier::{is_external_specifier, is_relative_specifier};
 
 mod helpers;
 use helpers::*;
@@ -60,13 +61,6 @@ struct PackageEntrypointResolution {
 enum PackageEntrypointKind {
     Declaration,
     RuntimeOnly,
-}
-
-fn is_external_specifier(specifier: &str) -> bool {
-    !specifier.starts_with("./")
-        && !specifier.starts_with("../")
-        && !specifier.starts_with(".\\")
-        && !specifier.starts_with("..\\")
 }
 
 fn parse_package_specifier(specifier: &str) -> Option<(String, Option<String>)> {
@@ -280,13 +274,16 @@ pub(crate) struct TypePackageResolution {
 ///   `getCandidateFromTypeRoot`.
 ///
 /// Entrypoint resolution stays narrow: `types` / `typings` / exact
-/// `exports["."].types` / `index.d.ts`.
+/// `exports["."].types` / `index.d.ts`. A name no type root provides then falls
+/// through to the secondary `node_modules` lookup, which is what resolves
+/// subpath directives such as `vitest/globals`.
 pub(crate) fn resolve_type_packages(
     inputs: &mut Vec<SourceFileInput>,
     sources: &mut Vec<(PathBuf, String, String)>,
     root_dir: &Path,
     types: Option<&[String]>,
     type_roots: &[PathBuf],
+    opts: &ResolverOptions,
     cache: &mut PackageDeclarationResolverCache,
 ) -> TypePackageResolution {
     let mut resolution = TypePackageResolution {
@@ -334,7 +331,10 @@ pub(crate) fn resolve_type_packages(
         .collect();
 
     for (name, explicit) in directives {
-        match resolve_type_directive_in_roots(&name, &roots, cache) {
+        let resolved = resolve_type_directive_in_roots(&name, &roots, cache).or_else(|| {
+            resolve_type_directive_in_node_modules(&name, root_dir, root_dir, opts, cache)
+        });
+        match resolved {
             Some(path) => {
                 load_type_package_file(&path, inputs, sources, &mut known_file_names);
                 resolution.effective_type_names.push(name);
@@ -376,8 +376,11 @@ pub(crate) struct ReferenceTypeDirectiveResolution {
 /// follows references recursively (a loaded type package's own directives).
 pub(crate) struct ReferenceTypeDirectiveResolver {
     roots: Vec<PathBuf>,
+    root_dir: PathBuf,
     scanned_files: HashSet<String>,
-    resolution_cache: HashMap<String, Option<PathBuf>>,
+    // The secondary `node_modules` lookup walks up from the referencing file, so
+    // the same directive name can resolve differently per directory.
+    resolution_cache: HashMap<(PathBuf, String), Option<PathBuf>>,
     effective_type_names: Vec<String>,
     seen_effective: HashSet<String>,
     missing: Vec<MissingReferenceTypeDirective>,
@@ -387,6 +390,7 @@ impl ReferenceTypeDirectiveResolver {
     pub fn new(root_dir: &Path, type_roots: &[PathBuf]) -> Self {
         Self {
             roots: effective_type_roots(root_dir, type_roots),
+            root_dir: root_dir.to_path_buf(),
             scanned_files: HashSet::new(),
             resolution_cache: HashMap::new(),
             effective_type_names: Vec::new(),
@@ -402,6 +406,7 @@ impl ReferenceTypeDirectiveResolver {
         &mut self,
         inputs: &mut Vec<SourceFileInput>,
         sources: &mut Vec<(PathBuf, String, String)>,
+        opts: &ResolverOptions,
         cache: &mut PackageDeclarationResolverCache,
     ) {
         loop {
@@ -452,6 +457,7 @@ impl ReferenceTypeDirectiveResolver {
                         inputs,
                         sources,
                         &mut known_file_names,
+                        opts,
                         cache,
                     );
                 }
@@ -467,14 +473,32 @@ impl ReferenceTypeDirectiveResolver {
         inputs: &mut Vec<SourceFileInput>,
         sources: &mut Vec<(PathBuf, String, String)>,
         known_file_names: &mut HashSet<String>,
+        opts: &ResolverOptions,
         cache: &mut PackageDeclarationResolverCache,
     ) {
         let name = directive.value;
-        let resolved = match self.resolution_cache.get(&name) {
+        let lookup_dir = Path::new(file_name)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.root_dir.clone());
+        let cache_key = (lookup_dir.clone(), name.clone());
+        let resolved = match self.resolution_cache.get(&cache_key) {
             Some(cached) => cached.clone(),
             None => {
-                let resolved = resolve_type_directive_in_roots(&name, &self.roots, cache);
-                self.resolution_cache.insert(name.clone(), resolved.clone());
+                let resolved = if is_relative_specifier(&name) || Path::new(&name).is_absolute() {
+                    resolve_relative_type_directive(&name, &lookup_dir, cache)
+                } else {
+                    resolve_type_directive_in_roots(&name, &self.roots, cache).or_else(|| {
+                        resolve_type_directive_in_node_modules(
+                            &name,
+                            &lookup_dir,
+                            &self.root_dir,
+                            opts,
+                            cache,
+                        )
+                    })
+                };
+                self.resolution_cache.insert(cache_key, resolved.clone());
                 resolved
             }
         };

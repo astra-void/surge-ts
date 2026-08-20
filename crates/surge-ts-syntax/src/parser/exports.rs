@@ -284,6 +284,9 @@ fn parse_exported_declaration(
             .map(|interface| vec![ParsedStatement::InterfaceDeclaration(Box::new(interface))])?,
         Declaration::ClassDeclaration(class) => super::classes::parse_class_declaration(class)
             .map(|class| vec![ParsedStatement::ClassDeclaration(Box::new(class))])?,
+        Declaration::TSEnumDeclaration(enum_declaration) => {
+            super::enums::parse_enum_declaration(enum_declaration)
+        }
         Declaration::TSModuleDeclaration(module) => super::parse_ts_module_declaration(module),
         _ => return None,
     };

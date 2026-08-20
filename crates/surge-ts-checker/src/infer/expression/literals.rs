@@ -176,12 +176,20 @@ fn infer_object_property_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Type {
-    if property.is_method
+    if (property.is_method || property.is_accessor)
         && let ParsedExpression::ArrowFunction(arrow) = &property.value
     {
         let function_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
             check_arrow_function_expression(arrow.as_ref().clone(), symbols, ctx)
         });
+        if property.is_accessor {
+            // A getter takes no parameters and yields its return type; a setter
+            // takes one and yields that parameter's type.
+            return match function_type.parameters().first() {
+                Some(parameter) => parameter.clone(),
+                None => function_type.return_type().clone(),
+            };
+        }
         return Type::Function(function_type);
     }
 

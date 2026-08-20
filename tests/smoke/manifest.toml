@@ -2216,32 +2216,32 @@ expected_diagnostics = ["TS2872"]
 [[case]]
 name = "control-flow-truthiness-if-number"
 path = "tests/smoke/control_flow_truthiness_if_number.ts"
-expected_diagnostics = ["TS2872"]
+expected_diagnostics = []
 
 [[case]]
 name = "control-flow-truthiness-if-true"
 path = "tests/smoke/control_flow_truthiness_if_true.ts"
-expected_diagnostics = ["TS2872"]
+expected_diagnostics = []
 
 [[case]]
 name = "control-flow-truthiness-if-false"
 path = "tests/smoke/control_flow_truthiness_if_false.ts"
-expected_diagnostics = ["TS2873"]
+expected_diagnostics = []
 
 [[case]]
 name = "control-flow-truthiness-while-true"
 path = "tests/smoke/control_flow_truthiness_while_true.ts"
-expected_diagnostics = ["TS2872"]
+expected_diagnostics = []
 
 [[case]]
 name = "control-flow-truthiness-while-zero"
 path = "tests/smoke/control_flow_truthiness_while_zero.ts"
-expected_diagnostics = ["TS2873"]
+expected_diagnostics = []
 
 [[case]]
 name = "control-flow-truthiness-conditional-expression"
 path = "tests/smoke/control_flow_truthiness_conditional_expression.ts"
-expected_diagnostics = ["TS2872"]
+expected_diagnostics = []
 
 # v0.46 undefined and union-lite coverage
 
@@ -2398,7 +2398,7 @@ expected_diagnostics = []
 [[case]]
 name = "union-equality-no-overlap-undefined-with-string"
 path = "tests/smoke/union_equality_no_overlap_undefined_with_string.ts"
-expected_diagnostics = ["TS2367"]
+expected_diagnostics = []
 
 [[case]]
 name = "union-equality-no-cascade-unresolved-operand"
@@ -5260,6 +5260,129 @@ expected_diagnostics = []
 [[case]]
 name = "function-type-literal-parameter-mismatch"
 path = "tests/smoke/function_type_literal_parameter_mismatch.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "reference-operand-arithmetic"
+path = "tests/smoke/reference_operand_arithmetic.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "union-reference-property-access"
+path = "tests/smoke/union_reference_property_access.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "partial-explicit-type-arguments"
+path = "tests/smoke/partial_explicit_type_arguments.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "member-assignment-narrowing"
+path = "tests/smoke/member_assignment_narrowing.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "boolean-discriminant-throw-guard"
+path = "tests/smoke/boolean_discriminant_throw_guard.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "optional-call-guard-narrows-receiver"
+path = "tests/smoke/optional_call_guard_narrows_receiver.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "type-literal-index-signature"
+path = "tests/smoke/type_literal_index_signature.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "array-literal-union-target"
+path = "tests/smoke/array_literal_union_target.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "isarray-impossible-branch"
+path = "tests/smoke/isarray_impossible_branch.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "quoted-property-key-member"
+path = "tests/smoke/quoted_property_key_member.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "overload-return-disagreement-degrades"
+path = "tests/smoke/overload_return_disagreement_degrades.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "overload-callback-parameter-context"
+path = "tests/smoke/overload_callback_parameter_context.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "own-member-shadows-inherited-overload"
+path = "tests/smoke/own_member_shadows_inherited_overload.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "nullish-guard-narrows-union-receiver"
+path = "tests/smoke/nullish_guard_narrows_union_receiver.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "global-function-is-callable"
+path = "tests/smoke/global_function_is_callable.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "default-operand-contextual-type"
+path = "tests/smoke/default_operand_contextual_type.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "string-search-position-argument"
+path = "tests/smoke/string_search_position_argument.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "ambient-module-exports-nested-global-value"
+files = [
+  { file_name = "buf.d.ts", source_text = "declare module \"mybuf\" {\n  global {\n    interface MyBuf { length: number }\n    var MyBuf: { from(s: string): MyBuf };\n  }\n  export { MyBuf };\n}\ndeclare module \"node:mybuf\" {\n  export * from \"mybuf\";\n}" },
+  { file_name = "index.ts", source_text = "import { MyBuf } from \"node:mybuf\";\nexport const a: number = MyBuf.from(\"x\").length;" },
+]
+expected_diagnostics = []
+
+[[case]]
+name = "guards-narrow-property-paths"
+path = "tests/smoke/guards_narrow_property_paths.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "optional-chain-on-guarded-receiver"
+path = "tests/smoke/optional_chain_on_guarded_receiver.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "in-operator-narrows-property-path"
+path = "tests/smoke/in_operator_narrows_property_path.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "narrowed-assignment-uses-declared-type"
+path = "tests/smoke/narrowed_assignment_uses_declared_type.ts"
+expected_diagnostics = ["TS2322"]
+
+[[case]]
+name = "method-parameter-bivariance"
+path = "tests/smoke/method_parameter_bivariance.ts"
+expected_diagnostics = []
+
+[[case]]
+name = "property-function-parameter-contravariance"
+path = "tests/smoke/property_function_parameter_contravariance.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]

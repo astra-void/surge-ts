@@ -38,12 +38,18 @@ pub fn load_tsconfig(options: TsConfigLoadOptions) -> LoadedTsConfig {
         &mut diagnostics,
     );
 
+    let removed_options = crate::removed_options::collect_removed_options(
+        &config_path,
+        merged.compiler_options.as_ref(),
+    );
+
     LoadedTsConfig {
         config_path,
         root_dir,
         files,
         compiler_options,
         diagnostics,
+        removed_options,
     }
 }
 

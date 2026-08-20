@@ -55,6 +55,8 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let parsed = parser.parse();
 
     let reference_type_directives = super::extract_reference_type_directives(source_text);
+    let suppressed_ranges =
+        super::suppressions::collect_suppressed_ranges(source_text, &parsed.program.comments);
 
     let statements: Vec<crate::ParsedStatement> = parsed
         .program
@@ -87,6 +89,9 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         super::reads::collect_program_reads(&parsed.program)
     };
 
+    let import_call_specifiers =
+        super::import_calls::collect_import_call_specifiers(&parsed.program, source_text);
+
     ParsedSource {
         file_name: file_name.to_string(),
         statements,
@@ -94,5 +99,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         is_module,
         reference_type_directives,
         module_reads,
+        suppressed_ranges,
+        import_call_specifiers,
     }
 }

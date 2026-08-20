@@ -17,6 +17,34 @@ use crate::infer::{InferredExpression, map_parsed_type};
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 
+/// The namespace tsc's classic JSX transform reads at every tag. `jsxFactory`
+/// and the `@jsx` pragma can rename it; neither is modelled here, so the
+/// default is the only factory this check knows.
+const JSX_FACTORY_NAMESPACE: &str = "React";
+
+/// Reports the implicit factory reference a JSX tag makes. Under `jsx: react`
+/// tsc resolves the factory namespace as a value at every opening element,
+/// self-closing element, and opening fragment — reporting at the tag name, or
+/// at the `<` of a fragment — so a module that never imports `React` reports
+/// once per tag. `preserve` and `react-native` resolve it without error
+/// reporting and the automatic runtime never names it, which is why this is
+/// gated on the classic React mode alone.
+pub(crate) fn check_jsx_factory_reference(
+    location_span: Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.jsx_classic_react {
+        return;
+    }
+
+    crate::checks::emit_umd_global_reference_diagnostic(
+        JSX_FACTORY_NAMESPACE,
+        location_span.or(fallback_span),
+        ctx,
+    );
+}
+
 /// Checks a JSX element: resolves the tag to an intrinsic element or function
 /// component, lowers attributes into a props object, and reports missing,
 /// excess, and mistyped props plus basic `children` mismatches. Attribute and
@@ -52,6 +80,16 @@ pub(crate) fn check_jsx_element(
         _ => None,
     };
 
+    // A component whose props type collapsed to the degradation sentinel offers
+    // no contextual type for an inline callback attribute, so any implicit-any
+    // report inside those attributes would describe surge's modelling gap rather
+    // than the source. Suppress it for the element's attributes and children, the
+    // same no-cascade rule a sentinel receiver gets elsewhere.
+    let unmodelled_props = props_type.as_ref().is_some_and(Type::is_unknown);
+    if unmodelled_props {
+        ctx.unmodelled_jsx_props_depth += 1;
+    }
+
     let spreads = check_attributes(
         attributes,
         props_object.as_ref(),
@@ -68,6 +106,10 @@ pub(crate) fn check_jsx_element(
         symbols,
         ctx,
     );
+
+    if unmodelled_props {
+        ctx.unmodelled_jsx_props_depth -= 1;
+    }
 
     if let Some(object) = props_object.as_ref() {
         check_missing_required_props(

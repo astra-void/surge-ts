@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use surge_ts_diagnostics::{Diagnostic, TextSpan as DiagnosticTextSpan};
 use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan as SyntaxTextSpan};
-use surge_ts_types::fx::FxHashMap;
+use surge_ts_types::fx::{FxHashMap, FxHashSet};
 use surge_ts_types::{FunctionType, ProgramTypeStore, Type, current_program_type_store};
 
 use crate::program::ProgramTimings;
@@ -505,6 +505,16 @@ pub struct CheckerOptions {
     /// `React` binding in scope. Under `preserve`/classic modes tsc requires the
     /// factory namespace to be visible, so the runtime fallback must not fire.
     pub jsx_automatic_runtime: bool,
+    /// `jsx: react` exactly. It is the only mode in which tsc resolves the JSX
+    /// factory namespace (`React`) with error reporting enabled, so it is the
+    /// only mode where a JSX tag can report on that implicit reference —
+    /// `preserve` and `react-native` resolve it silently, and the automatic
+    /// runtime never names it.
+    pub jsx_classic_react: bool,
+    /// `compilerOptions.allowUmdGlobalAccess`: suppresses TS2686 entirely.
+    /// tsc downgrades the diagnostic to a suggestion, a channel surge does not
+    /// emit on, so the option reads as full suppression here.
+    pub allow_umd_global_access: bool,
     pub diagnostic_profile: DiagnosticProfile,
 }
 
@@ -558,6 +568,8 @@ impl Default for CheckerOptions {
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
+            jsx_classic_react: false,
+            allow_umd_global_access: false,
             diagnostic_profile: DiagnosticProfile::default(),
         }
     }
@@ -950,6 +962,20 @@ pub(crate) struct CheckerContext {
     /// already-resolved target; they do not make `"x"` resolvable on their own.
     pub(crate) module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,
     pub(crate) ambient_global_symbols: SymbolTable,
+    /// Names an in-program module declares as a UMD global (`export as namespace
+    /// X`). Referencing one as a value from a module file is TS2686; from a
+    /// script file it is legal. Program-lifetime, written once before checking.
+    pub(crate) umd_global_names: Arc<FxHashSet<Arc<str>>>,
+    /// The subset of [`Self::umd_global_names`] the file under check actually
+    /// reaches through the global scope: the file is a module and nothing local
+    /// or imported shadows the name. Empty for script files, for files that
+    /// bind every UMD name themselves, and under `allowUmdGlobalAccess`.
+    pub(crate) file_umd_global_names: FxHashSet<Arc<str>>,
+    /// The file [`Self::file_umd_global_names`] was computed for. Type
+    /// resolution re-enters under a *declaring* file's name, and that file's
+    /// shadowing is not the checked file's, so the set only applies while the
+    /// two agree.
+    pub(crate) file_umd_global_names_owner: Option<String>,
     pub(crate) ambient_global_type_declarations: Arc<TypeDeclarationTable>,
     pub(crate) module_file_index_by_identity: Arc<FxHashMap<Arc<str>, usize>>,
     /// Each module's resolution scope keyed by its source `file_name`, mirroring
@@ -1001,6 +1027,20 @@ pub(crate) struct CheckerContext {
     /// they resolve to `unknown` without a TS2304 cascade — tsc resolves them
     /// against the full `@types/*`/generated namespace and reports nothing.
     pub(crate) namespace_member_resolution_depth: usize,
+    /// Nonzero while checking the attributes/children of a JSX element whose
+    /// component props type could not be modelled (the `unknown` sentinel).
+    /// Without a props type there is no contextual type to hand an inline
+    /// callback, so an implicit-any report there says nothing about the source —
+    /// it only reflects surge's own modelling gap. Same no-cascade rule the
+    /// property/index checks apply to a sentinel receiver.
+    pub(crate) unmodelled_jsx_props_depth: usize,
+    /// Nonzero while checking a value against an expected type surge degraded to
+    /// the `unknown` sentinel (the self-recursive generic interface cycle, most
+    /// of zod's builder surface). The written value has a contextual type in
+    /// tsc; surge just lost it, so an implicit-any report inside it describes
+    /// surge's modelling gap rather than the source. Same rule as
+    /// [`Self::unmodelled_jsx_props_depth`].
+    pub(crate) degraded_expected_type_depth: usize,
     /// Depth of `with_file_name` frames whose file differs from the enclosing
     /// one — nonzero exactly while a declaration from another file is being
     /// resolved. See [`Self::lookup_ignores_local_table`].
@@ -1092,6 +1132,9 @@ impl CheckerContext {
             ambient_modules: Arc::new(FxHashMap::default()),
             module_augmentations: Arc::new(FxHashMap::default()),
             ambient_global_symbols: SymbolTable::new(),
+            umd_global_names: Arc::new(FxHashSet::default()),
+            file_umd_global_names: FxHashSet::default(),
+            file_umd_global_names_owner: None,
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
             module_file_index_by_identity: Arc::new(FxHashMap::default()),
             module_scope_by_file: Arc::new(FxHashMap::default()),
@@ -1103,6 +1146,8 @@ impl CheckerContext {
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
             namespace_member_resolution_depth: 0,
+            unmodelled_jsx_props_depth: 0,
+            degraded_expected_type_depth: 0,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
@@ -1189,6 +1234,11 @@ impl CheckerContext {
             ambient_modules: data.ambient_modules.clone(),
             module_augmentations: data.module_augmentations.clone(),
             ambient_global_symbols: data.ambient_global_symbols.clone(),
+            // A declaration environment only re-resolves types; it never runs the
+            // expression checks that report TS2686, so it carries no UMD state.
+            umd_global_names: Arc::new(FxHashSet::default()),
+            file_umd_global_names: FxHashSet::default(),
+            file_umd_global_names_owner: None,
             ambient_global_type_declarations: data.ambient_global_type_declarations.clone(),
             module_file_index_by_identity: data.module_file_index_by_identity.clone(),
             module_scope_by_file: data.module_scope_by_file.clone(),
@@ -1200,6 +1250,8 @@ impl CheckerContext {
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
             timings: data.timings.clone(),
             namespace_member_resolution_depth: 0,
+            unmodelled_jsx_props_depth: 0,
+            degraded_expected_type_depth: 0,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
@@ -1273,6 +1325,7 @@ impl CheckerContext {
             environments.by_key.clear();
             environments.by_id.clear();
         }
+        crate::program::clear_program_module_scopes();
         surge_ts_types::clear_name_intern_table();
     }
 
@@ -1407,6 +1460,57 @@ impl CheckerContext {
     /// `resolved_named_types` must be a fresh map rather than cleared in place:
     /// resolutions depend on the consumer file's environment, and retained
     /// declaration environments may still refer to the previous file's map.
+    /// Whether `name` reaches the file under check only as a UMD global, which
+    /// makes a value reference to it TS2686. Reads the per-file set computed at
+    /// file entry, so shadowing by a local or imported binding is already
+    /// resolved.
+    pub(crate) fn is_umd_global_value_reference(&self, name: &str) -> bool {
+        if self.file_umd_global_names.is_empty()
+            || self.file_umd_global_names_owner.as_deref() != Some(self.file_name.as_str())
+            || !self.file_umd_global_names.contains(name)
+        {
+            return false;
+        }
+
+        // The per-file set only rules out shadowing that is visible from the
+        // file's own imports and module-level tables. A binding introduced in an
+        // enclosing scope — or a module-level one those tables missed — still
+        // shadows the global, so the name must either resolve to nothing or
+        // resolve to the ambient global entry itself.
+        match self.symbols.get_handle(name) {
+            None => true,
+            Some(resolved) => self
+                .ambient_global_symbols
+                .get_handle(name)
+                .is_some_and(|global| Arc::ptr_eq(&resolved, &global)),
+        }
+    }
+
+    /// Narrows the program's UMD global names to the ones the file under check
+    /// reaches through the global scope. `is_module` is the referencing file's
+    /// module-ness (a script may reference UMD globals freely) and `is_shadowed`
+    /// reports whether the file binds the name itself, as a value or a type —
+    /// tsc reports a different diagnostic for a shadowing `import type`, so a
+    /// bound name is left alone here either way.
+    pub(crate) fn set_file_umd_global_names(
+        &mut self,
+        is_module: bool,
+        mut is_shadowed: impl FnMut(&str) -> bool,
+    ) {
+        self.file_umd_global_names.clear();
+        self.file_umd_global_names_owner = None;
+        self.degraded_expected_type_depth = 0;
+        if !is_module || self.options.allow_umd_global_access || self.umd_global_names.is_empty() {
+            return;
+        }
+        self.file_umd_global_names_owner = Some(self.file_name.clone());
+        for name in self.umd_global_names.iter() {
+            if !is_shadowed(name) {
+                self.file_umd_global_names.insert(name.clone());
+            }
+        }
+    }
+
     pub(crate) fn begin_file_check(&mut self, file_name: String) {
         self.set_file_name(file_name);
         self.type_declaration_scope = None;
@@ -1422,6 +1526,8 @@ impl CheckerContext {
         }
         self.diagnostic_keys.clear();
         self.diagnostic_keys_len = 0;
+        self.file_umd_global_names.clear();
+        self.file_umd_global_names_owner = None;
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"
@@ -1619,6 +1725,16 @@ impl CheckerContext {
                 crate::program::record_type_declaration_lookup(2);
                 return Some(handle);
             }
+        } else if self.module_scope_by_file.is_empty()
+            && let Some(scope) = crate::program::program_module_scope_for_file(&self.file_name)
+            && let Some(handle) = scope.get_handle(name)
+        {
+            // This context was recovered from an environment captured before the
+            // map existed (a lazy annotation created during module analysis), so
+            // the declaring file's own imports are invisible to it. The published
+            // program map is the same authoritative per-file scope.
+            crate::program::record_type_declaration_lookup(2);
+            return Some(handle);
         }
 
         crate::program::record_type_declaration_lookup(3);
@@ -1639,6 +1755,7 @@ impl CheckerContext {
         module_scope_by_file: FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>,
     ) {
         self.module_scope_by_file = Arc::new(module_scope_by_file);
+        crate::program::publish_program_module_scopes(&self.module_scope_by_file);
         self.declaration_environment_generation =
             self.declaration_environment_generation.wrapping_add(1);
     }

@@ -1,4 +1,5 @@
 use super::*;
+use surge_ts_syntax::ParsedExpression;
 
 pub(crate) fn collect_exports_from_statement(
     statement: &ParsedStatement,
@@ -45,9 +46,9 @@ pub(crate) fn collect_exports_from_statement(
                 // re-expose them as qualified types (`React.ComponentProps<...>`).
                 let prefix = format!("{exported_name}.");
                 for (key, declaration) in local_type_declarations.iter() {
-                    if key.as_str().starts_with(&prefix) {
-                        let _ = type_declarations.insert(key.as_str(), declaration.clone());
-                        let exported_member_name = &key.as_str()[prefix.len()..];
+                    if key.starts_with(&prefix) {
+                        let _ = type_declarations.insert(key.as_ref(), declaration.clone());
+                        let exported_member_name = &key[prefix.len()..];
                         let _ = type_declarations.insert(
                             exported_member_name,
                             rename_type_declaration(
@@ -89,11 +90,18 @@ pub(crate) fn collect_exports_from_statement(
 
                     let mut found = false;
 
-                    if let Some(type_declaration) =
-                        local_type_declarations.get(&specifier.local_name)
+                    // Imported types are not in `local_type_declarations`; the
+                    // resolution scope's import layers carry them. Local-first
+                    // layer order keeps the own-declaration case unchanged.
+                    if let Some(handle) = local_type_declarations
+                        .get_handle(&specifier.local_name)
+                        .or_else(|| {
+                            resolution_scope
+                                .and_then(|scope| scope.get_handle(&specifier.local_name))
+                        })
                     {
                         export_local_type_declaration(
-                            type_declaration,
+                            handle.get(),
                             &specifier.exported_name,
                             resolution_scope,
                             type_declarations,
@@ -105,7 +113,13 @@ pub(crate) fn collect_exports_from_statement(
                         .get_shared(&specifier.local_name)
                         .or_else(|| imported_symbols.get_shared(&specifier.local_name))
                     {
-                        if symbols.get(&specifier.exported_name).is_none() {
+                        if specifier.exported_name == "default" {
+                            // `export { x as default }` — consumers read the
+                            // default through `default_symbol`, never `symbols`.
+                            if default_symbol.is_none() {
+                                *default_symbol = Some(symbol);
+                            }
+                        } else if symbols.get(&specifier.exported_name).is_none() {
                             symbols.insert_shared(specifier.exported_name.clone(), symbol);
                         }
                         found = true;
@@ -152,6 +166,12 @@ pub(crate) fn collect_exports_from_statement(
                     }
                 }
                 ParsedDefaultExportDeclaration::Class(class) => {
+                    publish_default_type_export(
+                        &class.name,
+                        local_type_declarations,
+                        resolution_scope,
+                        type_declarations,
+                    );
                     if let Some(symbol) = local_symbols.get_shared(&class.name) {
                         if default_symbol.is_some() {
                             push_duplicate_default_export_diagnostic(
@@ -171,6 +191,17 @@ pub(crate) fn collect_exports_from_statement(
                         return;
                     }
 
+                    // `export default Dispatcher` re-exports the named
+                    // declaration's type side too, not just its value.
+                    if let ParsedExpression::Identifier { name, .. } = expression {
+                        publish_default_type_export(
+                            name,
+                            local_type_declarations,
+                            resolution_scope,
+                            type_declarations,
+                        );
+                    }
+
                     let ty = crate::infer::infer_expression(expression, exportable_values, ctx);
                     let ty = match ty {
                         crate::infer::InferredExpression::Known(ty) => ty,
@@ -185,7 +216,18 @@ pub(crate) fn collect_exports_from_statement(
                         function_signature: None,
                     }));
                 }
-                ParsedDefaultExportDeclaration::Unsupported { .. } => {}
+                // The expression form is not modelled, but the module
+                // demonstrably HAS a default export; recording none would make
+                // every consumer report a missing `default` member.
+                ParsedDefaultExportDeclaration::Unsupported { .. } => {
+                    if default_symbol.is_none() {
+                        *default_symbol = Some(Arc::new(SymbolInfo {
+                            ty: Type::Unknown,
+                            kind: SymbolKind::Const,
+                            function_signature: None,
+                        }));
+                    }
+                }
             },
             ParsedExportDeclaration::Namespace { .. } => {}
             ParsedExportDeclaration::All { .. } => {}
@@ -255,6 +297,16 @@ pub(crate) fn collect_exports_from_statement(
                 }
             }
 
+            // The value members are collected under the same qualified
+            // `ns.<member>` keys; carry them over so a call through the
+            // namespace on the importing side finds the member's real signature.
+            let value_prefix = format!("{}.", namespace.name);
+            for (key, symbol) in exportable_values.iter_shared() {
+                if key.starts_with(&value_prefix) && symbols.get(key.as_ref()).is_none() {
+                    symbols.insert_shared(key.as_ref().to_string(), symbol.clone());
+                }
+            }
+
             if let Some(type_declaration) = local_type_declarations.get(&namespace.name) {
                 export_local_type_declaration(
                     type_declaration,
@@ -266,11 +318,9 @@ pub(crate) fn collect_exports_from_statement(
 
             let prefix = format!("{}.", namespace.name);
             for (key, declaration) in local_type_declarations.iter() {
-                if key.as_str().starts_with(&prefix)
-                    && type_declarations.get(key.as_str()).is_none()
-                {
+                if key.starts_with(&prefix) && type_declarations.get(key.as_ref()).is_none() {
                     let _ = type_declarations.insert(
-                        key.as_str(),
+                        key.as_ref(),
                         attach_type_resolution_scope_if_missing(
                             declaration.clone(),
                             resolution_scope,
@@ -281,4 +331,31 @@ pub(crate) fn collect_exports_from_statement(
         }
         _ => {}
     }
+}
+
+/// Publishes `local_name`'s type declaration under the `default` export key.
+///
+/// A default-exported class (or an identifier naming one) contributes a type as
+/// well as a value, and a consumer's `import D from "./m"` binds both. The name
+/// may itself be imported here (`import D from "./d"; export default D`), which
+/// puts it in the resolution scope's import layers rather than this file's own
+/// declaration table.
+fn publish_default_type_export(
+    local_name: &str,
+    local_type_declarations: &TypeDeclarationTable,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
+    type_declarations: &mut TypeDeclarationTable,
+) {
+    let Some(handle) = local_type_declarations
+        .get_handle(local_name)
+        .or_else(|| resolution_scope.and_then(|scope| scope.get_handle(local_name)))
+    else {
+        return;
+    };
+
+    if type_declarations.get("default").is_some() {
+        return;
+    }
+
+    export_local_type_declaration(handle.get(), "default", resolution_scope, type_declarations);
 }

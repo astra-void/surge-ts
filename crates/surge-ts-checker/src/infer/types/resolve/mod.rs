@@ -179,6 +179,14 @@ pub(crate) fn resolve_parsed_type(
             resolve_named_type(named_type, ctx, resolving, substitution)
         }
         ParsedType::TypeOf(type_of) => {
+            // A type query reads the value, so a UMD-global name reports here the
+            // same way it would in an expression.
+            let umd_global = crate::checks::emit_umd_global_reference_diagnostic(
+                &type_of.name,
+                type_of.name_span,
+                ctx,
+            );
+
             // `typeof X` references a value. During type-declaration resolution the
             // file's imported value bindings may not yet be in `ctx.symbols`, so on
             // a miss consult the module's full value table (the same forward-ref
@@ -214,10 +222,23 @@ pub(crate) fn resolve_parsed_type(
                 // (a false TS2304 / `had_error` would otherwise poison the enclosing
                 // intersection); the `T & unknown ⇒ T` simplification then keeps
                 // `window`/`self` as `Window`.
-                if type_of.name == "globalThis" {
+                // A UMD global resolves for tsc even when surge has no value
+                // symbol for it: the reference already reported as TS2686, so a
+                // TS2304 on top would be a second diagnostic tsc never emits.
+                if type_of.name == "globalThis" || umd_global {
                     return ResolvedType {
                         ty: Type::Unknown,
                         had_error: false,
+                    };
+                }
+                // A class reached through `import type { Class }` has a type
+                // declaration but no value symbol; tsc still resolves
+                // `typeof Class` there. Degrade instead of reporting a name the
+                // file demonstrably declares.
+                if ctx.lookup_type_declaration(&type_of.name).is_some() {
+                    return ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: true,
                     };
                 }
                 let mut diagnostic = Diagnostic::ts2304(&type_of.name, ctx.file_name.clone());
@@ -238,6 +259,18 @@ pub(crate) fn resolve_parsed_type(
             // degrades to `Unknown` silently rather than emitting a false
             // positive, since the base name itself was resolved.
             let mut ty = symbol.ty;
+            // A base still standing at the degradation sentinel is a value whose
+            // type is not known *yet* (a forward reference resolved during an
+            // earlier pass), not a value without the member. Reporting a clean
+            // `unknown` would let the enclosing declaration intern that answer and
+            // pin every later consumer to it — the shape behind a discriminant
+            // written as `typeof Codes.invalid_string` losing its literal type.
+            if ty.is_unknown() && !type_of.members.is_empty() {
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                };
+            }
             for member in &type_of.members {
                 match ty.get_property_access_type(member) {
                     Some(member_ty) => ty = member_ty,
@@ -263,6 +296,20 @@ pub(crate) fn resolve_parsed_type(
                 substitution,
             );
             let mut keys = Vec::new();
+            // `keyof {}` is `never`, not "could not model": the empty-interface
+            // escape hatch (`T[keyof DO_NOT_USE_…]` in React's `Key` and
+            // `ReactNode`) relies on the `never` arm vanishing from its union.
+            // Only a cleanly-resolved object with no index signature is genuinely
+            // keyless — a degraded resolution lands on a property-less object too,
+            // and calling that `never` would turn an unmodelled type into a closed
+            // empty shape (`Omit<Unmodelled, K>` ⇒ `{}`).
+            let empty_object_is_never = !resolved_inner.had_error
+                && matches!(
+                    resolved_inner.ty.peeled(),
+                    Type::Object(ref object_type)
+                        if object_type.properties.is_empty()
+                            && object_type.string_index_type.is_none()
+                );
             // Peel a nominal reference (`keyof User`) to read the named type's keys.
             match &resolved_inner.ty.peeled() {
                 Type::Object(object_type) => {
@@ -280,7 +327,11 @@ pub(crate) fn resolve_parsed_type(
 
             ResolvedType {
                 ty: if keys.is_empty() {
-                    Type::Unknown
+                    if empty_object_is_never {
+                        Type::Never
+                    } else {
+                        Type::Unknown
+                    }
                 } else if keys.len() == 1 {
                     keys.into_iter().next().unwrap()
                 } else {

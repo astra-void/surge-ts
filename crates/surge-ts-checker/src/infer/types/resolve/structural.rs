@@ -145,12 +145,19 @@ pub(crate) fn resolve_object_type(
             ObjectProperty::optional(property_type.ty)
         } else {
             ObjectProperty::required(property_type.ty)
-        };
+        }
+        .with_method(property.is_method);
 
         properties.insert(property.name.into(), object_property);
     }
 
-    let mut resolved_object = alloc_object_type(properties, None);
+    let string_index_type = object_type.string_index_type.and_then(|index_type| {
+        let resolved = resolve_parsed_type(*index_type, ctx, resolving, substitution);
+        had_error |= resolved.had_error;
+        (!resolved.had_error).then_some(resolved.ty)
+    });
+
+    let mut resolved_object = alloc_object_type(properties, string_index_type);
     if let Some(call_signature) = object_type.call_signature {
         let resolved = resolve_parsed_type(
             ParsedType::Function(std::sync::Arc::new(*call_signature)),

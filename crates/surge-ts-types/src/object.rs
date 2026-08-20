@@ -56,6 +56,14 @@ pub struct ObjectType {
     /// `TS2322`/`TS2345`, rather than the standalone `TS2741`). Excluded from
     /// equality so intersection-merged objects compare structurally.
     pub is_intersection: bool,
+    /// Set when `string_index_type` was injected by the checker to keep an
+    /// intersection surface open (an operand it could not enumerate), not
+    /// declared by the source. The index still widens property *reads*, but
+    /// `noPropertyAccessFromIndexSignature` must not fire on it: the property
+    /// really lives on the operand surge dropped, not on an index signature the
+    /// author wrote. Excluded from equality, like `is_intersection`, so no cache
+    /// key, dedup fingerprint, or canonical-store identity changes.
+    pub synthetic_open_index: bool,
 }
 
 impl PartialEq for ObjectType {
@@ -93,6 +101,11 @@ impl Eq for ObjectType {}
 pub struct ObjectProperty {
     pub ty: Type,
     pub optional: bool,
+    /// Declared with method syntax (`m(): T`) rather than as a property holding
+    /// a function type (`m: () => T`). tsc checks a method's parameters
+    /// bivariantly even under `strictFunctionTypes`, so the distinction is
+    /// load-bearing for assignability.
+    pub method: bool,
 }
 
 impl ObjectProperty {
@@ -100,11 +113,21 @@ impl ObjectProperty {
         Self {
             ty,
             optional: false,
+            method: false,
         }
     }
 
     pub fn optional(ty: Type) -> Self {
-        Self { ty, optional: true }
+        Self {
+            ty,
+            optional: true,
+            method: false,
+        }
+    }
+
+    pub fn with_method(mut self, method: bool) -> Self {
+        self.method = method;
+        self
     }
 
     pub fn is_optional(&self) -> bool {
@@ -113,6 +136,10 @@ impl ObjectProperty {
 
     pub fn is_required(&self) -> bool {
         !self.optional
+    }
+
+    pub fn is_method(&self) -> bool {
+        self.method
     }
 }
 
@@ -137,6 +164,7 @@ impl ObjectType {
             construct_signature: None,
             call_signature: None,
             is_intersection: false,
+            synthetic_open_index: false,
         }
     }
 
@@ -156,6 +184,13 @@ impl ObjectType {
     /// Marks this object as the merged surface of an intersection type.
     pub fn with_intersection_marker(mut self) -> Self {
         self.is_intersection = true;
+        self
+    }
+
+    /// Marks this object's string index signature as checker-injected openness
+    /// rather than a declared `[key: string]: T`.
+    pub fn with_open_index_marker(mut self) -> Self {
+        self.synthetic_open_index = true;
         self
     }
 
@@ -256,6 +291,7 @@ impl Clone for ObjectType {
             construct_signature: self.construct_signature.clone(),
             call_signature: self.call_signature.clone(),
             is_intersection: self.is_intersection,
+            synthetic_open_index: self.synthetic_open_index,
         }
     }
 }
@@ -285,6 +321,29 @@ mod tests {
         let same = ObjectType::new(PropertyMap::default(), None)
             .with_construct_signature(constructor(Type::String));
         assert_eq!(append, same);
+    }
+
+    #[test]
+    fn the_synthetic_open_index_marker_stays_out_of_equality() {
+        // Like `is_intersection`: the marker only steers diagnostic selection, so
+        // it must not split cache keys, dedup fingerprints, or store identity.
+        let declared = ObjectType::new(PropertyMap::default(), Some(Type::Any));
+        let synthetic =
+            ObjectType::new(PropertyMap::default(), Some(Type::Any)).with_open_index_marker();
+        assert_eq!(declared, synthetic);
+        assert!(!declared.synthetic_open_index);
+        assert!(synthetic.synthetic_open_index);
+        assert!(synthetic.clone().synthetic_open_index);
+    }
+
+    #[test]
+    fn a_synthetic_open_index_is_not_an_index_signature_source() {
+        let declared = Type::Object(ObjectType::new(PropertyMap::default(), Some(Type::Any)));
+        let synthetic = Type::Object(
+            ObjectType::new(PropertyMap::default(), Some(Type::Any)).with_open_index_marker(),
+        );
+        assert!(declared.property_only_from_string_index("path"));
+        assert!(!synthetic.property_only_from_string_index("path"));
     }
 
     #[test]

@@ -157,6 +157,22 @@ fn parse_function_body_statement(
                     .map(|function| {
                         vec![ParsedFunctionBodyStatement::Function(Box::new(function))]
                     }),
+                Declaration::TSTypeAliasDeclaration(alias) => {
+                    super::types::parse_type_alias_declaration(alias)
+                        .map(|alias| vec![ParsedFunctionBodyStatement::TypeAlias(Box::new(alias))])
+                }
+                Declaration::TSInterfaceDeclaration(interface) => {
+                    super::interfaces::parse_interface_declaration(interface).map(|interface| {
+                        vec![ParsedFunctionBodyStatement::Interface(Box::new(interface))]
+                    })
+                }
+                Declaration::ClassDeclaration(class) => {
+                    super::classes::parse_class_declaration(class)
+                        .map(|class| vec![ParsedFunctionBodyStatement::Class(Box::new(class))])
+                }
+                Declaration::TSEnumDeclaration(enum_declaration) => Some(
+                    super::enums::parse_enum_declaration_as_function_body(enum_declaration),
+                ),
                 _ => None,
             }
         }
@@ -196,6 +212,12 @@ fn parse_expression_statement_as_function_body(
                 )]);
             }
 
+            if let Some(member_assignment) = parse_member_assignment(assignment) {
+                return Some(vec![ParsedFunctionBodyStatement::MemberAssignment(
+                    Box::new(member_assignment),
+                )]);
+            }
+
             super::parse_assignment_expression(assignment).map(|assignment| {
                 vec![ParsedFunctionBodyStatement::Assignment(Box::new(
                     assignment,
@@ -214,6 +236,45 @@ fn parse_expression_statement_as_function_body(
             ))])
         }
     }
+}
+
+/// `o.p = v` where the target is a member of something other than `this`.
+/// Without this the whole statement was dropped, so neither the assignment's own
+/// type check nor the narrowing it establishes for the code after it happened.
+fn parse_member_assignment(
+    assignment: &oxc_ast::ast::AssignmentExpression<'_>,
+) -> Option<crate::ParsedMemberAssignment> {
+    if assignment.operator != AssignmentOperator::Assign {
+        return None;
+    }
+
+    let AssignmentTarget::StaticMemberExpression(member) = &assignment.left else {
+        return None;
+    };
+
+    let (object, object_span) = parse_expression(&member.object);
+    if object == ParsedExpression::Unknown {
+        return None;
+    }
+    let target = ParsedExpression::PropertyAccess {
+        object: Box::new(object),
+        object_span: Some(text_span_from_oxc_span(object_span)),
+        property_name: member.property.name.to_string(),
+        property_span: Some(text_span_from_oxc_span(member.property.span)),
+        is_bracketed: false,
+    };
+
+    let (value, value_span) = parse_expression(&assignment.right);
+    if value == ParsedExpression::Unknown {
+        return None;
+    }
+
+    Some(crate::ParsedMemberAssignment {
+        target,
+        target_span: Some(text_span_from_oxc_span(member.span)),
+        value,
+        value_span: Some(text_span_from_oxc_span(value_span)),
+    })
 }
 
 fn parse_this_property_assignment(

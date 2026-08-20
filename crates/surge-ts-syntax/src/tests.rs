@@ -3744,3 +3744,38 @@ fn parse_mapped_type_unsupported_modifiers() {
     };
     assert!(matches!(alias2.ty, ParsedType::Unknown));
 }
+
+#[test]
+fn parse_function_body_type_class_and_interface_declarations() {
+    let parsed = parse_source(
+        "function outer() { type T = string; interface I { a: number } class C {} return 1; }",
+        "example.ts",
+    );
+    assert!(parsed.parser_errors.is_empty());
+
+    let ParsedStatement::FunctionDeclaration(function) = &parsed.statements[0] else {
+        panic!("expected a function declaration");
+    };
+
+    let ParsedFunctionBodyStatement::TypeAlias(alias) = &function.body[0] else {
+        panic!("expected a body-local type alias");
+    };
+    assert_eq!(alias.name, "T");
+    assert_eq!(alias.ty, ParsedType::String);
+
+    let ParsedFunctionBodyStatement::Interface(interface) = &function.body[1] else {
+        panic!("expected a body-local interface");
+    };
+    assert_eq!(interface.name, "I");
+    assert_eq!(interface.members.len(), 1);
+
+    let ParsedFunctionBodyStatement::Class(class) = &function.body[2] else {
+        panic!("expected a body-local class");
+    };
+    assert_eq!(class.name, "C");
+
+    assert!(matches!(
+        function.body[3],
+        ParsedFunctionBodyStatement::Return(_)
+    ));
+}

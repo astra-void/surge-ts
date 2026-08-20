@@ -29,6 +29,7 @@ pub(crate) fn instantiate_function_type<'a>(
     type_arguments: &[ParsedType],
     type_argument_span: Option<TextSpan>,
     arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Cow<'a, FunctionType> {
@@ -73,8 +74,13 @@ pub(crate) fn instantiate_function_type<'a>(
         );
     }
 
-    let substitution =
-        infer_type_argument_substitution(function_signature, arguments, symbols, ctx);
+    let substitution = infer_type_argument_substitution(
+        function_signature,
+        arguments,
+        expected_return_type,
+        symbols,
+        ctx,
+    );
 
     if substitution
         .iter()
@@ -202,6 +208,7 @@ pub(crate) fn instantiate_function_return_type_for_call(
             type_arguments,
             type_argument_span,
             arguments,
+            None,
             symbols,
             ctx,
         )
@@ -216,19 +223,31 @@ pub(crate) fn explicit_type_argument_substitution(
     ctx: &mut CheckerContext,
 ) -> TypeParameterSubstitution {
     let mut substitution = TypeParameterSubstitution::new();
-    for (type_parameter, type_argument) in function_signature
-        .type_parameters
-        .iter()
-        .zip(type_arguments.iter())
-    {
-        substitution.insert(
-            type_parameter.name.clone(),
-            map_parsed_type_with_substitution(
+    for (index, type_parameter) in function_signature.type_parameters.iter().enumerate() {
+        // A call may supply fewer type arguments than the signature declares;
+        // the rest take their declared default. Leaving them out of the
+        // substitution let the *name* survive into the instantiated
+        // parameter/return types, where it read as an unknown type
+        // (`registry<GlobalMeta>()` against `registry<T, S>(): Registry<T, S>`
+        // reported a false TS2304 for `S`). Defaults resolve under the
+        // substitution built so far, so one that names an earlier parameter
+        // (`S extends T = T`) sees it.
+        let resolved = match type_arguments.get(index) {
+            Some(type_argument) => map_parsed_type_with_substitution(
                 type_argument.clone(),
                 ctx,
                 &TypeParameterSubstitution::new(),
             ),
-        );
+            None => match type_parameter.default_type.clone() {
+                Some(default_type) => {
+                    map_parsed_type_with_substitution(default_type, ctx, &substitution)
+                }
+                // No default: the parameter is genuinely unconstrained here, so
+                // it degrades rather than leaking its name.
+                None => Type::Unknown,
+            },
+        };
+        substitution.insert(type_parameter.name.clone(), resolved);
     }
     substitution
 }
@@ -320,6 +339,7 @@ fn constraint_target_display(
 pub(crate) fn infer_type_argument_substitution(
     function_signature: &FunctionSignatureInfo,
     arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> TypeParameterSubstitution {
@@ -347,7 +367,16 @@ pub(crate) fn infer_type_argument_substitution(
         // emits; the authoritative pass re-evaluates every argument and reports the
         // genuine ones.
         let diagnostics_before = ctx.diagnostics().len();
-        let inferred_argument = infer_expression(&argument.expression, symbols, ctx);
+        let inferred_argument = match array_literal_tuple_inference(
+            parameter_type,
+            &function_signature.type_parameters,
+            &argument.expression,
+            symbols,
+            ctx,
+        ) {
+            Some(tuple) => InferredExpression::Known(tuple),
+            None => infer_expression(&argument.expression, symbols, ctx),
+        };
         ctx.truncate_diagnostics(diagnostics_before);
         let InferredExpression::Known(argument_type) = inferred_argument else {
             record_generic_call_inference_unresolved_argument_skip();
@@ -369,7 +398,123 @@ pub(crate) fn infer_type_argument_substitution(
         );
     }
 
+    infer_type_arguments_from_expected_return_type(
+        function_signature,
+        expected_return_type,
+        &mut substitution,
+        ctx,
+    );
+
     substitution
+}
+
+/// tsc infers an array-literal argument as a *tuple* when the inference target
+/// is a tuple-shaped type parameter, and keeps its element literal types when
+/// that tuple's element type is itself a parameter constrained to a primitive.
+/// Both halves are load-bearing for the `[T, ...T[]]` enum-builder idiom
+/// (`arrayToEnum(["a", "b"])` must yield `{ a: "a"; b: "b" }`, not
+/// `{ [k: string]: string }`); array inference alone collapses the member
+/// literals and every `switch (issue.code)` narrowing built on them.
+fn array_literal_tuple_inference(
+    parameter_type: &ParsedType,
+    type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
+    argument: &surge_ts_syntax::ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let surge_ts_syntax::ParsedExpression::ArrayLiteral { elements, .. } = argument else {
+        return None;
+    };
+    if elements.is_empty() {
+        return None;
+    }
+    let ParsedType::Named(named) = parameter_type else {
+        return None;
+    };
+    if !named.type_arguments.is_empty() {
+        return None;
+    }
+    let constraint = type_parameters
+        .iter()
+        .find(|type_parameter| type_parameter.name == named.name)?
+        .constraint
+        .as_ref()?;
+    let element_constraint = match constraint {
+        ParsedType::Array(element) => element.as_ref(),
+        ParsedType::Tuple(elements) => elements.first()?,
+        _ => return None,
+    };
+    let keep_literals = matches!(
+        element_constraint,
+        ParsedType::String | ParsedType::Number | ParsedType::Boolean
+    ) || matches!(
+        element_constraint,
+        ParsedType::Named(element_named)
+            if type_parameters.iter().any(|type_parameter| {
+                type_parameter.name == element_named.name
+                    && matches!(
+                        type_parameter.constraint,
+                        Some(ParsedType::String | ParsedType::Number | ParsedType::Boolean)
+                    )
+            })
+    );
+
+    let mut element_types = Vec::with_capacity(elements.len());
+    for element in elements {
+        let InferredExpression::Known(element_type) =
+            infer_expression(&element.expression, symbols, ctx)
+        else {
+            return None;
+        };
+        if element_type.is_unknown() {
+            return None;
+        }
+        element_types.push(if keep_literals {
+            element_type
+        } else {
+            crate::checks::expr::widen_type(&element_type)
+        });
+    }
+    Some(Type::Tuple(element_types))
+}
+
+/// A type parameter that occurs only in the return type (`$constructor<T>`,
+/// `Ctor<T>`) is inferable solely from the call's contextual type — no argument
+/// mentions it, so it would otherwise stay `Type::Unknown` and degrade every
+/// callback parameter typed by it. Runs after the argument loop so an
+/// argument-derived candidate always wins, and only for a generic-instantiation
+/// return annotation, where the match is positional against the expected
+/// reference's type arguments rather than a whole-type guess.
+fn infer_type_arguments_from_expected_return_type(
+    function_signature: &FunctionSignatureInfo,
+    expected_return_type: Option<&Type>,
+    substitution: &mut TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+) {
+    let Some(expected_return_type) = expected_return_type else {
+        return;
+    };
+    if !substitution
+        .iter()
+        .any(|(_, candidate)| candidate.is_unknown())
+    {
+        return;
+    }
+    let Some(ParsedType::Named(declared_return_type)) = function_signature.return_type.as_ref()
+    else {
+        return;
+    };
+    if declared_return_type.type_arguments.is_empty() {
+        return;
+    }
+
+    infer_through_generic_reference(
+        declared_return_type,
+        expected_return_type,
+        substitution,
+        ctx,
+        0,
+    );
 }
 
 pub(crate) fn collect_inferred_type_argument(
@@ -734,6 +879,7 @@ pub(crate) fn widen_candidate_type(ty: &Type) -> Type {
                         surge_ts_types::ObjectProperty {
                             ty: widen_candidate_type(&property.ty),
                             optional: property.optional,
+                            method: property.method,
                         },
                     )
                 })

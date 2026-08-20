@@ -95,6 +95,40 @@ fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) ->
     }
 }
 
+/// `class D extends Parent {}` where `Parent` is a *value* — a `const` holding a
+/// constructor, the mixin shape zod and every `extends mixin(Base)` helper use —
+/// names no type declaration at all: TypeScript takes the base type from the
+/// value's construct signature. Only the heritage position may fall back onto a
+/// value this way; in an ordinary annotation a value used as a type stays an
+/// error. A value whose constructor surge cannot model (a union of constructors,
+/// `params?.Parent ?? Object`) degrades to the `unknown` sentinel, which leaves
+/// the derived type open rather than reporting an unresolved name.
+fn resolve_value_heritage_base(
+    named_type: &ParsedNamedType,
+    ctx: &CheckerContext,
+) -> Option<ResolvedType> {
+    if crate::program::current_dts_expansion_reason()
+        != crate::program::DtsExpansionReason::InterfaceHeritageResolution
+        || !named_type.type_arguments.is_empty()
+    {
+        return None;
+    }
+
+    let symbol = ctx.symbols.get(&named_type.name)?;
+    let ty = match symbol.ty.peeled() {
+        Type::Object(object) => object
+            .construct_signature()
+            .map(|signature| signature.return_type().clone())
+            .unwrap_or(Type::Unknown),
+        _ => Type::Unknown,
+    };
+
+    Some(ResolvedType {
+        ty,
+        had_error: false,
+    })
+}
+
 pub(crate) fn resolve_named_type(
     named_type: std::sync::Arc<ParsedNamedType>,
     ctx: &mut CheckerContext,
@@ -113,6 +147,9 @@ pub(crate) fn resolve_named_type(
     // mutably, without deep-cloning it. The handle keeps the backing arena alive;
     // the borrowed declaration below is decoupled from `ctx`.
     let Some(handle) = ctx.lookup_type_declaration_handle(&named_type.name) else {
+        if let Some(resolved) = resolve_value_heritage_base(&named_type, ctx) {
+            return resolved;
+        }
         // A qualified reference (`React.Foo`, `Prisma.Bar`) we cannot resolve is
         // treated as no-cascade: tsc resolves these against the full namespace
         // surface and reports nothing, so emitting TS2304 here would be a false

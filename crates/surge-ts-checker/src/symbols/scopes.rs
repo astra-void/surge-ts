@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::program::record_scope_stack_visible_symbol_handle_copy_count;
+use surge_ts_types::Type;
+
 use crate::symbols::{SymbolInfo, SymbolInfoHandle, SymbolTable, clone_symbol_info_handle};
 
 #[derive(Debug, Clone)]
@@ -14,6 +16,10 @@ pub(crate) struct ScopeStack {
 pub(crate) struct ScopeFrame {
     symbols: SymbolTable,
     visible_shadows: HashMap<Arc<str>, Option<SymbolInfoHandle>>,
+    /// Declared types this frame's flow narrowing shadowed, restored on
+    /// `pop_child` alongside `visible_shadows`. Only the narrowing paths write
+    /// here, so it is empty in nearly every frame.
+    declared_shadows: HashMap<Arc<str>, Option<Type>>,
 }
 
 impl ScopeStack {
@@ -32,6 +38,7 @@ impl ScopeStack {
             frames: vec![ScopeFrame {
                 symbols: SymbolTable::with_parent(root),
                 visible_shadows: HashMap::new(),
+                declared_shadows: HashMap::new(),
             }],
         }
     }
@@ -52,6 +59,32 @@ impl ScopeStack {
         symbol: SymbolInfo,
     ) -> Option<SymbolInfoHandle> {
         self.insert_current_handle(name, Arc::new(symbol))
+    }
+
+    /// Install a flow-narrowed type, remembering the type it was narrowed *from*
+    /// so an assignment inside the branch still checks against the declaration
+    /// (`if (v === undefined) { v = "x" }` where `v: string | undefined`).
+    pub(crate) fn insert_current_narrowed(
+        &mut self,
+        name: impl Into<Arc<str>>,
+        symbol: SymbolInfo,
+        declared: Type,
+    ) -> Option<SymbolInfoHandle> {
+        let name = name.into();
+        let previous_declared = self.visible_symbols.declared_type(&name).cloned();
+        let current_frame = self
+            .frames
+            .last_mut()
+            .expect("scope stack must contain at least one frame");
+        current_frame
+            .declared_shadows
+            .entry(Arc::clone(&name))
+            .or_insert(previous_declared.clone());
+        self.visible_symbols.set_declared_type(
+            Arc::clone(&name),
+            Some(previous_declared.unwrap_or(declared)),
+        );
+        self.insert_current(name, symbol)
     }
 
     pub(crate) fn insert_current_handle(
@@ -112,6 +145,10 @@ impl ScopeStack {
             "scope stack must contain at least one frame"
         );
         let frame = self.frames.pop().expect("scope stack must contain a frame");
+        for (name, previous_declared) in frame.declared_shadows {
+            self.visible_symbols
+                .set_declared_type(name, previous_declared);
+        }
         for (name, previous_symbol) in frame.visible_shadows {
             match previous_symbol {
                 Some(previous_symbol) => {

@@ -72,6 +72,14 @@ pub(crate) struct SymbolTable {
     // (overload signatures, ambient `declare function`s) merge as overloads and
     // must not trip it. Shares the copy-on-write discipline of `symbols`.
     function_implementations: Arc<HashSet<Arc<str>, FxBuildHasher>>,
+    // Declared type of a name whose entry in `symbols` currently holds a
+    // *narrowed* type. An assignment is checked against the declared type, not
+    // the flow-narrowed one (`let v: string | undefined = undefined; if (v ===
+    // undefined) { v = "x" }` is legal), so narrowing records the pre-narrowing
+    // type here. Populated only by the narrowing paths and dropped with the
+    // narrowed table, so it is empty in nearly every table and its `Arc` clone
+    // is effectively free. Shares the copy-on-write discipline of `symbols`.
+    declared_types: Option<Arc<HashMap<Arc<str>, Type, FxBuildHasher>>>,
     // Optional read-only fallback consulted by lookups (`get`, `get_handle`,
     // `contains_let_or_const`) when a name is absent from `symbols`. A function
     // body's root scope sets this to the module/ambient environment instead of
@@ -93,6 +101,7 @@ impl Clone for SymbolTable {
             symbols: Arc::clone(&self.symbols),
             declaration_spans: Arc::clone(&self.declaration_spans),
             function_implementations: Arc::clone(&self.function_implementations),
+            declared_types: self.declared_types.clone(),
             parent: self.parent.clone(),
         }
     }
@@ -115,6 +124,7 @@ impl SymbolTable {
             symbols: Arc::clone(&self.symbols),
             declaration_spans: Arc::new(HashMap::default()),
             function_implementations: Arc::new(HashSet::default()),
+            declared_types: self.declared_types.clone(),
             parent: self.parent.clone(),
         }
     }
@@ -126,6 +136,7 @@ impl SymbolTable {
             symbols: Arc::new(HashMap::default()),
             declaration_spans: Arc::new(HashMap::default()),
             function_implementations: Arc::new(HashSet::default()),
+            declared_types: None,
             parent: Some(parent),
         }
     }
@@ -188,12 +199,87 @@ impl SymbolTable {
         self.get_handle(name)
     }
 
+    /// Own-map-only lookup; never consults `parent`.
+    ///
+    /// Export collection attaches the ambient globals as a `parent` fallback, so
+    /// `get`/`get_shared` answer "is this name visible here?", not "did this module
+    /// declare it?". An own-ness test built on the visible-name question lets a
+    /// same-named global suppress the module's own declaration, after which the
+    /// module exports the global instead (`next/font`'s `Content` displacing
+    /// radix's `declare const Content`).
+    pub(crate) fn get_own(&self, name: &str) -> Option<&SymbolInfo> {
+        record_type_name_lookup_string_count(1);
+        self.symbols.get(name).map(|symbol| symbol.as_ref())
+    }
+
+    pub(crate) fn get_own_shared(&self, name: &str) -> Option<SymbolInfoHandle> {
+        record_type_name_lookup_string_count(1);
+        let symbol = self.symbols.get(name)?;
+        record_symbol_info_handle_copy_count(1);
+        Some(Arc::clone(symbol))
+    }
+
     pub(crate) fn insert(
         &mut self,
         name: impl Into<Arc<str>>,
         symbol: SymbolInfo,
     ) -> Option<SymbolInfoHandle> {
         self.symbols_mut().insert(name.into(), Arc::new(symbol))
+    }
+
+    /// Install a flow-narrowed type for `name`, remembering the type it was
+    /// narrowed *from* so assignments keep checking against the declaration. A
+    /// name narrowed twice (nested guards) keeps the outermost record.
+    pub(crate) fn insert_narrowed(
+        &mut self,
+        name: impl Into<Arc<str>>,
+        symbol: SymbolInfo,
+        declared: Type,
+    ) -> Option<SymbolInfoHandle> {
+        let name = name.into();
+        if self.declared_type(&name).is_none() {
+            let declared_types = self.declared_types.get_or_insert_with(Default::default);
+            Arc::make_mut(declared_types).insert(Arc::clone(&name), declared);
+        }
+        self.insert(name, symbol)
+    }
+
+    /// Record (or clear) the pre-narrowing type of `name` on this table's own
+    /// map, overwriting any existing entry. `insert_narrowed` is the
+    /// keep-the-outermost variant; scope-stack narrowing needs the explicit form
+    /// so `pop_child` can restore what the branch shadowed.
+    pub(crate) fn set_declared_type(&mut self, name: Arc<str>, declared: Option<Type>) {
+        match declared {
+            Some(declared) => {
+                let declared_types = self.declared_types.get_or_insert_with(Default::default);
+                Arc::make_mut(declared_types).insert(name, declared);
+            }
+            None => {
+                if let Some(declared_types) = self.declared_types.as_mut()
+                    && declared_types.contains_key(&name)
+                {
+                    Arc::make_mut(declared_types).remove(&name);
+                }
+            }
+        }
+    }
+
+    /// The pre-narrowing type of `name`, when a narrowing path replaced its
+    /// entry. `None` means the symbol's own type *is* its declared type.
+    ///
+    /// Walks the parent chain in lockstep with `get`, so a scope that declares
+    /// its own `name` (an inner function shadowing a narrowed outer binding)
+    /// stops the search rather than inheriting the outer declaration's type.
+    pub(crate) fn declared_type(&self, name: &str) -> Option<&Type> {
+        if self.symbols.contains_key(name) {
+            return self
+                .declared_types
+                .as_ref()
+                .and_then(|declared_types| declared_types.get(name));
+        }
+        self.parent
+            .as_ref()
+            .and_then(|parent| parent.declared_type(name))
     }
 
     pub(crate) fn insert_handle(

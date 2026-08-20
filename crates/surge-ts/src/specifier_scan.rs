@@ -65,13 +65,7 @@ impl ModuleSpecifierScanner {
                         let index = pending[slot];
                         let (_, file_name, source_text) = &sources[index];
                         let parsed = parser.parse(source_text, file_name);
-                        let specifiers: Arc<[String]> = parsed
-                            .statements
-                            .into_iter()
-                            .filter_map(statement_module_specifier)
-                            .collect::<Vec<_>>()
-                            .into();
-                        out.push((index, specifiers));
+                        out.push((index, source_specifiers(parsed)));
                     }
                     out
                 }));
@@ -102,15 +96,28 @@ impl ModuleSpecifierScanner {
             return cached.clone();
         }
         let parsed = self.parser.parse(source_text, file_name);
-        let specifiers: Arc<[String]> = parsed
-            .statements
-            .into_iter()
-            .filter_map(statement_module_specifier)
-            .collect::<Vec<_>>()
-            .into();
+        let specifiers = source_specifiers(parsed);
         self.scanned[index] = Some(specifiers.clone());
         specifiers
     }
+}
+
+/// Declaration specifiers first, then the `import("...")` forms the lossy
+/// `Parsed*` tree cannot carry. Both belong to the module graph: a package
+/// reached only through an import type still supplies its
+/// `/// <reference types>` directives and ambient `declare module` blocks.
+fn source_specifiers(parsed: surge_ts_syntax::ParsedSource) -> Arc<[String]> {
+    let surge_ts_syntax::ParsedSource {
+        statements,
+        import_call_specifiers,
+        ..
+    } = parsed;
+    statements
+        .into_iter()
+        .filter_map(statement_module_specifier)
+        .chain(import_call_specifiers)
+        .collect::<Vec<_>>()
+        .into()
 }
 
 fn statement_module_specifier(statement: ParsedStatement) -> Option<String> {

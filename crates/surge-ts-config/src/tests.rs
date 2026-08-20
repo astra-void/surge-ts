@@ -343,6 +343,61 @@ fn include_selects_matching_ts_files() {
 }
 
 #[test]
+fn include_wildcards_skip_dot_segments() {
+    let root = temp_dir("include-dot-segments");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["src", "gen/*/*.ts"] }"#);
+    write_file(&root, "src/index.ts", "const a = 1;");
+    write_file(&root, "src/.hidden/skipped.ts", "const b = 2;");
+    write_file(&root, "src/.dotfile.ts", "const c = 3;");
+    write_file(&root, "gen/plain/kept.ts", "const d = 4;");
+    write_file(&root, "gen/.hidden/skipped.ts", "const e = 5;");
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert_eq!(
+        loaded.files,
+        vec![root.join("gen/plain/kept.ts"), root.join("src/index.ts")]
+    );
+}
+
+#[test]
+fn include_pattern_spelling_a_dot_segment_still_matches() {
+    let root = temp_dir("include-literal-dot-segment");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "include": ["src/.generated/**/*", "src/.dotfile.ts"] }"#,
+    );
+    write_file(&root, "src/.generated/api.ts", "const a = 1;");
+    write_file(&root, "src/.generated/deep/more.ts", "const b = 2;");
+    write_file(&root, "src/.dotfile.ts", "const c = 3;");
+    write_file(&root, "src/other.ts", "const d = 4;");
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert_eq!(
+        loaded.files,
+        vec![
+            root.join("src/.dotfile.ts"),
+            root.join("src/.generated/api.ts"),
+            root.join("src/.generated/deep/more.ts"),
+        ]
+    );
+}
+
+#[test]
+fn include_bare_dot_directory_entry_is_not_a_recursive_root() {
+    // `isImplicitGlob` only expands an entry whose last component has no `.`, so
+    // `src/.generated` is a file spec that matches nothing.
+    let root = temp_dir("include-bare-dot-directory");
+    write_file(&root, "tsconfig.json", r#"{ "include": ["src/.generated"] }"#);
+    write_file(&root, "src/.generated/api.ts", "const a = 1;");
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.files.is_empty());
+}
+
+#[test]
 fn include_treats_directories_as_recursive_roots_and_keeps_source_extensions() {
     let root = temp_dir("include-directory-roots");
     write_file(
@@ -997,4 +1052,87 @@ fn canonicalize_matches_full_realpath_on_every_spelling() {
     }
 
     fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn removed_options_are_reported_with_source_ranges() {
+    let root = temp_dir("removed-options");
+    let source = "{\n  \"compilerOptions\": {\n    \"esModuleInterop\": false,\n    \"baseUrl\": \".\"\n  }\n}\n";
+    write_file(&root, "tsconfig.json", source);
+
+    let loaded = load(root.join("tsconfig.json"));
+    let removed: Vec<(&str, Option<&str>)> = loaded
+        .removed_options
+        .iter()
+        .map(|option| (option.name.as_str(), option.value.as_deref()))
+        .collect();
+    assert_eq!(
+        removed,
+        vec![("esModuleInterop", Some("false")), ("baseUrl", None)]
+    );
+
+    // `name=value` spans the value, a whole-option removal spans the key.
+    let interop = &loaded.removed_options[0];
+    assert_eq!(&source[interop.start..interop.end], "false");
+    let base_url = &loaded.removed_options[1];
+    assert_eq!(&source[base_url.start..base_url.end], "\"baseUrl\"");
+}
+
+#[test]
+fn removed_options_from_extends_anchor_on_the_compiler_options_key() {
+    let root = temp_dir("removed-options-extends");
+    write_file(
+        &root,
+        "base.json",
+        r#"{ "compilerOptions": { "esModuleInterop": false } }"#,
+    );
+    let source = "{\n  \"extends\": \"./base.json\",\n  \"compilerOptions\": { \"strict\": true }\n}\n";
+    write_file(&root, "tsconfig.json", source);
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert_eq!(loaded.removed_options.len(), 1);
+    let inherited = &loaded.removed_options[0];
+    assert_eq!(inherited.name, "esModuleInterop");
+    assert_eq!(
+        &source[inherited.start..inherited.end],
+        "\"compilerOptions\""
+    );
+}
+
+#[test]
+fn removed_option_values_use_typescript_spelling() {
+    let root = temp_dir("removed-option-values");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "target": "es5", "module": "amd", "moduleResolution": "node" } }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    let removed: Vec<(&str, Option<&str>)> = loaded
+        .removed_options
+        .iter()
+        .map(|option| (option.name.as_str(), option.value.as_deref()))
+        .collect();
+    assert_eq!(
+        removed,
+        vec![
+            ("target", Some("ES5")),
+            ("module", Some("AMD")),
+            ("moduleResolution", Some("node10")),
+        ]
+    );
+}
+
+#[test]
+fn supported_option_values_are_not_reported_as_removed() {
+    let root = temp_dir("removed-options-clean");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "esModuleInterop": true, "target": "es2022", "module": "esnext", "moduleResolution": "bundler" } }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.removed_options.is_empty());
 }

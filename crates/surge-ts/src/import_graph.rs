@@ -11,6 +11,7 @@ use surge_ts_config::{
     select_path_mapping_targets,
 };
 
+use crate::specifier::is_relative_specifier;
 use crate::specifier_scan::ModuleSpecifierScanner;
 
 /// Import-graph BFS state that survives across loader fixpoint iterations, so
@@ -327,13 +328,4 @@ fn is_dependency_javascript_source_file(path: &Path) -> bool {
         || path_ends_with_ignore_ascii_case(path, ".cjs");
 
     is_node_modules && is_javascript_source
-}
-
-fn is_relative_specifier(specifier: &str) -> bool {
-    specifier == "."
-        || specifier == ".."
-        || specifier.starts_with("./")
-        || specifier.starts_with("../")
-        || specifier.starts_with(".\\")
-        || specifier.starts_with("..\\")
 }
