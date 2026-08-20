@@ -38,6 +38,7 @@ pub(crate) fn declaration_resolution_key(file_name: &str, name: &str) -> Declara
         file_name: canonical_declaration_file_name(file_name),
         name: Arc::from(name),
         namespace: DeclarationNamespace::Type,
+        fingerprint: 0,
     }
 }
 
@@ -115,14 +116,21 @@ pub(crate) fn get_cached_named_type_resolution(
 /// Entries are stored under [`DeclarationNamespace::TypeSignatureContext`] with
 /// a substitution fingerprint appended to the name, so they cannot collide with
 /// the non-generic entries the same map holds under `Type`.
+/// Set on a module-instantiation memo key's fingerprint so it can never collide
+/// with the display-tagged signature-context keys, which share the namespace.
+const MODULE_INSTANTIATION_MEMO_TAG: u64 = 1 << 63;
+
 pub(crate) fn module_instantiation_memo_key(
     declaration_key: &DeclarationResolutionKey,
     fingerprint: u64,
 ) -> DeclarationResolutionKey {
     DeclarationResolutionKey {
         file_name: declaration_key.file_name.clone(),
-        name: Arc::from(format!("{}\u{2}{fingerprint:016x}", declaration_key.name)),
+        name: declaration_key.name.clone(),
         namespace: DeclarationNamespace::TypeSignatureContext,
+        // Distinguished by the fingerprint field rather than by formatting it
+        // into the name: this runs once per interface/alias resolution.
+        fingerprint: fingerprint | MODULE_INSTANTIATION_MEMO_TAG,
     }
 }
 
@@ -654,6 +662,7 @@ pub(crate) fn make_lazy_signature_annotation_reference(
             "signature {declaration_name}@{declaration_start}:{component_identity}"
         )),
         namespace: DeclarationNamespace::Type,
+        fingerprint: 0,
     };
     crate::program::record_lazy_reference_created(&key);
     crate::program::record_program_counter(|c| {
@@ -718,6 +727,7 @@ pub(crate) fn make_lazy_value_annotation_reference(
         file_name: canonical_declaration_file_name(&ctx.file_name),
         name: Arc::from(format!("value {declaration_name}@{declaration_start}")),
         namespace: DeclarationNamespace::Type,
+        fingerprint: 0,
     };
     crate::program::record_lazy_reference_created(&key);
     if let Some(filter) = lazy_value_trace_filter()

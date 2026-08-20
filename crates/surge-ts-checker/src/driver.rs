@@ -505,6 +505,7 @@ fn collect_named_local_type_declaration(
         file_name: canonical_file_name.clone(),
         name: std::sync::Arc::from(name),
         namespace: DeclarationNamespace::Type,
+        fingerprint: 0,
     };
     if !seen.insert(key) {
         return;

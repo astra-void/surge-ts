@@ -594,6 +594,12 @@ pub(crate) struct DeclarationResolutionKey {
     pub(crate) file_name: Arc<str>,
     pub(crate) name: Arc<str>,
     pub(crate) namespace: DeclarationNamespace,
+    /// Discriminator for the entries whose identity is a *hash* rather than a
+    /// name — the module-instantiation memo and the display-tagged signature
+    /// context. Zero for every ordinary declaration key. Kept as its own field
+    /// so the hot resolution paths do not format it into `name`, which cost a
+    /// `String` plus an `Arc<str>` allocation per interface/alias resolution.
+    pub(crate) fingerprint: u64,
 }
 
 #[derive(Debug, Clone)]

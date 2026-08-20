@@ -392,8 +392,12 @@ pub(crate) fn resolve_named_type(
         let display_fingerprint = std::hash::Hasher::finish(&display_hasher);
         Some(DeclarationResolutionKey {
             file_name: decl_key.file_name.clone(),
-            name: Arc::from(format!("{}\u{1}{display_fingerprint:016x}", decl_key.name)),
+            name: decl_key.name.clone(),
             namespace: crate::context::DeclarationNamespace::TypeSignatureContext,
+            // Carried as a field rather than formatted into the name — this runs
+            // once per generic instantiation. The memo keys that share this
+            // namespace set the high bit, so the two can never collide.
+            fingerprint: display_fingerprint & !(1u64 << 63),
         })
     } else {
         None

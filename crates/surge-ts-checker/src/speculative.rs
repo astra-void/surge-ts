@@ -2119,6 +2119,7 @@ mod reservation_tests {
             file_name: Arc::from("test.ts"),
             name: Arc::from(name),
             namespace: DeclarationNamespace::Type,
+            fingerprint: 0,
         }
     }
 
