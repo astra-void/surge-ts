@@ -10,10 +10,12 @@ Cargo crates are still named `surge-ts-*`; the CLI binary is `surge`.
 ## Current state
 
 - auth-kit matches TypeScript exactly at 0/0 diagnostics under the measured
-  command set.
-- The oracle preset sweep is 98/98 under the normal gate (diagnostic code-count
-  and file/code/line) as of 2026-07-29, after adding
-  `namespace-import-qualified-member-basic`. Message-text and span/column drift are reported but
+  command set. So do `unnamed`, `ky`, and `ofetch`; see their sections below.
+  `trpc` is a measured baseline rather than a parity target, with two understood
+  residual divergence classes recorded in its section.
+- The oracle preset sweep is 105/105 under the normal gate (diagnostic code-count
+  and file/code/line) as of 2026-08-20, after adding
+  `namespace-member-signature-siblings-basic`. Message-text and span/column drift are reported but
   non-gating unless `--strictMessages` / `--strictSpans` are passed. The
   `namespace-import-reexport-basic` preset pins re-export of namespace/named/
   default import bindings (`import * as z; export { z }`).
@@ -216,6 +218,21 @@ parity remains out of scope.
   copied into this repo; `--allowMissing` keeps the script honest when absent.
 - Artifacts: `.bench/real-projects/unnamed/` (`oracle-compare.json`,
   `compat-report.json`, `timings.txt`, `measurement.md`).
+
+### Current measurement (2026-08-20): 0/0, exact tsc parity
+
+`unnamed` now matches tsc exactly: **0 diagnostics on both sides**, no
+false positives and no false negatives. The subsections below are the historical
+burn-down and are kept verbatim as measured-at-the-time records.
+
+The last false positive was a `TS7006` on a `useState` updater callback, and it
+was the visible tip of a much larger hole: `export = <declare namespace>` exposed
+only the namespace object, whose members are modelled permissively, so **every
+React hook call lost its return type**. Closing it needed three changes together
+— accepting a signature that names a type the namespace *exports*, carrying a
+`namespace_prefix` on the signature so instantiation re-resolves sibling names
+under it, and carrying the qualified value members through `export =`. See the
+`fix(check): carry a namespace member's real signature to its callers` commit.
 
 ### Measured baseline
 
@@ -726,6 +743,48 @@ it picked up from the repo-root `node_modules/@types/node`. The faithful fix is
 transitive `/// <reference types="..." />` loading from dependency declaration
 files, tracked as future work; full Node/`@types` resolution parity stays out of
 scope.
+
+## trpc (TypeScript compiler-API real-project measurement)
+
+`trpc` is the largest real-project target (`.local-projects/trpc`, a pnpm
+monorepo whose `packages/openapi` and `packages/upgrade` drive the TypeScript
+compiler API, plus Next.js/React/Fastify examples). It is a measured baseline,
+not a parity claim: tsc itself reports 1,282 diagnostics there, many from
+examples with unresolved workspace imports.
+
+- Command:
+  `pnpm run oracle:compare -- --project .local-projects/trpc --maxDiagnostics 200`
+  (raw counts via `surge -p .local-projects/trpc/tsconfig.json`).
+
+### Current measurement (2026-08-20)
+
+| Metric | Value |
+| --- | ---: |
+| TypeScript (tsc) diagnostics | 1,282 |
+| surge-ts diagnostics | 825 |
+
+Adjudicated against tsc by `(file, line)`, the 2026-08-20 pass moved 6 false
+positives out and 4 in, and traded 2 matched diagnostics for 1. Both residual
+classes are understood and neither is a checker bug in the ordinary sense:
+
+**Four false positives: members of a re-opened namespace interface.** All four
+(`Identifier.text` once, `getText` three times) read a member that only exists in
+the *second* `interface` block of a `declare namespace ts` declaration — directly
+for `Identifier`, and through inheritance from `Node` for `getText` — which
+declaration merging would fold in. The merge is implemented and correct — it removes 33 false
+positives with none added — but is gated off because it turns the merged
+interfaces into a mutual cycle whose expansions degrade and therefore cannot be
+cached. Enable with `SURGE_NS_IFACE_MERGE=1`; see
+[docs/perf/NAMESPACE-INTERFACE-MERGE.md](docs/perf/NAMESPACE-INTERFACE-MERGE.md)
+for the counter evidence and the cycle-tolerant-resolution fix it waits on.
+
+**Two false negatives: unresolved-module policy.** Both are a `TS7006` on a
+`setMessages((current) => …)` callback in an example whose `~/utils/trpc` import
+does not resolve. tsc binds an unresolved module to `any`, and a callback
+parameter contextually typed by `any` *is* implicit-any; surge binds it to the
+degradation sentinel, which suppresses the report by design so a modelling gap
+never cascades. Matching tsc here means binding unresolved imports to `Any`, a
+policy change far larger than these two diagnostics — deliberately not taken.
 
 ## v0.84 Real-Project Audit
 
