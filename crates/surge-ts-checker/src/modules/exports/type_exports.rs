@@ -173,6 +173,34 @@ pub(crate) fn copy_qualified_value_exports(
     }
 }
 
+/// Re-exposes a module's qualified value members under a namespace alias
+/// (`import * as ts` -> `ts.isImportDeclaration`), the value twin of
+/// [`crate::modules::imports::build_namespace_alias_table`]. Only members that
+/// carry a published signature are copied: the namespace object models the
+/// member *set* with permissive `any`, so a call or a type-predicate guard
+/// routed through it would otherwise lose the signature. An `export =` module's
+/// members are also keyed bare (see the `Equals` arm in `statements.rs`), which
+/// is what makes `<alias>.<member>` land on the right name.
+pub(crate) fn copy_namespace_alias_value_exports(
+    export_table: &ModuleExportTable,
+    local_name: &str,
+    symbols: &mut SymbolTable,
+) {
+    let has_export_assignment = export_table.export_assignment_symbol.is_some();
+    for (key, symbol) in export_table.symbols.iter_shared() {
+        if symbol.function_signature.is_none() {
+            continue;
+        }
+        if !has_export_assignment && !key.contains('.') {
+            continue;
+        }
+        let local_key = format!("{local_name}.{key}");
+        if symbols.get(&local_key).is_none() {
+            symbols.insert_shared(local_key, symbol.clone());
+        }
+    }
+}
+
 pub(crate) fn lookup_value_export(
     export_table: &ModuleExportTable,
     local_name: &str,

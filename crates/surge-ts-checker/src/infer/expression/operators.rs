@@ -103,8 +103,22 @@ pub(crate) fn infer_conditional_expression(
     // `when_false`.
     let true_symbols =
         crate::checks::function::narrow_condition_symbol_table(condition, symbols, true);
+    let true_symbols = crate::checks::function::narrow_predicate_guards_symbol_table(
+        condition,
+        true_symbols.as_ref().unwrap_or(symbols),
+        true,
+        ctx,
+    )
+    .or(true_symbols);
     let false_symbols =
         crate::checks::function::narrow_condition_symbol_table(condition, symbols, false);
+    let false_symbols = crate::checks::function::narrow_predicate_guards_symbol_table(
+        condition,
+        false_symbols.as_ref().unwrap_or(symbols),
+        false,
+        ctx,
+    )
+    .or(false_symbols);
     let true_type = infer_expression(when_true, true_symbols.as_ref().unwrap_or(symbols), ctx);
     let false_type = infer_expression(when_false, false_symbols.as_ref().unwrap_or(symbols), ctx);
 

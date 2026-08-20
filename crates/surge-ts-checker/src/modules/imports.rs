@@ -849,6 +849,12 @@ fn resolve_namespace_import(
                 resolved_index,
             ));
 
+            crate::modules::exports::copy_namespace_alias_value_exports(
+                &export_table,
+                local_name,
+                symbols,
+            );
+
             if !local_symbol_exists(local_name) {
                 let namespace_type = namespace_export_object_type(&export_table);
                 let namespace_type = match resolved_index.and_then(|index| program_files.get(index))
@@ -930,6 +936,11 @@ fn resolve_namespace_import(
             namespace_scope.as_ref(),
             namespace_resolved_index,
         ));
+        crate::modules::exports::copy_namespace_alias_value_exports(
+            export_table,
+            local_name,
+            symbols,
+        );
     }
 
     if !local_symbol_exists(local_name) {

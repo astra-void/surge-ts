@@ -971,14 +971,23 @@ pub(super) fn narrow_union_by_arraybufferview(ty: &Type, keep_views: bool) -> Op
 /// A user-defined type-predicate guard extracted from a call condition
 /// (`isFoo(x)` where `isFoo`'s collected signature returns `param is T`).
 pub(super) struct PredicateGuardInfo {
-    /// The bare-identifier argument in the tested parameter's position.
+    /// The base identifier of the argument in the tested parameter's position.
     pub(super) subject: String,
+    /// Property path from `subject` to the tested reference, empty for a bare
+    /// identifier (`ts.isStringLiteral(node.moduleSpecifier)` -> `["moduleSpecifier"]`).
+    pub(super) path: Vec<String>,
     /// The predicate's parsed target type (`T` in `param is T`), unresolved.
     pub(super) predicate_type: surge_ts_syntax::ParsedType,
     /// File the predicate signature was declared in; its module-local type
     /// names resolve under this file's scope (see
     /// [`crate::symbols::FunctionSignatureInfo::declaring_file`]).
     pub(super) declaring_file: Option<std::sync::Arc<str>>,
+    /// Namespace the predicate signature was declared in, when it was published
+    /// as a qualified `ns.member`. `node is ImportDeclaration` inside
+    /// `declare namespace ts` names `ts.ImportDeclaration`, which only resolves
+    /// under that prefix (see
+    /// [`crate::symbols::FunctionSignatureInfo::namespace_prefix`]).
+    pub(super) namespace_prefix: Option<std::sync::Arc<str>>,
 }
 
 /// Extracts a user-defined type-predicate guard from a call condition. The
@@ -993,14 +1002,31 @@ pub(super) fn parse_type_predicate_condition(
     )
         -> Option<std::sync::Arc<crate::symbols::FunctionSignatureInfo>>,
 ) -> Option<PredicateGuardInfo> {
-    let ParsedExpression::Call {
-        callee_name,
-        type_arguments,
-        arguments,
-        ..
-    } = condition
-    else {
-        return None;
+    // A guard reached through a namespace (`ts.isImportDeclaration(node)`) parses
+    // as a property call; its signature is registered under the qualified
+    // `<alias>.<member>` key.
+    let qualified_callee;
+    let (callee_name, type_arguments, arguments) = match condition {
+        ParsedExpression::Call {
+            callee_name,
+            type_arguments,
+            arguments,
+            ..
+        } => (callee_name.as_str(), type_arguments, arguments),
+        ParsedExpression::PropertyCall {
+            object,
+            property_name,
+            type_arguments,
+            arguments,
+            ..
+        } => {
+            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+                return None;
+            };
+            qualified_callee = format!("{name}.{property_name}");
+            (qualified_callee.as_str(), type_arguments, arguments)
+        }
+        _ => return None,
     };
     if !type_arguments.is_empty() {
         return None;
@@ -1020,14 +1046,13 @@ pub(super) fn parse_type_predicate_condition(
         .parameter_names
         .iter()
         .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))?;
-    let ParsedExpression::Identifier { name: subject, .. } = &arguments.get(index)?.expression
-    else {
-        return None;
-    };
+    let (subject, path) = super::reference_path(&arguments.get(index)?.expression)?;
     Some(PredicateGuardInfo {
-        subject: subject.clone(),
+        subject,
+        path,
         predicate_type,
         declaring_file: signature.declaring_file.clone(),
+        namespace_prefix: signature.namespace_prefix.clone(),
     })
 }
 

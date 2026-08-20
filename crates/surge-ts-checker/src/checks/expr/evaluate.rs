@@ -207,6 +207,25 @@ pub(crate) fn evaluate_expression(
                     downgraded.or(guarded)
                 })
                 .flatten();
+            // A user-defined predicate in the chain narrows its subject for the
+            // right operand too (`ts.isImportDeclaration(n) && n.moduleSpecifier`).
+            // `a || b` only evaluates `b` when `a` is falsy, so a negated
+            // predicate narrows there the same way (`!isA(x) || x.av`).
+            let predicate_branch = match operator {
+                surge_ts_syntax::ParsedLogicalOperator::And => Some(true),
+                surge_ts_syntax::ParsedLogicalOperator::Or => Some(false),
+                _ => None,
+            };
+            let narrowed = predicate_branch
+                .and_then(|branch_is_true| {
+                    crate::checks::function::narrow_predicate_guards_symbol_table(
+                        left,
+                        narrowed.as_ref().unwrap_or(symbols),
+                        branch_is_true,
+                        ctx,
+                    )
+                })
+                .or(narrowed);
             let right_symbols = narrowed.as_ref().unwrap_or(symbols);
             // `a || b` hands `b` the same contextual type `a ?? b` does.
             let right_contextual = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::Or)
@@ -292,12 +311,26 @@ pub(crate) fn evaluate_expression(
                 true,
             )
             .or(true_symbols);
+            let true_symbols = crate::checks::function::narrow_predicate_guards_symbol_table(
+                condition,
+                true_symbols.as_ref().unwrap_or(symbols),
+                true,
+                ctx,
+            )
+            .or(true_symbols);
             let false_symbols =
                 crate::checks::function::narrow_condition_symbol_table(condition, symbols, false);
             let false_symbols = downgrade_guarded_genuine_unknown(
                 condition,
                 false_symbols.as_ref().unwrap_or(symbols),
                 false,
+            )
+            .or(false_symbols);
+            let false_symbols = crate::checks::function::narrow_predicate_guards_symbol_table(
+                condition,
+                false_symbols.as_ref().unwrap_or(symbols),
+                false,
+                ctx,
             )
             .or(false_symbols);
             let true_result = evaluate_expression(

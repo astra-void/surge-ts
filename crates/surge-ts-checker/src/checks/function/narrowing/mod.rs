@@ -184,6 +184,12 @@ enum ReferenceGuard<'a> {
     Assigned {
         assigned: &'a Type,
     },
+    /// A user-defined type predicate applied to a property path
+    /// (`ts.isStringLiteral(node.moduleSpecifier)`).
+    Predicate {
+        target: &'a Type,
+        keep_matching: bool,
+    },
 }
 
 impl ReferenceGuard<'_> {
@@ -232,6 +238,14 @@ impl ReferenceGuard<'_> {
             Self::Nullish { keep_matching } => {
                 let effective = Self::effective_leaf_type(ty, optional);
                 let narrowed = narrow_union_by_nullish(&effective, *keep_matching)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            Self::Predicate {
+                target,
+                keep_matching,
+            } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed = narrow_by_predicate(&effective, target, *keep_matching)?;
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
             // An assignment narrows a union-declared slot to the members the
@@ -531,6 +545,10 @@ fn resolve_predicate_guard_type(
         ctx.set_file_name(file);
         saved
     });
+    if let Some(prefix) = guard.namespace_prefix.as_deref() {
+        ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix.to_string());
+    }
     let resolved = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         crate::infer::types::resolve_parsed_type(
             guard.predicate_type.clone(),
@@ -539,6 +557,10 @@ fn resolve_predicate_guard_type(
             &crate::infer::TypeParameterSubstitution::new(),
         )
     });
+    if guard.namespace_prefix.is_some() {
+        ctx.namespace_member_prefix_stack.pop();
+        ctx.namespace_member_resolution_depth -= 1;
+    }
     if let Some(saved) = saved_file_name {
         ctx.set_file_name(saved);
     }
@@ -575,7 +597,7 @@ fn narrow_predicate_call_in_scope(
         return true;
     };
     let Some(narrowed) = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        narrow_by_predicate(&subject_ty, &predicate_ty, branch_is_true)
+        narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
     }) else {
         return true;
     };
@@ -1054,6 +1076,103 @@ fn collect_and_chain_truthy_targets(
 /// structured guard (`x.kind === "k" && …`) plus each identifier/property in the
 /// `&&` chain narrowed to non-nullish (`a.b && a.b > c`). Returns `None` when
 /// nothing narrows. Used to type the right operand of `&&`.
+/// Narrows the guarded reference: the value itself for a bare identifier, or the
+/// property the guard tested (`ts.isStringLiteral(node.moduleSpecifier)`).
+fn narrowed_predicate_subject(
+    subject_ty: &Type,
+    path: &[String],
+    predicate_ty: &Type,
+    branch_is_true: bool,
+) -> Option<Type> {
+    if path.is_empty() {
+        return narrow_by_predicate(subject_ty, predicate_ty, branch_is_true);
+    }
+    narrowed_reference_type(
+        subject_ty,
+        path,
+        ReferenceGuard::Predicate {
+            target: predicate_ty,
+            keep_matching: branch_is_true,
+        },
+    )
+}
+
+/// Applies user-defined type-predicate narrowing (`isFoo(x)`,
+/// `ts.isImportDeclaration(node)`) to a plain symbol table, for the expression
+/// paths that have no `ScopeStack` — the right operand of `&&` and a ternary's
+/// branches. Kept apart from [`narrow_condition_symbol_table`] because
+/// resolving the predicate's target type needs the checker context, which those
+/// syntactic guards do not take.
+pub(crate) fn narrow_predicate_guards_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) -> Option<SymbolTable> {
+    if let ParsedExpression::Unary {
+        operator: ParsedUnaryOperator::Not,
+        operand,
+        ..
+    } = condition
+    {
+        return narrow_predicate_guards_symbol_table(operand, symbols, !branch_is_true, ctx);
+    }
+
+    // Every operand of an `&&` holds in its true branch, and — by De Morgan —
+    // every operand of an `||` fails in its false branch, so either chain
+    // narrows by all of its operands. The other branch proves nothing about any
+    // single operand.
+    if let ParsedExpression::Logical {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+        && matches!(
+            (operator, branch_is_true),
+            (ParsedLogicalOperator::And, true) | (ParsedLogicalOperator::Or, false)
+        )
+    {
+        let left_narrowed =
+            narrow_predicate_guards_symbol_table(left, symbols, branch_is_true, ctx);
+        let right_narrowed = narrow_predicate_guards_symbol_table(
+            right,
+            left_narrowed.as_ref().unwrap_or(symbols),
+            branch_is_true,
+            ctx,
+        );
+        return right_narrowed.or(left_narrowed);
+    }
+
+    let guard = parse_type_predicate_condition(condition, &mut |name| {
+        symbols
+            .get(name)
+            .and_then(|symbol| symbol.function_signature.clone())
+    })?;
+    let symbol = symbols.get(&guard.subject)?;
+    let subject_ty = symbol.ty.clone();
+    let kind = symbol.kind;
+    let function_signature = symbol.function_signature.clone();
+    let predicate_ty = resolve_predicate_guard_type(&guard, ctx)?;
+    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
+    })?;
+    if narrowed == subject_ty {
+        return None;
+    }
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    narrowed_symbols.insert_narrowed(
+        guard.subject,
+        SymbolInfo {
+            ty: narrowed,
+            kind,
+            function_signature,
+        },
+        subject_ty,
+    );
+    Some(narrowed_symbols)
+}
+
 pub(crate) fn narrow_truthy_operand_symbol_table(
     operand: &ParsedExpression,
     symbols: &SymbolTable,
@@ -1147,6 +1266,78 @@ pub(crate) fn narrow_discriminant_in_scope(
     branch_is_true: bool,
     ctx: &mut CheckerContext,
 ) {
+    narrow_value_guards_in_scope(condition, scopes, branch_is_true, ctx);
+    // A predicate over a *property* (`ts.isStringLiteral(node.moduleSpecifier)`)
+    // narrows that path, which the value-guard dispatch above does not reach —
+    // and it has to run after it, since the property only exists once the base
+    // itself is narrowed (`isImportDeclaration(node) && isStringLiteral(node.m)`).
+    narrow_predicate_reference_guards_in_scope(condition, scopes, branch_is_true, ctx);
+}
+
+/// Applies every property-path type-predicate guard the condition proves. Walks
+/// `!` and the operands of a true-branch `&&`, the shapes that compose guards.
+fn narrow_predicate_reference_guards_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) {
+    if let ParsedExpression::Unary {
+        operator: ParsedUnaryOperator::Not,
+        operand,
+        ..
+    } = condition
+    {
+        narrow_predicate_reference_guards_in_scope(operand, scopes, !branch_is_true, ctx);
+        return;
+    }
+
+    if let ParsedExpression::Logical {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+        && matches!(
+            (operator, branch_is_true),
+            (ParsedLogicalOperator::And, true) | (ParsedLogicalOperator::Or, false)
+        )
+    {
+        narrow_predicate_reference_guards_in_scope(left, scopes, branch_is_true, ctx);
+        narrow_predicate_reference_guards_in_scope(right, scopes, branch_is_true, ctx);
+        return;
+    }
+
+    let Some(guard) = parse_type_predicate_condition(condition, &mut |name| {
+        scopes
+            .resolve(name)
+            .and_then(|symbol| symbol.function_signature.clone())
+    }) else {
+        return;
+    };
+    if guard.path.is_empty() {
+        return;
+    }
+    let Some(predicate_ty) = resolve_predicate_guard_type(&guard, ctx) else {
+        return;
+    };
+    narrow_reference_in_scope(
+        &guard.subject,
+        &guard.path,
+        ReferenceGuard::Predicate {
+            target: &predicate_ty,
+            keep_matching: branch_is_true,
+        },
+        scopes,
+    );
+}
+
+fn narrow_value_guards_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) {
     // `!guard` narrows the opposite branch.
     if let ParsedExpression::Unary {
         operator: ParsedUnaryOperator::Not,
@@ -1154,7 +1345,7 @@ pub(crate) fn narrow_discriminant_in_scope(
         ..
     } = condition
     {
-        narrow_discriminant_in_scope(operand, scopes, !branch_is_true, ctx);
+        narrow_value_guards_in_scope(operand, scopes, !branch_is_true, ctx);
         return;
     }
 
