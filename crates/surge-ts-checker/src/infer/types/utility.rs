@@ -253,7 +253,11 @@ pub(crate) fn resolve_partial_utility_type(
     }
 
     ResolvedType {
-        ty: Type::Object(alloc_object_type(properties, None)),
+        // A homomorphic mapped type preserves its source's index signature.
+        ty: Type::Object(alloc_object_type(
+            properties,
+            object_type.string_index_type.as_deref().cloned(),
+        )),
         had_error: false,
     }
 }
@@ -461,7 +465,14 @@ pub(crate) fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution
     }
 
     ResolvedType {
-        ty: Type::Object(alloc_object_type(properties, None)),
+        // `Omit<T, K>` is `Pick<T, Exclude<keyof T, K>>`, and `keyof T` contains
+        // `string` whenever `T` has a string index signature — so the result stays
+        // open. Dropping it made every unlisted member of an open source read as
+        // missing.
+        ty: Type::Object(alloc_object_type(
+            properties,
+            object_type.string_index_type.as_deref().cloned(),
+        )),
         had_error: false,
     }
 }
