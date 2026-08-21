@@ -975,9 +975,9 @@ path = "tests/smoke/property_call_any_object_assignment_valid.ts"
 expected_diagnostics = []
 
 [[case]]
-name = "property-call-any-object-argument-not-checked"
-path = "tests/smoke/property_call_any_object_argument_not_checked.ts"
-expected_diagnostics = []
+name = "property-call-any-object-argument-checked"
+path = "tests/smoke/property_call_any_object_argument_checked.ts"
+expected_diagnostics = ["TS2304"]
 
 [[case]]
 name = "property-call-unknown-object-assignment-no-cascade"

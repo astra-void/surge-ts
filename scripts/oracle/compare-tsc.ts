@@ -323,6 +323,11 @@ export const fixturePresets: Record<string, string> = {
   'namespace-import-qualified-member-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-import-qualified-member-basic/tsconfig.json'),
   'namespace-member-signature-siblings-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-member-signature-siblings-basic/tsconfig.json'),
   'enum-member-type-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-member-type-basic/tsconfig.json'),
+  'object-literal-property-checking-basic': path.join(workspaceRoot, 'tests/compat-projects/object-literal-property-checking-basic/tsconfig.json'),
+  'error-typed-import-binding-basic': path.join(workspaceRoot, 'tests/compat-projects/error-typed-import-binding-basic/tsconfig.json'),
+  'instanceof-subclass-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-subclass-narrowing-basic/tsconfig.json'),
+  'global-interface-cross-file-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/global-interface-cross-file-merge-basic/tsconfig.json'),
+  'deferred-block-forward-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/deferred-block-forward-reference-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noPropertyAccessFromIndexSignature": true,
+    "types": ["pkgruntime"]
+  },
+  "include": [
+    "src/**/*.ts"
+  ]
+}
