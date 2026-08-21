@@ -122,6 +122,60 @@ pub(crate) fn emit_implicit_return_diagnostic(
     ctx.push(diagnostic);
 }
 
+/// See the call site in [`check_function_body`]. Returns the previous
+/// `module_value_fallback` when one was installed, for the caller to restore.
+fn install_deferred_block_value_fallback(
+    body: &[ParsedFunctionBodyStatement],
+    ctx: &mut CheckerContext,
+) -> Option<Option<std::sync::Arc<crate::symbols::SymbolTable>>> {
+    let mut annotated = crate::symbols::SymbolTable::new();
+    let mut found = false;
+    for statement in body {
+        let ParsedFunctionBodyStatement::VariableDeclaration(variable) = statement else {
+            continue;
+        };
+        if !matches!(
+            variable.kind,
+            surge_ts_syntax::ParsedVariableKind::Let | surge_ts_syntax::ParsedVariableKind::Const
+        ) {
+            continue;
+        }
+        // The sentinel, never the declared type: the name *is* in scope for the
+        // deferred body (tsc resolves it), surge simply has no usable type for it
+        // before the declaration's own statement runs, and the sentinel says
+        // exactly that — it reports nothing and cascades nothing. Resolving the
+        // annotation here instead would be worse than useless: it runs out of
+        // statement position, and the alias cache would keep that first answer,
+        // swallowing the one-time diagnostic the real check owes.
+        found = true;
+        let ty = Type::Unknown;
+        let _ = annotated.insert(
+            variable.name.clone(),
+            SymbolInfo {
+                ty,
+                kind: match variable.kind {
+                    surge_ts_syntax::ParsedVariableKind::Let => {
+                        crate::symbols::SymbolKind::Let
+                    }
+                    _ => crate::symbols::SymbolKind::Const,
+                },
+                function_signature: None,
+            },
+        );
+    }
+    if !found {
+        return None;
+    }
+    let annotated = match ctx.module_value_fallback.clone() {
+        Some(parent) => annotated.with_parent_fallback(parent),
+        None => annotated,
+    };
+    Some(std::mem::replace(
+        &mut ctx.module_value_fallback,
+        Some(std::sync::Arc::new(annotated)),
+    ))
+}
+
 pub(crate) fn check_function_body(
     body: Vec<ParsedFunctionBodyStatement>,
     return_type: Option<&Type>,
@@ -179,6 +233,16 @@ pub(crate) fn check_function_body(
         }
     }
 
+    // A nested function body is deferred: it runs after the enclosing block has
+    // finished evaluating, so it may legally name a `const`/`let` declared later
+    // in that block. Recursive schemas are written exactly this way
+    // (`const A: Schema = lazy(() => object({ b: B })); const B: Schema = ...`).
+    // Publish those bindings as a fallback rather than into the scope itself, so
+    // straight-line resolution order — and the flow state built from it — is
+    // unchanged. Only *annotated* declarations qualify: an unannotated one would
+    // need its initializer inferred out of order.
+    let saved_module_value_fallback = install_deferred_block_value_fallback(&body, ctx);
+
     // A body-local type declaration's own body may name a body-local *value*
     // (`type Schema = Infer<typeof schema>`), and the `typeof` arm resolves
     // names through `ctx.symbols` — a file-level table that never holds function
@@ -215,6 +279,10 @@ pub(crate) fn check_function_body(
 
     if let Some(saved) = saved_type_declaration_scope {
         ctx.type_declaration_scope = saved;
+    }
+
+    if let Some(saved) = saved_module_value_fallback {
+        ctx.module_value_fallback = saved;
     }
 }
 
