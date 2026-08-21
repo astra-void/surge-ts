@@ -392,10 +392,37 @@ fn merge_intersection_members_now(
         return Type::Function(merged);
     }
 
+    // Two distinct literals have no common inhabitant, so their intersection is
+    // `never`. Without this the tail was first-operand-wins, which inverts a
+    // guard written as `keyof A & keyof B extends never ? … : …` — trpc's
+    // `ProtectedIntersection` — because the disjoint key sets reduced to the
+    // first operand instead of `never`. Only literal operands participate;
+    // full `string & number -> never` reduction stays a non-goal, as above.
+    if let Some(reduced) = reduce_disjoint_literals(&members) {
+        return reduced;
+    }
+
     match members.into_iter().next() {
         Some(member) => member,
         None => Type::Unknown,
     }
+}
+
+/// `Some` when every operand is a literal: `never` if any two differ, otherwise
+/// the shared literal. `None` leaves the caller's existing behavior alone.
+fn reduce_disjoint_literals(members: &[Type]) -> Option<Type> {
+    let mut literals = members.iter().map(|member| match member {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => Some(member),
+        _ => None,
+    });
+    let first = literals.next()??;
+    for other in literals {
+        let other = other?;
+        if other != first {
+            return Some(Type::Never);
+        }
+    }
+    Some(first.clone())
 }
 
 /// Whether an object contributes no required structure to an intersection — all
