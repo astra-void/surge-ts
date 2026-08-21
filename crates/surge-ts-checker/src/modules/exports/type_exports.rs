@@ -105,10 +105,28 @@ pub(crate) fn insert_unknown_type_import(
 }
 
 pub(crate) fn insert_unknown_value_import(local_name: &str, symbols: &mut SymbolTable) {
+    insert_value_import(local_name, Type::Unknown, symbols);
+}
+
+/// Binds a name whose import module was reported unresolved to tsc's error
+/// type. [`SymbolKind::ErrorImport`] records that the `any` is the source's, not
+/// a surge modelling failure.
+pub(crate) fn insert_error_typed_value_import(local_name: &str, symbols: &mut SymbolTable) {
     let _ = symbols.insert(
         local_name.to_string(),
         SymbolInfo {
-            ty: Type::Unknown,
+            ty: Type::Any,
+            kind: SymbolKind::ErrorImport,
+            function_signature: None,
+        },
+    );
+}
+
+pub(crate) fn insert_value_import(local_name: &str, ty: Type, symbols: &mut SymbolTable) {
+    let _ = symbols.insert(
+        local_name.to_string(),
+        SymbolInfo {
+            ty,
             kind: SymbolKind::Var,
             function_signature: None,
         },

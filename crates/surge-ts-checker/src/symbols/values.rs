@@ -162,6 +162,12 @@ pub(crate) enum SymbolKind {
     Const,
     Function,
     Parameter,
+    /// A binding stubbed for an import whose module was reported unresolved.
+    /// Its type is tsc's error type (`any`), and unlike an inferred `any` that
+    /// records a surge modelling failure, this one is what the source really
+    /// says — so a callback passed to a call on it genuinely has no contextual
+    /// type and its parameters are implicit-any.
+    ErrorImport,
 }
 
 impl SymbolTable {

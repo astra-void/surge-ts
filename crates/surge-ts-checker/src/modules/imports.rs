@@ -30,6 +30,25 @@ pub(crate) fn record_unresolved_external_module(ctx: &mut CheckerContext, specif
 /// against the unresolved-external figure, then emits the unresolved-module
 /// diagnostic unless an external specifier is being intentionally stubbed
 /// (`stub_external_modules`).
+/// The type an import binding takes when its module did not resolve. tsc binds
+/// its error type (`any`) there, so a call written against the binding still has
+/// its arguments checked and an untyped callback parameter is still TS7006/
+/// TS7031. The `Unknown` sentinel means "surge failed to model this" and
+/// suppresses those, which is right only when the diagnostic is suppressed too —
+/// `stubExternalModules` deliberately hides TS2307 for external specifiers.
+fn insert_unresolved_import_binding(
+    local_name: &str,
+    ctx: &CheckerContext,
+    import: &ParsedImportDeclaration,
+    symbols: &mut SymbolTable,
+) {
+    if ctx.options.stub_external_modules && is_external_specifier(&import.module_specifier) {
+        insert_unknown_value_import(local_name, symbols);
+    } else {
+        insert_error_typed_value_import(local_name, symbols);
+    }
+}
+
 pub(crate) fn report_unresolved_module(ctx: &mut CheckerContext, import: &ParsedImportDeclaration) {
     record_unresolved_external_module(ctx, &import.module_specifier);
     if !(ctx.options.stub_external_modules && is_external_specifier(&import.module_specifier)) {
@@ -364,7 +383,7 @@ fn resolve_default_and_named_import(
                 let _ = type_declarations.insert(local_name.clone(), declaration);
             }
         } else {
-            insert_unknown_value_import(local_name, symbols);
+            insert_unresolved_import_binding(local_name, ctx, import, symbols);
         }
 
         for specifier in specifiers {
@@ -392,7 +411,7 @@ fn resolve_default_and_named_import(
                 if type_declarations.get(&specifier.local_name).is_none() {
                     let _ = type_declarations.insert(specifier.local_name.clone(), declaration);
                 }
-                insert_unknown_value_import(&specifier.local_name, symbols);
+                insert_unresolved_import_binding(&specifier.local_name, ctx, import, symbols);
             }
         }
         return;
@@ -634,7 +653,7 @@ fn resolve_default_import(
         } else {
             emit_missing_export_diagnostic(ctx, &import.module_specifier, "default", *name_span);
         }
-        insert_unknown_value_import(local_name, symbols);
+        insert_unresolved_import_binding(local_name, ctx, import, symbols);
         return;
     };
 
@@ -710,7 +729,7 @@ fn resolve_import_equals(
         {
             report_unresolved_module(ctx, import);
         }
-        insert_unknown_value_import(local_name, symbols);
+        insert_unresolved_import_binding(local_name, ctx, import, symbols);
         return;
     };
 
@@ -919,7 +938,7 @@ fn resolve_namespace_import(
             {
                 report_unresolved_module(ctx, import);
             }
-            insert_unknown_value_import(local_name, symbols);
+            insert_unresolved_import_binding(local_name, ctx, import, symbols);
             return;
         };
 
@@ -1002,7 +1021,7 @@ fn resolve_named_import(
                     ctx.file_name_arc(),
                     specifier.name_span,
                 );
-                insert_unknown_value_import(&specifier.local_name, symbols);
+                insert_unresolved_import_binding(&specifier.local_name, ctx, import, symbols);
             }
             return;
         };

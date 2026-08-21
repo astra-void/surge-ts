@@ -843,6 +843,22 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                     ctx.push(diagnostic);
                 }
 
+                // A reported TS2307 means the program genuinely has no type
+                // here, which is tsc's error type (`any`) — implicit-any and
+                // argument checking downstream are real, not surge degradation.
+                // Under `stubExternalModules` the diagnostic is suppressed on
+                // purpose, so the sentinel stays and keeps the cascade quiet.
+                let (binding_ty, binding_kind) = if ctx.options.stub_external_modules {
+                    (
+                        surge_ts_types::Type::Unknown,
+                        crate::symbols::SymbolKind::Var,
+                    )
+                } else {
+                    (
+                        surge_ts_types::Type::Any,
+                        crate::symbols::SymbolKind::ErrorImport,
+                    )
+                };
                 // Stub the imports to avoid cascades in single-file mode
                 match &import.kind {
                     surge_ts_syntax::ParsedImportKind::Named {
@@ -881,8 +897,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                 let _ = ctx.symbols.insert(
                                     specifier.local_name.clone(),
                                     crate::symbols::SymbolInfo {
-                                        ty: surge_ts_types::Type::Unknown,
-                                        kind: crate::symbols::SymbolKind::Var,
+                                        ty: binding_ty.clone(),
+                                        kind: binding_kind,
                                         function_signature: None,
                                     },
                                 );
@@ -913,8 +929,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                             let _ = ctx.symbols.insert(
                                 local_name.clone(),
                                 crate::symbols::SymbolInfo {
-                                    ty: surge_ts_types::Type::Unknown,
-                                    kind: crate::symbols::SymbolKind::Var,
+                                    ty: binding_ty.clone(),
+                                    kind: binding_kind,
                                     function_signature: None,
                                 },
                             );
@@ -952,8 +968,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                 let _ = ctx.symbols.insert(
                                     specifier.local_name.clone(),
                                     crate::symbols::SymbolInfo {
-                                        ty: surge_ts_types::Type::Unknown,
-                                        kind: crate::symbols::SymbolKind::Var,
+                                        ty: binding_ty.clone(),
+                                        kind: binding_kind,
                                         function_signature: None,
                                     },
                                 );
@@ -964,8 +980,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                         let _ = ctx.symbols.insert(
                             local_name.clone(),
                             crate::symbols::SymbolInfo {
-                                ty: surge_ts_types::Type::Unknown,
-                                kind: crate::symbols::SymbolKind::Var,
+                                ty: binding_ty.clone(),
+                                kind: binding_kind,
                                 function_signature: None,
                             },
                         );
@@ -993,8 +1009,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                             let _ = ctx.symbols.insert(
                                 local_name.clone(),
                                 crate::symbols::SymbolInfo {
-                                    ty: surge_ts_types::Type::Unknown,
-                                    kind: crate::symbols::SymbolKind::Const,
+                                    ty: binding_ty.clone(),
+                                    kind: binding_kind,
                                     function_signature: None,
                                 },
                             );

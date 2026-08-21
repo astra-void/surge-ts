@@ -53,6 +53,62 @@ fn try_qualified_namespace_call(
     ))
 }
 
+/// tsc still checks a call's argument expressions when the callee is `any`, so
+/// their own errors surface (an untyped callback parameter is TS7006/TS7031, a
+/// bad reference inside the callback body is still reported). The symmetric
+/// call-position arm lives in `check_call_like_with_expected_type`.
+///
+/// Implicit-any is reported only when the receiver's `any` is the source's, not
+/// surge's — see [`receiver_any_is_genuine`]. Everything else in the argument
+/// (an unresolved name, a missing member, a mismatched body) is reported either
+/// way, since those do not depend on the callback's parameter types.
+fn evaluate_arguments_context_free(
+    object: &ParsedExpression,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let genuine = receiver_any_is_genuine(object, symbols);
+    if !genuine {
+        ctx.degraded_expected_type_depth += 1;
+    }
+    for argument in arguments {
+        let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+    }
+    if !genuine {
+        ctx.degraded_expected_type_depth -= 1;
+    }
+}
+
+/// Whether an `any`-typed receiver is `any` because the *source* says so, rather
+/// than because surge gave up partway along the chain.
+///
+/// Genuine: a binding stubbed for an import whose module was reported
+/// unresolved, which tsc types as its error type. A callback passed to a call on
+/// it really has no contextual type, so TS7006/TS7031 on its parameters is what
+/// tsc reports.
+///
+/// Not genuine: a chain that started from a typed binding and collapsed to `any`
+/// midway (a generic builder surge could not model). tsc still contextually
+/// types those callbacks, so reporting implicit-any there describes surge's gap
+/// rather than the source.
+fn receiver_any_is_genuine(object: &ParsedExpression, symbols: &SymbolTable) -> bool {
+    match object {
+        ParsedExpression::Identifier { name, .. } => symbols
+            .get(name)
+            .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::ErrorImport)),
+        // Walk the chain to the binding it started from: `p.input(x).query(cb)`
+        // is genuine exactly when `p` is.
+        ParsedExpression::PropertyAccess { object, .. }
+        | ParsedExpression::OptionalPropertyAccess { object, .. }
+        | ParsedExpression::PropertyCall { object, .. }
+        | ParsedExpression::OptionalPropertyCall { object, .. } => {
+            receiver_any_is_genuine(object, symbols)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn check_property_call_like(
     object: &ParsedExpression,
     object_span: Option<SyntaxTextSpan>,
@@ -119,7 +175,10 @@ pub(crate) fn check_property_call_like(
     }
 
     match object_ty {
-        Type::Any => Some(Type::Any),
+        Type::Any => {
+            evaluate_arguments_context_free(object, arguments, symbols, ctx);
+            Some(Type::Any)
+        }
         Type::Unknown | Type::GenuineUnknown => None,
         Type::Array(element_type) if property_name == "map" => check_array_map_call(
             element_type.as_ref(),
@@ -307,7 +366,10 @@ pub(crate) fn check_property_call_like(
                     symbols,
                     ctx,
                 ),
-                Type::Any => Some(Type::Any),
+                Type::Any => {
+                    evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                    Some(Type::Any)
+                }
                 Type::Unknown | Type::GenuineUnknown => None,
                 _ => {
                     ctx.push(diagnostic_with_syntax_span(
@@ -414,7 +476,10 @@ pub(crate) fn check_optional_property_call(
     let base_type_name = base_type.name();
 
     match base_type {
-        Type::Any => Some(Type::Any),
+        Type::Any => {
+            evaluate_arguments_context_free(object, arguments, symbols, ctx);
+            Some(Type::Any)
+        }
         Type::Unknown | Type::GenuineUnknown => None,
         Type::Array(element_type) if property_name == "map" => check_array_map_call(
             element_type.as_ref(),
@@ -561,7 +626,10 @@ pub(crate) fn check_optional_property_call(
                     ctx,
                 )
                 .map(|ret| union_type(vec![ret, Type::Undefined])),
-                Type::Any => Some(Type::Any),
+                Type::Any => {
+                    evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                    Some(Type::Any)
+                }
                 Type::Unknown | Type::GenuineUnknown => None,
                 _ => {
                     ctx.push(diagnostic_with_syntax_span(
