@@ -170,6 +170,10 @@ enum ReferenceGuard<'a> {
     },
     Instanceof {
         ctor_name: &'a str,
+        /// The constructor's instance type, when it resolved. A subject that is
+        /// not a union narrows *down* to it (`s: Base` -> `Sub`), which member
+        /// filtering cannot express.
+        instance: Option<&'a Type>,
         keep_matching: bool,
     },
     Arrayness {
@@ -219,10 +223,14 @@ impl ReferenceGuard<'_> {
             }
             Self::Instanceof {
                 ctor_name,
+                instance,
                 keep_matching,
             } => {
                 let effective = Self::effective_leaf_type(ty, optional);
-                let narrowed = narrow_union_by_instanceof(&effective, ctor_name, *keep_matching)?;
+                let narrowed = narrow_union_by_instanceof(&effective, ctor_name, *keep_matching)
+                    .or_else(|| {
+                        narrow_to_instanceof_subclass(&effective, *instance, *keep_matching)
+                    })?;
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
             Self::Arrayness { keep_arrays } => {
@@ -461,6 +469,7 @@ fn collect_reference_guards<'a>(
                 path,
                 ReferenceGuard::Instanceof {
                     ctor_name,
+                    instance: None,
                     keep_matching: branch_is_true,
                 },
             ));
@@ -697,6 +706,35 @@ fn narrow_type_for_identifier(
 }
 
 /// Narrows `ty` for `var_name` under a single (non-composite) guard condition.
+/// `x instanceof Sub` on a subject that is not a union narrows it *down* to the
+/// constructor's instance type when that type is a subtype of the subject's
+/// (`declare const s: Base; if (s instanceof Sub) s.onlyOnSub()`). Union subjects
+/// are handled by member filtering in `narrow_union_by_instanceof`; this is the
+/// single-type case, which filtering cannot express.
+///
+/// Only the matching branch narrows: the `else` branch of `s instanceof Sub`
+/// keeps `Base`, since every non-`Sub` `Base` still inhabits it.
+fn narrow_to_instanceof_subclass(
+    ty: &Type,
+    instance: Option<&Type>,
+    keep_matching: bool,
+) -> Option<Type> {
+    if !keep_matching || matches!(ty.peeled(), Type::Union(_)) {
+        return None;
+    }
+    // A subject that is already `any` or unresolved says nothing to narrow.
+    if ty.is_unknown() || matches!(ty, Type::Any) {
+        return None;
+    }
+    let instance = instance?;
+    if instance.is_unknown() || instance == ty {
+        return None;
+    }
+    // Narrow only along a real subtype edge; an unrelated constructor leaves the
+    // subject alone rather than replacing it with something it never was.
+    surge_ts_types::is_assignable_to(instance, ty).then(|| instance.clone())
+}
+
 fn narrow_single_guard_for_identifier(
     condition: &ParsedExpression,
     var_name: &str,
@@ -709,7 +747,11 @@ fn narrow_single_guard_for_identifier(
         parse_instanceof_condition(condition).map(|(operand, ctor)| (operand, ctor))
         && name == var_name
     {
-        return narrow_union_by_instanceof(ty, ctor_name, branch_is_true);
+        if let Some(narrowed) = narrow_union_by_instanceof(ty, ctor_name, branch_is_true) {
+            return Some(narrowed);
+        }
+        let instance = resolve_constructor_instance_type(ctor_name, ctx);
+        return narrow_to_instanceof_subclass(ty, instance.as_ref(), branch_is_true);
     }
     if let Some((ParsedExpression::Identifier { name, .. }, tag, eq)) =
         parse_typeof_condition(condition)
@@ -1364,7 +1406,7 @@ fn narrow_value_guards_in_scope(
     if narrow_typeof_in_scope(condition, scopes, branch_is_true) {
         return;
     }
-    if narrow_instanceof_in_scope(condition, scopes, branch_is_true) {
+    if narrow_instanceof_in_scope(condition, scopes, branch_is_true, ctx) {
         return;
     }
     if narrow_array_isarray_in_scope(condition, scopes, branch_is_true) {
@@ -1610,6 +1652,7 @@ fn narrow_instanceof_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
+    ctx: &mut CheckerContext,
 ) -> bool {
     let Some((operand, ctor_name)) = parse_instanceof_condition(condition) else {
         return false;
@@ -1617,16 +1660,62 @@ fn narrow_instanceof_in_scope(
     let Some((base, path)) = reference_path(operand) else {
         return false;
     };
+    let instance = resolve_constructor_instance_type(ctor_name, ctx);
     narrow_reference_in_scope(
         &base,
         &path,
         ReferenceGuard::Instanceof {
             ctor_name,
+            instance: instance.as_ref(),
             keep_matching: branch_is_true,
         },
         scopes,
     );
     true
+}
+
+/// The instance type a constructor name denotes, for `x instanceof Ctor`. `None`
+/// when the name does not resolve to a type — the guard then falls back to
+/// nominal union filtering.
+fn resolve_constructor_instance_type(
+    ctor_name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    // The reference is synthesized from the guard, not written in the source, so
+    // it has to carry the arity the declaration expects — a bare generic name
+    // would report TS2314 for arguments the guard never writes. `x instanceof
+    // GSub` narrows to `GSub<any>` in tsc, which is what filling `any` gives.
+    let arity = match ctx.type_declarations.get(ctor_name) {
+        Some(crate::symbols::TypeDeclarationInfo::Interface(info)) => {
+            info.body.type_parameters.len()
+        }
+        Some(crate::symbols::TypeDeclarationInfo::Alias(info)) => info.body.type_parameters.len(),
+        None => 0,
+    };
+    // Nothing this resolution reports belongs to the source, so drop whatever it
+    // raised. `push_deduplicated` rebuilds its index when the length moves, which
+    // is what makes truncating safe here.
+    let diagnostics_before = ctx.diagnostics.len();
+    let resolved = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        crate::infer::types::resolve_parsed_type(
+            surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(
+                surge_ts_syntax::ParsedNamedType {
+                    name: ctor_name.to_string(),
+                    span: None,
+                    type_arguments: vec![surge_ts_syntax::ParsedType::Any; arity],
+                },
+            )),
+            ctx,
+            &mut Vec::new(),
+            &crate::infer::TypeParameterSubstitution::new(),
+        )
+    });
+    ctx.diagnostics.truncate(diagnostics_before);
+    if resolved.had_error() {
+        return None;
+    }
+    let instance = resolved.into_ty();
+    (!instance.is_unknown()).then_some(instance)
 }
 
 /// Applies `Array.isArray(x)` / `Array.isArray(o.p)` narrowing in place to a
