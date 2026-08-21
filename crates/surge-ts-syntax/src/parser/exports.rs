@@ -193,6 +193,16 @@ pub(crate) fn parse_export_default_declaration(
             let (parsed_expression, _) = parse_expression(&parenthesized_expression.expression);
             ParsedDefaultExportDeclaration::Expression(parsed_expression)
         }
+        // Every remaining expression form — `satisfies`, `as`, a call, a
+        // template — is still an expression and must be checked. Only the
+        // genuinely non-expression kinds (an interface declaration, an
+        // unparseable node) fall through to `Unsupported` below.
+        // `ExportDefaultDeclarationKind` inherits `Expression` through oxc's
+        // `inherit_variants!`, which is what makes `to_expression` available.
+        other if other.is_expression() => {
+            let (parsed_expression, _) = parse_expression(other.to_expression());
+            ParsedDefaultExportDeclaration::Expression(parsed_expression)
+        }
         _ => {
             return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
                 ParsedExportDeclaration::Default {
