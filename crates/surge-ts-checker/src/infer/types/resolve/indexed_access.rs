@@ -30,6 +30,20 @@ impl ParsedTypeSpan for ParsedType {
 /// structural shape is still usable, so the requested property can be selected
 /// without cascading a fresh missing-property diagnostic. Returns `None` when
 /// the receiver is not an indexable structure or the key is not present.
+/// tsc instantiates an indexed access with no access node — `getIndexedAccessType`
+/// returns `unknownType` silently rather than reporting — whenever the receiver is
+/// a type parameter a substitution has just replaced. Reporting there describes the
+/// *instantiation*, not anything the source wrote: the generated hey-api clients
+/// re-validate `T['baseUrl']` once per candidate substitution and collect one
+/// TS2339 per rendering of a receiver the user never named.
+///
+/// Only the failure branches consult this. A successful lookup on a substituted
+/// receiver still resolves — `T['responseStyle']` on the very same corpus line
+/// does, and must keep doing so.
+fn suppress_instantiation_indexed_access(object_is_concrete_substitution: bool) -> bool {
+    object_is_concrete_substitution
+}
+
 fn select_indexed_property_no_cascade(object: &Type, index: &Type) -> Option<Type> {
     match (object, index) {
         (Type::Object(object_type), Type::StringLiteral(key)) => {
@@ -253,6 +267,11 @@ pub(super) fn resolve_indexed_access_type(
                     ty: property_ty,
                     had_error: false,
                 }
+            } else if suppress_instantiation_indexed_access(object_is_concrete_substitution) {
+                ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: false,
+                }
             } else {
                 let mut diagnostic =
                     Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
@@ -277,6 +296,11 @@ pub(super) fn resolve_indexed_access_type(
                 }
                 ResolvedType {
                     ty: property_ty,
+                    had_error: false,
+                }
+            } else if suppress_instantiation_indexed_access(object_is_concrete_substitution) {
+                ResolvedType {
+                    ty: Type::Unknown,
                     had_error: false,
                 }
             } else {
@@ -307,7 +331,9 @@ pub(super) fn resolve_indexed_access_type(
                 if let Some(key) = key {
                     if let Some(property_ty) = object_type.get_property_access_type(&key) {
                         types.push(property_ty);
-                    } else {
+                    } else if !suppress_instantiation_indexed_access(
+                        object_is_concrete_substitution,
+                    ) {
                         let mut diagnostic = Diagnostic::ts2339(
                             &key,
                             &resolved_object.ty.name(),
@@ -424,7 +450,12 @@ pub(super) fn resolve_indexed_access_type(
                     break;
                 }
             }
-            if missing {
+            if missing && suppress_instantiation_indexed_access(object_is_concrete_substitution) {
+                ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: false,
+                }
+            } else if missing {
                 let mut diagnostic =
                     Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
                 if let Some(span) = indexed_access.span {
@@ -443,6 +474,17 @@ pub(super) fn resolve_indexed_access_type(
                     ty: union_type(types),
                     had_error: false,
                 }
+            }
+        }
+        (_, Type::StringLiteral(_))
+            if suppress_instantiation_indexed_access(object_is_concrete_substitution) =>
+        {
+            if generic_indexed_access {
+                record_generic_indexed_access_unknown_fallback();
+            }
+            ResolvedType {
+                ty: Type::Unknown,
+                had_error: false,
             }
         }
         (_, Type::StringLiteral(key)) => {
