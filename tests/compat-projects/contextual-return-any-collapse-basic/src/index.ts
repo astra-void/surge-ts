@@ -52,3 +52,15 @@ export const nestedAnnotatedArrowStillChecked: Fn = (n) => {
   if (n > 0) { return anyValue; }
   return { ok: true };
 };
+
+// Probing the returned value for `any` must not itself report. Method shorthand
+// in a returned object literal has a contextual signature, and the inference
+// pass routes it through the checking entry with no expected type.
+type Handlers = { onItem(value: string[]): void };
+export const handlers: () => Handlers = () => {
+  return {
+    onItem(value) {
+      void value.length;
+    },
+  };
+};

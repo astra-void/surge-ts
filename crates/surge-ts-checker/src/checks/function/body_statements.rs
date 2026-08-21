@@ -1128,6 +1128,33 @@ pub(crate) fn check_function_expression_statement(
     let _ = evaluate_expression(&expression, None, &visible_symbols, ctx);
 }
 
+/// Whether a return value could possibly infer as `any`, so the probe below is
+/// worth running. A literal, an object/array literal, an arrow or a JSX element
+/// has a shape of its own and never is.
+///
+/// This is not only an optimization. The inference pass is diagnostic-free for
+/// every kind EXCEPT an object literal: `infer_object_property_type` routes
+/// method and accessor shorthand through the *checking* entry — deliberately, to
+/// honor its declared signature — with no expected type, so probing an object
+/// literal reported its methods' parameters as implicit any while the real
+/// check, one pass later, typed them correctly from the contextual signature.
+fn may_infer_as_any(expression: &ParsedExpression) -> bool {
+    !matches!(
+        expression,
+        ParsedExpression::ObjectLiteral { .. }
+            | ParsedExpression::ArrayLiteral { .. }
+            | ParsedExpression::ArrowFunction(_)
+            | ParsedExpression::JsxElement { .. }
+            | ParsedExpression::JsxFragment { .. }
+            | ParsedExpression::StringLiteral(_)
+            | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::TemplateLiteral { .. }
+            | ParsedExpression::UndefinedLiteral
+            | ParsedExpression::NullLiteral
+    )
+}
+
 /// Whether a return value's own type is `any`, directly or as a union member —
 /// the shape that collapses tsc's inferred return type. See
 /// `ContextualReturnFrame`.
@@ -1195,6 +1222,7 @@ pub(crate) fn check_function_return_statement(
     // mismatch — so ask the diagnostic-free inference path for the value's own
     // type, which for `cond ? anyValue : { … }` is the union tsc would form.
     if ctx.in_contextual_return_body()
+        && may_infer_as_any(expression)
         && returns_any(&crate::infer::infer_expression(expression, symbols, ctx))
     {
         ctx.note_contextual_return_is_any();
