@@ -9,6 +9,40 @@ pub(crate) fn evaluate_expression(
     record_expression_check();
     crate::checks::check_umd_global_value_reference(expression, fallback_span, ctx);
     match expression {
+        // The inference pass types the literal but does not check it, so a
+        // property value's own errors — an unresolved name, a bad member, an
+        // untyped callback parameter — never surfaced. Same split the array
+        // literal arm below uses: infer for the type, evaluate for diagnostics.
+        ParsedExpression::ObjectLiteral { properties, .. } => {
+            let inferred_expression = infer_expression(expression, symbols, ctx);
+
+            for property in properties {
+                // Method and accessor shorthand is checked by the inference pass
+                // itself, which must route it through the arrow-checking path to
+                // honor its declared signature; evaluating it here as well would
+                // duplicate every diagnostic that raised.
+                if property.is_method || property.is_accessor {
+                    continue;
+                }
+                let _ = evaluate_expression(
+                    &property.value,
+                    property.value_span.or(property.span).or(fallback_span),
+                    symbols,
+                    ctx,
+                );
+            }
+
+            inferred_expression
+        }
+        // A template's interpolations are ordinary expressions and carry their own
+        // errors (`${process.env.PORT}` is still a TS4111 index-signature access).
+        // The result type stays unmodelled, as before.
+        ParsedExpression::TemplateLiteral { expressions, span } => {
+            for interpolation in expressions {
+                let _ = evaluate_expression(interpolation, (*span).or(fallback_span), symbols, ctx);
+            }
+            infer_expression(expression, symbols, ctx)
+        }
         ParsedExpression::ArrayLiteral { elements, .. } => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
 
