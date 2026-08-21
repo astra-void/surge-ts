@@ -250,8 +250,25 @@ impl ObjectType {
         self.properties.contains_key(name) || self.string_index_type.is_some()
     }
 
+    /// Like [`Self::contains_property`], but counts only members the SOURCE
+    /// declared — a checker-injected openness index does not make every name a
+    /// known property. See [`Self::declares_string_index_access`].
+    pub fn declares_property(&self, name: &str) -> bool {
+        self.properties.contains_key(name) || self.declares_string_index_access()
+    }
+
     pub fn allows_string_index_access(&self) -> bool {
         self.string_index_type.is_some()
+    }
+
+    /// Like [`Self::allows_string_index_access`], but only for an index the
+    /// SOURCE declared. Checker-injected openness (`synthetic_open_index`, set
+    /// when an intersection dropped an unmodelled operand) means "reads of
+    /// unknown members are not errors here" — it does not mean the type declares
+    /// those members, so it must not silence excess-property checking the way a
+    /// real `[key: string]: T` does.
+    pub fn declares_string_index_access(&self) -> bool {
+        self.string_index_type.is_some() && !self.synthetic_open_index
     }
 
     pub fn required_properties(&self) -> impl Iterator<Item = (&Arc<str>, &ObjectProperty)> + '_ {

@@ -107,7 +107,33 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     // identity — e.g. `Window & typeof globalThis` would otherwise corrupt the
     // shared `Window` apparent type.
     if members.len() == 1 {
-        return open_if_unmodelled(members.into_iter().next().unwrap());
+        let survivor = members.into_iter().next().unwrap();
+        // A NAMED lone survivor must become open too — `T & Other` where `T`'s
+        // binding degraded leaves `Other` alone, and a closed `Other` reports
+        // every member that lived on `T`'s constraint as missing. Peeling it
+        // here would force the reference's structural expansion at resolution
+        // time (the hazard the comment above describes, and the one the
+        // `any`-member degradation counter pins), so defer instead: the merge
+        // below peels and opens on first consumer peel.
+        if dropped_unmodelled_operand
+            && let Type::Reference(reference) = &survivor
+        {
+            crate::program::record_program_counter(|c| c.lazy_intersection_create_count += 1);
+            let display = survivor.name();
+            let id = format!("\u{0}intersection-open\u{0}{}", reference.id.as_ref());
+            let members = vec![survivor.clone()];
+            return Type::Reference(surge_ts_types::TypeReference::new(
+                id,
+                display,
+                members.clone(),
+                std::sync::Arc::new(LazyIntersectionMerge {
+                    members,
+                    dropped_unmodelled_operand: true,
+                    memo: std::sync::OnceLock::new(),
+                }),
+            ));
+        }
+        return open_if_unmodelled(survivor);
     }
 
     // `(A | B) & C` is `(A & C) | (B & C)`. The object merge below only reads
