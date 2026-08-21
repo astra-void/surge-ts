@@ -648,10 +648,17 @@ fn check_program_with_stats_and_jobs_inner(
     record_program_timing(timings.as_ref(), |timings| {
         timings.root_source_global_collection += type_declaration_collection_start.elapsed()
     });
-    let global_type_declarations = clone_type_declaration_table(
+    let mut global_type_declarations = clone_type_declaration_table(
         &ctx.type_declarations,
         timings.as_ref(),
         TableCloneKind::General,
+    );
+    // Same merge as `script_type_declarations` below, applied once here so every
+    // consumer of the global table sees the fully merged global interfaces rather
+    // than shadowing them with a single contributor's declaration.
+    crate::symbols::merge_shared_table_into(
+        &mut global_type_declarations,
+        ctx.ambient_global_type_declarations.as_ref(),
     );
     collect_global_function_signatures(
         &parsed_files,
@@ -1012,9 +1019,14 @@ fn check_program_with_stats_and_jobs_inner(
             timings.as_ref(),
             TableCloneKind::General,
         );
-        for (name, declaration) in ctx.ambient_global_type_declarations.iter() {
-            let _ = table.insert(name.clone(), declaration.clone());
-        }
+        // Declaration merging, not first-wins: a global interface split across a
+        // script file and an ambient `declare global` block (`NodeJS.ProcessEnv`,
+        // which several packages re-open) must carry every contributor's members,
+        // not just whichever table was populated first.
+        crate::symbols::merge_shared_table_into(
+            &mut table,
+            ctx.ambient_global_type_declarations.as_ref(),
+        );
         table
     };
     let merged_module_import_bindings =

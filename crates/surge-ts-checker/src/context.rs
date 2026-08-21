@@ -1634,23 +1634,69 @@ impl CheckerContext {
             && self.type_declaration_scope.is_some()
     }
 
+    /// A global interface re-opened by several declarations lives fully merged in
+    /// the ambient table. A narrower layer can hold one of those declarations on
+    /// its own — a dependency's own declaration table becomes a scope layer for
+    /// every file that resolves through it — and answering from that layer
+    /// silently drops every other contributor. `NodeJS.ProcessEnv` is the case
+    /// that motivated this: `next` re-opens it with just `NODE_ENV`, so a file
+    /// resolving through `next` lost `@types/node`'s `extends Dict<string>` and
+    /// with it the index signature that makes `process.env.ANYTHING` legal.
+    ///
+    /// Only supersede when the ambient entry is provably the same declaration
+    /// plus more: every fragment of the narrower entry must appear in it. A
+    /// module-local interface that merely shares a qualified name is not a
+    /// contributor and keeps its own answer.
+    fn ambient_supersedes(&self, name: &str, found: &TypeDeclarationInfo) -> bool {
+        // Only namespace-qualified keys. An *unqualified* name in a narrower
+        // layer is module-local and is supposed to shadow a same-named global —
+        // node-fetch's `class Response` must keep its `json(): Promise<unknown>`
+        // rather than answering from the DOM's `interface Response`.
+        if !name.contains('.') {
+            return false;
+        }
+        let TypeDeclarationInfo::Interface(found) = found else {
+            return false;
+        };
+        let Some(TypeDeclarationInfo::Interface(ambient)) =
+            self.ambient_global_type_declarations.get(name)
+        else {
+            return false;
+        };
+        if ambient.body.declaration_fragments.len() <= found.body.declaration_fragments.len() {
+            return false;
+        }
+        found
+            .body
+            .declaration_fragments
+            .iter()
+            .all(|fragment| ambient.body.declaration_fragments.contains(fragment))
+    }
+
     fn lookup_type_declaration_exact(&self, name: &str) -> Option<&TypeDeclarationInfo> {
         if !self.lookup_ignores_local_table()
             && let Some(declaration) = self.type_declarations.get(name)
         {
             crate::program::record_type_declaration_lookup(1);
+            if self.ambient_supersedes(name, declaration) {
+                return self.ambient_global_type_declarations.get(name);
+            }
             return Some(declaration);
         }
 
         if let Some(scope) = self.type_declaration_scope.as_ref() {
             if let Some(declaration) = scope.get(name) {
                 crate::program::record_type_declaration_lookup(2);
+                if self.ambient_supersedes(name, declaration) {
+                    return self.ambient_global_type_declarations.get(name);
+                }
                 return Some(declaration);
             }
         }
 
         crate::program::record_type_declaration_lookup(3);
-        self.ambient_global_type_declarations.get(name)
+        let found = self.ambient_global_type_declarations.get(name);
+        found
     }
 
     /// Candidate qualified names for a bare reference made inside a namespace
@@ -1703,12 +1749,22 @@ impl CheckerContext {
             && let Some(handle) = self.type_declarations.get_handle(name)
         {
             crate::program::record_type_declaration_lookup(1);
+            if self.ambient_supersedes(name, handle.get())
+                && let Some(ambient) = self.ambient_global_type_declarations.get_handle(name)
+            {
+                return Some(ambient);
+            }
             return Some(handle);
         }
 
         if let Some(scope) = self.type_declaration_scope.as_ref() {
             if let Some(handle) = scope.get_handle(name) {
                 crate::program::record_type_declaration_lookup(2);
+                if self.ambient_supersedes(name, handle.get())
+                    && let Some(ambient) = self.ambient_global_type_declarations.get_handle(name)
+                {
+                    return Some(ambient);
+                }
                 return Some(handle);
             }
         }
@@ -1729,12 +1785,23 @@ impl CheckerContext {
         if let Some(scope) = self.module_scope_by_file.get(self.file_name.as_str()) {
             if let Some(handle) = scope.get_handle(name) {
                 crate::program::record_type_declaration_lookup(2);
+                if self.ambient_supersedes(name, handle.get())
+                    && let Some(ambient) = self.ambient_global_type_declarations.get_handle(name)
+                {
+                    return Some(ambient);
+                }
                 return Some(handle);
             }
         } else if self.module_scope_by_file.is_empty()
             && let Some(scope) = crate::program::program_module_scope_for_file(&self.file_name)
             && let Some(handle) = scope.get_handle(name)
         {
+            if self.ambient_supersedes(name, handle.get())
+                && let Some(ambient) = self.ambient_global_type_declarations.get_handle(name)
+            {
+                crate::program::record_type_declaration_lookup(2);
+                return Some(ambient);
+            }
             // This context was recovered from an environment captured before the
             // map existed (a lazy annotation created during module analysis), so
             // the declaring file's own imports are invisible to it. The published
@@ -1744,7 +1811,8 @@ impl CheckerContext {
         }
 
         crate::program::record_type_declaration_lookup(3);
-        self.ambient_global_type_declarations.get_handle(name)
+        let found = self.ambient_global_type_declarations.get_handle(name);
+        found
     }
 
     pub(crate) fn set_module_file_index_by_identity(
