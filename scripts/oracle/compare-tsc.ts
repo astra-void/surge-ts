@@ -330,6 +330,7 @@ export const fixturePresets: Record<string, string> = {
   'deferred-block-forward-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/deferred-block-forward-reference-basic/tsconfig.json'),
   'instantiated-indexed-access-basic': path.join(workspaceRoot, 'tests/compat-projects/instantiated-indexed-access-basic/tsconfig.json'),
   'unbound-name-resolution-basic': path.join(workspaceRoot, 'tests/compat-projects/unbound-name-resolution-basic/tsconfig.json'),
+  'contextual-return-any-collapse-basic': path.join(workspaceRoot, 'tests/compat-projects/contextual-return-any-collapse-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
