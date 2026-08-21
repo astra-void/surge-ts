@@ -329,6 +329,7 @@ export const fixturePresets: Record<string, string> = {
   'global-interface-cross-file-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/global-interface-cross-file-merge-basic/tsconfig.json'),
   'deferred-block-forward-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/deferred-block-forward-reference-basic/tsconfig.json'),
   'instantiated-indexed-access-basic': path.join(workspaceRoot, 'tests/compat-projects/instantiated-indexed-access-basic/tsconfig.json'),
+  'unbound-name-resolution-basic': path.join(workspaceRoot, 'tests/compat-projects/unbound-name-resolution-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
