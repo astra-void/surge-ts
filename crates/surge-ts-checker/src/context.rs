@@ -1962,7 +1962,9 @@ impl CheckerContext {
         let is_return_verdict = self.in_contextual_return_check
             && matches!(
                 diagnostic.code,
-                surge_ts_diagnostics::DiagnosticCode::TypeScript(2322 | 2353)
+                // The four shapes a return-value mismatch takes: not assignable,
+                // excess property, and the two missing-property renderings.
+                surge_ts_diagnostics::DiagnosticCode::TypeScript(2322 | 2353 | 2739 | 2741)
             );
         let before = self.diagnostics.len();
         self.push_deduplicated(diagnostic);

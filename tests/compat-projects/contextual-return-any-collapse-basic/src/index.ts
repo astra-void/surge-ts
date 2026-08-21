@@ -32,3 +32,14 @@ export const otherErrorsSurvive: Fn = (n) => {
   }
   return { ok: notDeclaredAnywhere };
 };
+
+// A missing property is a return-value verdict too, so the collapse covers it.
+export const absorbedMissingProperty: Fn = (n) => { if (n > 0) { return anyValue; } return {}; };
+
+// A property-level `any` does NOT collapse the union — the return's own type is
+// an object, not `any` — so this still reports.
+type Boxed = (n: number) => { data: { id: string }; error: undefined };
+export const propertyAnyStillReports: Boxed = (n) => { let d: any; return { data: d, error: 1 }; };
+
+// An `any` return in a NESTED function belongs to that function's own body.
+export const nestedAnyDoesNotLeak: Fn = (n) => { const inner: Fn = (m) => { return anyValue; }; return { ok: 'nope' }; };
