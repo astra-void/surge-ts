@@ -598,6 +598,7 @@ pub(crate) fn resolve_module_export_table(
         let ParsedExportDeclaration::All {
             module_specifier,
             module_specifier_span,
+            is_type_only,
             ..
         } = export.as_ref()
         else {
@@ -639,12 +640,14 @@ pub(crate) fn resolve_module_export_table(
             }
         }
 
-        for (name, symbol) in target_export_table.symbols.iter_shared() {
-            if resolved_export_table.symbols.get(name).is_none() {
-                crate::program::record_module_export_symbol_handle_copy_count(1);
-                resolved_export_table
-                    .symbols
-                    .insert_shared(name.clone(), symbol.clone());
+        if !*is_type_only {
+            for (name, symbol) in target_export_table.symbols.iter_shared() {
+                if resolved_export_table.symbols.get(name).is_none() {
+                    crate::program::record_module_export_symbol_handle_copy_count(1);
+                    resolved_export_table
+                        .symbols
+                        .insert_shared(name.clone(), symbol.clone());
+                }
             }
         }
     }

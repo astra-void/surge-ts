@@ -529,6 +529,10 @@ pub enum ParsedExportDeclaration {
         module_specifier: String,
         module_specifier_span: Option<TextSpan>,
         span: Option<TextSpan>,
+        /// `export type * from "x"` re-exports the target's TYPES only. Binding
+        /// its values too would invent names the module does not have, masking
+        /// the TS2304 a consumer should get.
+        is_type_only: bool,
     },
     Namespace {
         exported_name: String,

@@ -241,7 +241,11 @@ pub(crate) fn parse_export_all_declaration(
     let module_specifier = declaration.source.value.to_string();
     let module_specifier_span = Some(text_span_from_oxc_span(declaration.source.span));
 
-    if matches!(declaration.export_kind, ImportOrExportKind::Type) {
+    let is_type_only = matches!(declaration.export_kind, ImportOrExportKind::Type);
+
+    // `export type * as ns from "x"` still has no representation; only the
+    // un-named form is modelled below.
+    if is_type_only && declaration.exported.is_some() {
         return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
             ParsedExportDeclaration::Unsupported { span },
         ))]);
@@ -264,6 +268,7 @@ pub(crate) fn parse_export_all_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            is_type_only,
         },
     ))])
 }
