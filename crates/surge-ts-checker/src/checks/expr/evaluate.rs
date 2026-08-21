@@ -590,20 +590,52 @@ pub(crate) fn evaluate_expression(
             ty,
             type_span: _,
         } => {
-            // Evaluate the inner expression so it participates in checking
-            let _ = evaluate_expression(
-                asserted_expression,
-                expression_span.or(fallback_span),
-                symbols,
-                ctx,
-            );
-
             let temp_symbols = symbols.clone_with_reason(TypeCopyReason::ExpressionInference);
             let saved_symbols = std::mem::replace(&mut ctx.symbols, temp_symbols);
             let resolved_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
                 crate::infer::map_parsed_type(ty.clone(), ctx)
             });
             ctx.symbols = saved_symbols;
+
+            // Evaluate the inner expression so it participates in checking. An
+            // asserted function expression is contextually typed by the
+            // assertion target (`((arg) => …) as Ctor["create"]`), so its
+            // parameters are not implicit-any — resolve the target first and
+            // pass it down.
+            match asserted_expression.as_ref() {
+                ParsedExpression::ArrowFunction(arrow) => {
+                    let contextual = match resolved_type.peeled() {
+                        surge_ts_types::Type::Function(function_type) => Some(function_type),
+                        _ => None,
+                    };
+                    // A target surge could not reduce to a signature still gives
+                    // tsc one, so an implicit-any report here would describe that
+                    // gap rather than the source.
+                    let degraded = contextual.is_none();
+                    if degraded {
+                        ctx.degraded_expected_type_depth += 1;
+                    }
+                    let _ = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                        crate::checks::function::check_arrow_function_expression_with_expected_type(
+                            arrow.as_ref().clone(),
+                            contextual.as_ref(),
+                            symbols,
+                            ctx,
+                        )
+                    });
+                    if degraded {
+                        ctx.degraded_expected_type_depth -= 1;
+                    }
+                }
+                _ => {
+                    let _ = evaluate_expression(
+                        asserted_expression,
+                        expression_span.or(fallback_span),
+                        symbols,
+                        ctx,
+                    );
+                }
+            }
 
             // If the type is unresolved (e.g. unknown named type), map_parsed_type
             // already emits TS2304 and returns Type::Unknown.
