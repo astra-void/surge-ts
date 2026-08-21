@@ -1046,6 +1046,10 @@ pub(crate) fn check_function_body_with_signature_and_this(
     }
 
     with_type_parameter_scope(type_parameters, ctx, |ctx| {
+        // A declaration's own frame, never active — it has a real signature, so
+        // its returns are checked. Opening one stops a nested declaration from
+        // recording into an enclosing arrow's frame.
+        ctx.open_contextual_return_frame();
         check_function_body(
             body,
             Some(function_type.return_type()),
@@ -1053,6 +1057,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
             &mut flow_state,
             ctx,
         );
+        ctx.close_contextual_return_frame();
     });
 
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {

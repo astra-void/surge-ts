@@ -43,3 +43,12 @@ export const propertyAnyStillReports: Boxed = (n) => { let d: any; return { data
 
 // An `any` return in a NESTED function belongs to that function's own body.
 export const nestedAnyDoesNotLeak: Fn = (n) => { const inner: Fn = (m) => { return anyValue; }; return { ok: 'nope' }; };
+
+// The collapse belongs to the body that owns it. A nested function with its own
+// signature keeps its returns checked, even inside a collapsed outer body.
+export const nestedAnnotatedArrowStillChecked: Fn = (n) => {
+  const inner = (): { ok: boolean } => { return { ok: 'nope' }; };
+  void inner;
+  if (n > 0) { return anyValue; }
+  return { ok: true };
+};

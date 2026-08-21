@@ -1178,7 +1178,7 @@ pub(crate) fn check_function_return_statement(
     // contextual-return frame; everything else the expression reports is
     // unrelated and must survive.
     let was_in_return_check = ctx.in_contextual_return_check;
-    ctx.in_contextual_return_check = !ctx.contextual_return_frames.is_empty();
+    ctx.in_contextual_return_check = ctx.in_contextual_return_body();
     let inferred_expression = evaluate_expression_with_expected_type(
         expression,
         return_statement.expression_span,
@@ -1194,7 +1194,7 @@ pub(crate) fn check_function_return_statement(
     // cannot answer this — it reports per branch and yields the sentinel on a
     // mismatch — so ask the diagnostic-free inference path for the value's own
     // type, which for `cond ? anyValue : { … }` is the union tsc would form.
-    if !ctx.contextual_return_frames.is_empty()
+    if ctx.in_contextual_return_body()
         && returns_any(&crate::infer::infer_expression(expression, symbols, ctx))
     {
         ctx.note_contextual_return_is_any();
@@ -1237,7 +1237,7 @@ pub(crate) fn check_function_return_statement(
                 // Same frame bookkeeping as the verdicts raised inside the
                 // expression above: this is the whole-value one.
                 let was_in_return_check = ctx.in_contextual_return_check;
-                ctx.in_contextual_return_check = !ctx.contextual_return_frames.is_empty();
+                ctx.in_contextual_return_check = ctx.in_contextual_return_body();
                 ctx.push(diagnostic);
                 ctx.in_contextual_return_check = was_in_return_check;
             }

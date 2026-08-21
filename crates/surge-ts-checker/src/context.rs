@@ -479,6 +479,12 @@ impl FileKind {
 pub(crate) struct ContextualReturnFrame {
     diagnostic_indices: Vec<usize>,
     saw_any_return: bool,
+    /// Whether this body is the one being checked against an unannotated
+    /// contextual return type. Every body pushes a frame so the innermost one
+    /// always belongs to the function being checked — otherwise a nested
+    /// function without its own frame would record into, and be silenced by,
+    /// an enclosing arrow's.
+    active: bool,
 }
 
 impl CheckerContext {
@@ -486,15 +492,31 @@ impl CheckerContext {
     /// return type. Returns whether one was opened, for the caller to pair with
     /// [`Self::close_contextual_return_frame`].
     pub(crate) fn open_contextual_return_frame(&mut self) {
+        let active = std::mem::take(&mut self.next_body_frame_active);
+        self.contextual_return_frames.push(ContextualReturnFrame {
+            active,
+            ..ContextualReturnFrame::default()
+        });
+    }
+
+    /// Marks the next body opened as the one checked against an unannotated
+    /// contextual return type.
+    pub(crate) fn activate_next_body_frame(&mut self) {
+        self.next_body_frame_active = true;
+    }
+
+    /// Whether the body currently being checked owns an active frame.
+    pub(crate) fn in_contextual_return_body(&self) -> bool {
         self.contextual_return_frames
-            .push(ContextualReturnFrame::default());
+            .last()
+            .is_some_and(|frame| frame.active)
     }
 
     pub(crate) fn close_contextual_return_frame(&mut self) {
         let Some(frame) = self.contextual_return_frames.pop() else {
             return;
         };
-        if !frame.saw_any_return {
+        if !frame.active || !frame.saw_any_return {
             return;
         }
         // Descending, so earlier indices stay valid as later ones are removed.
@@ -508,14 +530,18 @@ impl CheckerContext {
     }
 
     pub(crate) fn note_contextual_return_is_any(&mut self) {
-        if let Some(frame) = self.contextual_return_frames.last_mut() {
+        if let Some(frame) = self.contextual_return_frames.last_mut()
+            && frame.active
+        {
             frame.saw_any_return = true;
         }
     }
 
     /// Records `index` as a return-mismatch verdict of the innermost frame.
     fn note_contextual_return_mismatch(&mut self, index: usize) {
-        if let Some(frame) = self.contextual_return_frames.last_mut() {
+        if let Some(frame) = self.contextual_return_frames.last_mut()
+            && frame.active
+        {
             frame.diagnostic_indices.push(index);
         }
     }
@@ -1116,6 +1142,9 @@ pub(crate) struct CheckerContext {
     /// contextual type, so only the mismatch verdicts get recorded — every other
     /// diagnostic raised inside the expression is unrelated and must survive.
     pub(crate) in_contextual_return_check: bool,
+    /// Set by the arrow path just before it checks a block body, consumed by
+    /// the frame that body opens.
+    pub(crate) next_body_frame_active: bool,
     /// Depth of `with_file_name` frames whose file differs from the enclosing
     /// one — nonzero exactly while a declaration from another file is being
     /// resolved. See [`Self::lookup_ignores_local_table`].
@@ -1225,6 +1254,7 @@ impl CheckerContext {
             degraded_expected_type_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
+            next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
@@ -1331,6 +1361,7 @@ impl CheckerContext {
             degraded_expected_type_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
+            next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
@@ -1581,6 +1612,7 @@ impl CheckerContext {
         self.degraded_expected_type_depth = 0;
         self.contextual_return_frames.clear();
         self.in_contextual_return_check = false;
+        self.next_body_frame_active = false;
         if !is_module || self.options.allow_umd_global_access || self.umd_global_names.is_empty() {
             return;
         }

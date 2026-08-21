@@ -433,10 +433,13 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                 // A contextual return type this arrow did not annotate is not a
                 // per-return assignability target for tsc — see
                 // `ContextualReturnFrame`.
-                let contextual_return_frame = !has_explicit_return_type && expected_type.is_some();
-                if contextual_return_frame {
-                    ctx.open_contextual_return_frame();
+                // One frame per FUNCTION body — `check_function_body` also runs
+                // for every nested block, so the frame cannot live there or an
+                // `if` would shadow its own function's.
+                if !has_explicit_return_type && expected_type.is_some() {
+                    ctx.activate_next_body_frame();
                 }
+                ctx.open_contextual_return_frame();
                 check_function_body(
                     statements,
                     return_type_for_body,
@@ -444,9 +447,7 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                     &mut flow_state,
                     ctx,
                 );
-                if contextual_return_frame {
-                    ctx.close_contextual_return_frame();
-                }
+                ctx.close_contextual_return_frame();
 
                 let contextually_void = expected_type
                     .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void));
