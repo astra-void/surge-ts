@@ -208,6 +208,11 @@ pub(crate) fn check_function_body(
     // callable before their statement position).
     for statement in &body {
         if let ParsedFunctionBodyStatement::Function(function) = statement {
+            // The signature mapper seeds parameter-default evaluation from
+            // `ctx.symbols`, a file-level table that never holds function locals,
+            // so a default referring to an enclosing local read as unresolved.
+            // The visible scope is already in hand two lines below.
+            let saved_symbols = std::mem::replace(&mut ctx.symbols, scopes.visible_symbols().clone());
             let function_type = crate::checks::function::signature::map_function_signature(
                 &function.parameters,
                 function.return_type.as_ref(),
@@ -215,6 +220,7 @@ pub(crate) fn check_function_body(
                 None,
                 ctx,
             );
+            ctx.symbols = saved_symbols;
             scopes.insert_current_handle(
                 function.name.as_str(),
                 std::sync::Arc::new(SymbolInfo {

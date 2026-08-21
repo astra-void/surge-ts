@@ -45,8 +45,16 @@ pub(crate) fn instantiate_function_type<'a>(
 
     if !type_arguments.is_empty() {
         record_generic_call_inference_explicit_type_args_skip();
-        let substitution =
-            explicit_type_argument_substitution(function_signature, type_arguments, ctx);
+        // Explicit type arguments name types visible at the CALL, which may be
+        // function locals; `ctx.symbols` is the file-level table and does not
+        // hold them. The caller already passed the right one.
+        let substitution = {
+            let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+            let substitution =
+                explicit_type_argument_substitution(function_signature, type_arguments, ctx);
+            ctx.symbols = saved_symbols;
+            substitution
+        };
 
         // A type argument that failed to resolve, or one that violates a
         // `K extends keyof T` constraint, must not cascade into the `T[K]`

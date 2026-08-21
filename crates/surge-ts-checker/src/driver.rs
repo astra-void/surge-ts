@@ -296,6 +296,23 @@ fn lower_global_augmentation_values(
             _ => None,
         };
 
+        // A `declare global { namespace awslambda { … } }` block publishes the
+        // namespace as a global *value* too, so `awslambda.HttpResponseStream`
+        // resolves. Same first-wins discipline the variable arm below uses.
+        if let ParsedStatement::NamespaceDeclaration(namespace) = stmt
+            && ctx.ambient_global_symbols.get(&namespace.name).is_none()
+        {
+            crate::program::record_augmentation_value_insertion();
+            ctx.ambient_global_symbols.insert(
+                namespace.name.clone(),
+                crate::symbols::SymbolInfo {
+                    ty: crate::modules::namespace_value_object_type(namespace),
+                    kind: crate::symbols::SymbolKind::Const,
+                    function_signature: None,
+                },
+            );
+        }
+
         if let Some(var) = var {
             let ty = var
                 .declared_type

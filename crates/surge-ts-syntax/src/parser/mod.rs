@@ -436,6 +436,22 @@ fn parse_array_pattern_declarations(
         ));
     }
 
+    // `const [a, ...rest] = xs` binds `rest` to the remaining elements. Bound to
+    // the whole initializer, the same shape the object-pattern sibling uses: for
+    // an array source that is already the right element type. A tuple source is
+    // over-wide here (tsc slices), which is still far better than leaving the
+    // name unbound and reporting it as missing everywhere it is used.
+    if let Some(rest) = array_pattern.rest.as_deref() {
+        declarations.extend(parse_binding_pattern_declarations(
+            &rest.argument,
+            Some(initializer.clone()),
+            initializer_span,
+            is_declare,
+            kind,
+            None,
+        ));
+    }
+
     declarations
 }
 
