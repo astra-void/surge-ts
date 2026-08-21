@@ -90,8 +90,17 @@ fn parse_this_parameter(
 pub(crate) fn parse_function_type_rest_parameter(
     rest: &FormalParameterRest<'_>,
 ) -> Option<ParsedFunctionTypeParameter> {
-    let BindingPattern::BindingIdentifier(binding) = &rest.rest.argument else {
-        return None;
+    // Only the annotation carries meaning for a signature; the binding name is
+    // cosmetic. Bailing on a non-identifier pattern dropped the whole parameter
+    // and with it the method that declares it — `Iterator.next(...args: [] | [T])`
+    // is written with a destructuring rest in lib.es2015.iterable.d.ts, so
+    // `next` vanished from Iterator/Generator/AsyncIterator/AsyncGenerator.
+    let (name, name_span) = match &rest.rest.argument {
+        BindingPattern::BindingIdentifier(binding) => (
+            Some(binding.name.to_string()),
+            Some(text_span_from_oxc_span(binding.span)),
+        ),
+        _ => (None, None),
     };
 
     let ty = rest
@@ -100,8 +109,8 @@ pub(crate) fn parse_function_type_rest_parameter(
         .and_then(|annotation| parse_type_annotation(annotation))?;
 
     Some(ParsedFunctionTypeParameter {
-        name: Some(binding.name.to_string()),
-        name_span: Some(text_span_from_oxc_span(binding.span)),
+        name,
+        name_span,
         ty,
         optional: false,
         is_this: false,
