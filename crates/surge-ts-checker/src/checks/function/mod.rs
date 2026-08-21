@@ -430,6 +430,13 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                     Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Void => None,
                     ty => Some(ty),
                 };
+                // A contextual return type this arrow did not annotate is not a
+                // per-return assignability target for tsc — see
+                // `ContextualReturnFrame`.
+                let contextual_return_frame = !has_explicit_return_type && expected_type.is_some();
+                if contextual_return_frame {
+                    ctx.open_contextual_return_frame();
+                }
                 check_function_body(
                     statements,
                     return_type_for_body,
@@ -437,6 +444,9 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                     &mut flow_state,
                     ctx,
                 );
+                if contextual_return_frame {
+                    ctx.close_contextual_return_frame();
+                }
 
                 let contextually_void = expected_type
                     .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void));

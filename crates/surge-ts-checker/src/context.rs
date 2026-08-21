@@ -461,6 +461,67 @@ impl FileKind {
     }
 }
 
+/// tsc gates per-return checking on a return-type ANNOTATION. With none, it
+/// infers the return type from the returns via `getUnionType` — where a single
+/// `any` constituent collapses the whole union to `any` — and checks only the
+/// whole-signature relation at the declaration, which `any` trivially passes.
+///
+/// surge checks each return against the contextual type instead, so a body that
+/// mixes an `any` return with a differently-shaped one reported a mismatch tsc
+/// never raises (the generated hey-api clients do exactly this: `let data: any`
+/// returned alongside object literals).
+///
+/// The frame records the index of every diagnostic that is a *return mismatch
+/// verdict* for one such body. If any return turns out to be `any`, those are
+/// dropped — and only those, so an unresolved name or a bad member access inside
+/// a return expression still reports, which tsc does regardless of the collapse.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ContextualReturnFrame {
+    diagnostic_indices: Vec<usize>,
+    saw_any_return: bool,
+}
+
+impl CheckerContext {
+    /// Opens a frame for a block body checked against an unannotated contextual
+    /// return type. Returns whether one was opened, for the caller to pair with
+    /// [`Self::close_contextual_return_frame`].
+    pub(crate) fn open_contextual_return_frame(&mut self) {
+        self.contextual_return_frames
+            .push(ContextualReturnFrame::default());
+    }
+
+    pub(crate) fn close_contextual_return_frame(&mut self) {
+        let Some(frame) = self.contextual_return_frames.pop() else {
+            return;
+        };
+        if !frame.saw_any_return {
+            return;
+        }
+        // Descending, so earlier indices stay valid as later ones are removed.
+        for index in frame.diagnostic_indices.iter().rev() {
+            if *index < self.diagnostics.len() {
+                self.diagnostics.remove(*index);
+            }
+        }
+        // `push_deduplicated` rebuilds its index when the length no longer
+        // matches, which is what makes removing entries safe here.
+    }
+
+    pub(crate) fn note_contextual_return_is_any(&mut self) {
+        if let Some(frame) = self.contextual_return_frames.last_mut() {
+            frame.saw_any_return = true;
+        }
+    }
+
+    /// Records `index` as a return-mismatch verdict of the innermost frame.
+    fn note_contextual_return_mismatch(&mut self, index: usize) {
+        if let Some(frame) = self.contextual_return_frames.last_mut() {
+            frame.diagnostic_indices.push(index);
+        }
+    }
+
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompatibilityStats {
     pub suppressed_diagnostics_total: usize,
@@ -1047,6 +1108,14 @@ pub(crate) struct CheckerContext {
     /// surge's modelling gap rather than the source. Same rule as
     /// [`Self::unmodelled_jsx_props_depth`].
     pub(crate) degraded_expected_type_depth: usize,
+    /// One frame per block-bodied function being checked against a CONTEXTUAL
+    /// return type it did not annotate. See
+    /// `ContextualReturnFrame`.
+    pub(crate) contextual_return_frames: Vec<ContextualReturnFrame>,
+    /// Set while a return statement's value is being checked against that
+    /// contextual type, so only the mismatch verdicts get recorded — every other
+    /// diagnostic raised inside the expression is unrelated and must survive.
+    pub(crate) in_contextual_return_check: bool,
     /// Depth of `with_file_name` frames whose file differs from the enclosing
     /// one — nonzero exactly while a declaration from another file is being
     /// resolved. See [`Self::lookup_ignores_local_table`].
@@ -1154,6 +1223,8 @@ impl CheckerContext {
             namespace_member_resolution_depth: 0,
             unmodelled_jsx_props_depth: 0,
             degraded_expected_type_depth: 0,
+            contextual_return_frames: Vec::new(),
+            in_contextual_return_check: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
@@ -1258,6 +1329,8 @@ impl CheckerContext {
             namespace_member_resolution_depth: 0,
             unmodelled_jsx_props_depth: 0,
             degraded_expected_type_depth: 0,
+            contextual_return_frames: Vec::new(),
+            in_contextual_return_check: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
@@ -1506,6 +1579,8 @@ impl CheckerContext {
         self.file_umd_global_names.clear();
         self.file_umd_global_names_owner = None;
         self.degraded_expected_type_depth = 0;
+        self.contextual_return_frames.clear();
+        self.in_contextual_return_check = false;
         if !is_module || self.options.allow_umd_global_access || self.umd_global_names.is_empty() {
             return;
         }
@@ -1879,7 +1954,22 @@ impl CheckerContext {
             self.record_suppressed(&diagnostic);
             return;
         }
+        // An assignability verdict raised while checking a return value against a
+        // contextual type belongs to the frame — it is the thing tsc does not
+        // check. Everything else the expression reports (an unresolved name, a
+        // missing member, an implicit-any parameter) is unrelated and is left
+        // alone, which is what keeps this narrower than draining the range.
+        let is_return_verdict = self.in_contextual_return_check
+            && matches!(
+                diagnostic.code,
+                surge_ts_diagnostics::DiagnosticCode::TypeScript(2322 | 2353)
+            );
+        let before = self.diagnostics.len();
         self.push_deduplicated(diagnostic);
+        if is_return_verdict && self.diagnostics.len() > before {
+            let index = self.diagnostics.len() - 1;
+            self.note_contextual_return_mismatch(index);
+        }
     }
 
     /// Merges a diagnostic that already passed suppression in the context it

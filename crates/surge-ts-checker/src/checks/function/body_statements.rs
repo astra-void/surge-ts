@@ -1128,6 +1128,20 @@ pub(crate) fn check_function_expression_statement(
     let _ = evaluate_expression(&expression, None, &visible_symbols, ctx);
 }
 
+/// Whether a return value's own type is `any`, directly or as a union member —
+/// the shape that collapses tsc's inferred return type. See
+/// `ContextualReturnFrame`.
+fn returns_any(inferred: &InferredExpression) -> bool {
+    let InferredExpression::Known(ty) = inferred else {
+        return false;
+    };
+    match ty {
+        Type::Any => true,
+        Type::Union(union) => union.types().iter().any(|member| *member == Type::Any),
+        _ => false,
+    }
+}
+
 pub(crate) fn check_function_return_statement(
     return_statement: ParsedReturnStatement,
     statement_index: usize,
@@ -1160,6 +1174,11 @@ pub(crate) fn check_function_return_statement(
         return;
     };
 
+    // Only the mismatch verdicts raised while checking this value belong to the
+    // contextual-return frame; everything else the expression reports is
+    // unrelated and must survive.
+    let was_in_return_check = ctx.in_contextual_return_check;
+    ctx.in_contextual_return_check = !ctx.contextual_return_frames.is_empty();
     let inferred_expression = evaluate_expression_with_expected_type(
         expression,
         return_statement.expression_span,
@@ -1168,6 +1187,18 @@ pub(crate) fn check_function_return_statement(
         symbols,
         ctx,
     );
+    ctx.in_contextual_return_check = was_in_return_check;
+
+    // An `any` return is what collapses tsc's inferred union, so the frame drops
+    // its recorded verdicts when the body ends. The contextual evaluation above
+    // cannot answer this — it reports per branch and yields the sentinel on a
+    // mismatch — so ask the diagnostic-free inference path for the value's own
+    // type, which for `cond ? anyValue : { … }` is the union tsc would form.
+    if !ctx.contextual_return_frames.is_empty()
+        && returns_any(&crate::infer::infer_expression(expression, symbols, ctx))
+    {
+        ctx.note_contextual_return_is_any();
+    }
 
     match inferred_expression {
         InferredExpression::Known(source_type) => {
@@ -1203,7 +1234,12 @@ pub(crate) fn check_function_return_statement(
                     None => diagnostic,
                 };
 
+                // Same frame bookkeeping as the verdicts raised inside the
+                // expression above: this is the whole-value one.
+                let was_in_return_check = ctx.in_contextual_return_check;
+                ctx.in_contextual_return_check = !ctx.contextual_return_frames.is_empty();
                 ctx.push(diagnostic);
+                ctx.in_contextual_return_check = was_in_return_check;
             }
         }
         InferredExpression::UnresolvedIdentifier { .. } => {}
