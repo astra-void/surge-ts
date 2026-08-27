@@ -36,14 +36,18 @@ fn local_values_consult_probe()
         .as_ref()
 }
 
-/// Opt-in `SURGE_NS_QUALIFIED_RETRY=1`: retry an already-dotted type name under
-/// the active namespace prefixes after the exact lookup misses. Off by default
-/// until degraded peels are memoized — resolving these names today converts
-/// fast-fail hash misses into full per-peel re-expansion of the enclosing
-/// declaration graph (see docs/perf/NAMESPACE-INTERFACE-MERGE.md).
+/// Default-on (opt-out `SURGE_NS_QUALIFIED_RETRY=0`): retry an already-dotted
+/// type name under the active namespace prefixes after the exact lookup
+/// misses, so an enum registered inside `declare namespace ts` resolves from
+/// its sibling members' bare `SyntaxKind.X` references. Affordable only since
+/// the check-phase degraded-peel pin: before it, resolving these names
+/// converted fast-fail hash misses into full per-peel re-expansion of the
+/// enclosing declaration graph (see docs/perf/NAMESPACE-INTERFACE-MERGE.md).
 fn namespace_qualified_retry_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("SURGE_NS_QUALIFIED_RETRY").is_some())
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("SURGE_NS_QUALIFIED_RETRY").is_none_or(|value| value != "0")
+    })
 }
 
 fn record_local_values_consult(file_name: &str) {

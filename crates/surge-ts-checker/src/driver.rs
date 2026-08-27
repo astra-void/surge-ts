@@ -634,25 +634,26 @@ fn collect_namespace_type_declarations(
 /// is ALSO registered under the bare immediate-namespace key (`JSX.IntrinsicElements`)
 /// so the JSX checker's literal lookup and the unqualified sibling references inside
 /// the library's own bodies keep resolving. First-wins (declaration merging).
-/// Opt-in `SURGE_NS_IFACE_MERGE=1`: fold a namespace's re-opened interfaces into
-/// one declaration. Correct and worth **33 fewer false positives on tRPC** (825
-/// -> 793, no new ones) — typescript.d.ts splits `Node`, `Type`, `Symbol`,
-/// `Identifier`, `SourceFile`, `Signature` and four more into two blocks each,
-/// and first-wins drops the block carrying their whole service-method half
-/// (`ts.Type.getProperty`, `ts.Symbol.getName`, `Node.getText`, `Identifier.text`).
+/// Default-on (opt-out `SURGE_NS_IFACE_MERGE=0`): fold a namespace's re-opened
+/// interfaces into one declaration. Correct and worth **32 fewer false
+/// positives on tRPC** (no new ones) — typescript.d.ts splits `Node`, `Type`,
+/// `Symbol`, `Identifier`, `SourceFile`, `Signature` and four more into two
+/// blocks each, and first-wins drops the block carrying their whole
+/// service-method half (`ts.Type.getProperty`, `ts.Symbol.getName`,
+/// `Node.getText`, `Identifier.text`).
 ///
-/// Not the default because it costs **+223% wall on tRPC** (10.1s -> 32.7s,
-/// interleaved A/B). The cause is not the extra members but that they are
-/// *mutually cyclic*: merged `ts.Node` gains methods returning `SourceFile`,
-/// whose merged block returns `Node`. Counters say clean expansions are
-/// unchanged (7,997 -> 7,999) while degraded ones go 19,528 -> 1,266,359 (65x)
-/// and member visits 3.3M -> 26.2M — a degraded expansion is never cached, so
-/// every peel re-expands the cycle. Landing this by default needs cycle-tolerant
-/// interface resolution (a reference to a sibling interface must stay nominal
-/// during the enclosing body's own resolution), not a change here.
+/// The merged blocks are *mutually cyclic* (merged `ts.Node` gains methods
+/// returning `SourceFile`, whose merged block returns `Node`), and a degraded
+/// expansion is never interned, so before the check-phase degraded-peel pin on
+/// `LazyInstantiation` every consumer peel re-expanded the cycle (+223% wall
+/// on tRPC, member visits 3.3M -> 26.2M). With the pin the merge measures at
+/// baseline wall (27.9s -> 8.1s on tRPC); the pin is what makes this default
+/// affordable.
 fn namespace_interface_merge_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("SURGE_NS_IFACE_MERGE").is_some())
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("SURGE_NS_IFACE_MERGE").is_none_or(|value| value != "0")
+    })
 }
 
 /// Merges from the parsed blocks in one shot rather than folding into the table
