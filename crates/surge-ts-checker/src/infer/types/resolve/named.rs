@@ -498,17 +498,21 @@ pub(crate) fn resolve_named_type(
         };
     }
 
-    // Defer a concrete library-scoped generic *interface* instantiation
+    // Defer a library-scoped generic *interface* instantiation
     // (`HTMLAttributes<HTMLElement>`): expand its body only on peel so a use site
     // does not pull the whole DOM/iterator graph and collapse. Generic type
     // aliases stay eager (their bodies reference interfaces, which are themselves
-    // deferred, so they stay bounded); non-concrete instantiations stay eager
-    // because their placeholder substitution must not be frozen into a shared ref.
-    if concrete_instantiation
-        && matches!(declaration, TypeDeclarationInfo::Interface(_))
+    // deferred, so they stay bounded). A non-concrete site defers under the same
+    // gate as the alias branch above — every argument fully resolved and none
+    // `unknown` — because inside a generic body a placeholder argument collapses
+    // to `unknown`, and freezing a placeholder-dependent expansion into a shared
+    // reference would drop the members a later substitution should have added.
+    if matches!(declaration, TypeDeclarationInfo::Interface(_))
         && declaration_file_is_library_scoped(declaration, ctx)
         && let (Some(display), Some(arguments)) =
             (alias_display_name.as_ref(), reference_arguments.as_ref())
+        && (concrete_instantiation
+            || arguments.iter().all(|argument| !argument.is_unknown()))
     {
         return ResolvedType {
             ty: make_lazy_type_reference(
