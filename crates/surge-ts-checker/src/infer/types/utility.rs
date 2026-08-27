@@ -99,10 +99,12 @@ pub(crate) fn resolve_type_alias(
     }
 
     resolving.push(declaration_key.clone());
-    let effective_scope = alias
-        .resolution_scope
-        .clone()
-        .or_else(|| ctx.module_scope_for_file(&alias.file_name));
+    // See the matching comment in `resolve_interface`: an empty per-file
+    // fallback (ambient-module files) must not clobber the installed scope.
+    let effective_scope = alias.resolution_scope.clone().or_else(|| {
+        ctx.module_scope_for_file(&alias.file_name)
+            .filter(|scope| !scope.is_empty())
+    });
     let Some(bound_arguments) = bind_type_arguments(
         &alias.body.type_parameters,
         type_arguments,

@@ -570,6 +570,10 @@ impl TypeDeclarationScope {
     pub(crate) fn layers(&self) -> &[Arc<TypeDeclarationTable>] {
         &self.layers
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.layers.iter().all(|layer| layer.len() == 0)
+    }
 }
 
 #[derive(Debug)]

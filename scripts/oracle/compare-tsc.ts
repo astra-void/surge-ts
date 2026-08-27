@@ -333,6 +333,7 @@ export const fixturePresets: Record<string, string> = {
   'contextual-return-any-collapse-basic': path.join(workspaceRoot, 'tests/compat-projects/contextual-return-any-collapse-basic/tsconfig.json'),
   'literal-intersection-never-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-intersection-never-basic/tsconfig.json'),
   'intersection-degraded-operand-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-degraded-operand-basic/tsconfig.json'),
+  'ambient-module-sibling-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-sibling-scope-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

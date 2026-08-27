@@ -155,7 +155,7 @@ pub(crate) fn collect_preliminary_module_type_bindings(
     )
 }
 
-fn attach_resolution_scope_to_declarations(
+pub(crate) fn attach_resolution_scope_to_declarations(
     declarations: &TypeDeclarationTable,
     scope: Arc<TypeDeclarationScope>,
 ) -> TypeDeclarationTable {

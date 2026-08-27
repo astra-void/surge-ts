@@ -176,10 +176,16 @@ pub(crate) fn resolve_interface(
     }
 
     resolving.push(declaration_key.clone());
-    let declaration_effective_scope = interface
-        .resolution_scope
-        .clone()
-        .or_else(|| ctx.module_scope_for_file(&interface.file_name));
+    // An EMPTY per-file fallback must not clobber the caller's installed scope:
+    // an ambient-module file (`declare module "http" { … }` in @types/node)
+    // registers its declarations in the block's export table, so its per-file
+    // scope is empty. A sibling declaration reached through the installed block
+    // scope carries no resolution_scope of its own; replacing the block scope
+    // with the empty fallback made every name in the sibling's body miss.
+    let declaration_effective_scope = interface.resolution_scope.clone().or_else(|| {
+        ctx.module_scope_for_file(&interface.file_name)
+            .filter(|scope| !scope.is_empty())
+    });
     let Some(bound_arguments) = bind_type_arguments(
         &interface.body.type_parameters,
         type_arguments,

@@ -140,9 +140,10 @@ pub(crate) fn collect_global_augmentations(
         for_each_global_augmentation_block(
             &parsed_file.statements,
             ctx,
-            |block_statements, ctx| {
+            |block_statements, enclosing_statements, ctx| {
                 block_tables.push(collect_global_augmentation_block_types(
                     block_statements,
+                    enclosing_statements,
                     ctx,
                 ));
             },
@@ -162,7 +163,9 @@ pub(crate) fn lower_global_augmentation_values_from_statements(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) {
-    for_each_global_augmentation_block(statements, ctx, lower_global_augmentation_values);
+    for_each_global_augmentation_block(statements, ctx, |block_statements, _enclosing, ctx| {
+        lower_global_augmentation_values(block_statements, ctx)
+    });
 }
 
 /// Single-file driver path: no cross-file split and no module import scope, so the
@@ -172,17 +175,24 @@ pub(crate) fn collect_global_augmentations_from_statements(
     ctx: &mut CheckerContext,
 ) {
     let mut block_tables = Vec::new();
-    for_each_global_augmentation_block(statements, ctx, |block_statements, ctx| {
-        block_tables.push(collect_global_augmentation_block_types(
-            block_statements,
-            ctx,
-        ));
-    });
+    for_each_global_augmentation_block(
+        statements,
+        ctx,
+        |block_statements, enclosing_statements, ctx| {
+            block_tables.push(collect_global_augmentation_block_types(
+                block_statements,
+                enclosing_statements,
+                ctx,
+            ));
+        },
+    );
     crate::symbols::merge_shared_tables_into(
         std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
         &block_tables,
     );
-    for_each_global_augmentation_block(statements, ctx, lower_global_augmentation_values);
+    for_each_global_augmentation_block(statements, ctx, |block_statements, _enclosing, ctx| {
+        lower_global_augmentation_values(block_statements, ctx)
+    });
 }
 
 /// Whether any statement carries a `declare global` block (directly or nested
@@ -208,7 +218,7 @@ pub(crate) fn has_global_augmentation_block(statements: &[ParsedStatement]) -> b
 fn for_each_global_augmentation_block(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
-    mut visit: impl FnMut(&[ParsedStatement], &mut CheckerContext),
+    mut visit: impl FnMut(&[ParsedStatement], Option<&[ParsedStatement]>, &mut CheckerContext),
 ) {
     for statement in statements {
         let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
@@ -216,16 +226,20 @@ fn for_each_global_augmentation_block(
         };
 
         if module.module_specifier == "global" {
-            visit(&module.statements, ctx);
+            visit(&module.statements, None, ctx);
             continue;
         }
 
         // `declare module "X" { global { ... } }` also augments the global scope
         // (e.g. `@types/node` declares `var Buffer` inside the "buffer" module).
+        // The enclosing block's statements ride along so the augmentation's
+        // declarations can see the block's own type aliases and interfaces
+        // (`@types/node/events.d.ts` writes `NodeJS.EventEmitter` members
+        // against block-local helpers like `Key`/`Listener1`).
         for nested in &module.statements {
             if let ParsedStatement::DeclareModuleDeclaration(inner) = nested {
                 if inner.module_specifier == "global" {
-                    visit(&inner.statements, ctx);
+                    visit(&inner.statements, Some(&module.statements), ctx);
                 }
             }
         }
@@ -238,6 +252,7 @@ fn for_each_global_augmentation_block(
 /// (see [`collect_global_augmentations`]).
 fn collect_global_augmentation_block_types(
     block_statements: &[ParsedStatement],
+    enclosing_statements: Option<&[ParsedStatement]>,
     ctx: &mut CheckerContext,
 ) -> crate::symbols::TypeDeclarationTable {
     let saved_type_declarations = std::mem::replace(
@@ -248,7 +263,28 @@ fn collect_global_augmentation_block_types(
     ctx.type_declaration_scope = None;
 
     collect_type_declarations(block_statements, ctx);
-    let block_table = std::mem::take(&mut ctx.type_declarations);
+    let mut block_table = std::mem::take(&mut ctx.type_declarations);
+
+    // A `global { … }` block nested in `declare module "X"` lexically sees the
+    // enclosing block's type declarations, but this collection runs before
+    // `collect_ambient_modules` builds that block's scope. Collect the
+    // enclosing declarations here and attach them as the augmentation
+    // declarations' resolution scope, so their bodies resolve block-local
+    // helpers instead of degrading at every use site.
+    if let Some(enclosing) = enclosing_statements {
+        collect_type_declarations(enclosing, ctx);
+        let enclosing_table = std::mem::take(&mut ctx.type_declarations);
+        if enclosing_table.len() > 0 {
+            let enclosing_scope =
+                std::sync::Arc::new(crate::symbols::TypeDeclarationScope::new(vec![
+                    std::sync::Arc::new(enclosing_table),
+                ]));
+            block_table = crate::program::binding::attach_resolution_scope_to_declarations(
+                &block_table,
+                enclosing_scope,
+            );
+        }
+    }
 
     ctx.type_declarations = saved_type_declarations;
     ctx.type_declaration_scope = saved_type_declaration_scope;
