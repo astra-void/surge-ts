@@ -34,8 +34,8 @@ thread_local! {
     /// at the cycle edge instead of after 200 redundant levels. Cleared when the
     /// outermost `is_assignable_to` returns so a freed `Arc` pointer can never be
     /// reused for a stale entry.
-    static OBJECT_ASSIGNABILITY_IN_PROGRESS: std::cell::RefCell<std::collections::HashSet<(usize, usize)>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
+    static OBJECT_ASSIGNABILITY_IN_PROGRESS: std::cell::RefCell<crate::fx::FxHashSet<(usize, usize)>> =
+        std::cell::RefCell::new(crate::fx::FxHashSet::default());
 
     /// Completed-result memo for the current outermost `is_assignable_to` query,
     /// keyed on stable `Arc` identities of both sides. The in-progress set above
@@ -44,8 +44,8 @@ thread_local! {
     /// full comparison, which is exponential in nesting depth. Cleared with the
     /// in-progress set when the outermost call returns, so a freed `Arc` pointer
     /// can never alias a stale entry.
-    static ASSIGNABILITY_RELATION_CACHE: std::cell::RefCell<std::collections::HashMap<(RelationKey, RelationKey), bool>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static ASSIGNABILITY_RELATION_CACHE: std::cell::RefCell<crate::fx::FxHashMap<(RelationKey, RelationKey), bool>> =
+        std::cell::RefCell::new(crate::fx::FxHashMap::default());
 
     /// Bumped whenever a comparison is answered by assumption (depth-cap or
     /// in-progress coinductive `true`) rather than by inspection. A result whose
