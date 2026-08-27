@@ -36,6 +36,16 @@ fn local_values_consult_probe()
         .as_ref()
 }
 
+/// Opt-in `SURGE_NS_QUALIFIED_RETRY=1`: retry an already-dotted type name under
+/// the active namespace prefixes after the exact lookup misses. Off by default
+/// until degraded peels are memoized — resolving these names today converts
+/// fast-fail hash misses into full per-peel re-expansion of the enclosing
+/// declaration graph (see docs/perf/NAMESPACE-INTERFACE-MERGE.md).
+fn namespace_qualified_retry_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_NS_QUALIFIED_RETRY").is_some())
+}
+
 fn record_local_values_consult(file_name: &str) {
     if let Some(probe) = local_values_consult_probe()
         && let Ok(mut set) = probe.lock()
@@ -1742,7 +1752,28 @@ impl CheckerContext {
                 return Some(declaration);
             }
         }
-        self.lookup_type_declaration_exact(name)
+        if let Some(declaration) = self.lookup_type_declaration_exact(name) {
+            return Some(declaration);
+        }
+        for candidate in self.namespace_dotted_retry_candidates(name) {
+            if let Some(declaration) = self.lookup_type_declaration_exact(&candidate) {
+                return Some(declaration);
+            }
+        }
+        None
+    }
+
+    /// Opt-in (`SURGE_NS_QUALIFIED_RETRY=1`) fallback for an already-dotted name
+    /// written inside a namespace body: an enum declared inside
+    /// `declare namespace ts` registers as `ts.SyntaxKind.X`, so the bare
+    /// `SyntaxKind.X` its sibling members write misses the exact lookup. The
+    /// retry runs strictly after the exact lookup, so it can never shadow an
+    /// existing resolution.
+    fn namespace_dotted_retry_candidates(&self, name: &str) -> Vec<String> {
+        if !namespace_qualified_retry_enabled() || !name.contains('.') {
+            return Vec::new();
+        }
+        self.namespace_prefix_candidates(name)
     }
 
     /// Whether name lookups for the file currently being resolved must ignore
@@ -1837,6 +1868,13 @@ impl CheckerContext {
         if name.contains('.') {
             return Vec::new();
         }
+        self.namespace_prefix_candidates(name)
+    }
+
+    /// The prefix walk shared by [`Self::namespace_qualified_candidates`] and
+    /// [`namespace_qualified_retry_enabled`]'s dotted retry: each active
+    /// namespace prefix, outermost last, joined to `name`.
+    fn namespace_prefix_candidates(&self, name: &str) -> Vec<String> {
         let Some(prefix) = self.namespace_member_prefix_stack.last() else {
             return Vec::new();
         };
@@ -1868,7 +1906,15 @@ impl CheckerContext {
                 return Some(handle);
             }
         }
-        self.lookup_type_declaration_handle_exact(name)
+        if let Some(handle) = self.lookup_type_declaration_handle_exact(name) {
+            return Some(handle);
+        }
+        for candidate in self.namespace_dotted_retry_candidates(name) {
+            if let Some(handle) = self.lookup_type_declaration_handle_exact(&candidate) {
+                return Some(handle);
+            }
+        }
+        None
     }
 
     fn lookup_type_declaration_handle_exact(

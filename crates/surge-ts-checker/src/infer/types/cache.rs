@@ -398,6 +398,19 @@ struct LazyInstantiation {
     /// `program_instantiations`; if it is gone the resolve falls through to a
     /// fresh peel.
     memo: std::sync::OnceLock<std::sync::Weak<Type>>,
+    /// A degraded expansion is never interned (see the comment at the degraded
+    /// return in `resolve_arc`), so without this every peel of a
+    /// still-degraded instantiation re-expands the full member map — and its
+    /// equally degraded heritage bases — per consumer read, which is the
+    /// re-expansion multiplier behind the namespace-merge blowup. Pin the
+    /// first degraded answer per reference instance, but only once the check
+    /// phase has begun: before it, module scopes still move between binding
+    /// rounds, so an early degraded shape must stay transient for a later
+    /// clean peel to supersede. A pinned return still bumps the degradation
+    /// epoch and counters, so enclosing expansions stay uncacheable exactly as
+    /// before — only the recomputation is skipped. Mirrors
+    /// [`LazyDeclarationAnnotation::degraded_memo`].
+    degraded_memo: std::sync::OnceLock<Arc<Type>>,
 }
 
 struct LazyDeclarationAnnotation {
@@ -1067,7 +1080,21 @@ impl ResolveReference for LazyInstantiation {
             crate::speculative::InstantiationProbe::Miss => {}
         }
 
+        // After the interner probe, so a clean expansion interned by another
+        // reference to the same instantiation always wins over the pin.
+        if let Some(pinned) = self.degraded_memo.get() {
+            // Same taint semantics as the expansion this replaces: the consumer
+            // still observes a degradation, only the re-expansion is skipped.
+            crate::program::note_expansion_degradation();
+            crate::program::record_degraded_resolution();
+            crate::program::record_program_counter(|c| {
+                c.lazy_reference_degraded_memo_hit_count += 1
+            });
+            return pinned.clone();
+        }
+
         let guard_key = (self.decl_key.clone(), self.resolved_arguments.clone());
+        let outermost_peel = LAZY_PEEL_STACK.with(|stack| stack.borrow().is_empty());
         let blocked = LAZY_PEEL_STACK.with(|stack| {
             let stack = stack.borrow();
             if stack.len() >= MAX_LAZY_PEEL_DEPTH {
@@ -1106,6 +1133,7 @@ impl ResolveReference for LazyInstantiation {
         if self.creation_scope.is_some() {
             ctx.type_declaration_scope = self.creation_scope.clone();
         }
+        let in_flight_before = in_flight_degraded_read_epoch();
         let mut resolving = Vec::new();
         let resolved = match self.decl.get() {
             TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
@@ -1150,7 +1178,22 @@ impl ResolveReference for LazyInstantiation {
             crate::program::record_program_counter(|c| {
                 c.lazy_reference_degraded_expansion_count += 1
             });
-            return Arc::new(resolved.ty);
+            let degraded = Arc::new(resolved.ty);
+            // Pin only an answer every later peel would recompute identically:
+            // check phase (module scopes stable), outermost peel (a nested
+            // peel's depth/same-declaration blocking is call-site-dependent —
+            // at depth zero the subtree had maximal headroom, so no call site
+            // can do better), and no in-flight degraded read consumed (that
+            // answer depends on which resolutions were mid-flight, see
+            // `IN_FLIGHT_DEGRADED_READS`). Blocked-stack `Unknown` and
+            // `Deferred` probes return above and are never pinned.
+            if crate::program::in_check_phase()
+                && outermost_peel
+                && in_flight_degraded_read_epoch() == in_flight_before
+            {
+                let _ = self.degraded_memo.set(degraded.clone());
+            }
+            return degraded;
         }
 
         // The eager named-type path tags the resolved object with its declaration
@@ -1226,6 +1269,7 @@ pub(crate) fn make_lazy_type_reference(
             substitution,
             display: Arc::from(display),
             memo: std::sync::OnceLock::new(),
+            degraded_memo: std::sync::OnceLock::new(),
         }),
     ))
 }

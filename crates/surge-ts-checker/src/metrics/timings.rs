@@ -899,6 +899,10 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         counters.lazy_reference_degraded_expansion_count
     );
     eprintln!(
+        "    lazy_reference_degraded_memo_hit_count: {}",
+        counters.lazy_reference_degraded_memo_hit_count
+    );
+    eprintln!(
         "    generic_instantiation_count: {}",
         counters.generic_instantiation_count
     );
