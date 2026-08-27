@@ -1042,6 +1042,20 @@ pub(crate) fn resolve_interface_declaration(
     }
 }
 
+/// Whether exactly one side of an overload parameter slot is a function type and
+/// the other declares no call signature of its own. Deliberately does NOT peel:
+/// this runs for every merged slot, and forcing a nominal reference's expansion
+/// here is the hazard the interface-resolution counters pin.
+fn exactly_one_callback_slot(left: &Type, right: &Type) -> bool {
+    let left_is_function = matches!(left, Type::Function(_));
+    let right_is_function = matches!(right, Type::Function(_));
+    if left_is_function == right_is_function {
+        return false;
+    }
+    let other = if left_is_function { right } else { left };
+    !matches!(other, Type::Object(object) if object.call_signature.is_some())
+}
+
 /// Collapse two function overloads into a single permissive signature: the
 /// required-parameter count is the smaller of the two (a call matching the
 /// shorter overload's arity is accepted), the parameter list is the longer of
@@ -1093,6 +1107,15 @@ pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> F
                     unreachable!("guarded above")
                 };
                 Type::Function(merge_overload_signatures(current, other))
+            }
+            // Exactly one overload declares a callback in this slot: widening to
+            // `any` throws the callback's parameter types away, so every arrow
+            // written at the call site becomes an implicit any (JSON.stringify's
+            // replacer, addEventListener's listener). A union keeps both
+            // overloads' arguments assignable AND leaves a signature for
+            // contextual typing to find.
+            Some(other) if exactly_one_callback_slot(ty, other) => {
+                surge_ts_types::union_type(vec![ty.clone(), other.clone()])
             }
             Some(_) => Type::Any,
             None => ty.clone(),
