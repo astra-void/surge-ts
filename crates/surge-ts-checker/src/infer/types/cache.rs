@@ -22,15 +22,27 @@ pub(crate) fn type_declaration_resolution_key(
     declaration: &TypeDeclarationInfo,
 ) -> DeclarationResolutionKey {
     match declaration {
-        TypeDeclarationInfo::Alias(alias) => alias
-            .cached_resolution_key
-            .get_or_init(|| declaration_resolution_key(&alias.file_name, &alias.name))
-            .clone(),
-        TypeDeclarationInfo::Interface(interface) => interface
-            .cached_resolution_key
-            .get_or_init(|| declaration_resolution_key(&interface.file_name, &interface.name))
-            .clone(),
+        TypeDeclarationInfo::Alias(alias) => alias_resolution_key(alias),
+        TypeDeclarationInfo::Interface(interface) => interface_resolution_key(interface),
     }
+}
+
+pub(crate) fn alias_resolution_key(
+    alias: &crate::symbols::TypeAliasInfo,
+) -> DeclarationResolutionKey {
+    alias
+        .cached_resolution_key
+        .get_or_init(|| declaration_resolution_key(&alias.file_name, &alias.name))
+        .clone()
+}
+
+pub(crate) fn interface_resolution_key(
+    interface: &crate::symbols::InterfaceInfo,
+) -> DeclarationResolutionKey {
+    interface
+        .cached_resolution_key
+        .get_or_init(|| declaration_resolution_key(&interface.file_name, &interface.name))
+        .clone()
 }
 
 pub(crate) fn declaration_resolution_key(file_name: &str, name: &str) -> DeclarationResolutionKey {
@@ -657,7 +669,7 @@ pub(crate) fn make_lazy_signature_annotation_reference(
     let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
     let component_identity = component.identity();
     let key = DeclarationResolutionKey {
-        file_name: canonical_declaration_file_name(&ctx.file_name),
+        file_name: ctx.canonical_file_name_arc(),
         name: Arc::from(format!(
             "signature {declaration_name}@{declaration_start}:{component_identity}"
         )),
@@ -724,7 +736,7 @@ pub(crate) fn make_lazy_value_annotation_reference(
 ) -> Type {
     let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
     let key = DeclarationResolutionKey {
-        file_name: canonical_declaration_file_name(&ctx.file_name),
+        file_name: ctx.canonical_file_name_arc(),
         name: Arc::from(format!("value {declaration_name}@{declaration_start}")),
         namespace: DeclarationNamespace::Type,
         fingerprint: 0,
@@ -1622,6 +1634,21 @@ pub(crate) fn canonical_physical_interface_key(
 pub(crate) fn stable_interface_declaration_id(
     interface: &crate::symbols::InterfaceInfo,
 ) -> Result<StableInterfaceDeclarationId, InterfaceCacheSkipReason> {
+    let memoized = interface
+        .cached_stable_id
+        .get_or_init(|| build_stable_interface_declaration_id(interface).ok())
+        .clone();
+    debug_assert_eq!(
+        memoized,
+        build_stable_interface_declaration_id(interface).ok(),
+        "stale cached_stable_id: a fragment or rename mutation missed its reset"
+    );
+    memoized.ok_or(InterfaceCacheSkipReason::UnstableDeclaration)
+}
+
+fn build_stable_interface_declaration_id(
+    interface: &crate::symbols::InterfaceInfo,
+) -> Result<StableInterfaceDeclarationId, InterfaceCacheSkipReason> {
     let declaration_start = interface
         .name_span
         .map_or(Ok(0), |span| u32::try_from(span.start))
@@ -1647,7 +1674,7 @@ pub(crate) fn stable_interface_declaration_id(
     })
 }
 
-fn canonical_physical_interface_key_with_declaration(
+pub(crate) fn canonical_physical_interface_key_with_declaration(
     interface: &crate::symbols::InterfaceInfo,
     substitution: &TypeParameterSubstitution,
     ctx: &CheckerContext,

@@ -41,7 +41,7 @@ pub(crate) fn resolve_type_alias(
     substitution: &TypeParameterSubstitution,
     pre_resolved_arguments: Option<&[Type]>,
 ) -> ResolvedType {
-    let declaration_key = declaration_resolution_key(&alias.file_name, &alias.name);
+    let declaration_key = super::cache::alias_resolution_key(alias);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
         ctx.note_resolution_cycle(index);
         // tsc only rejects a type alias that references itself *without* an

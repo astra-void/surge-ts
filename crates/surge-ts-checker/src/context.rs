@@ -963,6 +963,11 @@ pub(crate) struct CheckerContext {
     /// Declaration headers collected for one file share this single allocation
     /// instead of owning a path copy per header.
     file_name_arc: Option<Arc<str>>,
+    /// Lazily built canonical form of `file_name` (raw, canonical), revalidated
+    /// against the raw name on every call for the same reason as
+    /// [`Self::file_name_arc`]. Lazy annotation references key on the canonical
+    /// path per creation; this collapses the repeated canonicalize-cache probes.
+    canonical_file_name_memo: Option<(Arc<str>, Arc<str>)>,
     pub(crate) current_file_kind: FileKind,
     pub(crate) options: Arc<CheckerOptions>,
     pub(crate) diagnostics: Vec<Diagnostic>,
@@ -1207,6 +1212,7 @@ impl CheckerContext {
         Self {
             file_name,
             file_name_arc: None,
+            canonical_file_name_memo: None,
             current_file_kind,
             options,
             diagnostics: Vec::new(),
@@ -1306,6 +1312,7 @@ impl CheckerContext {
         Self {
             file_name: data.file_name.clone(),
             file_name_arc: None,
+            canonical_file_name_memo: None,
             current_file_kind: data.current_file_kind,
             options: data.options.clone(),
             diagnostics: Vec::new(),
@@ -1531,6 +1538,7 @@ impl CheckerContext {
                 self.declaration_environment_generation.wrapping_add(1);
             self.environment_visit_counter = self.environment_visit_counter.wrapping_add(1);
             self.file_name_arc = None;
+            self.canonical_file_name_memo = None;
         }
         self.current_file_kind = self
             .file_kinds
@@ -1538,6 +1546,21 @@ impl CheckerContext {
             .copied()
             .unwrap_or(FileKind::RootSource);
         self.file_name = file_name;
+    }
+
+    /// The canonical twin of [`Self::file_name_arc`], with the same
+    /// revalidation rule.
+    pub(crate) fn canonical_file_name_arc(&mut self) -> Arc<str> {
+        if let Some((raw, canonical)) = &self.canonical_file_name_memo
+            && **raw == *self.file_name
+        {
+            return canonical.clone();
+        }
+        let raw = self.file_name_arc();
+        let canonical =
+            crate::paths::canonicalize_if_exists_arc(std::path::Path::new(&*self.file_name));
+        self.canonical_file_name_memo = Some((raw, canonical.clone()));
+        canonical
     }
 
     /// The memo is revalidated against `file_name` on every call because a few

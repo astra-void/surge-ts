@@ -146,6 +146,13 @@ pub(crate) struct InterfaceInfo {
     pub(crate) cached_resolution_key: std::sync::OnceLock<crate::context::DeclarationResolutionKey>,
     /// See [`TypeAliasInfo::cached_alias_id`].
     pub(crate) cached_alias_id: std::sync::OnceLock<Arc<str>>,
+    /// Memoized stable declaration identity for the instantiation cache
+    /// (`None` = the declaration is unstable and never cacheable). Depends on
+    /// `file_name`, `name_span`, the declared name, and every merged fragment,
+    /// so it must be reset wherever `declaration_fragments` grows on a cloned
+    /// accumulator and wherever the declaration is renamed.
+    pub(crate) cached_stable_id:
+        std::sync::OnceLock<Option<crate::context::StableInterfaceDeclarationId>>,
 }
 
 impl InterfaceInfo {
@@ -186,6 +193,7 @@ impl InterfaceInfo {
             }),
             cached_resolution_key: std::sync::OnceLock::new(),
             cached_alias_id: std::sync::OnceLock::new(),
+            cached_stable_id: std::sync::OnceLock::new(),
         }
     }
 }
@@ -202,6 +210,7 @@ impl Clone for InterfaceInfo {
             body: self.body.clone(),
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
+            cached_stable_id: self.cached_stable_id.clone(),
         }
     }
 }
@@ -459,6 +468,9 @@ fn fold_interface_declaration(
     incoming: &InterfaceInfo,
     is_method: &impl Fn(&ParsedInterfaceMember) -> bool,
 ) {
+    // The accumulator is a clone of an existing declaration, so a memoized
+    // stable id would go stale as the fragment list grows below.
+    accumulator.cached_stable_id = std::sync::OnceLock::new();
     let body = Arc::make_mut(&mut accumulator.body);
     for (member, fragment) in incoming
         .body

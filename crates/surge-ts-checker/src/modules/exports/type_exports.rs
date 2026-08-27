@@ -68,6 +68,7 @@ pub(crate) fn rename_type_declaration(
             interface.name = exported_name.into();
             interface.cached_resolution_key = std::sync::OnceLock::new();
             interface.cached_alias_id = std::sync::OnceLock::new();
+            interface.cached_stable_id = std::sync::OnceLock::new();
             TypeDeclarationInfo::Interface(interface)
         }
     }

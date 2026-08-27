@@ -140,7 +140,7 @@ pub(crate) fn resolve_interface(
     pre_resolved_arguments: Option<&[Type]>,
 ) -> ResolvedType {
     crate::program::record_interface_resolution_attempt();
-    let declaration_key = declaration_resolution_key(&interface.file_name, &interface.name);
+    let declaration_key = super::cache::interface_resolution_key(interface);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
         // A recursive interface (`interface Node { next: Node }`) is always valid in
         // tsc. For a *non-generic* interface resolve the self-edge to a lazy nominal
@@ -315,12 +315,19 @@ pub(crate) fn resolve_interface(
         None
     };
     let interface_key = if cache_eligible || collect_all_interface_identities {
-        match canonical_physical_interface_key(
-            interface,
-            &local_substitution,
-            ctx,
-            cache_eligible && !physical_default_lib,
-        ) {
+        // Reuse the stable id computed above instead of rebuilding it inside
+        // the key constructor.
+        let key = match stable_declaration.clone() {
+            Some(declaration) => canonical_physical_interface_key_with_declaration(
+                interface,
+                &local_substitution,
+                ctx,
+                declaration,
+                cache_eligible && !physical_default_lib,
+            ),
+            None => Err(InterfaceCacheSkipReason::UnstableDeclaration),
+        };
+        match key {
             Ok(key) => Some(key),
             Err(reason) => {
                 record_interface_cache_skip(reason);
