@@ -98,6 +98,122 @@ fn rest_element_type(ty: Type) -> Type {
     }
 }
 
+/// [`resolve_function_type`] with lazy components (Stage 2 of member-level
+/// lazy expansion): the FunctionType shell — arity, variadic, required count,
+/// `this`/rest handling — is built exactly as the eager path builds it, but an
+/// eligible parameter or return annotation becomes a lazy component reference
+/// resolved on first read. `this` and rest parameters always resolve eagerly
+/// (`this` is typing metadata outside arity; a rest annotation is stored as
+/// its ELEMENT type, which a deferred wrapper would mis-shape).
+pub(crate) fn resolve_function_type_lazy_components(
+    function_type: std::sync::Arc<ParsedFunctionType>,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+    interface_name: &str,
+    declaration_start: usize,
+    member_name: &str,
+) -> ResolvedType {
+    let local_substitution = extend_substitution_with_type_parameters(
+        substitution,
+        &function_type.type_parameters,
+        ctx,
+        resolving,
+    );
+
+    let value_parameters = function_type
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this)
+        .cloned()
+        .collect::<Vec<_>>();
+    let required_parameter_count = required_parameter_count(&value_parameters);
+    let is_variadic = value_parameters
+        .last()
+        .is_some_and(|parameter| parameter.rest);
+    let mut parameters = Vec::new();
+    let mut had_error = false;
+
+    let mut value_index = 0usize;
+    for parameter in function_type.parameters.iter().cloned() {
+        let is_this = parameter.is_this;
+        let is_rest = parameter.rest;
+        let defer = !is_this
+            && !is_rest
+            && defer_method_component_annotation(&parameter.ty);
+        if defer {
+            let ty = super::super::cache::make_lazy_method_component_reference(
+                ctx,
+                interface_name,
+                declaration_start,
+                member_name,
+                crate::infer::LazySignatureComponent::Parameter(value_index),
+                parameter.ty,
+                &local_substitution,
+            );
+            parameters.push(ty);
+            value_index += 1;
+            continue;
+        }
+        let resolved_parameter =
+            resolve_function_type_parameter(parameter, ctx, resolving, &local_substitution);
+        had_error |= resolved_parameter.had_error;
+        if is_this {
+            continue;
+        }
+        value_index += 1;
+        if is_rest {
+            parameters.push(rest_element_type(resolved_parameter.ty));
+        } else {
+            parameters.push(resolved_parameter.ty);
+        }
+    }
+
+    // The return annotation stays eager: a call's result flows through the
+    // whole program — truthiness narrowing, unions, optional chains — and a
+    // deferred `X | undefined` return measurably escapes narrowing (25 tRPC
+    // false positives). Parameters have a narrow consumer surface (argument
+    // assignability and contextual typing, both of which peel).
+    let return_type = resolve_parsed_type(
+        (*function_type.return_type).clone(),
+        ctx,
+        resolving,
+        &local_substitution,
+    );
+    had_error |= return_type.had_error;
+    ResolvedType {
+        ty: Type::Function(alloc_function_type(
+            parameters,
+            return_type.ty,
+            is_variadic,
+            required_parameter_count,
+        )),
+        had_error,
+    }
+}
+
+/// The method-component deferral tier: structured shapes minus anything
+/// containing `typeof` (resolved against value tables the captured
+/// environment drops) and minus predicates (`x is T` shapes the signature).
+fn defer_method_component_annotation(annotation: &ParsedType) -> bool {
+    match annotation {
+        ParsedType::Object(_)
+        | ParsedType::Tuple(_)
+        | ParsedType::Union(_)
+        | ParsedType::Intersection(_)
+        | ParsedType::Function(_)
+        | ParsedType::KeyOf(_)
+        | ParsedType::IndexedAccess(_)
+        | ParsedType::Mapped(_)
+        | ParsedType::Conditional(_)
+        | ParsedType::TemplateLiteral(_) => {
+            !crate::modules::annotation_contains_typeof(annotation)
+        }
+        ParsedType::Array(element) => defer_method_component_annotation(element),
+        _ => false,
+    }
+}
+
 pub(crate) fn required_parameter_count(
     parameters: &[surge_ts_syntax::ParsedFunctionTypeParameter],
 ) -> usize {

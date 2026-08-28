@@ -421,6 +421,12 @@ struct LazyDeclarationAnnotation {
     annotation: surge_ts_syntax::ParsedType,
     signature_component: Option<LazySignatureComponent>,
     signature_environment: Option<LazySignatureEnvironment>,
+    /// The namespace-member prefix stack active where the annotation was
+    /// captured. A member of `declare namespace ts` writes bare `Symbol`
+    /// meaning `ts.Symbol`; the recovered force context has an empty stack, so
+    /// without re-installing this the bare name resolves to the GLOBAL Symbol
+    /// and every nominal comparison against the namespace type fails.
+    namespace_prefix_stack: Option<Arc<[String]>>,
     memo: std::sync::OnceLock<std::sync::Weak<Type>>,
     /// A degraded (`had_error`/unknown) resolution is never interned into the
     /// shared caches (that would violate the no-degraded-results-program-wide
@@ -614,6 +620,9 @@ impl LazyDeclarationAnnotation {
         if self.creation_scope.is_some() {
             ctx.type_declaration_scope = self.creation_scope.clone();
         }
+        if let Some(stack) = &self.namespace_prefix_stack {
+            ctx.namespace_member_prefix_stack = stack.to_vec();
+        }
         if let Some(environment) = &self.signature_environment
             && !environment.type_parameters.is_empty()
         {
@@ -736,6 +745,7 @@ pub(crate) fn make_lazy_signature_annotation_reference(
         "{}\u{0}signature-annotation\u{0}{declaration_name}\u{0}{declaration_start}\u{0}{component_identity}",
         key.file_name
     );
+    let ctx_prefix_stack = ctx.namespace_member_prefix_stack.clone();
     let environment = ctx.declaration_environment();
     let creation_scope = ctx.type_declaration_scope.clone();
     Type::Reference(TypeReference::new(
@@ -750,6 +760,7 @@ pub(crate) fn make_lazy_signature_annotation_reference(
             annotation,
             signature_component: Some(component),
             signature_environment,
+            namespace_prefix_stack: None,
             memo: std::sync::OnceLock::new(),
             degraded_memo: std::sync::OnceLock::new(),
         }),
@@ -801,6 +812,7 @@ pub(crate) fn make_lazy_value_annotation_reference(
             annotation,
             signature_component: None,
             signature_environment: None,
+            namespace_prefix_stack: None,
             memo: std::sync::OnceLock::new(),
             degraded_memo: std::sync::OnceLock::new(),
         }),
@@ -816,6 +828,14 @@ pub(crate) fn make_lazy_value_annotation_reference(
 /// fingerprint carries the substitution's display-inclusive identity so two
 /// instantiations of the same generic interface never share an interner
 /// entry.
+fn capture_namespace_prefix_stack(stack: &[String]) -> Option<Arc<[String]>> {
+    if stack.is_empty() {
+        None
+    } else {
+        Some(Arc::from(stack))
+    }
+}
+
 pub(crate) fn make_lazy_member_annotation_reference(
     ctx: &mut CheckerContext,
     interface_name: &str,
@@ -825,22 +845,7 @@ pub(crate) fn make_lazy_member_annotation_reference(
     substitution: &TypeParameterSubstitution,
 ) -> Type {
     let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
-    let fingerprint = {
-        use std::hash::Hasher;
-        let mut entries = substitution.iter().peekable();
-        if entries.peek().is_none() {
-            0
-        } else {
-            let mut hasher = surge_ts_types::fx::FxHasher::default();
-            for (name, ty) in entries {
-                hasher.write(name.as_bytes());
-                hasher.write_u8(u8::from(substitution.is_placeholder(name)));
-                hasher.write_u64(crate::speculative::display_type_fingerprint(ty));
-            }
-            // High bit clear keeps the key disjoint from the module-memo tag.
-            hasher.finish() & !MODULE_INSTANTIATION_MEMO_TAG
-        }
-    };
+    let fingerprint = member_substitution_fingerprint(substitution);
     let key = DeclarationResolutionKey {
         file_name: ctx.canonical_file_name_arc(),
         name: Arc::from(format!(
@@ -855,6 +860,7 @@ pub(crate) fn make_lazy_member_annotation_reference(
         "{}\u{0}member-annotation\u{0}{interface_name}\u{0}{declaration_start}\u{0}{member_name}\u{0}{fingerprint:016x}",
         key.file_name
     );
+    let ctx_prefix_stack = ctx.namespace_member_prefix_stack.clone();
     let environment = ctx.declaration_environment();
     let creation_scope = ctx.type_declaration_scope.clone();
     Type::Reference(TypeReference::new(
@@ -869,10 +875,123 @@ pub(crate) fn make_lazy_member_annotation_reference(
             annotation,
             signature_component: None,
             signature_environment: LazySignatureEnvironment::for_member_substitution(substitution),
+            namespace_prefix_stack: capture_namespace_prefix_stack(&ctx_prefix_stack),
             memo: std::sync::OnceLock::new(),
             degraded_memo: std::sync::OnceLock::new(),
         }),
     ))
+}
+
+/// A lazy reference for one COMPONENT (parameter or return annotation) of a
+/// library interface method (Stage 2 of member-level lazy expansion). The
+/// FunctionType shell stays eager; the captured substitution is the method's
+/// LOCAL substitution (interface bindings + the method's own extended
+/// parameters), so the force resolves exactly as the eager path would.
+/// Components carry `signature_component`, so the force peels the resolved
+/// reference the way eager structural resolution produced structural shapes.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn make_lazy_method_component_reference(
+    ctx: &mut CheckerContext,
+    interface_name: &str,
+    declaration_start: usize,
+    member_name: &str,
+    component: LazySignatureComponent,
+    annotation: surge_ts_syntax::ParsedType,
+    local_substitution: &TypeParameterSubstitution,
+) -> Type {
+    let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
+    let fingerprint = member_substitution_fingerprint(local_substitution);
+    let component_identity = component.identity();
+    let key = DeclarationResolutionKey {
+        file_name: ctx.canonical_file_name_arc(),
+        name: Arc::from(format!(
+            "method {interface_name}@{declaration_start}.{member_name}:{component_identity}"
+        )),
+        namespace: DeclarationNamespace::Type,
+        fingerprint,
+    };
+    crate::program::record_lazy_reference_created(&key);
+    crate::program::record_program_counter(|c| c.lazy_member_annotation_create_count += 1);
+    let id = format!(
+        "{}\u{0}method-component\u{0}{interface_name}\u{0}{declaration_start}\u{0}{member_name}\u{0}{component_identity}\u{0}{fingerprint:016x}",
+        key.file_name
+    );
+    let ctx_prefix_stack = ctx.namespace_member_prefix_stack.clone();
+    let environment = ctx.declaration_environment();
+    let creation_scope = ctx.type_declaration_scope.clone();
+    Type::Reference(TypeReference::new(
+        id,
+        display.clone(),
+        Vec::new(),
+        Arc::new(LazyDeclarationAnnotation {
+            environment,
+            creation_scope,
+            key,
+            display,
+            annotation,
+            signature_component: Some(component),
+            signature_environment: LazySignatureEnvironment::for_member_substitution(
+                local_substitution,
+            ),
+            namespace_prefix_stack: capture_namespace_prefix_stack(&ctx_prefix_stack),
+            memo: std::sync::OnceLock::new(),
+            degraded_memo: std::sync::OnceLock::new(),
+        }),
+    ))
+}
+
+pub(crate) fn member_substitution_fingerprint(substitution: &TypeParameterSubstitution) -> u64 {
+    use std::hash::Hasher;
+    let mut entries = substitution.iter().peekable();
+    if entries.peek().is_none() {
+        return 0;
+    }
+    let mut hasher = surge_ts_types::fx::FxHasher::default();
+    for (name, ty) in entries {
+        hasher.write(name.as_bytes());
+        hasher.write_u8(u8::from(substitution.is_placeholder(name)));
+        hasher.write_u64(crate::speculative::display_type_fingerprint(ty));
+    }
+    // High bit clear keeps the key disjoint from the module-memo tag.
+    hasher.finish() & !MODULE_INSTANTIATION_MEMO_TAG
+}
+
+/// Syntactic twin of [`physical_interface_method_has_contextual_typing_dependency`]
+/// for methods whose components defer: any real (non-`this`) parameter whose
+/// ANNOTATION spells a callable. Matches the resolved-side classifier exactly,
+/// because that classifier has no `Type::Reference` arm — a named annotation
+/// resolving to a callable already classified as `false` there.
+pub(crate) fn parsed_method_has_contextual_typing_dependency(
+    function: &surge_ts_syntax::ParsedFunctionType,
+) -> bool {
+    fn contains_callable(annotation: &surge_ts_syntax::ParsedType, depth: usize) -> bool {
+        use surge_ts_syntax::ParsedType;
+        if depth >= 32 {
+            return true;
+        }
+        match annotation {
+            ParsedType::Function(_) => true,
+            ParsedType::Object(object) => {
+                object.call_signature.is_some()
+                    || object
+                        .properties
+                        .iter()
+                        .any(|property| contains_callable(&property.ty, depth + 1))
+            }
+            ParsedType::Array(element) | ParsedType::KeyOf(element) => {
+                contains_callable(element, depth + 1)
+            }
+            ParsedType::Tuple(elements) | ParsedType::Union(elements) => {
+                elements.iter().any(|e| contains_callable(e, depth + 1))
+            }
+            _ => false,
+        }
+    }
+    function
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this)
+        .any(|parameter| contains_callable(&parameter.ty, 0))
 }
 
 /// Opt-in probe filter (`SURGE_LAZY_VALUE_TRACE=<substr>`), read once — the

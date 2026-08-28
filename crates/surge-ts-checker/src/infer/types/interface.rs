@@ -779,6 +779,20 @@ pub(crate) fn resolve_interface_declaration(
     // `EventTarget` one it overrides and cost the callback its contextual type.
     let mut own_member_names =
         surge_ts_types::fx::FxHashSet::<&str>::with_hasher(Default::default());
+    // Stage 2 gate: a method's components defer only when it has NO overloads
+    // — `merge_overload_signatures` compares parameter slots by equality and
+    // must not peel, so distinct lazy-ref ids in an overload group would widen
+    // previously-equal slots to `any`.
+    let lazy_method_group_counts = lazy_member_context.map(|_| {
+        let mut counts =
+            surge_ts_types::fx::FxHashMap::<&str, u32>::with_hasher(Default::default());
+        for member in members {
+            if matches!(member.ty, ParsedType::Function(_)) {
+                *counts.entry(member.name.as_str()).or_insert(0) += 1;
+            }
+        }
+        counts
+    });
     for (member_index, member) in members.iter().enumerate() {
         let is_method = matches!(member.ty, ParsedType::Function(_));
         let reason = if is_method {
@@ -822,6 +836,7 @@ pub(crate) fn resolve_interface_declaration(
                 }
             });
         }
+        let mut deferred_method_components = false;
         let mut property_type = if let Some(function) = cached_method {
             ResolvedType {
                 ty: Type::Function(function),
@@ -842,6 +857,32 @@ pub(crate) fn resolve_interface_declaration(
                 ),
                 had_error: false,
             }
+        } else if let Some((interface_name, declaration_start)) = lazy_member_context
+            && is_method
+            // Check phase only: during analysis, scopes still move, so a
+            // forced component cannot intern — and signature assignability
+            // then re-resolves the components per comparison pair, grinding
+            // the analysis rounds the way the pre-pin degraded re-expansion
+            // did.
+            && crate::program::in_check_phase()
+            && lazy_method_group_counts
+                .as_ref()
+                .is_some_and(|counts| counts.get(member.name.as_str()) == Some(&1))
+            && let ParsedType::Function(function_type) = &member.ty
+        {
+            deferred_method_components = true;
+            let function_type = function_type.clone();
+            crate::program::with_dts_expansion_reason(reason, || {
+                super::resolve::resolve_function_type_lazy_components(
+                    function_type,
+                    ctx,
+                    resolving,
+                    substitution,
+                    interface_name,
+                    declaration_start,
+                    &member.name,
+                )
+            })
         } else {
             crate::program::with_dts_expansion_reason(reason, || {
                 resolve_parsed_type(member.ty.clone(), ctx, resolving, substitution)
@@ -856,8 +897,20 @@ pub(crate) fn resolve_interface_declaration(
             } else {
                 None
             };
+        // A deferred method's callables hide behind lazy component refs the
+        // resolved-side classifier cannot see, so classify from the PARSED
+        // annotation — semantically identical (the resolved-side check has no
+        // Reference arm, so named callables already classified as false).
         let contextual_typing_dependency = is_method
-            && physical_interface_method_has_contextual_typing_dependency(&property_type.ty);
+            && if deferred_method_components {
+                if let ParsedType::Function(function_type) = &member.ty {
+                    super::cache::parsed_method_has_contextual_typing_dependency(function_type)
+                } else {
+                    false
+                }
+            } else {
+                physical_interface_method_has_contextual_typing_dependency(&property_type.ty)
+            };
         let method_clean = is_method
             && !property_type.had_error
             && !emitted_diagnostics
