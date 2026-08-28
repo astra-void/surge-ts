@@ -1762,6 +1762,14 @@ impl CheckerContext {
         // Resolving the qualified candidates first is what keeps generic React event
         // types (`MouseEventHandler<T> = EventHandler<MouseEvent<T>>`) from degrading
         // to the arity-0 global and losing their function shape.
+        // `globalThis.X` explicitly targets the global scope, bypassing every
+        // local shadow — `interface Iterator<T> extends globalThis.Iterator<T>`
+        // must reach the lib Iterator, not re-find its own shadowing
+        // declaration. Only the ambient global table is consulted.
+        if let Some(global_name) = name.strip_prefix("globalThis.") {
+            crate::program::record_type_declaration_lookup(3);
+            return self.ambient_global_type_declarations.get(global_name);
+        }
         for candidate in self.namespace_qualified_candidates(name) {
             if let Some(declaration) = self.lookup_type_declaration_exact(&candidate) {
                 return Some(declaration);
@@ -1916,6 +1924,11 @@ impl CheckerContext {
     ) -> Option<crate::symbols::TypeDeclarationHandle> {
         // Namespace siblings shadow outer/global declarations of the same name — see
         // [`lookup_type_declaration`] for why this ordering matters.
+        // See the `globalThis.` comment in `lookup_type_declaration`.
+        if let Some(global_name) = name.strip_prefix("globalThis.") {
+            crate::program::record_type_declaration_lookup(3);
+            return self.ambient_global_type_declarations.get_handle(global_name);
+        }
         for candidate in self.namespace_qualified_candidates(name) {
             if let Some(handle) = self.lookup_type_declaration_handle_exact(&candidate) {
                 return Some(handle);
