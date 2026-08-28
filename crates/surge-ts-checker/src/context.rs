@@ -1740,19 +1740,21 @@ impl CheckerContext {
     /// bodies reference only the global ambient surface) and emit no use-site
     /// diagnostics under `skipLibCheck`, so they are safe to memoize program-wide.
     pub(crate) fn is_library_scoped_file(&self, file_name: &str) -> bool {
-        if crate::default_lib::is_physical_default_lib_file_name(file_name)
-            || crate::default_lib::is_generated_default_lib_file_name(file_name)
-        {
-            return true;
-        }
-        matches!(
+        // Probe `file_kinds` first: the hot callers ask about dependency
+        // `.d.ts` files that are registered there, and the name-based
+        // default-lib checks each cost a thread-local string-hash lookup.
+        if matches!(
             self.file_kinds.get(file_name),
             Some(
                 FileKind::DependencyDeclaration
                     | FileKind::GeneratedDeclaration
                     | FileKind::PhysicalDefaultLib
             )
-        )
+        ) {
+            return true;
+        }
+        crate::default_lib::is_physical_default_lib_file_name(file_name)
+            || crate::default_lib::is_generated_default_lib_file_name(file_name)
     }
 
     pub(crate) fn lookup_type_declaration(&self, name: &str) -> Option<&TypeDeclarationInfo> {
