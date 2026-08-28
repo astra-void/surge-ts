@@ -15,6 +15,23 @@ fn extended_interface_cache_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_IFACE_CACHE_ALL").is_some())
 }
 
+/// Opt-in `SURGE_LIB_MEMBER_CACHE=1`: extend the per-MEMBER instantiation
+/// cache (method/overload signatures) beyond the physical default lib to
+/// every library-scoped declaration file, check phase only — before it,
+/// module scopes and augmentations still move between binding rounds. Unlike
+/// `SURGE_IFACE_CACHE_ALL` this does NOT extend the whole-interface cache;
+/// only member keys and declaration templates are formed for these files.
+///
+/// Sealed off-by-default (2026-08-28): diagnostics stay 5-corpus identical
+/// and tRPC method-cache hits rise 2.5k -> 120k, but user time is ~+2% — key
+/// formation, composite-key hashing, and value validation cost more than the
+/// avoided member resolutions now that the check-phase degraded peel is
+/// pinned. Re-measure only alongside a cheaper member-key identity.
+fn extended_member_cache_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_LIB_MEMBER_CACHE").is_some())
+}
+
 /// Opt-in `SURGE_LAZY_IFACE_MEMBERS=1`: defer a library interface's structured
 /// PROPERTY member annotations to lazy references resolved on first read (see
 /// docs/perf/MEMBER-LAZY-EXPANSION.md). Method members stay eager in Stage 1.
@@ -358,13 +375,38 @@ pub(crate) fn resolve_interface(
     // interning, value validation, display-tagged argument identity) applies.
     let cache_eligible = physical_default_lib
         || (extended_interface_cache_enabled() && crate::program::in_check_phase());
+    let member_cache_extension = !physical_default_lib
+        && extended_member_cache_enabled()
+        && physical_interface_member_cache_enabled()
+        && {
+            let check_phase = crate::program::in_check_phase();
+            let library_scoped = check_phase
+                && (ctx.is_library_scoped_file(&interface.file_name)
+                    || crate::program::is_library_classified_file_name(&interface.file_name));
+            crate::program::record_program_counter(|c| {
+                if !check_phase {
+                    c.member_cache_ext_not_check_phase_count += 1;
+                } else if !library_scoped {
+                    c.member_cache_ext_not_library_scoped_count += 1;
+                }
+            });
+            if check_phase
+                && !library_scoped
+                && std::env::var_os("SURGE_MEMBER_CACHE_TRACE").is_some()
+            {
+                eprintln!("[member-cache-ext] not-lib file={}", interface.file_name);
+            }
+            library_scoped
+        };
     let collect_all_interface_identities = crate::program::dts_expansion_trace_enabled();
-    let stable_declaration = if cache_eligible || collect_all_interface_identities {
+    let form_interface_key =
+        cache_eligible || member_cache_extension || collect_all_interface_identities;
+    let stable_declaration = if form_interface_key {
         stable_interface_declaration_id(interface).ok()
     } else {
         None
     };
-    let interface_key = if cache_eligible || collect_all_interface_identities {
+    let interface_key = if form_interface_key {
         // Reuse the stable id computed above instead of rebuilding it inside
         // the key constructor.
         let key = match stable_declaration.clone() {
@@ -373,7 +415,7 @@ pub(crate) fn resolve_interface(
                 &local_substitution,
                 ctx,
                 declaration,
-                cache_eligible && !physical_default_lib,
+                (cache_eligible || member_cache_extension) && !physical_default_lib,
             ),
             None => Err(InterfaceCacheSkipReason::UnstableDeclaration),
         };
@@ -387,7 +429,7 @@ pub(crate) fn resolve_interface(
     } else {
         None
     };
-    let declaration_template = if physical_default_lib
+    let declaration_template = if (physical_default_lib || member_cache_extension)
         && physical_interface_member_cache_enabled()
         && let Some(declaration) = stable_declaration.as_ref()
     {
@@ -395,6 +437,15 @@ pub(crate) fn resolve_interface(
     } else {
         None
     };
+    if member_cache_extension {
+        crate::program::record_program_counter(|c| {
+            if declaration_template.is_none() || interface_key.is_none() {
+                c.member_cache_ext_template_unavailable_count += 1;
+            } else {
+                c.member_cache_ext_keyed_count += 1;
+            }
+        });
+    }
     let creation_before = crate::program::type_creation_snapshot();
     if cache_eligible {
         if !physical_interface_cache_enabled() {

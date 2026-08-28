@@ -1419,6 +1419,20 @@ fn parse_program_file(
     }
 }
 
+/// Whether the file NAME classifies as a trusted library/dependency
+/// declaration file. Unlike `CheckerContext::is_library_scoped_file` this is
+/// consumer-independent: synthetic environment-recovered contexts can carry a
+/// `file_kinds` map without dependency entries, and a cache-key eligibility
+/// gate must not vary with the consumer.
+pub(crate) fn is_library_classified_file_name(file_name: &str) -> bool {
+    matches!(
+        classify_file_kind(file_name),
+        FileKind::DependencyDeclaration
+            | FileKind::GeneratedDeclaration
+            | FileKind::PhysicalDefaultLib
+    )
+}
+
 fn classify_file_kind(file_name: &str) -> FileKind {
     if is_declaration_file_name(file_name) {
         if is_generated_declaration_file_name(file_name) {

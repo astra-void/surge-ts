@@ -1092,6 +1092,22 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
             counters.unknown_containing_interface_member_count,
         ),
         (
+            "member_cache_ext_not_check_phase_count",
+            counters.member_cache_ext_not_check_phase_count,
+        ),
+        (
+            "member_cache_ext_not_library_scoped_count",
+            counters.member_cache_ext_not_library_scoped_count,
+        ),
+        (
+            "member_cache_ext_template_unavailable_count",
+            counters.member_cache_ext_template_unavailable_count,
+        ),
+        (
+            "member_cache_ext_keyed_count",
+            counters.member_cache_ext_keyed_count,
+        ),
+        (
             "interface_template_build_attempt_count",
             counters.interface_template_build_attempt_count,
         ),
