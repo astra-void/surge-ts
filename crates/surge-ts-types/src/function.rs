@@ -188,6 +188,12 @@ impl FunctionType {
         Arc::as_ptr(&self.payload) as usize
     }
 
+    /// A weak handle to the shared payload, for identity-keyed memo entries
+    /// that must pin the allocation so its address cannot be reused.
+    pub fn payload_weak(&self) -> std::sync::Weak<FunctionTypePayload> {
+        Arc::downgrade(&self.payload)
+    }
+
     pub fn parameter_list_address(&self) -> usize {
         self.payload.parameters.as_ptr() as usize
     }
