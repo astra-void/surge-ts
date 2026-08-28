@@ -2554,9 +2554,15 @@ fn check_program_file(
             record_module_scope_cache_hit();
         }
 
-        let mut merged_symbols = ctx
-            .ambient_global_symbols
-            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        // The ambient globals (~4k entries on @types/node projects) are a
+        // read-only lookup backdrop for the file check; holding them as a
+        // `parent` fallback keeps the per-file working set O(imports + locals)
+        // where a clone-then-insert deep-copied every global per file.
+        let globals_parent = Arc::new(
+            ctx.ambient_global_symbols
+                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+        );
+        let mut merged_symbols = crate::symbols::SymbolTable::file_check_root(globals_parent.clone());
         if let Some(imported_bindings) = imported_bindings {
             for (name, symbol) in imported_bindings.symbols.iter_shared() {
                 let _ = merged_symbols.insert_shared(name.clone(), symbol.clone());
@@ -2639,6 +2645,13 @@ fn check_program_file(
                 signature_local_symbols.insert_shared(name.clone(), symbol.clone());
             }
         }
+        // `validation_symbols` reaches globals through its parent fallback, so
+        // the loop above seeds only file-level names; re-attach the globals so
+        // `typeof <globalFn>` in a parameter annotation still resolves. Local
+        // function declarations stay invisible (globals do not contain them),
+        // preserving the duplicate-signature exclusion.
+        let mut signature_local_symbols =
+            signature_local_symbols.with_parent_fallback(globals_parent.clone());
         let mut final_function_signatures = HashMap::new();
         collect_function_signatures_from_statements(
             &parsed_file.statements,

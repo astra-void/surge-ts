@@ -153,6 +153,23 @@ impl SymbolTable {
         self.parent = Some(parent);
         self
     }
+
+    /// A per-file check root: empty own symbol map with `parent` (the ambient
+    /// globals) as the lookup fallback, sharing the parent's declaration-span
+    /// and function-implementation maps copy-on-write so the own-map-only
+    /// duplicate checks see exactly what a full clone would have seen. Unlike
+    /// a clone, the first file-local insert copies only the small own map,
+    /// not every global.
+    pub(crate) fn file_check_root(parent: Arc<SymbolTable>) -> Self {
+        record_symbol_table_clone_count();
+        Self {
+            symbols: Arc::new(HashMap::default()),
+            declaration_spans: Arc::clone(&parent.declaration_spans),
+            function_implementations: Arc::clone(&parent.function_implementations),
+            declared_types: parent.declared_types.clone(),
+            parent: Some(parent),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
