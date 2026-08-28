@@ -12,8 +12,15 @@ use crate::context::{CheckerContext, FileKind};
 use crate::driver::collect_type_declarations;
 use crate::modules::{ModuleExportTable, build_module_export_table};
 
-/// See the gate comment at the ambient block-import binding phase in
-/// [`collect_ambient_modules`].
+/// See the comment at the ambient block-import binding phase in
+/// [`collect_ambient_modules`]. Opt-in (`SURGE_AMBIENT_BLOCK_IMPORTS=1`):
+/// since the namespace class+interface declaration merge and the class-arm
+/// prefix repair, flag-on is diagnostics-clean on every corpus (the earlier
+/// `Socket.destroy` false positive is gone) — but resolving the @types/node
+/// graph that the bound imports open up costs +36% user time on tRPC
+/// (interleaved A/B, diagnostics set-identical), because the newly reachable
+/// declarations expand eagerly per peel. Flip the default only after
+/// member-level lazy expansion makes that graph affordable.
 fn ambient_block_imports_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_AMBIENT_BLOCK_IMPORTS").is_some())
@@ -777,25 +784,15 @@ pub(crate) fn collect_ambient_modules(
         }
     }
 
-    // Opt-in `SURGE_AMBIENT_BLOCK_IMPORTS=1`: bind each block's own imports
-    // (`import { Socket } from "node:net"` inside `declare module "http"`) now
-    // that every ambient specifier is registered, and publish a per-file scope
-    // of block declarations + import bindings. The layered lookup's per-file
-    // fallback consults it when the installed block scope misses, which is the
-    // only way a block-internal import can be seen from a declaration body.
-    // Import-resolution diagnostics are dropped: these imports were never
-    // resolved before, and an unresolvable one must keep missing silently
-    // exactly as it always has.
-    //
-    // Not the default yet: with the imports bound, `net.Socket extends
-    // stream.Duplex` resolves — but `export =` namespace flattening registers
-    // `Stream.Duplex` under its BARE name, so the namespace-member prefix
-    // stack never activates and Duplex's bare sibling references (`Readable`,
-    // `ArrayOptions`) still miss. The half-resolved chain drops Readable's
-    // members from Socket and introduces a `Socket.destroy` TS2339 false
-    // positive on tRPC. Landing this by default needs the flattening to
-    // preserve the qualified declared name (or bare dual-keying of top-level
-    // namespace members) first.
+    // Bind each block's own imports (`import { Socket } from "node:net"`
+    // inside `declare module "http"`) now that every ambient specifier is
+    // registered, and publish a per-file scope of block declarations + import
+    // bindings. The layered lookup's per-file fallback consults it when the
+    // installed block scope misses, which is the only way a block-internal
+    // import can be seen from a declaration body. Import-resolution
+    // diagnostics are dropped: these imports were never resolved before, and
+    // an unresolvable one must keep missing silently exactly as it always
+    // has.
     if !ambient_block_imports_enabled() {
         record_program_timing(timings, |timings| {
             timings.ambient_module_binding += ambient_binding_start.elapsed()

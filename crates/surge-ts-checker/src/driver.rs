@@ -702,10 +702,12 @@ fn register_merged_namespace_interfaces(
     bare_prefix: &str,
     ctx: &mut CheckerContext,
 ) {
-    let mut blocks: std::collections::HashMap<
-        &str,
-        Vec<&surge_ts_syntax::ParsedInterfaceDeclaration>,
-    > = std::collections::HashMap::new();
+    enum NamespaceTypeFragment<'a> {
+        Interface(&'a surge_ts_syntax::ParsedInterfaceDeclaration),
+        Class(&'a surge_ts_syntax::ParsedClassDeclaration),
+    }
+    let mut blocks: std::collections::HashMap<&str, Vec<NamespaceTypeFragment<'_>>> =
+        std::collections::HashMap::new();
     let mut order: Vec<&str> = Vec::new();
     for statement in &namespace.statements {
         let inner = match statement {
@@ -718,23 +720,35 @@ fn register_merged_namespace_interfaces(
             }
             other => other,
         };
-        if let ParsedStatement::InterfaceDeclaration(interface) = inner {
-            let entry = blocks.entry(interface.name.as_str()).or_default();
-            if entry.is_empty() {
-                order.push(interface.name.as_str());
+        // A class and a same-named interface declaration-merge just as two
+        // interfaces do (`class Duplex …` + `interface Duplex extends
+        // Readable, Writable {}` in @types/node's stream namespace is how
+        // `destroy` reaches Duplex). Collect both fragment kinds.
+        let (name, fragment) = match inner {
+            ParsedStatement::InterfaceDeclaration(interface) => (
+                interface.name.as_str(),
+                NamespaceTypeFragment::Interface(interface),
+            ),
+            ParsedStatement::ClassDeclaration(class) => {
+                (class.name.as_str(), NamespaceTypeFragment::Class(class))
             }
-            entry.push(interface);
+            _ => continue,
+        };
+        let entry = blocks.entry(name).or_default();
+        if entry.is_empty() {
+            order.push(name);
         }
+        entry.push(fragment);
     }
 
     for name in order {
-        let interfaces = &blocks[name];
-        if interfaces.len() < 2 {
+        let fragments = &blocks[name];
+        if fragments.len() < 2 {
             continue;
         }
         let file_name = ctx.file_name_arc();
-        let build = |key: &str, interface: &surge_ts_syntax::ParsedInterfaceDeclaration| {
-            InterfaceInfo::new(
+        let build = |key: &str, fragment: &NamespaceTypeFragment<'_>| match fragment {
+            NamespaceTypeFragment::Interface(interface) => InterfaceInfo::new(
                 key.to_string(),
                 file_name.clone(),
                 interface.name_span,
@@ -745,16 +759,22 @@ fn register_merged_namespace_interfaces(
                 interface.call_signature.clone(),
                 interface.construct_signatures.clone(),
                 None,
-            )
+            ),
+            NamespaceTypeFragment::Class(class) => {
+                let mut info =
+                    crate::program::class_instance_interface_info(class, file_name.clone());
+                info.name = key.into();
+                info
+            }
         };
         let mut keys = vec![format!("{prefix}.{name}")];
         if prefix != bare_prefix {
             keys.push(format!("{bare_prefix}.{name}"));
         }
         for key in keys {
-            let mut merged = build(&key, interfaces[0]);
-            for interface in &interfaces[1..] {
-                merged = crate::symbols::merge_interface_infos(&merged, &build(&key, interface));
+            let mut merged = build(&key, &fragments[0]);
+            for fragment in &fragments[1..] {
+                merged = crate::symbols::merge_interface_infos(&merged, &build(&key, fragment));
             }
             ctx.type_declarations
                 .upsert(key, TypeDeclarationInfo::Interface(merged));
@@ -836,7 +856,15 @@ fn collect_namespace_type_declarations_prefixed(
                         class,
                         ctx.file_name_arc(),
                     );
-                    info.declared_name = Some(info.name.clone());
+                    // Qualified name with NO declared_name, mirroring the
+                    // interface arm above: the namespace-member prefix push in
+                    // `resolve_interface` derives from `declared_name.unwrap_or
+                    // (name)`, so recording the bare class name as declared_name
+                    // kills the prefix and every bare sibling reference in the
+                    // class body (`Duplex extends Readable` inside
+                    // `namespace Stream`) misses. The `export =` flattening's
+                    // bare copy captures the qualified name as declared_name on
+                    // rename, exactly as it does for interfaces.
                     info.name = key.as_str().into();
                     let _ = ctx
                         .type_declarations
