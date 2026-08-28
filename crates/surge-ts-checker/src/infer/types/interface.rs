@@ -15,6 +15,50 @@ fn extended_interface_cache_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_IFACE_CACHE_ALL").is_some())
 }
 
+/// Opt-in `SURGE_LAZY_IFACE_MEMBERS=1`: defer a library interface's structured
+/// PROPERTY member annotations to lazy references resolved on first read (see
+/// docs/perf/MEMBER-LAZY-EXPANSION.md). Method members stay eager in Stage 1.
+fn lazy_interface_members_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_LAZY_IFACE_MEMBERS").is_some())
+}
+
+/// The member-annotation deferral tier: structured shapes whose eager
+/// resolution recurses. Primitives, literals, and keywords resolve in
+/// nanoseconds and deferring them exposes unforced references to structural
+/// checks; `ParsedType::Named` already defers itself through the library
+/// reference tiers; anything containing `typeof` resolves against value
+/// tables the captured environment drops.
+fn defer_interface_member_annotation(annotation: &ParsedType, optional: bool) -> bool {
+    match annotation {
+        // A union stays eager when the OPTIONAL read path would re-wrap it
+        // (`property.ty | undefined`): the eager path normalizes the combined
+        // union on construction, while a deferred union resolves too late for
+        // the outer dedup and leaks `T | undefined | undefined` shapes into
+        // verdicts and renders.
+        ParsedType::Union(members) => {
+            !optional
+                && !members
+                    .iter()
+                    .any(|member| matches!(member, ParsedType::Undefined)
+                            || matches!(member, ParsedType::Named(named) if named.name == "null"))
+                && !crate::modules::annotation_contains_typeof(annotation)
+        }
+        ParsedType::Object(_)
+        | ParsedType::Tuple(_)
+        | ParsedType::Intersection(_)
+        | ParsedType::KeyOf(_)
+        | ParsedType::IndexedAccess(_)
+        | ParsedType::Mapped(_)
+        | ParsedType::Conditional(_)
+        | ParsedType::TemplateLiteral(_) => {
+            !crate::modules::annotation_contains_typeof(annotation)
+        }
+        ParsedType::Array(element) => defer_interface_member_annotation(element, false),
+        _ => false,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ModuleInstantiationMemoMode {
     Off,
@@ -441,6 +485,14 @@ pub(crate) fn resolve_interface(
     } else {
         crate::program::DtsExpansionReason::InterfaceResolution
     };
+    let lazy_member_context = (lazy_interface_members_enabled()
+        && ctx.is_library_scoped_file(&interface.file_name))
+    .then(|| {
+        (
+            interface.name.as_ref(),
+            interface.name_span.map_or(0, |span| span.start),
+        )
+    });
     let resolved = crate::program::with_dts_expansion_reason(expansion_reason, || {
         with_type_declaration_scope(&declaration_effective_scope, ctx, |ctx| {
             with_file_name(ctx, &interface.file_name, |ctx| {
@@ -456,6 +508,7 @@ pub(crate) fn resolve_interface(
                     stable_declaration.as_ref(),
                     declaration_template.as_deref(),
                     interface_key.as_ref(),
+                    lazy_member_context,
                 )
             })
         })
@@ -564,6 +617,12 @@ pub(crate) fn resolve_interface_declaration(
     interface_declaration: Option<&crate::context::StableInterfaceDeclarationId>,
     declaration_template: Option<&crate::context::InterfaceDeclarationTemplate>,
     interface_key: Option<&crate::context::InterfaceInstantiationKey>,
+    // `Some((interface name, declaration start))` opts this expansion into
+    // member-level laziness (library-scoped declarations only). The local
+    // validation pass passes `None`: it exists to EMIT member diagnostics,
+    // and diagnostics produced inside a lazy force are dropped with the
+    // recovered context.
+    lazy_member_context: Option<(&str, usize)>,
 ) -> ResolvedType {
     crate::program::record_interface_member_declaration_visits(members.len());
     crate::program::record_program_counter(|c| {
@@ -766,6 +825,21 @@ pub(crate) fn resolve_interface_declaration(
         let mut property_type = if let Some(function) = cached_method {
             ResolvedType {
                 ty: Type::Function(function),
+                had_error: false,
+            }
+        } else if let Some((interface_name, declaration_start)) = lazy_member_context
+            && !is_method
+            && defer_interface_member_annotation(&member.ty, member.optional)
+        {
+            ResolvedType {
+                ty: super::cache::make_lazy_member_annotation_reference(
+                    ctx,
+                    interface_name,
+                    declaration_start,
+                    &member.name,
+                    member.ty.clone(),
+                    substitution,
+                ),
                 had_error: false,
             }
         } else {

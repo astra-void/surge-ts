@@ -520,7 +520,7 @@ fn defer_value_annotation(annotation: &surge_ts_syntax::ParsedType) -> bool {
     }
 }
 
-fn annotation_contains_typeof(annotation: &surge_ts_syntax::ParsedType) -> bool {
+pub(crate) fn annotation_contains_typeof(annotation: &surge_ts_syntax::ParsedType) -> bool {
     use surge_ts_syntax::ParsedType;
     match annotation {
         ParsedType::TypeOf(_) => true,

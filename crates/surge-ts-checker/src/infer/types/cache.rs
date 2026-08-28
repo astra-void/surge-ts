@@ -447,6 +447,24 @@ pub(crate) struct LazySignatureEnvironment {
 }
 
 impl LazySignatureEnvironment {
+    /// Environment for a deferred interface MEMBER annotation: no
+    /// type-parameter scope of its own (the interface's parameters are already
+    /// bound), just the enclosing instantiation's substitution captured so the
+    /// force resolves under the same bindings the eager path would have used.
+    pub(crate) fn for_member_substitution(
+        substitution: &TypeParameterSubstitution,
+    ) -> Option<Self> {
+        if substitution.iter().next().is_none() {
+            return None;
+        }
+        Some(Self {
+            type_parameters: Arc::from(&[][..]),
+            substitution: Arc::new(
+                substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
+            ),
+        })
+    }
+
     pub(crate) fn new(type_parameters: &[surge_ts_syntax::ParsedTypeParameter]) -> Option<Self> {
         if type_parameters.is_empty() {
             return None;
@@ -596,7 +614,12 @@ impl LazyDeclarationAnnotation {
         if self.creation_scope.is_some() {
             ctx.type_declaration_scope = self.creation_scope.clone();
         }
-        if let Some(environment) = &self.signature_environment {
+        if let Some(environment) = &self.signature_environment
+            && !environment.type_parameters.is_empty()
+        {
+            // The empty case (a member-substitution environment) must not push
+            // a scope: an open type-parameter scope makes every nested
+            // resolution non-concrete and de-defers it.
             ctx.push_type_parameter_scope(&environment.type_parameters, None);
         }
         let empty_substitution = TypeParameterSubstitution::new();
@@ -778,6 +801,74 @@ pub(crate) fn make_lazy_value_annotation_reference(
             annotation,
             signature_component: None,
             signature_environment: None,
+            memo: std::sync::OnceLock::new(),
+            degraded_memo: std::sync::OnceLock::new(),
+        }),
+    ))
+}
+
+/// A lazy reference for a library interface MEMBER annotation (Stage 1 of
+/// member-level lazy expansion, `SURGE_LAZY_IFACE_MEMBERS=1`): the property's
+/// annotation maps on first read under the captured declaration environment
+/// and the enclosing instantiation's substitution, instead of eagerly during
+/// every interface expansion. Like the value variant, the force returns the
+/// mapped type UNPEELED so nested named references stay nominal. The key's
+/// fingerprint carries the substitution's display-inclusive identity so two
+/// instantiations of the same generic interface never share an interner
+/// entry.
+pub(crate) fn make_lazy_member_annotation_reference(
+    ctx: &mut CheckerContext,
+    interface_name: &str,
+    declaration_start: usize,
+    member_name: &str,
+    annotation: surge_ts_syntax::ParsedType,
+    substitution: &TypeParameterSubstitution,
+) -> Type {
+    let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
+    let fingerprint = {
+        use std::hash::Hasher;
+        let mut entries = substitution.iter().peekable();
+        if entries.peek().is_none() {
+            0
+        } else {
+            let mut hasher = surge_ts_types::fx::FxHasher::default();
+            for (name, ty) in entries {
+                hasher.write(name.as_bytes());
+                hasher.write_u8(u8::from(substitution.is_placeholder(name)));
+                hasher.write_u64(crate::speculative::display_type_fingerprint(ty));
+            }
+            // High bit clear keeps the key disjoint from the module-memo tag.
+            hasher.finish() & !MODULE_INSTANTIATION_MEMO_TAG
+        }
+    };
+    let key = DeclarationResolutionKey {
+        file_name: ctx.canonical_file_name_arc(),
+        name: Arc::from(format!(
+            "member {interface_name}@{declaration_start}.{member_name}"
+        )),
+        namespace: DeclarationNamespace::Type,
+        fingerprint,
+    };
+    crate::program::record_lazy_reference_created(&key);
+    crate::program::record_program_counter(|c| c.lazy_member_annotation_create_count += 1);
+    let id = format!(
+        "{}\u{0}member-annotation\u{0}{interface_name}\u{0}{declaration_start}\u{0}{member_name}\u{0}{fingerprint:016x}",
+        key.file_name
+    );
+    let environment = ctx.declaration_environment();
+    let creation_scope = ctx.type_declaration_scope.clone();
+    Type::Reference(TypeReference::new(
+        id,
+        display.clone(),
+        Vec::new(),
+        Arc::new(LazyDeclarationAnnotation {
+            environment,
+            creation_scope,
+            key,
+            display,
+            annotation,
+            signature_component: None,
+            signature_environment: LazySignatureEnvironment::for_member_substitution(substitution),
             memo: std::sync::OnceLock::new(),
             degraded_memo: std::sync::OnceLock::new(),
         }),

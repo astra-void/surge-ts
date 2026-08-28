@@ -278,6 +278,7 @@ pub(crate) fn validate_local_type_declaration(
                         None,
                         None,
                         None,
+                        None,
                     );
                     ctx.pop_type_parameter_scope();
                 })
