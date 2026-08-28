@@ -11,6 +11,13 @@ use super::*;
 use crate::context::{CheckerContext, FileKind};
 use crate::driver::collect_type_declarations;
 use crate::modules::{ModuleExportTable, build_module_export_table};
+
+/// See the gate comment at the ambient block-import binding phase in
+/// [`collect_ambient_modules`].
+fn ambient_block_imports_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_AMBIENT_BLOCK_IMPORTS").is_some())
+}
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 
 #[derive(Debug, Clone)]
@@ -18,6 +25,9 @@ pub(crate) struct AmbientModuleEntry {
     module_specifier: String,
     file: ParsedProgramFile,
     raw_export_table: ModuleExportTable,
+    /// The block's own type declarations, retained so the per-file ambient
+    /// scope can be published after every block is registered.
+    block_scope: Arc<TypeDeclarationScope>,
 }
 
 /// Collects the program's UMD global names: every `export as namespace X` in a
@@ -678,7 +688,7 @@ pub(crate) fn collect_ambient_modules(
                 &current_type_declarations,
                 &current_symbols,
                 &SymbolTable::new(),
-                Some(current_type_declarations_scope),
+                Some(current_type_declarations_scope.clone()),
                 ctx,
             );
             let lowered_type_declarations = current_type_declarations.len() as u64;
@@ -721,6 +731,7 @@ pub(crate) fn collect_ambient_modules(
                     module_specifier: module.module_specifier.clone(),
                     file: temp_file,
                     raw_export_table,
+                    block_scope: current_type_declarations_scope.clone(),
                 });
             }
 
@@ -765,6 +776,67 @@ pub(crate) fn collect_ambient_modules(
                 .insert(entry.module_specifier.clone(), resolved_export_table);
         }
     }
+
+    // Opt-in `SURGE_AMBIENT_BLOCK_IMPORTS=1`: bind each block's own imports
+    // (`import { Socket } from "node:net"` inside `declare module "http"`) now
+    // that every ambient specifier is registered, and publish a per-file scope
+    // of block declarations + import bindings. The layered lookup's per-file
+    // fallback consults it when the installed block scope misses, which is the
+    // only way a block-internal import can be seen from a declaration body.
+    // Import-resolution diagnostics are dropped: these imports were never
+    // resolved before, and an unresolvable one must keep missing silently
+    // exactly as it always has.
+    //
+    // Not the default yet: with the imports bound, `net.Socket extends
+    // stream.Duplex` resolves — but `export =` namespace flattening registers
+    // `Stream.Duplex` under its BARE name, so the namespace-member prefix
+    // stack never activates and Duplex's bare sibling references (`Readable`,
+    // `ArrayOptions`) still miss. The half-resolved chain drops Readable's
+    // members from Socket and introduces a `Socket.destroy` TS2339 false
+    // positive on tRPC. Landing this by default needs the flattening to
+    // preserve the qualified declared name (or bare dual-keying of top-level
+    // namespace members) first.
+    if !ambient_block_imports_enabled() {
+        record_program_timing(timings, |timings| {
+            timings.ambient_module_binding += ambient_binding_start.elapsed()
+        });
+        return;
+    }
+    let mut ambient_file_layers: surge_ts_types::fx::FxHashMap<
+        Arc<str>,
+        Vec<Arc<crate::symbols::TypeDeclarationTable>>,
+    > = surge_ts_types::fx::FxHashMap::default();
+    for entry in &ambient_module_entries {
+        let layers = ambient_file_layers
+            .entry(Arc::from(entry.file.file_name.as_str()))
+            .or_default();
+        layers.extend(entry.block_scope.layers().iter().cloned());
+        let has_imports = entry
+            .file
+            .statements
+            .iter()
+            .any(|statement| matches!(statement, ParsedStatement::ImportDeclaration(_)));
+        if !has_imports {
+            continue;
+        }
+        ctx.set_file_name(entry.file.file_name.clone());
+        let diagnostics_before = ctx.diagnostics().len();
+        let bindings =
+            crate::modules::resolve_module_imports(&entry.file, &[], &[], &[], &|_| false, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
+        layers.extend(bindings.scope_layers());
+    }
+    ctx.ambient_file_type_scopes = Arc::new(
+        ambient_file_layers
+            .into_iter()
+            .map(|(file_name, layers)| {
+                (
+                    file_name,
+                    Arc::new(crate::symbols::TypeDeclarationScope::new(layers)),
+                )
+            })
+            .collect(),
+    );
 
     record_program_timing(timings, |timings| {
         timings.ambient_module_binding += ambient_binding_start.elapsed()

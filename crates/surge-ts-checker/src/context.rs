@@ -206,6 +206,7 @@ struct DeclarationEnvironmentData {
     physical_interface_overload_instantiations:
         Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
     ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
+    ambient_file_type_scopes: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,
     ambient_global_symbols: SymbolTable,
     ambient_global_type_declarations: Arc<TypeDeclarationTable>,
@@ -443,6 +444,7 @@ impl DeclarationEnvironmentData {
                 .physical_interface_overload_instantiations
                 .clone(),
             ambient_modules: ctx.ambient_modules.clone(),
+            ambient_file_type_scopes: ctx.ambient_file_type_scopes.clone(),
             module_augmentations: ctx.module_augmentations.clone(),
             ambient_global_symbols: ctx.ambient_global_symbols.clone_for_environment_capture(),
             ambient_global_type_declarations: ctx.ambient_global_type_declarations.clone(),
@@ -1069,6 +1071,13 @@ pub(crate) struct CheckerContext {
     pub(crate) physical_interface_overload_instantiations:
         Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
     pub(crate) ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
+    /// Per-file resolution scopes for files whose declarations live in ambient
+    /// `declare module "…"` blocks: the blocks' own type declarations plus
+    /// their block-internal import bindings. Merged into `module_scope_by_file`
+    /// so the layered lookup's per-file fallback can see block imports
+    /// (`import { Socket } from "node:net"` inside `declare module "http"`),
+    /// which no other scope carries.
+    pub(crate) ambient_file_type_scopes: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     /// Module augmentations (`declare module "x"` in a file that is itself a
     /// module). Unlike ambient module declarations, these only merge into an
     /// already-resolved target; they do not make `"x"` resolvable on their own.
@@ -1254,6 +1263,7 @@ impl CheckerContext {
             physical_interface_method_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
             physical_interface_overload_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
             ambient_modules: Arc::new(FxHashMap::default()),
+            ambient_file_type_scopes: Arc::new(FxHashMap::default()),
             module_augmentations: Arc::new(FxHashMap::default()),
             ambient_global_symbols: SymbolTable::new(),
             umd_global_names: Arc::new(FxHashSet::default()),
@@ -1360,6 +1370,7 @@ impl CheckerContext {
                 .physical_interface_overload_instantiations
                 .clone(),
             ambient_modules: data.ambient_modules.clone(),
+            ambient_file_type_scopes: data.ambient_file_type_scopes.clone(),
             module_augmentations: data.module_augmentations.clone(),
             ambient_global_symbols: data.ambient_global_symbols.clone(),
             // A declaration environment only re-resolves types; it never runs the

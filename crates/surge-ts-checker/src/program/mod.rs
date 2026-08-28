@@ -880,10 +880,9 @@ fn check_program_with_stats_and_jobs_inner(
     // round, and resolving the full import graph twice measurably regresses
     // check time/memory on large cyclic programs (zod).
     ctx.begin_resolution_stage();
-    ctx.set_module_scope_by_file(module_scope_by_file_map(
-        &parsed_files,
-        &module_resolution_scopes,
-    ));
+    let module_scope_map =
+        module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
+    ctx.set_module_scope_by_file(module_scope_map);
     let augmentation_insertions_before_final = augmentation_value_insertion_count();
     let type_collection_start = Instant::now();
     let final_analysis_parallel = analysis_worker_count > 1
@@ -998,10 +997,9 @@ fn check_program_with_stats_and_jobs_inner(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
-    ctx.set_module_scope_by_file(module_scope_by_file_map(
-        &parsed_files,
-        &module_resolution_scopes,
-    ));
+    let module_scope_map =
+        module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
+    ctx.set_module_scope_by_file(module_scope_map);
     ctx.jsx_intrinsic_elements_declarer =
         locate_jsx_intrinsic_elements_declarer(&parsed_files, &module_export_tables);
     // The resolved (re-export-expanded) export tables were only consumed by
@@ -2450,8 +2448,12 @@ fn locate_jsx_intrinsic_elements_declarer(
 fn module_scope_by_file_map(
     parsed_files: &[ParsedProgramFile],
     module_resolution_scopes: &[Option<Arc<crate::symbols::TypeDeclarationScope>>],
+    ctx: &CheckerContext,
 ) -> surge_ts_types::fx::FxHashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>> {
-    parsed_files
+    let mut map: surge_ts_types::fx::FxHashMap<
+        Arc<str>,
+        Arc<crate::symbols::TypeDeclarationScope>,
+    > = parsed_files
         .iter()
         .zip(module_resolution_scopes.iter())
         .filter_map(|(parsed_file, scope)| {
@@ -2459,7 +2461,29 @@ fn module_scope_by_file_map(
                 .as_ref()
                 .map(|scope| (Arc::from(parsed_file.file_name.as_str()), scope.clone()))
         })
-        .collect()
+        .collect();
+    // A file whose declarations live in ambient `declare module` blocks has an
+    // empty (or absent) per-file scope of its own; the ambient scope carries
+    // the blocks' declarations and their block-internal import bindings. A
+    // file with both top-level declarations and blocks keeps its own layers
+    // first.
+    for (file_name, ambient_scope) in ctx.ambient_file_type_scopes.iter() {
+        match map.get_mut(file_name) {
+            Some(existing) => {
+                if existing.is_empty() {
+                    *existing = ambient_scope.clone();
+                } else {
+                    let mut layers = existing.layers().to_vec();
+                    layers.extend(ambient_scope.layers().iter().cloned());
+                    *existing = Arc::new(crate::symbols::TypeDeclarationScope::new(layers));
+                }
+            }
+            None => {
+                map.insert(file_name.clone(), ambient_scope.clone());
+            }
+        }
+    }
+    map
 }
 
 fn check_program_file(
