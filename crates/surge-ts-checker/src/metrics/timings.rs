@@ -907,6 +907,14 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         counters.lazy_member_annotation_create_count
     );
     eprintln!(
+        "    lazy_member_template_hit_count: {}",
+        counters.lazy_member_template_hit_count
+    );
+    eprintln!(
+        "    lazy_member_template_miss_count: {}",
+        counters.lazy_member_template_miss_count
+    );
+    eprintln!(
         "    generic_instantiation_count: {}",
         counters.generic_instantiation_count
     );

@@ -834,6 +834,9 @@ pub(crate) fn resolve_interface_declaration(
     // — `merge_overload_signatures` compares parameter slots by equality and
     // must not peel, so distinct lazy-ref ids in an overload group would widen
     // previously-equal slots to `any`.
+    // One substitution per expansion, so its fingerprint is computed at most
+    // once here rather than per deferred member.
+    let mut lazy_substitution_fingerprint: Option<u64> = None;
     let lazy_method_group_counts = lazy_member_context.map(|_| {
         let mut counts =
             surge_ts_types::fx::FxHashMap::<&str, u32>::with_hasher(Default::default());
@@ -900,10 +903,18 @@ pub(crate) fn resolve_interface_declaration(
             ResolvedType {
                 ty: super::cache::make_lazy_member_annotation_reference(
                     ctx,
-                    interface_name,
-                    declaration_start,
-                    &member.name,
-                    member.ty.clone(),
+                    super::cache::LazyMemberIdentity {
+                        interface_name,
+                        declaration_start,
+                        member_index,
+                        member_name: &member.name,
+                        component: None,
+                        substitution_fingerprint: *lazy_substitution_fingerprint
+                            .get_or_insert_with(|| {
+                                super::cache::member_substitution_fingerprint(substitution)
+                            }),
+                    },
+                    &member.ty,
                     substitution,
                 ),
                 had_error: false,
@@ -931,6 +942,7 @@ pub(crate) fn resolve_interface_declaration(
                     substitution,
                     interface_name,
                     declaration_start,
+                    member_index,
                     &member.name,
                 )
             })

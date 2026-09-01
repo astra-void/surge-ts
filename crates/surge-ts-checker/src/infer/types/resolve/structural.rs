@@ -112,6 +112,7 @@ pub(crate) fn resolve_function_type_lazy_components(
     substitution: &TypeParameterSubstitution,
     interface_name: &str,
     declaration_start: usize,
+    member_index: usize,
     member_name: &str,
 ) -> ResolvedType {
     let local_substitution = extend_substitution_with_type_parameters(
@@ -120,6 +121,7 @@ pub(crate) fn resolve_function_type_lazy_components(
         ctx,
         resolving,
     );
+    let mut substitution_fingerprint: Option<u64> = None;
 
     let value_parameters = function_type
         .parameters
@@ -135,7 +137,7 @@ pub(crate) fn resolve_function_type_lazy_components(
     let mut had_error = false;
 
     let mut value_index = 0usize;
-    for parameter in function_type.parameters.iter().cloned() {
+    for parameter in function_type.parameters.iter() {
         let is_this = parameter.is_this;
         let is_rest = parameter.rest;
         let defer = !is_this
@@ -144,19 +146,29 @@ pub(crate) fn resolve_function_type_lazy_components(
         if defer {
             let ty = super::super::cache::make_lazy_method_component_reference(
                 ctx,
-                interface_name,
-                declaration_start,
-                member_name,
-                crate::infer::LazySignatureComponent::Parameter(value_index),
-                parameter.ty,
+                super::super::cache::LazyMemberIdentity {
+                    interface_name,
+                    declaration_start,
+                    member_index,
+                    member_name,
+                    component: Some(crate::infer::LazySignatureComponent::Parameter(value_index)),
+                    substitution_fingerprint: *substitution_fingerprint.get_or_insert_with(|| {
+                        super::super::cache::member_substitution_fingerprint(&local_substitution)
+                    }),
+                },
+                &parameter.ty,
                 &local_substitution,
             );
             parameters.push(ty);
             value_index += 1;
             continue;
         }
-        let resolved_parameter =
-            resolve_function_type_parameter(parameter, ctx, resolving, &local_substitution);
+        let resolved_parameter = resolve_function_type_parameter(
+            parameter.clone(),
+            ctx,
+            resolving,
+            &local_substitution,
+        );
         had_error |= resolved_parameter.had_error;
         if is_this {
             continue;

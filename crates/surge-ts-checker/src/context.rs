@@ -8,6 +8,7 @@ use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan as SyntaxTextSpa
 use surge_ts_types::fx::{FxHashMap, FxHashSet};
 use surge_ts_types::{FunctionType, ProgramTypeStore, Type, current_program_type_store};
 
+use crate::infer::types::LazyMemberTemplateTable;
 use crate::program::ProgramTimings;
 use crate::symbols::{
     SymbolTable, TypeDeclarationInfo, TypeDeclarationScope, TypeDeclarationTable,
@@ -205,6 +206,7 @@ struct DeclarationEnvironmentData {
         Arc<Mutex<FxHashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
     physical_interface_overload_instantiations:
         Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
+    lazy_member_annotation_templates: Arc<Mutex<LazyMemberTemplateTable>>,
     ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
     ambient_file_type_scopes: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,
@@ -434,6 +436,7 @@ impl DeclarationEnvironmentData {
             program_resolved_generic_types: ctx.program_resolved_generic_types.clone(),
             program_instantiations: ctx.program_instantiations.clone(),
             physical_interface_instantiations: ctx.physical_interface_instantiations.clone(),
+            lazy_member_annotation_templates: ctx.lazy_member_annotation_templates.clone(),
             physical_interface_declaration_templates: ctx
                 .physical_interface_declaration_templates
                 .clone(),
@@ -1070,6 +1073,11 @@ pub(crate) struct CheckerContext {
         Arc<Mutex<FxHashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
     pub(crate) physical_interface_overload_instantiations:
         Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
+    /// Interned capture-site content for deferred interface member
+    /// annotations (`SURGE_LAZY_IFACE_MEMBERS`). Pure content keyed by
+    /// declaration identity and substitution fingerprint, so it is shared
+    /// across environments the way the parsed AST is.
+    pub(crate) lazy_member_annotation_templates: Arc<Mutex<LazyMemberTemplateTable>>,
     pub(crate) ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
     /// Per-file resolution scopes for files whose declarations live in ambient
     /// `declare module "…"` blocks: the blocks' own type declarations plus
@@ -1262,6 +1270,7 @@ impl CheckerContext {
             physical_interface_declaration_templates: Arc::new(Mutex::new(FxHashMap::default())),
             physical_interface_method_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
             physical_interface_overload_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
+            lazy_member_annotation_templates: Arc::new(Mutex::new(FxHashMap::default())),
             ambient_modules: Arc::new(FxHashMap::default()),
             ambient_file_type_scopes: Arc::new(FxHashMap::default()),
             module_augmentations: Arc::new(FxHashMap::default()),
@@ -1360,6 +1369,7 @@ impl CheckerContext {
             program_resolved_generic_types: data.program_resolved_generic_types.clone(),
             program_instantiations: data.program_instantiations.clone(),
             physical_interface_instantiations: data.physical_interface_instantiations.clone(),
+            lazy_member_annotation_templates: data.lazy_member_annotation_templates.clone(),
             physical_interface_declaration_templates: data
                 .physical_interface_declaration_templates
                 .clone(),
@@ -1460,6 +1470,9 @@ impl CheckerContext {
             cache.clear();
         }
         if let Ok(mut cache) = self.physical_interface_overload_instantiations.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.lazy_member_annotation_templates.lock() {
             cache.clear();
         }
         self.substitution_store.clear();
