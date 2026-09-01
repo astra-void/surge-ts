@@ -1198,6 +1198,26 @@ pub(crate) fn check_function_return_statement(
     }
 
     let Some(return_type) = return_type else {
+        // No expected return type only removes the assignability verdict; the
+        // value still owes its own diagnostics. Skipping it left every
+        // expression in an unannotated function unchecked — unresolved names,
+        // UMD globals behind JSX tags, property access — which is why a
+        // component written as `const C = () => { return <div/>; }` reported
+        // nothing at all.
+        // …but with no expectation there is also no contextual parameter type
+        // to hand a callback or an object-literal method, so an implicit-any
+        // report here would describe surge's missing context rather than an
+        // omission in the source (tRPC's `new ReadableStream({ start(c) {…} })`
+        // inside a returned object is typed by the constructor, not by the
+        // return). Same reasoning as a degraded expectation.
+        ctx.degraded_expected_type_depth += 1;
+        let _ = evaluate_expression(
+            expression,
+            return_statement.expression_span,
+            symbols,
+            ctx,
+        );
+        ctx.degraded_expected_type_depth -= 1;
         return;
     };
 
