@@ -140,7 +140,11 @@ impl TypeReference {
 
     /// Nominal identity test: same declaration and same type arguments.
     pub fn nominal_eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.arguments == other.arguments
+        // Interned references share one id allocation, and ids are long
+        // qualified strings with a common file-path prefix — the byte compare
+        // never short-circuits early, so the pointer check is the whole win.
+        let same_id = Arc::ptr_eq(&self.id, &other.id) || self.id == other.id;
+        same_id && self.arguments == other.arguments
     }
 }
 
