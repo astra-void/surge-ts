@@ -917,6 +917,9 @@ pub enum ParsedUnaryOperator {
     Plus,
     Minus,
     Typeof,
+    /// `void`, `delete` and `~`: the result is not modelled, but the operand is
+    /// still an expression that has to be checked.
+    Discard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
