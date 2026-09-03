@@ -313,6 +313,7 @@ pub(crate) fn resolve_named_type(
     // tsc displays a generic instantiation by its alias form (`Box<string>`), not
     // the structural expansion. Build that display name from the resolved type
     // arguments and tag the resolved object with it for diagnostics.
+    let branch_alias = alias_resolves_to_its_branch(declaration);
     let alias_display_name =
         generic_instantiation_display_name(&named_type, declaration.declared_name());
 
@@ -448,6 +449,7 @@ pub(crate) fn resolve_named_type(
             return tag_generic_object_reference(
                 hit,
                 alias_display_name.as_deref(),
+                branch_alias,
                 &reference_id,
                 &decl_key,
                 reference_arguments.clone(),
@@ -624,6 +626,7 @@ pub(crate) fn resolve_named_type(
     tag_generic_object_reference(
         resolved,
         alias_display_name.as_deref(),
+        branch_alias,
         &reference_id,
         &decl_key,
         reference_arguments,
@@ -646,9 +649,45 @@ fn degraded_resolution_trace_enabled() -> bool {
 /// expansions (non-object bodies, display-less objects) are interned but returned
 /// structurally; errored or argument-unresolved resolutions fall back to the
 /// previous structural object tagging.
+/// Renders a generic instantiation from its *resolved* arguments
+/// (`Dispatch<SetStateAction<number>>`), which is what tsc displays. The
+/// syntactic form would keep an unsubstituted type parameter (`Dispatch<S>`).
+/// The declaration name is registered qualified for a namespace member
+/// (`Hooks.Dispatch`); tsc names it bare.
+/// Whether a type alias resolves *to* an existing type rather than creating one.
+/// A conditional alias yields whichever branch matched, and tsc displays that
+/// branch's own type because no alias symbol attaches to a type that already
+/// exists in its own right.
+fn alias_resolves_to_its_branch(declaration: &TypeDeclarationInfo) -> bool {
+    matches!(
+        declaration,
+        TypeDeclarationInfo::Alias(alias) if matches!(alias.body.ty, ParsedType::Conditional(_))
+    )
+}
+
+fn resolved_argument_display(
+    decl_key: &DeclarationResolutionKey,
+    arguments: &Option<Vec<Type>>,
+) -> Option<String> {
+    let arguments = arguments.as_ref().filter(|arguments| !arguments.is_empty())?;
+    let name = decl_key
+        .name
+        .rsplit_once('.')
+        .map_or(decl_key.name.as_ref(), |(_, bare)| bare);
+    Some(format!(
+        "{name}<{}>",
+        arguments
+            .iter()
+            .map(surge_ts_types::Type::name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
 fn tag_generic_object_reference(
     resolved: ResolvedType,
     display_name: Option<&str>,
+    render_structurally: bool,
     reference_id: &str,
     decl_key: &DeclarationResolutionKey,
     arguments: Option<Vec<Type>>,
@@ -674,6 +713,30 @@ fn tag_generic_object_reference(
         )),
         _ => None,
     };
+    // A generic alias whose body is a signature or a union (`Dispatch<A>`,
+    // `SetStateAction<T>`) has no object to tag, but tsc still displays it by the
+    // alias form. The handle-local name carries it without touching identity.
+    if !resolved.had_error
+        && let Some(display) = resolved_argument_display(decl_key, &arguments)
+            .or_else(|| effective_display.clone())
+            .as_deref()
+    {
+        match &resolved.ty {
+            Type::Function(function) if function.alias_name().is_none() => {
+                return ResolvedType {
+                    ty: Type::Function(function.clone().with_alias_name(display)),
+                    had_error: false,
+                };
+            }
+            Type::Union(union) if union.alias_name().is_none() => {
+                return ResolvedType {
+                    ty: Type::Union(union.clone().with_alias_name(display)),
+                    had_error: false,
+                };
+            }
+            _ => {}
+        }
+    }
     match (effective_display.as_deref(), arguments, &resolved.ty) {
         (Some(display), Some(arguments), Type::Object(object)) if !resolved.had_error => {
             // Tag the structural object with the instantiation's display name so a
@@ -691,13 +754,22 @@ fn tag_generic_object_reference(
             } else {
                 std::sync::Arc::new(structural)
             };
+            let reference = make_type_reference(
+                reference_id.to_string(),
+                display.to_string(),
+                arguments,
+                interned,
+            );
             ResolvedType {
-                ty: make_type_reference(
-                    reference_id.to_string(),
-                    display.to_string(),
-                    arguments,
-                    interned,
-                ),
+                // The reference — display included — is unchanged, so intern
+                // identity and every sharing decision keyed on it stay exactly as
+                // they were; only the rendering is redirected.
+                ty: match (render_structurally, reference) {
+                    (true, Type::Reference(reference)) => {
+                        Type::Reference(reference.rendered_structurally())
+                    }
+                    (_, reference) => reference,
+                },
                 had_error: resolved.had_error,
             }
         }
@@ -852,6 +924,18 @@ fn attach_object_alias_name(resolved: ResolvedType, name: &str, alias_id: &str) 
                 had_error: resolved.had_error,
             }
         }
+        // A union or function alias (`type Level = "a" | "b"`,
+        // `type Fn = (x: string) => void`) is displayed by its name too. The name
+        // rides on the handle, so the interned payload stays shared and
+        // assignability still sees the plain union/signature.
+        Type::Union(union) if !resolved.had_error => ResolvedType {
+            ty: Type::Union(union.with_alias_name(name)),
+            had_error: resolved.had_error,
+        },
+        Type::Function(function) if !resolved.had_error => ResolvedType {
+            ty: Type::Function(function.with_alias_name(name)),
+            had_error: resolved.had_error,
+        },
         ty => ResolvedType {
             ty,
             had_error: resolved.had_error,

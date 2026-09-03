@@ -476,5 +476,6 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
             function_type.is_variadic(),
             function_type.required_parameter_count(),
         )
+        .with_parameter_names(signature::written_binding_names(&parameters))
     })
 }

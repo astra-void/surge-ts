@@ -91,6 +91,17 @@ impl Clone for FunctionTypePayload {
 pub struct FunctionType {
     pub(crate) payload: Arc<FunctionTypePayload>,
     id: Option<FunctionTypeId>,
+    /// Written parameter names, for display only. tsc renders a function type as
+    /// `(value: string) => void`, but names play no part in assignability, so
+    /// they live on the handle rather than the interned payload: two signatures
+    /// that differ only in parameter names still share one canonical payload.
+    parameter_names: Option<Arc<[Option<Arc<str>>]>>,
+    /// Rendered type-parameter list (`<T extends FieldBag = FieldBag>`), which
+    /// tsc prefixes to a generic signature. Display-only, for the same reason.
+    type_parameter_head: Option<Arc<str>>,
+    /// The type-alias name this signature was written as (`type Fn = (x: string)
+    /// => void`), which tsc displays instead of the structural form.
+    alias_name: Option<Arc<str>>,
 }
 
 impl FunctionType {
@@ -101,6 +112,9 @@ impl FunctionType {
         Self {
             payload,
             id: Some(id),
+            parameter_names: None,
+            type_parameter_head: None,
+            alias_name: None,
         }
     }
 
@@ -123,6 +137,9 @@ impl FunctionType {
                     return Self {
                         payload,
                         id: Some(id),
+                        parameter_names: None,
+                        type_parameter_head: None,
+                        alias_name: None,
                     };
                 }
                 Err((parameters, return_type)) => {
@@ -138,6 +155,9 @@ impl FunctionType {
                             name_memo: crate::name_memo::NameMemo::default(),
                         }),
                         id: None,
+                        parameter_names: None,
+                        type_parameter_head: None,
+                        alias_name: None,
                     };
                 }
             }
@@ -153,7 +173,42 @@ impl FunctionType {
                 name_memo: crate::name_memo::NameMemo::default(),
             }),
             id: None,
+            parameter_names: None,
+            type_parameter_head: None,
+            alias_name: None,
         }
+    }
+
+    /// Attaches the written parameter names for display. Ignored when the count
+    /// does not match the parameter list, and dropped entirely when no position
+    /// carries a name, so an unnamed signature keeps the memoized rendering.
+    pub fn with_parameter_names(mut self, names: Vec<Option<Arc<str>>>) -> Self {
+        if names.len() == self.payload.parameters.len()
+            && names.iter().any(std::option::Option::is_some)
+        {
+            self.parameter_names = Some(names.into());
+        }
+        self
+    }
+
+    pub fn parameter_names(&self) -> Option<&[Option<Arc<str>>]> {
+        self.parameter_names.as_deref()
+    }
+
+    /// Attaches the rendered type-parameter list, without the angle brackets.
+    pub fn with_type_parameter_head(mut self, head: Option<String>) -> Self {
+        self.type_parameter_head = head.filter(|head| !head.is_empty()).map(Arc::from);
+        self
+    }
+
+    /// Names this signature by the alias it was written as, for display only.
+    pub fn with_alias_name(mut self, name: impl Into<Arc<str>>) -> Self {
+        self.alias_name = Some(name.into());
+        self
+    }
+
+    pub fn alias_name(&self) -> Option<&str> {
+        self.alias_name.as_deref()
     }
 
     pub fn payload(&self) -> &FunctionTypePayload {
@@ -199,21 +254,49 @@ impl FunctionType {
     }
 
     pub fn name(&self) -> String {
+        if let Some(alias_name) = self.alias_name.as_deref() {
+            return alias_name.to_string();
+        }
+        // The memo lives on the shared payload, so a handle-local rendering must
+        // not be written into it.
+        if self.parameter_names.is_some() || self.type_parameter_head.is_some() {
+            return self.render_name();
+        }
         self.payload
             .name_memo
-            .get_or_render(|| {
-                let mut parameters =
-                    self.parameters().iter().map(Type::name).collect::<Vec<_>>();
-
-                if self.is_variadic() {
-                    parameters.push("...args: any[]".to_string());
-                }
-
-                let parameters = parameters.join(", ");
-
-                format!("({parameters}) => {}", self.return_type().name())
-            })
+            .get_or_render(|| self.render_name())
             .to_string()
+    }
+
+    fn render_name(&self) -> String {
+        let names = self.parameter_names();
+        let mut parameters = self
+            .parameters()
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                let optional = index >= self.required_parameter_count();
+                match names.and_then(|names| names[index].as_deref()) {
+                    Some(name) if optional => format!("{name}?: {}", parameter.name()),
+                    Some(name) => format!("{name}: {}", parameter.name()),
+                    None => parameter.name(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if self.is_variadic() {
+            parameters.push("...args: any[]".to_string());
+        }
+
+        let head = match self.type_parameter_head.as_deref() {
+            Some(head) => format!("<{head}>"),
+            None => String::new(),
+        };
+        format!(
+            "{head}({}) => {}",
+            parameters.join(", "),
+            self.return_type().name()
+        )
     }
 }
 
@@ -233,6 +316,9 @@ impl Clone for FunctionType {
         Self {
             payload: self.payload.clone(),
             id: self.id,
+            parameter_names: self.parameter_names.clone(),
+            type_parameter_head: self.type_parameter_head.clone(),
+            alias_name: self.alias_name.clone(),
         }
     }
 }

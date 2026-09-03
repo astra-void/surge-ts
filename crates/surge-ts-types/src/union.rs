@@ -67,6 +67,11 @@ impl Clone for UnionTypePayload {
 pub struct UnionType {
     payload: Arc<UnionTypePayload>,
     id: Option<UnionTypeId>,
+    /// The type-alias name this union was written as (`type Level = "a" | "b"`),
+    /// for display only. tsc names such a union by its alias in diagnostics.
+    /// Handle-local, like [`crate::FunctionType`]'s parameter names: the payload
+    /// stays interned and shared, so rendering never depends on intern order.
+    alias_name: Option<Arc<str>>,
 }
 
 impl UnionType {
@@ -79,6 +84,7 @@ impl UnionType {
                     return Self {
                         payload,
                         id: Some(id),
+                        alias_name: None,
                     };
                 }
                 Err(types) => {
@@ -90,6 +96,7 @@ impl UnionType {
                             name_memo: crate::name_memo::NameMemo::default(),
                         }),
                         id: None,
+                        alias_name: None,
                     };
                 }
             }
@@ -102,7 +109,18 @@ impl UnionType {
                 name_memo: crate::name_memo::NameMemo::default(),
             }),
             id: None,
+            alias_name: None,
         }
+    }
+
+    /// Names this union by the alias it was written as, for display only.
+    pub fn with_alias_name(mut self, name: impl Into<Arc<str>>) -> Self {
+        self.alias_name = Some(name.into());
+        self
+    }
+
+    pub fn alias_name(&self) -> Option<&str> {
+        self.alias_name.as_deref()
     }
 
     /// Like [`Self::new`], but probes the interner through borrowed members so
@@ -117,6 +135,7 @@ impl UnionType {
             return Self {
                 payload,
                 id: Some(id),
+                alias_name: None,
             };
         }
         Self::new(members.iter().map(|ty| (*ty).clone()).collect())
@@ -131,17 +150,26 @@ impl UnionType {
     }
 
     pub fn name(&self) -> String {
+        if let Some(alias_name) = self.alias_name.as_deref() {
+            return alias_name.to_string();
+        }
         if self.types().is_empty() {
             return "unknown".to_string();
         }
         self.payload
             .name_memo
             .get_or_render(|| {
-                self.types()
-                    .iter()
-                    .map(Type::name)
-                    .collect::<Vec<_>>()
-                    .join(" | ")
+                // Distinct members can render to one name — every member of a
+                // nominal enum displays as the enum itself — and tsc prints that
+                // name once.
+                let mut rendered: Vec<String> = Vec::with_capacity(self.types().len());
+                for member in self.types() {
+                    let name = member.name();
+                    if !rendered.iter().any(|existing| *existing == name) {
+                        rendered.push(name);
+                    }
+                }
+                rendered.join(" | ")
             })
             .to_string()
     }
@@ -181,6 +209,7 @@ impl Clone for UnionType {
         Self {
             payload: self.payload.clone(),
             id: self.id,
+            alias_name: self.alias_name.clone(),
         }
     }
 }

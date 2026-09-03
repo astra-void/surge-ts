@@ -296,6 +296,31 @@ impl Type {
                     return alias_name.to_string();
                 }
 
+                return object_structural_name(object);
+            }
+            Type::Array(element) => format!("{}[]", array_element_name(element)),
+            Type::Tuple(elements) => {
+                let elements = elements
+                    .iter()
+                    .map(Type::name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{elements}]")
+            }
+            Type::Union(union) => union.name(),
+            Type::Reference(reference) if reference.render_structurally => {
+                match reference.resolve() {
+                    Type::Object(object) => object_structural_name(&object),
+                    peeled => peeled.name(),
+                }
+            }
+            Type::Reference(reference) => reference.display.to_string(),
+        }
+    }
+}
+
+fn object_structural_name(object: &crate::ObjectType) -> String {
+    {
                 let mut parts = object
                     .properties
                     .iter()
@@ -319,19 +344,6 @@ impl Type {
                 } else {
                     format!("{{ {}; }}", properties)
                 }
-            }
-            Type::Array(element) => format!("{}[]", array_element_name(element)),
-            Type::Tuple(elements) => {
-                let elements = elements
-                    .iter()
-                    .map(Type::name)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("[{elements}]")
-            }
-            Type::Union(union) => union.name(),
-            Type::Reference(reference) => reference.display.to_string(),
-        }
     }
 }
 

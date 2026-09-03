@@ -81,6 +81,11 @@ pub struct TypeReference {
     pub display: Arc<str>,
     /// Resolved type arguments, for variance-aware comparison and display.
     pub arguments: Arc<[Type]>,
+    /// Render the resolved type structurally instead of by `display`. A
+    /// conditional alias resolves *to* one of its branches, and tsc shows that
+    /// branch's own type. Display-only and a pure function of the declaration,
+    /// so it stays out of `nominal_eq` and out of canonical identity.
+    pub render_structurally: bool,
     resolver: Arc<dyn ResolveReference>,
 }
 
@@ -95,8 +100,16 @@ impl TypeReference {
             id: id.into(),
             display: display.into(),
             arguments: arguments.into(),
+            render_structurally: false,
             resolver,
         }
+    }
+
+
+    /// Marks this reference as rendering its resolved type structurally.
+    pub fn rendered_structurally(mut self) -> Self {
+        self.render_structurally = true;
+        self
     }
 
     /// Computes (or returns the memoized) structural expansion of this reference.

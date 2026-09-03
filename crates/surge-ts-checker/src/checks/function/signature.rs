@@ -440,7 +440,49 @@ pub(crate) fn map_function_signature(
         parameters.last().is_some_and(|parameter| parameter.rest),
         required_parameter_count(parameters),
     )
+    .with_parameter_names(written_binding_names(parameters))
+    .with_type_parameter_head(type_parameter_head(type_parameters))
 }
+
+/// Renders a signature's type-parameter list the way tsc prefixes it
+/// (`T extends FieldBag = FieldBag`), without the angle brackets. Syntactic, so
+/// it neither resolves nor caches anything; `None` when a constraint or default
+/// is not renderable, which keeps the un-prefixed form rather than a partial one.
+pub(crate) fn type_parameter_head(parameters: &[ParsedTypeParameter]) -> Option<String> {
+    if parameters.is_empty() {
+        return None;
+    }
+    let mut rendered = Vec::with_capacity(parameters.len());
+    for parameter in parameters {
+        let mut text = parameter.name.clone();
+        if let Some(constraint) = parameter.constraint.as_ref() {
+            text.push_str(" extends ");
+            text.push_str(&crate::driver::parsed_type_display(constraint)?);
+        }
+        if let Some(default_type) = parameter.default_type.as_ref() {
+            text.push_str(" = ");
+            text.push_str(&crate::driver::parsed_type_display(default_type)?);
+        }
+        rendered.push(text);
+    }
+    Some(rendered.join(", "))
+}
+
+/// The names as written, for display only (see
+/// [`surge_ts_types::FunctionType::with_parameter_names`]). A destructured
+/// parameter has no written name, so it keeps the bare type rendering.
+pub(crate) fn written_binding_names(
+    parameters: &[ParsedFunctionParameter],
+) -> Vec<Option<Arc<str>>> {
+    parameters
+        .iter()
+        .map(|parameter| match &parameter.binding_name {
+            ParsedBindingName::Identifier { name, .. } => Some(Arc::<str>::from(name.as_str())),
+            _ => None,
+        })
+        .collect()
+}
+
 
 pub(crate) fn map_lazy_dependency_function_signature(
     function: &surge_ts_syntax::ParsedFunctionDeclaration,
@@ -532,6 +574,8 @@ pub(crate) fn map_lazy_dependency_function_signature(
             .is_some_and(|parameter| parameter.rest),
         required_parameter_count(&function.parameters),
     )
+    .with_parameter_names(written_binding_names(&function.parameters))
+    .with_type_parameter_head(type_parameter_head(&function.type_parameters))
 }
 
 fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {

@@ -74,14 +74,37 @@ pub(crate) fn resolve_function_type(
     );
     had_error |= return_type.had_error;
     ResolvedType {
-        ty: Type::Function(alloc_function_type(
-            parameters,
-            return_type.ty,
-            is_variadic,
-            required_parameter_count,
-        )),
+        ty: Type::Function(
+            alloc_function_type(
+                parameters,
+                return_type.ty,
+                is_variadic,
+                required_parameter_count,
+            )
+            .with_parameter_names(written_parameter_names(&value_parameters))
+            .with_type_parameter_head(
+                crate::checks::function::type_parameter_head(&function_type.type_parameters),
+            ),
+        ),
         had_error,
     }
+}
+
+/// The names as written, so a diagnostic can render `(value: string) => void`
+/// the way tsc does. Display-only: they are attached to the type handle and
+/// never reach the interned payload or assignability.
+pub(crate) fn written_parameter_names(
+    parameters: &[surge_ts_syntax::ParsedFunctionTypeParameter],
+) -> Vec<Option<std::sync::Arc<str>>> {
+    parameters
+        .iter()
+        .map(|parameter| {
+            parameter
+                .name
+                .as_deref()
+                .map(std::sync::Arc::<str>::from)
+        })
+        .collect()
 }
 
 /// [`resolve_function_type`] with lazy components (Stage 2 of member-level
