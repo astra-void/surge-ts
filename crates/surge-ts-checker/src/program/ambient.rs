@@ -170,7 +170,9 @@ pub(crate) fn collect_ambient_globals(
     // type against whatever members were merged when its own file was processed,
     // dropping members contributed by files processed later.
     for parsed_file in parsed_files {
-        if !is_ambient_global_declaration_file(parsed_file, ctx) {
+        if !is_ambient_global_declaration_file(parsed_file, ctx)
+            || !publishes_ambient_globals(parsed_file)
+        {
             continue;
         }
 
@@ -212,7 +214,9 @@ pub(crate) fn collect_ambient_globals(
     // `declare class` constructors) against the now fully-merged type table, so
     // a variable typed by a split global interface sees every member.
     for parsed_file in parsed_files {
-        if !is_ambient_global_declaration_file(parsed_file, ctx) {
+        if !is_ambient_global_declaration_file(parsed_file, ctx)
+            || !publishes_ambient_globals(parsed_file)
+        {
             continue;
         }
 
@@ -512,6 +516,24 @@ fn is_ambient_global_declaration_file(
     }
 
     true
+}
+
+/// Whether the file's own top-level declarations reach the *global* scope. A
+/// declaration file carrying a top-level `import`/`export` is a module: its
+/// declarations are module-scoped no matter how the file was reached, and it
+/// augments the global scope only through `declare global` /
+/// `declare module "x"` blocks, which are collected separately. Publishing a
+/// module's declarations globally made the whole
+/// `@types/express-serve-static-core` surface global (a `/// <reference types>`
+/// directive in a dependency puts it in the effective `types` list), clobbering
+/// the real global `Response` with express's `status(code)` and resolving bare
+/// `NextFunction`/`ParamsDictionary` that tsc reports as unknown names.
+///
+/// Neither pass below can serve a module: both run before binding, so a module's
+/// import scope does not exist yet and its annotations would resolve against the
+/// global table alone. A module declaration file is therefore skipped outright.
+fn publishes_ambient_globals(parsed_file: &ParsedProgramFile) -> bool {
+    !parsed_file.is_module
 }
 
 /// Whether `file_name` belongs to one of the configured `compilerOptions.types`
