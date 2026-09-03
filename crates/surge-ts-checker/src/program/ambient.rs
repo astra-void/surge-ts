@@ -110,6 +110,18 @@ pub(crate) fn module_scope_declared_names(statements: &[ParsedStatement]) -> Has
     names
 }
 
+/// [`module_scope_declared_names`] minus the import bindings: the names the file
+/// declares itself. A type-only import of a name the file also declares is a
+/// duplicate-identifier error, not a type-only value use, so the declaration
+/// wins.
+pub(crate) fn module_scope_own_declared_names(statements: &[ParsedStatement]) -> HashSet<&str> {
+    let imported = import_bound_names(statements);
+    module_scope_declared_names(statements)
+        .into_iter()
+        .filter(|name| !imported.contains(name))
+        .collect()
+}
+
 /// Every local name a file's imports bind, type-only imports included. A
 /// type-only binding still shadows a same-named global — tsc reports using it
 /// as a value as TS1361, not as a UMD-global reference — and an import whose
@@ -151,6 +163,56 @@ pub(crate) fn import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str
             }
             surge_ts_syntax::ParsedImportKind::SideEffect
             | surge_ts_syntax::ParsedImportKind::Unsupported => {}
+        }
+    }
+
+    names
+}
+
+/// The local names a file's imports bind **in type space only**
+/// (`import type X from …`, `import type { X } from …`,
+/// `import type * as X from …`). Referencing one as a value is TS1361.
+pub(crate) fn type_only_import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str> {
+    let mut names = HashSet::new();
+
+    for statement in statements {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+
+        match &import.kind {
+            surge_ts_syntax::ParsedImportKind::Named {
+                is_type_only: true,
+                specifiers,
+            } => {
+                names.extend(
+                    specifiers
+                        .iter()
+                        .map(|specifier| specifier.local_name.as_str()),
+                );
+            }
+            surge_ts_syntax::ParsedImportKind::DefaultAndNamed {
+                local_name,
+                is_type_only: true,
+                specifiers,
+                ..
+            } => {
+                names.insert(local_name.as_str());
+                names.extend(
+                    specifiers
+                        .iter()
+                        .map(|specifier| specifier.local_name.as_str()),
+                );
+            }
+            surge_ts_syntax::ParsedImportKind::Namespace {
+                local_name,
+                is_type_only: true,
+                ..
+            }
+            | surge_ts_syntax::ParsedImportKind::TypeOnlyDefault { local_name, .. } => {
+                names.insert(local_name.as_str());
+            }
+            _ => {}
         }
     }
 

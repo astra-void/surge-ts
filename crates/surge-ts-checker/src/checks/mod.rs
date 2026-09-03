@@ -12,6 +12,31 @@ use surge_ts_syntax::{ParsedExpression, TextSpan};
 
 use crate::context::{CheckerContext, convert_span};
 
+/// Reports the diagnostic tsc gives for a name used in a genuine *value*
+/// position that is not usable as one: TS1361 when a type-only import binds it
+/// (the import shadows any same-named UMD global, so tsc reports the import),
+/// otherwise TS2686 for a UMD global. Returns whether it fired.
+///
+/// A `typeof X` type query is NOT such a position — a type-only import is
+/// exactly what makes `typeof ns.Member` legal — so it calls
+/// [`emit_umd_global_reference_diagnostic`] directly.
+pub(crate) fn emit_value_position_reference_diagnostic(
+    name: &str,
+    span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if ctx.is_type_only_import_value_reference(name) {
+        let mut diagnostic = Diagnostic::ts1361(name, ctx.file_name.clone());
+        if let Some(span) = span {
+            diagnostic = diagnostic.with_span(convert_span(span));
+        }
+        ctx.push(diagnostic);
+        return true;
+    }
+
+    emit_umd_global_reference_diagnostic(name, span, ctx)
+}
+
 /// Reports TS2686 when `name` reaches the file under check only as a UMD global.
 /// Returns whether it fired, so an unresolved-name path can stop before its own
 /// report: tsc resolves the name successfully here and never reaches its
@@ -65,15 +90,16 @@ fn value_reference_head(expression: &ParsedExpression) -> Option<(&str, Option<T
     }
 }
 
-/// Reports a UMD-global read at the head of a value expression. Cheap to call on
-/// every evaluated expression: the per-file name set is empty in every program
-/// that has no UMD global, and duplicate spans collapse in `ctx.push`.
+/// Reports a read at the head of a value expression that names something not
+/// usable as a value — a type-only import (TS1361) or a UMD global (TS2686).
+/// Cheap to call on every evaluated expression: both per-file name sets are
+/// empty in the common case, and duplicate spans collapse in `ctx.push`.
 pub(crate) fn check_umd_global_value_reference(
     expression: &ParsedExpression,
     fallback_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    if ctx.file_umd_global_names.is_empty() {
+    if ctx.file_umd_global_names.is_empty() && ctx.file_type_only_import_names.is_empty() {
         return;
     }
 
@@ -81,12 +107,12 @@ pub(crate) fn check_umd_global_value_reference(
         return;
     };
 
-    if !ctx.is_umd_global_value_reference(name) {
+    if !ctx.is_type_only_import_value_reference(name) && !ctx.is_umd_global_value_reference(name) {
         return;
     }
 
     let name = name.to_string();
-    emit_umd_global_reference_diagnostic(&name, span.or(fallback_span), ctx);
+    emit_value_position_reference_diagnostic(&name, span.or(fallback_span), ctx);
 }
 
 pub(crate) fn emit_type_only_as_value_diagnostic(

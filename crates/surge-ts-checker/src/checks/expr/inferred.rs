@@ -20,7 +20,7 @@ pub(crate) fn report_inferred_expression(
             // The name is unresolved *here* but a UMD global resolves it for
             // tsc, so the reference reports as TS2686 rather than as a missing
             // name.
-            if crate::checks::emit_umd_global_reference_diagnostic(
+            if crate::checks::emit_value_position_reference_diagnostic(
                 &name,
                 choose_span(span, fallback_span),
                 ctx,

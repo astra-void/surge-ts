@@ -2578,6 +2578,17 @@ fn check_program_file(
             merged_symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
         );
 
+        // A module-scope declaration of the same name shadows the import (and is
+        // its own duplicate-identifier error), so it is excluded rather than
+        // reported as a type-only value use.
+        let module_declared =
+            crate::program::ambient::module_scope_own_declared_names(&parsed_file.statements);
+        ctx.set_file_type_only_import_names(
+            crate::program::ambient::type_only_import_bound_names(&parsed_file.statements)
+                .into_iter()
+                .filter(|name| !module_declared.contains(name)),
+        );
+
         if !ctx.umd_global_names.is_empty() {
             let declared = module_scope_declared_names(&parsed_file.statements);
             ctx.set_file_umd_global_names(true, |name| {

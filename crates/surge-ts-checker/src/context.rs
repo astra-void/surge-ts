@@ -1100,6 +1100,18 @@ pub(crate) struct CheckerContext {
     /// or imported shadows the name. Empty for script files, for files that
     /// bind every UMD name themselves, and under `allowUmdGlobalAccess`.
     pub(crate) file_umd_global_names: FxHashSet<Arc<str>>,
+    /// Set only while collecting a *script* file's top-level type declarations.
+    /// A script's `interface X` re-opens a same-named global interface
+    /// (declaration merging); a module's shadows it. Without the merge a script
+    /// that re-opens a DOM interface silently lost the lib's members — and, in
+    /// the other direction, the lib's shape replaced the file's own.
+    pub(crate) merge_script_interfaces_with_globals: bool,
+    /// Local names the file under check binds through a type-only import
+    /// (`import type React from "react"`). Referencing one as a value is
+    /// TS1361 — including the implicit factory reference every JSX tag makes
+    /// under `jsx: react`.
+    pub(crate) file_type_only_import_names: FxHashSet<Arc<str>>,
+    pub(crate) file_type_only_import_names_owner: Option<String>,
     /// The file [`Self::file_umd_global_names`] was computed for. Type
     /// resolution re-enters under a *declaring* file's name, and that file's
     /// shadowing is not the checked file's, so the set only applies while the
@@ -1278,6 +1290,9 @@ impl CheckerContext {
             umd_global_names: Arc::new(FxHashSet::default()),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
+            merge_script_interfaces_with_globals: false,
+            file_type_only_import_names: FxHashSet::default(),
+            file_type_only_import_names_owner: None,
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
             module_file_index_by_identity: Arc::new(FxHashMap::default()),
             module_scope_by_file: Arc::new(FxHashMap::default()),
@@ -1388,6 +1403,9 @@ impl CheckerContext {
             umd_global_names: Arc::new(FxHashSet::default()),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
+            merge_script_interfaces_with_globals: false,
+            file_type_only_import_names: FxHashSet::default(),
+            file_type_only_import_names_owner: None,
             ambient_global_type_declarations: data.ambient_global_type_declarations.clone(),
             module_file_index_by_identity: data.module_file_index_by_identity.clone(),
             module_scope_by_file: data.module_scope_by_file.clone(),
@@ -1663,6 +1681,29 @@ impl CheckerContext {
     /// reports whether the file binds the name itself, as a value or a type —
     /// tsc reports a different diagnostic for a shadowing `import type`, so a
     /// bound name is left alone here either way.
+    /// Whether `name` reaches the file under check only through a type-only
+    /// import, which makes a value reference to it TS1361.
+    ///
+    /// The import must actually name something with a value meaning: importing
+    /// a *type* with `import type` and using it as a value is TS2693 in tsc
+    /// ("only refers to a type"), not TS1361.
+    pub(crate) fn is_type_only_import_value_reference(&self, name: &str) -> bool {
+        self.file_type_only_import_names_owner.as_deref() == Some(self.file_name.as_str())
+            && self.file_type_only_import_names.contains(name)
+            && self.lookup_type_declaration(name).is_none()
+    }
+
+    pub(crate) fn set_file_type_only_import_names<'a>(
+        &mut self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) {
+        self.file_type_only_import_names.clear();
+        self.file_type_only_import_names_owner = Some(self.file_name.clone());
+        for name in names {
+            self.file_type_only_import_names.insert(Arc::from(name));
+        }
+    }
+
     pub(crate) fn set_file_umd_global_names(
         &mut self,
         is_module: bool,
@@ -1702,6 +1743,8 @@ impl CheckerContext {
         self.diagnostic_keys_len = 0;
         self.file_umd_global_names.clear();
         self.file_umd_global_names_owner = None;
+        self.file_type_only_import_names.clear();
+        self.file_type_only_import_names_owner = None;
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"

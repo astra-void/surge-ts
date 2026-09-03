@@ -38,7 +38,7 @@ pub(crate) fn check_jsx_factory_reference(
         return;
     }
 
-    crate::checks::emit_umd_global_reference_diagnostic(
+    crate::checks::emit_value_position_reference_diagnostic(
         JSX_FACTORY_NAMESPACE,
         location_span.or(fallback_span),
         ctx,

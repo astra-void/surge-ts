@@ -411,6 +411,12 @@ span_tests = [
   "crates/surge-ts-checker/tests/program.rs",
 ]
 
+[TS1361]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/import-type-value-reference-basic/tsconfig.json",
+]
+
 [TS2686]
 status = "emitted"
 fixtures = [

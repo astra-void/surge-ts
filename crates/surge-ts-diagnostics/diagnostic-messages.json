@@ -32,6 +32,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS1361",
+    "category": "Error",
+    "message": "'{0}' cannot be used as a value because it was imported using 'import type'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2304",
     "category": "Error",
     "message": "Cannot find name '{0}'.",
