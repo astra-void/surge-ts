@@ -40,6 +40,11 @@ pub(crate) struct TypeAliasInfo {
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
     pub(crate) body: Arc<TypeAliasBody>,
+    /// The enum this alias stands for, when it was synthesized by lowering an
+    /// `enum` (see [`surge_ts_syntax::ParsedTypeAliasDeclaration::enum_name`]).
+    pub(crate) enum_name: Option<Arc<str>>,
+    /// Whether that enum was exported; tsc qualifies only an exported one.
+    pub(crate) enum_exported: bool,
     /// Memoized resolution-cache key (canonical file name + declared name).
     /// Built on first request — key construction canonicalizes the path and
     /// allocates, and resolution asks for it millions of times per run. Carried
@@ -71,9 +76,19 @@ impl TypeAliasInfo {
                 type_parameters,
                 ty,
             }),
+            enum_name: None,
+            enum_exported: false,
             cached_resolution_key: std::sync::OnceLock::new(),
             cached_alias_id: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Marks this alias as standing for an enum, so its resolution can carry the
+    /// enum's nominal display.
+    pub(crate) fn with_enum_name(mut self, enum_name: Option<&str>, exported: bool) -> Self {
+        self.enum_name = enum_name.map(Arc::from);
+        self.enum_exported = exported;
+        self
     }
 }
 
@@ -87,6 +102,8 @@ impl Clone for TypeAliasInfo {
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
             body: self.body.clone(),
+            enum_name: self.enum_name.clone(),
+            enum_exported: self.enum_exported,
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
         }

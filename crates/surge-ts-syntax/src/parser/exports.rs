@@ -300,7 +300,7 @@ fn parse_exported_declaration(
         Declaration::ClassDeclaration(class) => super::classes::parse_class_declaration(class)
             .map(|class| vec![ParsedStatement::ClassDeclaration(Box::new(class))])?,
         Declaration::TSEnumDeclaration(enum_declaration) => {
-            super::enums::parse_enum_declaration(enum_declaration)
+            super::enums::parse_enum_declaration(enum_declaration, true)
         }
         Declaration::TSModuleDeclaration(module) => super::parse_ts_module_declaration(module),
         _ => return None,

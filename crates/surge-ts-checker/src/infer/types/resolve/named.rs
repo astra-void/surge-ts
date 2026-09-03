@@ -255,6 +255,11 @@ pub(crate) fn resolve_named_type(
         // assignability recognise two resolutions of the same declaration.
         let alias_id = type_declaration_alias_id(declaration, &cache_key);
         let resolved = attach_object_alias_name(resolved, &named_type.name, &alias_id);
+        // An enum type is nominal in tsc and displayed by the enum's name, which
+        // the lowered literal-union body cannot express. Wrap it in a nominal
+        // reference so the *display* carries the enum while the payload stays the
+        // literal union assignability already understands.
+        let resolved = wrap_enum_member_reference(resolved, declaration, &alias_id, &cache_key, ctx);
         // Wrap the named object in a lazy nominal reference. A non-generic
         // declaration is concrete and context-independent, so its expansion is
         // interned (the wrapped object keeps its `alias_id`/`alias_name`, so a
@@ -902,6 +907,51 @@ fn tag_generic_object_alias(resolved: ResolvedType, display_name: Option<&str>) 
 /// Tags a resolved object type with the interface/type-alias name it came from
 /// so diagnostics display the name (tsc behaviour). Non-object resolutions and
 /// errored resolutions pass through unchanged.
+/// Wraps an enum-lowered alias resolution in a nominal reference whose display
+/// is tsc's enum form (`import("<module>").Color`). The reference id stays
+/// per-member (`Color.Red`), so two members never compare equal to each other.
+fn wrap_enum_member_reference(
+    resolved: ResolvedType,
+    declaration: &TypeDeclarationInfo,
+    reference_id: &str,
+    decl_key: &DeclarationResolutionKey,
+    ctx: &CheckerContext,
+) -> ResolvedType {
+    let TypeDeclarationInfo::Alias(alias) = declaration else {
+        return resolved;
+    };
+    let Some(enum_name) = alias.enum_name.as_deref() else {
+        return resolved;
+    };
+    if resolved.had_error || matches!(resolved.ty, Type::Reference(_) | Type::Unknown) {
+        return resolved;
+    }
+    // tsc qualifies an exported enum's type with the module it came from and
+    // names a file-local one bare.
+    let display = if alias.enum_exported {
+        format!(
+            "import({:?}).{enum_name}",
+            module_path_for_display(&alias.file_name)
+        )
+    } else {
+        enum_name.to_string()
+    };
+    let interned = intern_instantiation(ctx, decl_key, &[], resolved.ty.clone());
+    ResolvedType {
+        ty: make_type_reference(reference_id.to_string(), display, Vec::new(), interned),
+        had_error: false,
+    }
+}
+
+/// The module path tsc writes inside `import("…")`: the declaring file without
+/// its declaration extension.
+fn module_path_for_display(file_name: &str) -> &str {
+    [".d.ts", ".d.mts", ".d.cts", ".tsx", ".ts", ".mts", ".cts"]
+        .iter()
+        .find_map(|extension| file_name.strip_suffix(extension))
+        .unwrap_or(file_name)
+}
+
 fn attach_object_alias_name(resolved: ResolvedType, name: &str, alias_id: &str) -> ResolvedType {
     match resolved.ty {
         // Tag the nominal identity even when the resolution errored (a cyclic

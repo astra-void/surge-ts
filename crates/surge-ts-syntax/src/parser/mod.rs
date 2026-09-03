@@ -100,7 +100,7 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
         Declaration::ClassDeclaration(class) => parse_class_declaration(class)
             .map(|class| vec![ParsedStatement::ClassDeclaration(Box::new(class))]),
         Declaration::TSEnumDeclaration(enum_declaration) => {
-            Some(enums::parse_enum_declaration(enum_declaration))
+            Some(enums::parse_enum_declaration(enum_declaration, false))
         }
         Declaration::TSModuleDeclaration(module) => Some(parse_ts_module_declaration(module)),
         Declaration::TSGlobalDeclaration(global) => Some(parse_ts_global_declaration(global)),

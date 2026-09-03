@@ -15,8 +15,11 @@ use crate::{
 
 use super::text_span_from_oxc_span;
 
-pub(crate) fn parse_enum_declaration(declaration: &TSEnumDeclaration<'_>) -> Vec<ParsedStatement> {
-    let (type_alias, value) = lower_enum_declaration(declaration);
+pub(crate) fn parse_enum_declaration(
+    declaration: &TSEnumDeclaration<'_>,
+    exported: bool,
+) -> Vec<ParsedStatement> {
+    let (type_alias, value) = lower_enum_declaration(declaration, exported);
     let mut statements: Vec<ParsedStatement> = member_type_aliases(&type_alias, &value)
         .map(|alias| ParsedStatement::TypeAliasDeclaration(Box::new(alias)))
         .collect();
@@ -49,13 +52,16 @@ fn member_type_aliases<'a>(
         type_parameters: Vec::new(),
         ty: member.ty.clone(),
         type_span: member.name_span,
+        enum_name: Some(type_alias.name.clone()),
+        enum_exported: type_alias.enum_exported,
     })
 }
 
 pub(crate) fn parse_enum_declaration_as_function_body(
     declaration: &TSEnumDeclaration<'_>,
 ) -> Vec<ParsedFunctionBodyStatement> {
-    let (type_alias, value) = lower_enum_declaration(declaration);
+    // A body-local enum is never visible outside its file.
+    let (type_alias, value) = lower_enum_declaration(declaration, false);
     vec![
         ParsedFunctionBodyStatement::TypeAlias(Box::new(type_alias)),
         ParsedFunctionBodyStatement::VariableDeclaration(Box::new(value)),
@@ -64,6 +70,7 @@ pub(crate) fn parse_enum_declaration_as_function_body(
 
 fn lower_enum_declaration(
     declaration: &TSEnumDeclaration<'_>,
+    exported: bool,
 ) -> (ParsedTypeAliasDeclaration, ParsedVariableDeclaration) {
     let name_span = Some(text_span_from_oxc_span(declaration.id.span));
     let mut next_auto_value: f64 = 0.0;
@@ -127,6 +134,8 @@ fn lower_enum_declaration(
             type_parameters: Vec::new(),
             ty: enum_type,
             type_span: name_span,
+            enum_name: Some(declaration.id.name.to_string()),
+            enum_exported: exported,
         },
         ParsedVariableDeclaration {
             // The object side has no written initializer to check, and an `enum`

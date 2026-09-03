@@ -334,6 +334,14 @@ pub struct ParsedTypeAliasDeclaration {
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub ty: ParsedType,
     pub type_span: Option<TextSpan>,
+    /// The enum this alias stands for, when it was synthesized by lowering an
+    /// `enum` declaration (both the enum's own alias and one per member). An
+    /// enum type is nominal in tsc and displayed by the enum's name, which the
+    /// literal-union body cannot express on its own.
+    pub enum_name: Option<String>,
+    /// Whether that `enum` was exported. tsc qualifies an exported enum's type
+    /// as `import("<module>").Color` and names a file-local one bare.
+    pub enum_exported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

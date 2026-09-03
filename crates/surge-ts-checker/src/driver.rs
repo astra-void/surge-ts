@@ -844,7 +844,8 @@ fn collect_namespace_type_declarations_prefixed(
                         alias.type_parameters.clone(),
                         alias.ty.clone(),
                         None,
-                    );
+                    )
+                    .with_enum_name(alias.enum_name.as_deref(), alias.enum_exported);
                     let _ = ctx
                         .type_declarations
                         .insert(key, TypeDeclarationInfo::Alias(info));
@@ -1308,7 +1309,8 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
         alias.type_parameters.clone(),
         alias.ty.clone(),
         None,
-    );
+    )
+    .with_enum_name(alias.enum_name.as_deref(), alias.enum_exported);
 
     if ctx
         .type_declarations

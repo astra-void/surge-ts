@@ -338,6 +338,7 @@ export const fixturePresets: Record<string, string> = {
   'ambient-module-sibling-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-sibling-scope-basic/tsconfig.json'),
   'optional-property-conditional-undefined-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-property-conditional-undefined-basic/tsconfig.json'),
   'generic-type-predicate-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-type-predicate-narrowing-basic/tsconfig.json'),
+  'nominal-enum-display-basic': path.join(workspaceRoot, 'tests/compat-projects/nominal-enum-display-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
