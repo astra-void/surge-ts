@@ -73,6 +73,49 @@ program") and `docs/MEMORY-OPTIMIZATION-REPORT.md`.
 - MUST NOT use `git stash` for large cross-cutting memory work; commit and
   validate each memory stage independently.
 
+## Documentation rules
+
+Two failure modes have repeatedly made this repository's docs misleading: a
+stale number presented as current, and a historical note read as a support
+statement. These rules exist to prevent both.
+
+- **[CURRENT_STATUS.md](CURRENT_STATUS.md) is the single source of truth for
+  current state.** Volatile values — oracle preset count, workspace test count,
+  real-project parity, benchmark medians — are recorded there and **nowhere
+  else**. Other documents link to it rather than copying the number.
+- **MUST NOT record a measured number you did not measure.** If you are
+  carrying forward someone else's result, say so explicitly and cite the source
+  document, commit, and date. "Last recorded" is an acceptable claim;
+  presenting it as current is not.
+- **MUST NOT let a skipped gate read as a passing gate.** The real-project
+  gates skip when the checkout or the `typescript` package is absent. Record
+  *not measured*, not the previous number.
+- **MUST measure from a clean checkout.** Do not record gate results or
+  benchmark numbers produced by a dirty working tree; build from a clean
+  worktree at the commit you are citing and point the harness at it with
+  `SURGE_TS_BIN`.
+- **MUST label historical content unmistakably.** Version-tagged milestone
+  notes, superseded support lists, and point-in-time optimization reports
+  belong under [docs/history/](docs/history/) or [docs/perf/](docs/perf/), or
+  under an explicit `Historical` heading, with a banner saying they do not
+  describe current behavior. Do not delete engineering investigations —
+  a rejected design with its measurement attached is what stops the idea being
+  re-proposed.
+- **MUST NOT carry a limitation forward unverified.** Before repeating a
+  "not supported" claim, reproduce it against the oracle. Several long-standing
+  entries turned out to have been fixed. When a limitation is confirmed or
+  refuted, record the date and the commit alongside the verdict.
+- **`v0.x` / `v1.x` labels are internal milestone markers**, not releases,
+  tags, or crate versions. Do not synchronize them with the Cargo workspace
+  version. See [CURRENT_STATUS.md § Versioning](CURRENT_STATUS.md#versioning).
+- **[PUBLIC_API.md](PUBLIC_API.md) is a contract, not a status board.** It
+  lists the stable API and the exact-parity feature areas; it carries no
+  volatile counts.
+- **Never generalize a fixture result into a compatibility claim.** A green
+  preset means parity on that fixture. Real-project 0/0 corpora are
+  false-positive regression gates. `trpc` is a measured workload, never a
+  parity claim.
+
 ## Performance and correctness guardrails
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and

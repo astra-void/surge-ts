@@ -319,6 +319,25 @@ fn bind_infer_captures(
                     );
                 }
             }
+            // A constructor *type* (`abstract new (...args: infer P) => any`,
+            // `ConstructorParameters`' whole pattern) is an object carrying only
+            // a construct signature, so its captures live there rather than in a
+            // property.
+            if let Some(signature) = pattern
+                .construct_signature
+                .as_deref()
+                .or(pattern.call_signature.as_deref())
+            {
+                bind_signature_infer_captures(
+                    signature,
+                    &peeled,
+                    substitution,
+                    ctx,
+                    resolving,
+                    depth,
+                    reference_positional,
+                );
+            }
         }
         // `(props: infer P) => infer R` matched against a concrete function type:
         // line up value parameters and the return position so captures inside a
@@ -331,50 +350,15 @@ fn bind_infer_captures(
                 crate::program::DtsExpansionReason::ConditionalType,
                 || check.peeled(),
             );
-            if let Some(check_function) = callable_signature(&peeled) {
-                let check_parameters = check_function.parameters();
-                let pattern_parameters = pattern
-                    .parameters
-                    .iter()
-                    .filter(|parameter| !parameter.is_this);
-                for (index, pattern_parameter) in pattern_parameters.enumerate() {
-                    // `(...args: infer P)` captures the *tuple* of every remaining
-                    // parameter, not the one at this position — that is what makes
-                    // `Parameters`/`ConstructorParameters` yield a parameter list.
-                    if pattern_parameter.rest {
-                        bind_infer_captures(
-                            &pattern_parameter.ty,
-                            &Type::Tuple(check_parameters[index.min(check_parameters.len())..].to_vec()),
-                            substitution,
-                            ctx,
-                            resolving,
-                            depth,
-                            reference_positional,
-                        );
-                        break;
-                    }
-                    if let Some(check_parameter) = check_parameters.get(index) {
-                        bind_infer_captures(
-                            &pattern_parameter.ty,
-                            check_parameter,
-                            substitution,
-                            ctx,
-                            resolving,
-                            depth,
-                            reference_positional,
-                        );
-                    }
-                }
-                bind_infer_captures(
-                    &pattern.return_type,
-                    check_function.return_type(),
-                    substitution,
-                    ctx,
-                    resolving,
-                    depth,
-                    reference_positional,
-                );
-            }
+            bind_signature_infer_captures(
+                pattern,
+                &peeled,
+                substitution,
+                ctx,
+                resolving,
+                depth,
+                reference_positional,
+            );
         }
         // A union/intersection extends pattern (e.g. the body of
         // `JSXElementConstructor`) binds from whichever member structurally lines
@@ -515,6 +499,64 @@ fn try_function_infer_match(
 /// `ForwardRefExoticComponent<P>` or a class value) uniformly. This lets
 /// `JSXElementConstructor<infer P>` recover the props type from a `forwardRef`/
 /// `memo` component, not only from a plain function component.
+/// Lines up a written signature pattern with the check type's callable surface:
+/// value parameters positionally, the rest parameter against the tuple of every
+/// remaining one (what makes `Parameters`/`ConstructorParameters` yield a
+/// parameter list), and the return position.
+#[allow(clippy::too_many_arguments)]
+fn bind_signature_infer_captures(
+    pattern: &surge_ts_syntax::ParsedFunctionType,
+    check: &Type,
+    substitution: &mut TypeParameterSubstitution,
+    ctx: &CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    depth: usize,
+    reference_positional: bool,
+) {
+    let Some(check_function) = callable_signature(check) else {
+        return;
+    };
+    let check_parameters = check_function.parameters();
+    let pattern_parameters = pattern
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this);
+    for (index, pattern_parameter) in pattern_parameters.enumerate() {
+        if pattern_parameter.rest {
+            bind_infer_captures(
+                &pattern_parameter.ty,
+                &Type::Tuple(check_parameters[index.min(check_parameters.len())..].to_vec()),
+                substitution,
+                ctx,
+                resolving,
+                depth,
+                reference_positional,
+            );
+            break;
+        }
+        if let Some(check_parameter) = check_parameters.get(index) {
+            bind_infer_captures(
+                &pattern_parameter.ty,
+                check_parameter,
+                substitution,
+                ctx,
+                resolving,
+                depth,
+                reference_positional,
+            );
+        }
+    }
+    bind_infer_captures(
+        &pattern.return_type,
+        check_function.return_type(),
+        substitution,
+        ctx,
+        resolving,
+        depth,
+        reference_positional,
+    );
+}
+
 fn callable_signature(ty: &Type) -> Option<&surge_ts_types::FunctionType> {
     match ty {
         Type::Function(function) => Some(function),
@@ -569,6 +611,17 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
             for property in &object.properties {
                 collect_infer_names(&property.ty, names);
             }
+            for signature in object
+                .construct_signature
+                .as_deref()
+                .into_iter()
+                .chain(object.call_signature.as_deref())
+            {
+                for parameter in &signature.parameters {
+                    collect_infer_names(&parameter.ty, names);
+                }
+                collect_infer_names(&signature.return_type, names);
+            }
         }
         _ => {}
     }
@@ -580,10 +633,24 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
 fn parsed_type_contains_infer(ty: &ParsedType) -> bool {
     match ty {
         ParsedType::Infer(_) => true,
-        ParsedType::Object(object) => object
-            .properties
-            .iter()
-            .any(|property| parsed_type_contains_infer(&property.ty)),
+        ParsedType::Object(object) => {
+            object
+                .properties
+                .iter()
+                .any(|property| parsed_type_contains_infer(&property.ty))
+                || object
+                    .construct_signature
+                    .as_deref()
+                    .into_iter()
+                    .chain(object.call_signature.as_deref())
+                    .any(|signature| {
+                        signature
+                            .parameters
+                            .iter()
+                            .any(|parameter| parsed_type_contains_infer(&parameter.ty))
+                            || parsed_type_contains_infer(&signature.return_type)
+                    })
+        }
         ParsedType::Array(inner) | ParsedType::KeyOf(inner) => parsed_type_contains_infer(inner),
         ParsedType::Union(members)
         | ParsedType::Intersection(members)

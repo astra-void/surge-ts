@@ -434,21 +434,94 @@ fn merge_intersection_members_now(
     }
 }
 
-/// `Some` when every operand is a literal: `never` if any two differ, otherwise
-/// the shared literal. `None` leaves the caller's existing behavior alone.
-fn reduce_disjoint_literals(members: &[Type]) -> Option<Type> {
-    let mut literals = members.iter().map(|member| match member {
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => Some(member),
+/// The set of literals an operand admits, when the operand is a scalar literal,
+/// a union of scalar literals, or the primitive that spells one of their
+/// domains. `None` for anything else, which leaves the caller's existing
+/// behavior alone.
+enum LiteralDomain<'a> {
+    /// Every literal of one primitive domain (`string`, `number`, …).
+    Primitive(&'a Type),
+    Members(Vec<&'a Type>),
+}
+
+fn literal_primitive_domain(literal: &Type) -> Option<Type> {
+    match literal {
+        Type::StringLiteral(_) => Some(Type::String),
+        Type::NumberLiteral(_) => Some(Type::Number),
+        Type::BooleanLiteral(_) => Some(Type::Boolean),
         _ => None,
-    });
-    let first = literals.next()??;
-    for other in literals {
-        let other = other?;
-        if other != first {
+    }
+}
+
+fn literal_domain(ty: &Type) -> Option<LiteralDomain<'_>> {
+    match ty {
+        Type::String | Type::Number | Type::Boolean => Some(LiteralDomain::Primitive(ty)),
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
+            Some(LiteralDomain::Members(vec![ty]))
+        }
+        Type::Union(union) => {
+            let mut members = Vec::with_capacity(union.types().len());
+            for member in union.types() {
+                match member {
+                    Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
+                        members.push(member);
+                    }
+                    _ => return None,
+                }
+            }
+            (!members.is_empty()).then_some(LiteralDomain::Members(members))
+        }
+        _ => None,
+    }
+}
+
+/// `Some` when every operand is literal-like: the set intersection of their
+/// admitted literals, `never` when that is empty. Without this a `keyof A &
+/// keyof B` guard — trpc's `ProtectedIntersection`, whose disjoint key sets must
+/// reduce to `never` — took the first operand and inverted the conditional. Two
+/// union operands never reach the distribution path above (its product is
+/// quadratic), so the reduction has to happen here.
+fn reduce_disjoint_literals(members: &[Type]) -> Option<Type> {
+    let mut domains = members.iter().map(literal_domain);
+    let mut reduced = domains.next()??;
+
+    for domain in domains {
+        reduced = match (reduced, domain?) {
+            (LiteralDomain::Primitive(left), LiteralDomain::Primitive(right)) => {
+                if left == right {
+                    LiteralDomain::Primitive(left)
+                } else {
+                    return Some(Type::Never);
+                }
+            }
+            (LiteralDomain::Primitive(primitive), LiteralDomain::Members(members))
+            | (LiteralDomain::Members(members), LiteralDomain::Primitive(primitive)) => {
+                LiteralDomain::Members(
+                    members
+                        .into_iter()
+                        .filter(|member| {
+                            literal_primitive_domain(member).as_ref() == Some(primitive)
+                        })
+                        .collect(),
+                )
+            }
+            (LiteralDomain::Members(left), LiteralDomain::Members(right)) => LiteralDomain::Members(
+                left.into_iter()
+                    .filter(|member| right.contains(member))
+                    .collect(),
+            ),
+        };
+        if matches!(&reduced, LiteralDomain::Members(members) if members.is_empty()) {
             return Some(Type::Never);
         }
     }
-    Some(first.clone())
+
+    Some(match reduced {
+        LiteralDomain::Primitive(primitive) => primitive.clone(),
+        LiteralDomain::Members(members) => {
+            surge_ts_types::union_type(members.into_iter().cloned().collect())
+        }
+    })
 }
 
 /// Whether an object contributes no required structure to an intersection — all

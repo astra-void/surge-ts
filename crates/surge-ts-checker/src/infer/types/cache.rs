@@ -413,9 +413,15 @@ struct LazyInstantiation {
     degraded_memo: std::sync::OnceLock<Arc<Type>>,
 }
 
-struct LazyDeclarationAnnotation {
-    environment: DeclarationEnvironmentHandle,
-    creation_scope: Option<Arc<crate::symbols::TypeDeclarationScope>>,
+/// The capture-site content of a lazy annotation reference, split out from the
+/// per-instance handle because none of it depends on WHICH context created the
+/// reference: the resolution key, the rendered display, the parsed annotation
+/// and the substitution snapshot are functions of the declaration alone. Member
+/// references intern this by content, so an interface member reached from N
+/// consumer sites renders its display, formats its id and key, and clones its
+/// annotation and substitution once rather than N times.
+struct LazyAnnotationContent {
+    id: Arc<str>,
     key: DeclarationResolutionKey,
     display: Arc<str>,
     annotation: surge_ts_syntax::ParsedType,
@@ -427,6 +433,12 @@ struct LazyDeclarationAnnotation {
     /// without re-installing this the bare name resolves to the GLOBAL Symbol
     /// and every nominal comparison against the namespace type fails.
     namespace_prefix_stack: Option<Arc<[String]>>,
+}
+
+struct LazyDeclarationAnnotation {
+    content: Arc<LazyAnnotationContent>,
+    environment: DeclarationEnvironmentHandle,
+    creation_scope: Option<Arc<crate::symbols::TypeDeclarationScope>>,
     memo: std::sync::OnceLock<std::sync::Weak<Type>>,
     /// A degraded (`had_error`/unknown) resolution is never interned into the
     /// shared caches (that would violate the no-degraded-results-program-wide
@@ -437,7 +449,7 @@ struct LazyDeclarationAnnotation {
     degraded_memo: std::sync::OnceLock<Arc<Type>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LazySignatureComponent {
     Parameter(usize),
     Return,
@@ -518,7 +530,7 @@ impl ResolveReference for LazyDeclarationAnnotation {
 
     fn resolve_arc(&self) -> Arc<Type> {
         let resolve = || self.resolve_arc_inner();
-        let Some(component) = self.signature_component else {
+        let Some(component) = self.content.signature_component else {
             return resolve();
         };
         if crate::program::current_dts_expansion_reason()
@@ -543,11 +555,12 @@ impl ResolveReference for LazyDeclarationAnnotation {
     }
 
     fn captured_census(&self) -> surge_ts_types::ResolverCaptureCensus {
-        let mut own_bytes = std::mem::size_of::<Self>() as u64
-            + self.annotation.estimated_heap_bytes()
-            + self.key.name.len() as u64;
+        let content = &self.content;
+        let mut content_bytes = std::mem::size_of::<LazyAnnotationContent>() as u64
+            + content.annotation.estimated_heap_bytes()
+            + content.key.name.len() as u64;
         let mut shared_captures = Vec::new();
-        if let Some(environment) = &self.signature_environment {
+        if let Some(environment) = &content.signature_environment {
             shared_captures.push((
                 environment.type_parameters.as_ptr() as usize,
                 environment
@@ -557,10 +570,14 @@ impl ResolveReference for LazyDeclarationAnnotation {
                     .sum(),
             ));
             shared_captures.extend(environment.substitution.census_shared_captures());
-            own_bytes += std::mem::size_of::<LazySignatureEnvironment>() as u64;
+            content_bytes += std::mem::size_of::<LazySignatureEnvironment>() as u64;
         }
+        // Interned member content is shared by every reference that named the
+        // same member under the same substitution; charging it per handle would
+        // multiply one allocation across its readers.
+        shared_captures.push((Arc::as_ptr(content) as *const () as usize, content_bytes));
         surge_ts_types::ResolverCaptureCensus {
-            own_bytes,
+            own_bytes: std::mem::size_of::<Self>() as u64,
             shared_captures,
         }
     }
@@ -572,13 +589,14 @@ impl ResolveReference for LazyDeclarationAnnotation {
 
 impl LazyDeclarationAnnotation {
     fn resolve_arc_inner(&self) -> Arc<Type> {
-        crate::program::record_lazy_reference_peel_start(&self.key);
-        if self.signature_component.is_some() {
+        let content = self.content.as_ref();
+        crate::program::record_lazy_reference_peel_start(&content.key);
+        if content.signature_component.is_some() {
             crate::program::record_program_counter(|c| c.lazy_signature_materialization_count += 1);
         }
         if let Some(resolved) = self.memo.get().and_then(std::sync::Weak::upgrade) {
             crate::program::record_program_counter(|c| c.lazy_reference_memo_hit_count += 1);
-            if self.signature_component.is_some() {
+            if content.signature_component.is_some() {
                 crate::program::record_program_counter(|c| {
                     c.signature_materialization_cache_hit_count += 1
                 });
@@ -592,9 +610,9 @@ impl LazyDeclarationAnnotation {
         let Some(ctx) = self.environment.checker_context() else {
             return Arc::new(Type::Unknown);
         };
-        if let Some(entry) = lookup_instantiation(&ctx, &self.key, &[]) {
+        if let Some(entry) = lookup_instantiation(&ctx, &content.key, &[]) {
             crate::program::record_program_counter(|c| c.lazy_reference_interner_hit_count += 1);
-            if self.signature_component.is_some() {
+            if content.signature_component.is_some() {
                 crate::program::record_program_counter(|c| {
                     c.signature_materialization_cache_hit_count += 1
                 });
@@ -602,7 +620,7 @@ impl LazyDeclarationAnnotation {
             let _ = self.memo.set(Arc::downgrade(&entry.resolved));
             return entry.resolved;
         }
-        if self.signature_component.is_some() {
+        if content.signature_component.is_some() {
             crate::program::record_program_counter(|c| {
                 c.signature_materialization_cache_miss_count += 1
             });
@@ -610,20 +628,20 @@ impl LazyDeclarationAnnotation {
 
         let before = crate::program::type_creation_snapshot();
         crate::program::record_lazy_reference_expansion_start(
-            &self.key,
+            &content.key,
             &ctx.file_name,
-            &self.display,
+            &content.display,
             0,
         );
         let mut ctx = Box::new(ctx);
-        ctx.set_file_name(self.key.file_name.as_ref().to_string());
+        ctx.set_file_name(content.key.file_name.as_ref().to_string());
         if self.creation_scope.is_some() {
             ctx.type_declaration_scope = self.creation_scope.clone();
         }
-        if let Some(stack) = &self.namespace_prefix_stack {
+        if let Some(stack) = &content.namespace_prefix_stack {
             ctx.namespace_member_prefix_stack = stack.to_vec();
         }
-        if let Some(environment) = &self.signature_environment
+        if let Some(environment) = &content.signature_environment
             && !environment.type_parameters.is_empty()
         {
             // The empty case (a member-substitution environment) must not push
@@ -632,14 +650,14 @@ impl LazyDeclarationAnnotation {
             ctx.push_type_parameter_scope(&environment.type_parameters, None);
         }
         let empty_substitution = TypeParameterSubstitution::new();
-        let substitution = self
+        let substitution = content
             .signature_environment
             .as_ref()
             .map_or(&empty_substitution, |environment| {
                 environment.substitution.as_ref()
             });
         let resolved = resolve_parsed_type(
-            self.annotation.clone(),
+            content.annotation.clone(),
             &mut ctx,
             &mut Vec::new(),
             substitution,
@@ -652,13 +670,13 @@ impl LazyDeclarationAnnotation {
         // eager peel here would bake a snapshot of the recovered environment's
         // expansion into the symbol and drift from the eager shape.
         let resolved = Arc::new(match resolved.ty {
-            Type::Reference(reference) if self.signature_component.is_some() => {
+            Type::Reference(reference) if content.signature_component.is_some() => {
                 reference.resolve().peeled()
             }
             ty => ty,
         });
         if let Some(filter) = lazy_value_trace_filter()
-            && self.key.name.contains(filter)
+            && content.key.name.contains(filter)
         {
             let diagnostics: Vec<String> = ctx
                 .diagnostics
@@ -668,7 +686,7 @@ impl LazyDeclarationAnnotation {
                 .collect();
             eprintln!(
                 "[lazy-value] FORCE {} had_error={had_error} diags={:?} ty={}",
-                self.key.name,
+                content.key.name,
                 diagnostics,
                 lazy_value_trace_shape(&resolved),
             );
@@ -677,26 +695,26 @@ impl LazyDeclarationAnnotation {
             crate::program::note_expansion_degradation();
             crate::program::record_program_counter(|c| {
                 c.lazy_reference_degraded_expansion_count += 1;
-                if self.signature_component.is_some() {
+                if content.signature_component.is_some() {
                     c.degraded_signature_expansion_count += 1;
                 }
             });
-            if self.signature_component.is_some() {
-                crate::program::record_degraded_signature_expansion(&self.key);
+            if content.signature_component.is_some() {
+                crate::program::record_degraded_signature_expansion(&content.key);
             }
             let _ = self.degraded_memo.set(resolved.clone());
             return resolved;
         }
-        let resolved = intern_instantiation(&ctx, &self.key, &[], (*resolved).clone());
+        let resolved = intern_instantiation(&ctx, &content.key, &[], (*resolved).clone());
         let _ = self.memo.set(Arc::downgrade(&resolved));
         crate::program::record_lazy_reference_expansion(
-            &self.key,
+            &content.key,
             &ctx.file_name,
-            &self.display,
+            &content.display,
             0,
             before,
         );
-        if self.signature_component.is_some() {
+        if content.signature_component.is_some() {
             crate::program::record_program_counter(|c| c.clean_signature_expansion_count += 1);
         }
         resolved
@@ -745,22 +763,34 @@ pub(crate) fn make_lazy_signature_annotation_reference(
         "{}\u{0}signature-annotation\u{0}{declaration_name}\u{0}{declaration_start}\u{0}{component_identity}",
         key.file_name
     );
-    let ctx_prefix_stack = ctx.namespace_member_prefix_stack.clone();
-    let environment = ctx.declaration_environment();
-    let creation_scope = ctx.type_declaration_scope.clone();
-    Type::Reference(TypeReference::new(
-        id,
-        display.clone(),
-        Vec::new(),
-        Arc::new(LazyDeclarationAnnotation {
-            environment,
-            creation_scope,
+    lazy_annotation_reference(
+        Arc::new(LazyAnnotationContent {
+            id: Arc::from(id),
             key,
             display,
             annotation,
             signature_component: Some(component),
             signature_environment,
             namespace_prefix_stack: None,
+        }),
+        ctx,
+    )
+}
+
+/// Wraps one lazy annotation content in a fresh per-capture handle: the
+/// environment, the creation scope and the memo slots are the only parts that
+/// belong to a single capture site.
+fn lazy_annotation_reference(content: Arc<LazyAnnotationContent>, ctx: &mut CheckerContext) -> Type {
+    let environment = ctx.declaration_environment();
+    let creation_scope = ctx.type_declaration_scope.clone();
+    Type::Reference(TypeReference::new(
+        content.id.clone(),
+        content.display.clone(),
+        Vec::new(),
+        Arc::new(LazyDeclarationAnnotation {
+            content,
+            environment,
+            creation_scope,
             memo: std::sync::OnceLock::new(),
             degraded_memo: std::sync::OnceLock::new(),
         }),
@@ -798,25 +828,18 @@ pub(crate) fn make_lazy_value_annotation_reference(
         "{}\u{0}value-annotation\u{0}{declaration_name}\u{0}{declaration_start}",
         key.file_name
     );
-    let environment = ctx.declaration_environment();
-    let creation_scope = ctx.type_declaration_scope.clone();
-    Type::Reference(TypeReference::new(
-        id,
-        display.clone(),
-        Vec::new(),
-        Arc::new(LazyDeclarationAnnotation {
-            environment,
-            creation_scope,
+    lazy_annotation_reference(
+        Arc::new(LazyAnnotationContent {
+            id: Arc::from(id),
             key,
             display,
             annotation,
             signature_component: None,
             signature_environment: None,
             namespace_prefix_stack: None,
-            memo: std::sync::OnceLock::new(),
-            degraded_memo: std::sync::OnceLock::new(),
         }),
-    ))
+        ctx,
+    )
 }
 
 /// A lazy reference for a library interface MEMBER annotation (Stage 1 of
@@ -838,48 +861,32 @@ fn capture_namespace_prefix_stack(stack: &[String]) -> Option<Arc<[String]>> {
 
 pub(crate) fn make_lazy_member_annotation_reference(
     ctx: &mut CheckerContext,
-    interface_name: &str,
-    declaration_start: usize,
-    member_name: &str,
-    annotation: surge_ts_syntax::ParsedType,
+    identity: LazyMemberIdentity<'_>,
+    annotation: &surge_ts_syntax::ParsedType,
     substitution: &TypeParameterSubstitution,
 ) -> Type {
-    let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
-    let fingerprint = member_substitution_fingerprint(substitution);
-    let key = DeclarationResolutionKey {
-        file_name: ctx.canonical_file_name_arc(),
-        name: Arc::from(format!(
-            "member {interface_name}@{declaration_start}.{member_name}"
-        )),
-        namespace: DeclarationNamespace::Type,
-        fingerprint,
-    };
-    crate::program::record_lazy_reference_created(&key);
-    crate::program::record_program_counter(|c| c.lazy_member_annotation_create_count += 1);
-    let id = format!(
-        "{}\u{0}member-annotation\u{0}{interface_name}\u{0}{declaration_start}\u{0}{member_name}\u{0}{fingerprint:016x}",
-        key.file_name
-    );
-    let ctx_prefix_stack = ctx.namespace_member_prefix_stack.clone();
-    let environment = ctx.declaration_environment();
-    let creation_scope = ctx.type_declaration_scope.clone();
-    Type::Reference(TypeReference::new(
-        id,
-        display.clone(),
-        Vec::new(),
-        Arc::new(LazyDeclarationAnnotation {
-            environment,
-            creation_scope,
+    let content = intern_lazy_member_content(ctx, identity, |file_name, prefix_stack| {
+        let display: Arc<str> = Arc::from(parsed_annotation_display(annotation));
+        let key = DeclarationResolutionKey {
+            name: Arc::from(identity.key_name("member")),
+            file_name,
+            namespace: DeclarationNamespace::Type,
+            fingerprint: identity.substitution_fingerprint,
+        };
+        crate::program::record_lazy_reference_created(&key);
+        let id = identity.reference_id("member-annotation", &key.file_name);
+        Arc::new(LazyAnnotationContent {
+            id: Arc::from(id),
             key,
             display,
-            annotation,
+            annotation: annotation.clone(),
             signature_component: None,
             signature_environment: LazySignatureEnvironment::for_member_substitution(substitution),
-            namespace_prefix_stack: capture_namespace_prefix_stack(&ctx_prefix_stack),
-            memo: std::sync::OnceLock::new(),
-            degraded_memo: std::sync::OnceLock::new(),
-        }),
-    ))
+            namespace_prefix_stack: capture_namespace_prefix_stack(prefix_stack),
+        })
+    });
+    crate::program::record_program_counter(|c| c.lazy_member_annotation_create_count += 1);
+    lazy_annotation_reference(content, ctx)
 }
 
 /// A lazy reference for one COMPONENT (parameter or return annotation) of a
@@ -889,55 +896,171 @@ pub(crate) fn make_lazy_member_annotation_reference(
 /// parameters), so the force resolves exactly as the eager path would.
 /// Components carry `signature_component`, so the force peels the resolved
 /// reference the way eager structural resolution produced structural shapes.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn make_lazy_method_component_reference(
     ctx: &mut CheckerContext,
-    interface_name: &str,
-    declaration_start: usize,
-    member_name: &str,
-    component: LazySignatureComponent,
-    annotation: surge_ts_syntax::ParsedType,
+    identity: LazyMemberIdentity<'_>,
+    annotation: &surge_ts_syntax::ParsedType,
     local_substitution: &TypeParameterSubstitution,
 ) -> Type {
-    let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
-    let fingerprint = member_substitution_fingerprint(local_substitution);
-    let component_identity = component.identity();
-    let key = DeclarationResolutionKey {
-        file_name: ctx.canonical_file_name_arc(),
-        name: Arc::from(format!(
-            "method {interface_name}@{declaration_start}.{member_name}:{component_identity}"
-        )),
-        namespace: DeclarationNamespace::Type,
-        fingerprint,
-    };
-    crate::program::record_lazy_reference_created(&key);
-    crate::program::record_program_counter(|c| c.lazy_member_annotation_create_count += 1);
-    let id = format!(
-        "{}\u{0}method-component\u{0}{interface_name}\u{0}{declaration_start}\u{0}{member_name}\u{0}{component_identity}\u{0}{fingerprint:016x}",
-        key.file_name
-    );
-    let ctx_prefix_stack = ctx.namespace_member_prefix_stack.clone();
-    let environment = ctx.declaration_environment();
-    let creation_scope = ctx.type_declaration_scope.clone();
-    Type::Reference(TypeReference::new(
-        id,
-        display.clone(),
-        Vec::new(),
-        Arc::new(LazyDeclarationAnnotation {
-            environment,
-            creation_scope,
+    let content = intern_lazy_member_content(ctx, identity, |file_name, prefix_stack| {
+        let display: Arc<str> = Arc::from(parsed_annotation_display(annotation));
+        let key = DeclarationResolutionKey {
+            name: Arc::from(identity.key_name("method")),
+            file_name,
+            namespace: DeclarationNamespace::Type,
+            fingerprint: identity.substitution_fingerprint,
+        };
+        crate::program::record_lazy_reference_created(&key);
+        let id = identity.reference_id("method-component", &key.file_name);
+        Arc::new(LazyAnnotationContent {
+            id: Arc::from(id),
             key,
             display,
-            annotation,
-            signature_component: Some(component),
+            annotation: annotation.clone(),
+            signature_component: identity.component,
             signature_environment: LazySignatureEnvironment::for_member_substitution(
                 local_substitution,
             ),
-            namespace_prefix_stack: capture_namespace_prefix_stack(&ctx_prefix_stack),
-            memo: std::sync::OnceLock::new(),
-            degraded_memo: std::sync::OnceLock::new(),
-        }),
-    ))
+            namespace_prefix_stack: capture_namespace_prefix_stack(prefix_stack),
+        })
+    });
+    crate::program::record_program_counter(|c| c.lazy_member_annotation_create_count += 1);
+    lazy_annotation_reference(content, ctx)
+}
+
+/// Everything that identifies one deferred interface member: the declaring
+/// interface, the member's position in the merged member list (same-named
+/// members from declaration-merged fragments are distinct annotations), and
+/// the substitution the enclosing expansion resolved under. `component` is
+/// `None` for a whole property member and `Some` for one component of a
+/// method signature.
+#[derive(Clone, Copy)]
+pub(crate) struct LazyMemberIdentity<'a> {
+    pub(crate) interface_name: &'a str,
+    pub(crate) declaration_start: usize,
+    pub(crate) member_index: usize,
+    pub(crate) member_name: &'a str,
+    pub(crate) component: Option<LazySignatureComponent>,
+    pub(crate) substitution_fingerprint: u64,
+}
+
+impl LazyMemberIdentity<'_> {
+    fn component_identity(&self) -> String {
+        self.component
+            .map_or_else(String::new, |component| format!(":{}", component.identity()))
+    }
+
+    fn key_name(&self, kind: &str) -> String {
+        format!(
+            "{kind} {}@{}#{}.{}{}",
+            self.interface_name,
+            self.declaration_start,
+            self.member_index,
+            self.member_name,
+            self.component_identity()
+        )
+    }
+
+    fn reference_id(&self, tag: &str, file_name: &str) -> String {
+        format!(
+            "{file_name}\u{0}{tag}\u{0}{}\u{0}{}\u{0}{}\u{0}{}{}\u{0}{:016x}",
+            self.interface_name,
+            self.declaration_start,
+            self.member_index,
+            self.member_name,
+            self.component_identity(),
+            self.substitution_fingerprint
+        )
+    }
+
+    fn digest(&self, file_name: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = surge_ts_types::fx::FxHasher::default();
+        hasher.write(file_name.as_bytes());
+        hasher.write(self.interface_name.as_bytes());
+        hasher.write_usize(self.declaration_start);
+        hasher.write_usize(self.member_index);
+        hasher.write(self.member_name.as_bytes());
+        self.component.hash(&mut hasher);
+        hasher.write_u64(self.substitution_fingerprint);
+        hasher.finish()
+    }
+
+    fn matches(&self, entry: &LazyMemberTemplateEntry, file_name: &str) -> bool {
+        self.declaration_start == entry.declaration_start
+            && self.member_index == entry.member_index
+            && self.substitution_fingerprint == entry.substitution_fingerprint
+            && self.component == entry.component
+            && self.member_name == entry.member_name.as_ref()
+            && self.interface_name == entry.interface_name.as_ref()
+            && file_name == entry.file_name.as_ref()
+    }
+}
+
+/// One interned member content plus the identity fields the bucket scan
+/// verifies against — the map is keyed by a digest, so a colliding digest must
+/// never hand back another member's annotation.
+pub(crate) struct LazyMemberTemplateEntry {
+    file_name: Arc<str>,
+    interface_name: Box<str>,
+    declaration_start: usize,
+    member_index: usize,
+    member_name: Box<str>,
+    component: Option<LazySignatureComponent>,
+    substitution_fingerprint: u64,
+    content: Arc<LazyAnnotationContent>,
+}
+
+impl std::fmt::Debug for LazyMemberTemplateEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LazyMemberTemplateEntry")
+            .field("id", &self.content.id)
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) type LazyMemberTemplateTable =
+    surge_ts_types::fx::FxHashMap<u64, Vec<LazyMemberTemplateEntry>>;
+
+/// Content-addressed interning for deferred member annotations. The same
+/// library member is deferred once per expansion of its interface — on tRPC
+/// 52.8k creates carry only 1.7k distinct contents — and every create formats
+/// two identity strings, walks the annotation for its display, and clones the
+/// annotation and the substitution. Interning collapses all of that to a
+/// digest lookup; the environment, creation scope and memo slots stay
+/// per-capture, so a shared content never shares a resolution.
+fn intern_lazy_member_content(
+    ctx: &mut CheckerContext,
+    identity: LazyMemberIdentity<'_>,
+    build: impl FnOnce(Arc<str>, &[String]) -> Arc<LazyAnnotationContent>,
+) -> Arc<LazyAnnotationContent> {
+    let file_name = ctx.canonical_file_name_arc();
+    let digest = identity.digest(&file_name);
+    let table = ctx.lazy_member_annotation_templates.clone();
+    let Ok(mut templates) = table.lock() else {
+        return build(file_name, &ctx.namespace_member_prefix_stack);
+    };
+    let bucket: &mut Vec<LazyMemberTemplateEntry> = templates.entry(digest).or_default();
+    if let Some(entry) = bucket
+        .iter()
+        .find(|entry| identity.matches(entry, &file_name))
+    {
+        crate::program::record_program_counter(|c| c.lazy_member_template_hit_count += 1);
+        return entry.content.clone();
+    }
+    crate::program::record_program_counter(|c| c.lazy_member_template_miss_count += 1);
+    let content = build(file_name.clone(), &ctx.namespace_member_prefix_stack);
+    bucket.push(LazyMemberTemplateEntry {
+        file_name,
+        interface_name: Box::from(identity.interface_name),
+        declaration_start: identity.declaration_start,
+        member_index: identity.member_index,
+        member_name: Box::from(identity.member_name),
+        component: identity.component,
+        substitution_fingerprint: identity.substitution_fingerprint,
+        content: content.clone(),
+    });
+    content
 }
 
 pub(crate) fn member_substitution_fingerprint(substitution: &TypeParameterSubstitution) -> u64 {

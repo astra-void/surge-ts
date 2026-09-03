@@ -1,5 +1,11 @@
 # Clean generic base expansion: distributive-conditional member guards (2026-07-29)
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 ## Problem
 
 Re-enabling qualified heritage (`interface X extends NS.Base`) is blocked by a

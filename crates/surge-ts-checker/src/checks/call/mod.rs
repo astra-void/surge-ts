@@ -448,6 +448,41 @@ pub(crate) fn check_new_like(
                 ctx,
             )
         }
+        // `new (Custom ?? Default)(…)`: a union whose every member is
+        // constructable is constructable, and the result is the union of the
+        // instance types. Arguments are checked against the first member only —
+        // checking each would report the same argument diagnostics per member.
+        Type::Union(union)
+            if union
+                .types()
+                .iter()
+                .all(|member| construct_signature_of(member).is_some()) =>
+        {
+            let signatures: Vec<surge_ts_types::FunctionType> = union
+                .types()
+                .iter()
+                .filter_map(construct_signature_of)
+                .collect();
+            let mut results = Vec::with_capacity(signatures.len());
+            for (index, signature) in signatures.iter().enumerate() {
+                if index == 0 {
+                    if let Some(result) = check_function_type_call(
+                        signature,
+                        callee_span,
+                        call_span,
+                        type_arguments,
+                        arguments,
+                        symbols,
+                        ctx,
+                    ) {
+                        results.push(result);
+                    }
+                } else {
+                    results.push(signature.return_type().clone());
+                }
+            }
+            (!results.is_empty()).then(|| surge_ts_types::union_type(results))
+        }
         Type::Any => Some(Type::Any),
         Type::Unknown | Type::GenuineUnknown => None,
         _ => {
@@ -455,6 +490,57 @@ pub(crate) fn check_new_like(
                 Diagnostic::ts2351(ctx.file_name.clone()),
                 callee_span,
             ));
+            None
+        }
+    }
+}
+
+/// Checks a call whose callee is an arbitrary expression (an IIFE, a call on a
+/// call). The callee and the arguments are always evaluated so everything
+/// written inside them is checked; the result is the callee's return type.
+pub(crate) fn check_expression_call(
+    callee: &surge_ts_syntax::ParsedExpression,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let callee_result = evaluate_expression(callee, callee_span, symbols, ctx);
+
+    let callee_type = match callee_result {
+        InferredExpression::Known(ty) => ty.peeled(),
+        _ => {
+            ctx.degraded_expected_type_depth += 1;
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            ctx.degraded_expected_type_depth -= 1;
+            return None;
+        }
+    };
+
+    match callee_type {
+        Type::Function(function_type) => check_function_type_call(
+            &function_type,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ),
+        // A callee surge could not reduce to a signature still has one for tsc,
+        // so the arguments are evaluated under a degraded expectation: their own
+        // diagnostics surface, but an implicit-any report describing surge's
+        // missing contextual type does not (`describe.each(cases)(name, cb)`).
+        _ => {
+            ctx.degraded_expected_type_depth += 1;
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            ctx.degraded_expected_type_depth -= 1;
             None
         }
     }
@@ -523,6 +609,17 @@ fn excess_argument_span(
         start: first.start,
         end: last.map(|span| span.end).unwrap_or(first.end),
     })
+}
+
+/// The construct signature a `new` target carries: a function type is its own
+/// (surge models a class value's static side as an object), an object supplies
+/// its declared one, and a reference peels to whichever it resolves to.
+fn construct_signature_of(ty: &Type) -> Option<surge_ts_types::FunctionType> {
+    match ty.peeled() {
+        Type::Function(function_type) => Some(function_type),
+        Type::Object(object) => object.construct_signature().cloned(),
+        _ => None,
+    }
 }
 
 fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Type {

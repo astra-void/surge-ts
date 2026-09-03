@@ -7,9 +7,13 @@ noEmit-style project checks.
 The built binary is `surge` (`target/release/surge`). The crate is published
 internally as `surge-ts-cli`, so `cargo` invocations use `-p surge-ts-cli`.
 
-v0.68 keeps the CLI shape stable while the checker expands emitted diagnostic coverage. CLI output should continue to reflect catalog-driven codes, spans, and line/column data without introducing package-resolution or lib.d.ts discovery.
-
 Diagnostics are catalog-driven and rendered through the shared diagnostics crate.
+
+> This file documents the CLI surface. For the current support surface, known
+> gaps, and verified gate results, see
+> [CURRENT_STATUS.md](../../CURRENT_STATUS.md). Any `v0.x` / `v1.x` label
+> appearing in this repository is an internal milestone marker, not a release
+> or crate version.
 
 ## Modes
 
@@ -81,26 +85,37 @@ table). Multi-line span underlining renders the span's starting line; rendering
 every line of a multi-line span is deferred (the JSON output and oracle
 comparison are unaffected).
 
-## External Modules (v0.63)
+## External Modules
 
 By default, unresolved non-relative package imports emit TS2307.
 `--stubExternalModules` suppresses non-relative TS2307 and inserts unknown type/value stubs.
 This is a surge-ts-only compatibility mode.
 
-## Declaration Files & Built-ins (v0.69/v0.69.1/v0.70/v0.72/v0.72.1)
+## Declaration Files & Built-ins
 
 Loaded `.d.ts` files from project inputs participate in semantic checking.
 Bare package imports (`pkg`, `@scope/pkg`) and exact subpaths resolve their `.d.ts` entrypoints via `types`, `typings`, `exports["types"]`, or `index.d.ts` fallback.
-Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. Configured `compilerOptions.types` entries and `/// <reference types="..." />` directives resolve through the effective type roots (`typeRoots` when set, otherwise ancestor `node_modules/@types` directories) and load the package's `types`/`typings`/exact `exports["."].types`/`index.d.ts` entrypoint as dependency declarations. TypeScript 6 does not implicitly include every visible `@types` package when `types` is absent; use `types: ["*"]` for wildcard discovery. Missing explicit configured types and missing reference-type directives report `TS2688`, with declaration-file reference diagnostics suppressed by `skipLibCheck`. The CLI still does not implement full package resolution, wildcard `exports`, or full `lib.d.ts` parity. `baseUrl` resolution remains unsupported/deprecated. v0.85 introduces a generated default-lib foundation: it does not load the full official TypeScript lib files at runtime, but instead generates a small supported subset from the local TypeScript package and loads those generated declarations as ambient default libs. `noLib: true` disables the generated default libs. Full lib.d.ts parity remains future work.
+Explicit `paths` aliases and declaration-only package entries share the same internal resolved module map. Configured `compilerOptions.types` entries and `/// <reference types="..." />` directives resolve through the effective type roots (`typeRoots` when set, otherwise ancestor `node_modules/@types` directories) and load the package's `types`/`typings`/exact `exports["."].types`/`index.d.ts` entrypoint as dependency declarations. TypeScript 6 does not implicitly include every visible `@types` package when `types` is absent; use `types: ["*"]` for wildcard discovery. Missing explicit configured types and missing reference-type directives report `TS2688`, with declaration-file reference diagnostics suppressed by `skipLibCheck`. `/// <reference types="..." />` directives are followed recursively, including from dependency declaration files. `baseUrl` non-relative specifier resolution **is** supported in the loader (the option is deprecated upstream but honored for compatibility); see [crates/surge-ts/MODULE_RESOLUTION.md](../surge-ts/MODULE_RESOLUTION.md) for the per-rule inventory and [AUTO_TYPES.md](AUTO_TYPES.md) for `types`/`typeRoots`/`@types` semantics.
+
+Project mode loads the **physical** `lib*.d.ts` graph from the local TypeScript package as ambient default libs by default. The generated default-lib subset (introduced in the `v0.85` milestone) is the fallback used only when that package cannot be found, and the single-file support path. `noLib: true` disables both. Full `lib.d.ts`/DOM/Node parity, full runtime/JS package resolution, and wildcard `exports` runtime conditions remain out of scope.
 Default export, namespace import, named re-export, type-only re-export, star re-export, duplicate ambient module, and duplicate ambient global behavior is pinned rather than full TypeScript declaration merging.
 
 `.tsx` files parse JSX syntax (elements, fragments, attributes, and `{...}`
-expression containers) in expression position, and JSX expressions infer a
-conservative `JSX.Element` stand-in so simple React-shaped files check without
-cascades. Expression containers and capitalized component tags are still walked
-for ordinary diagnostics (e.g. unresolved names report `TS2304`). This does not
-imply JSX transforms, `JSX` namespace resolution, `JSX.IntrinsicElements` prop
-validation, React globals, or DOM support.
+expression containers). JSX element and prop validation is implemented and
+oracle-gated: `JSX.IntrinsicElements` lookup, function-component and
+imported-component props, member tags, `children`, ref-as-prop, generic-angle
+disambiguation, and `jsx: react-jsx` runtime lookup through `@types/react`.
+
+This is **not** the JSX transform, and it is not full React contextual typing.
+Prop mismatches on *type-parameter-dependent* props of generic components are
+still missed. See [PUBLIC_API.md](../../PUBLIC_API.md) § 2.2 for the gated JSX
+surface and [CURRENT_STATUS.md](../../CURRENT_STATUS.md#known-limitations) for
+the current gaps.
+
+> Historical note: earlier revisions of this file said JSX expressions infer a
+> conservative `JSX.Element` stand-in and that `JSX` namespace resolution and
+> `JSX.IntrinsicElements` prop validation were not implied. That described the
+> pre-JSX-checking state.
 
 
 ## Single-file behavior
@@ -132,10 +147,12 @@ cargo run -p surge-ts-cli -- --ignoreConfig examples/basic.ts
 - `--showSpans` is a text-mode affordance; JSON output already carries spans and,
   when available, 1-based line and column numbers.
 - `--maxDiagnostics` limits rendered diagnostics in normal diagnostic mode.
+- `--extendedDiagnostics`, `--memoryReport`, and `--reportJson <PATH>` emit run
+  statistics; none of them changes the diagnostics output. `--timings` and
+  `--rss` are hidden debug flags (equivalent to `SURGE_TIMINGS=1` /
+  `SURGE_RSS=1`).
 - `--compatReport` is a raw measurement surface: it reports totals, counts by code and file, parser-error grouping, loaded file counts, file-kind counts, and suppressed diagnostic totals where relevant. It does not perform semantic diagnosis. Raw parity analysis belongs in oracle output, fixtures, and implementation notes.
 - The oracle comparison output prints the exact `surge-ts` command and the explicit job count when `--rustJobs` is provided.
-
-The synthetic builtin surface stays narrow and now serves as bootstrap coverage for the remaining gaps outside the generated default libs.
 
 The JSON diagnostic shape stays stable across the catalog migration:
 

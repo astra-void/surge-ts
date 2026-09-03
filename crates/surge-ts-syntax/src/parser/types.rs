@@ -56,12 +56,21 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSTupleType(tuple_type) => parse_tuple_type(tuple_type),
         TSType::TSFunctionType(function_type) => parse_function_type(function_type)
             .map(|function| ParsedType::Function(std::sync::Arc::new(function))),
-        // A constructor type (`new (args) => T`) is lowered to a callable
-        // signature; surge does not distinguish newability, and keeping it parsed
-        // prevents a union member like `JSXElementConstructor`'s `new (...) => …`
-        // from collapsing the whole alias to `Unknown`.
-        TSType::TSConstructorType(constructor_type) => parse_constructor_type(constructor_type)
-            .map(|function| ParsedType::Function(std::sync::Arc::new(function))),
+        // A constructor type (`new (args) => T`) becomes an object carrying only
+        // a construct signature. Lowering it to a plain callable made
+        // `T extends new (...args: any[]) => any` true for every function type,
+        // which inverted the vitest `Mock<T>` conditional and made every mock
+        // call a false TS2349.
+        TSType::TSConstructorType(constructor_type) => {
+            parse_constructor_type(constructor_type).map(|function| {
+                ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
+                    properties: Vec::new(),
+                    string_index_type: None,
+                    call_signature: None,
+                    construct_signature: Some(Box::new(function)),
+                }))
+            })
+        }
         TSType::TSParenthesizedType(parenthesized_type) => {
             parse_type(&parenthesized_type.type_annotation)
         }
@@ -487,6 +496,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
     let mut string_index_type: Option<Box<ParsedType>> = None;
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
+    let mut construct_signature: Option<Box<ParsedFunctionType>> = None;
     let getters = getter_accessor_names(&type_literal.members);
 
     for member in &type_literal.members {
@@ -518,6 +528,21 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 }
                 continue;
             }
+            TSSignature::TSConstructSignatureDeclaration(signature) => {
+                // `{ new (...): T }` — without this arm the whole type literal
+                // degraded to `Unknown`, which is what made vitest's `Mock<T>`
+                // (a conditional branch object carrying both a construct and a
+                // call signature) uncallable.
+                if let Some(parsed) = parse_construct_signature(signature) {
+                    construct_signature = Some(match construct_signature.take() {
+                        Some(existing) => {
+                            Box::new(merge_parsed_call_signatures(&existing, &parsed))
+                        }
+                        None => Box::new(parsed),
+                    });
+                }
+                continue;
+            }
             TSSignature::TSIndexSignature(index_signature) => {
                 // The last index signature wins, matching the interface path.
                 if let Some(value_type) = parse_index_signature_value_type(index_signature) {
@@ -539,6 +564,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         properties,
         string_index_type,
         call_signature,
+        construct_signature,
     }))
 }
 

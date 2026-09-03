@@ -92,26 +92,46 @@ pub(crate) fn infer_expression(
         }
         ParsedExpression::UndefinedLiteral => InferredExpression::Known(Type::Undefined),
         ParsedExpression::NullLiteral => InferredExpression::Known(Type::Any),
-        ParsedExpression::Identifier { name, span } => symbols
-            .get(name)
-            .or_else(|| {
-                // Fall back to the module-scope value table for a binding declared
-                // later in the file: a function body may legally reference it
-                // because the body runs after the module is fully evaluated.
-                ctx.module_value_fallback
+        ParsedExpression::Identifier { name, span } => {
+            // The module-scope value table backs a binding declared later in the
+            // file or block: a function body may legally reference it because the
+            // body runs after the enclosing scope is fully evaluated. It is a
+            // *fallback* on a miss — except when the only hit is an ambient
+            // global, which such a binding shadows (zod's `const Node = z.union(…)`
+            // read as the DOM `Node` constructor).
+            let resolved = match symbols.get_handle(name) {
+                // Only the fallback table's *own* entries shadow: they are the
+                // enclosing block's later `const`/`let`, which the language says
+                // wins over a global. Its parent layers are ordinary fallbacks.
+                Some(handle)
+                    if ctx
+                        .ambient_global_symbols
+                        .get_handle(name)
+                        .is_some_and(|global| std::sync::Arc::ptr_eq(&handle, &global)) =>
+                {
+                    ctx.module_value_fallback
+                        .as_ref()
+                        .and_then(|fallback| fallback.get_own_shared(name))
+                        .or(Some(handle))
+                }
+                Some(handle) => Some(handle),
+                None => ctx
+                    .module_value_fallback
                     .as_ref()
-                    .and_then(|fallback| fallback.get(name))
-            })
-            .map(|symbol| {
-                InferredExpression::Known(clone_type_with_metrics(
-                    &symbol.ty,
-                    CopySource::Identifier,
-                ))
-            })
-            .unwrap_or_else(|| InferredExpression::UnresolvedIdentifier {
-                name: name.clone(),
-                span: *span,
-            }),
+                    .and_then(|fallback| fallback.get_handle(name)),
+            };
+            resolved
+                .map(|symbol| {
+                    InferredExpression::Known(clone_type_with_metrics(
+                        &symbol.ty,
+                        CopySource::Identifier,
+                    ))
+                })
+                .unwrap_or_else(|| InferredExpression::UnresolvedIdentifier {
+                    name: name.clone(),
+                    span: *span,
+                })
+        }
         ParsedExpression::This { .. } => symbols
             .get("this")
             .map(|symbol| {
@@ -333,6 +353,21 @@ pub(crate) fn infer_expression(
                     }
                     None => InferredExpression::Unknown,
                 },
+            }
+        }
+        // An IIFE and friends: the callee is an arbitrary expression, so its type
+        // is inferred rather than looked up by name. Unlike `OptionalCall` the
+        // result is not widened with `undefined`.
+        ParsedExpression::ExpressionCall { callee, .. } => {
+            match infer_expression(callee, symbols, ctx) {
+                InferredExpression::Known(Type::Function(function_type)) => {
+                    InferredExpression::Known(clone_type_with_metrics(
+                        function_type.return_type(),
+                        CopySource::CallReturn,
+                    ))
+                }
+                InferredExpression::Known(Type::Any) => InferredExpression::Known(Type::Any),
+                _ => InferredExpression::Unknown,
             }
         }
         ParsedExpression::OptionalCall { callee, .. } => {

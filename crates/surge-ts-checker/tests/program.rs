@@ -208,13 +208,20 @@ fn dependency_dts_export_star_lazy() {
     assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
+// Two instantiations of the same degraded alias resolve independently — a
+// degraded resolution is never cached — and the unresolvable name is still
+// reported exactly once. The declaration file is an ambient script (no
+// top-level import/export): a *module* declaration file is module-scoped, so it
+// is not lowered by the ambient-global passes at all.
 #[test]
 fn dependency_dts_degraded_resolution_not_cached() {
-    let diagnostics = dependency_program(
-        "node_modules/dep/index.d.ts",
-        "type Broken<T> = Missing<T>; declare const first: Broken<string>; declare const second: Broken<number>; export { first, second };",
-        "import { first, second } from 'dep'; first.anything; second.anything;",
-    );
+    let diagnostics = program(&[
+        (
+            "node_modules/dep/index.d.ts",
+            "type Broken<T> = Missing<T>; declare const first: Broken<string>; declare const second: Broken<number>;",
+        ),
+        ("src/index.ts", "first.anything; second.anything;"),
+    ]);
     assert_eq!(codes(&diagnostics), vec!["TS2304"]);
 }
 

@@ -95,6 +95,13 @@ pub(crate) fn check_function_variable_declaration(
         );
     }
 
+    let literal_initializer_type = matches!(
+        variable_kind,
+        ParsedVariableKind::Let | ParsedVariableKind::Var | ParsedVariableKind::Const
+    )
+    .then(|| literal_initializer_type(variable.initializer.as_ref()))
+    .flatten();
+
     let visible_symbols = visible_symbols(scopes);
 
     if let Some(symbol) = check_variable_declaration_against_symbols(
@@ -113,7 +120,56 @@ pub(crate) fn check_function_variable_declaration(
             Some(&symbol.ty),
             flow_state,
         );
-        scopes.insert_current_handle(local_name.as_str(), symbol);
+        // A declared union narrows to what the initializer can inhabit, exactly
+        // as a later assignment does: `let style: Style = "simple"` is
+        // `"simple"` until reassigned. Recorded as a *narrowing* so a later
+        // assignment still checks against the declaration. Only a literal
+        // initializer participates — its type is known without re-evaluating
+        // (and re-reporting) the expression.
+        let narrowed = literal_initializer_type.filter(|initialized| {
+            matches!(symbol.ty, Type::Union(_)) && is_assignable_to(initialized, &symbol.ty)
+        });
+        match narrowed {
+            Some(initialized) => {
+                let declared = symbol.ty.clone();
+                scopes.insert_current_handle(local_name.as_str(), symbol);
+                scopes.insert_current_narrowed(
+                    local_name.as_str(),
+                    SymbolInfo {
+                        ty: initialized,
+                        kind: symbol_kind_for_variable(variable_kind),
+                        function_signature: None,
+                    },
+                    declared,
+                );
+            }
+            None => {
+                scopes.insert_current_handle(local_name.as_str(), symbol);
+            }
+        }
+    }
+}
+
+fn symbol_kind_for_variable(kind: ParsedVariableKind) -> SymbolKind {
+    match kind {
+        ParsedVariableKind::Let => SymbolKind::Let,
+        ParsedVariableKind::Const => SymbolKind::Const,
+        ParsedVariableKind::Var => SymbolKind::Var,
+    }
+}
+
+/// The type of a literal initializer, which needs no expression evaluation (and
+/// so cannot double-report the initializer's own diagnostics).
+fn literal_initializer_type(initializer: Option<&ParsedExpression>) -> Option<Type> {
+    match initializer? {
+        ParsedExpression::StringLiteral(value) => Some(Type::StringLiteral(value.clone())),
+        ParsedExpression::NumberLiteral(value) => Some(Type::NumberLiteral(
+            surge_ts_types::NumberLiteralType {
+                value: value.clone(),
+            },
+        )),
+        ParsedExpression::BooleanLiteral(value) => Some(Type::BooleanLiteral(*value)),
+        _ => None,
     }
 }
 
@@ -211,7 +267,15 @@ fn join_branch_assignments(
         let Some(symbol) = scopes.resolve(name) else {
             continue;
         };
-        if joined == symbol.ty || !is_assignable_to(&joined, &symbol.ty) {
+        // Bound by the *declaration*, not by whatever narrowing survives the
+        // branch: with both edges narrowed (`let s: Wide = "a"; if (c) s = "b";`)
+        // the join is legitimately wider than either, and comparing against the
+        // fall-through narrowing alone would drop it.
+        let bound = scopes
+            .visible_symbols()
+            .declared_type(name)
+            .unwrap_or(&symbol.ty);
+        if joined == symbol.ty || !is_assignable_to(&joined, bound) {
             continue;
         }
         let joined_symbol = SymbolInfo {
@@ -223,6 +287,47 @@ fn join_branch_assignments(
         // describes the binding from the `if` onward, and a block-local shadow
         // would be dropped before a `break`/loop-exit edge that carries it.
         let _ = scopes.update_visible(name, joined_symbol);
+    }
+}
+
+/// Joins the two edges of an `if`/`else` for the bindings either branch assigns.
+/// Both branch frames have popped, so each side's end type is supplied as a
+/// snapshot; the result is bounded by the declaration, never by whatever
+/// narrowing survives the statement.
+fn join_branch_pair(
+    then_types: &[(String, Type)],
+    else_types: &[(String, Type)],
+    scopes: &mut ScopeStack,
+) {
+    for (name, then_ty) in then_types {
+        let Some((_, else_ty)) = else_types.iter().find(|(other, _)| other == name) else {
+            continue;
+        };
+        let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+            union_type(vec![then_ty.clone(), else_ty.clone()])
+        });
+        let Some(symbol) = scopes.resolve(name) else {
+            continue;
+        };
+        let current = symbol.ty.clone();
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let bound = scopes
+            .visible_symbols()
+            .declared_type(name)
+            .cloned()
+            .unwrap_or_else(|| current.clone());
+        if joined == current || !is_assignable_to(&joined, &bound) {
+            continue;
+        }
+        let _ = scopes.update_visible(
+            name,
+            SymbolInfo {
+                ty: joined,
+                kind,
+                function_signature,
+            },
+        );
     }
 }
 
@@ -261,9 +366,19 @@ pub(crate) fn check_function_if_statement(
     let then_diverts_control = then_guarantees_value_return || then_flow.guarantees_exit;
     let has_else_body = !if_statement.else_body.is_empty();
 
+    let else_flow_diverts = has_else_body && {
+        let else_flow = analyze_function_body_flow(&if_statement.else_body);
+        else_flow.guarantees_value_return || else_flow.guarantees_exit
+    };
     let mut joinable_assignments = Vec::new();
     if !has_else_body && !then_diverts_control {
         branch_assigned_names(&if_statement.then_body, &mut joinable_assignments);
+    } else if has_else_body && !then_diverts_control && !else_flow_diverts {
+        // Both edges reach the join, so the binding is the union of what each
+        // branch left it as — the fall-through edge the no-else form uses does
+        // not exist here.
+        branch_assigned_names(&if_statement.then_body, &mut joinable_assignments);
+        branch_assigned_names(&if_statement.else_body, &mut joinable_assignments);
     }
 
     let flow_active = flow_state.tracked_local_count() > 0;
@@ -305,7 +420,9 @@ pub(crate) fn check_function_if_statement(
         then_delta.continues = !then_diverts_control;
         let then_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
-        join_branch_assignments(&then_assignment_types, &if_statement.condition, scopes, ctx);
+        if !has_else_body {
+            join_branch_assignments(&then_assignment_types, &if_statement.condition, scopes, ctx);
+        }
         branch_deltas.push(then_delta);
 
         if has_else_body {
@@ -318,7 +435,9 @@ pub(crate) fn check_function_if_statement(
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let mut else_delta = flow_state.finish_branch_capture();
             else_delta.continues = !else_diverts_control;
+            let else_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
             scopes.pop_child();
+            join_branch_pair(&then_assignment_types, &else_assignment_types, scopes);
             branch_deltas.push(else_delta);
         }
 
@@ -341,13 +460,17 @@ pub(crate) fn check_function_if_statement(
         );
         let then_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
-        join_branch_assignments(&then_assignment_types, &if_statement.condition, scopes, ctx);
+        if !has_else_body {
+            join_branch_assignments(&then_assignment_types, &if_statement.condition, scopes, ctx);
+        }
 
         if has_else_body {
             scopes.push_child();
             narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
+            let else_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
             scopes.pop_child();
+            join_branch_pair(&then_assignment_types, &else_assignment_types, scopes);
         }
 
         if !has_else_body && then_diverts_control {
@@ -1071,6 +1194,19 @@ pub(crate) fn update_assigned_symbol_type(
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone()),
             value_ty,
         ])
+    } else if scopes
+        .visible_symbols()
+        .declared_type(target_name)
+        .is_some_and(|declared| {
+            matches!(declared, Type::Union(_)) && is_assignable_to(&value_ty, declared)
+        })
+    {
+        // The binding is already narrowed (by its initializer, or by an earlier
+        // assignment) to something this value does not inhabit. The assignment is
+        // still legal against the *declaration*, and it re-narrows to the new
+        // value — `let s: Wide = "a"; s = "c";` is `"c"`, not a rejected write.
+        narrowed_by_assignment = true;
+        value_ty
     } else {
         // Preserve the declared/inferred symbol type when an incompatible assignment
         // is already reported to avoid cascading return/usage diagnostics.
@@ -1198,6 +1334,29 @@ pub(crate) fn check_function_return_statement(
     }
 
     let Some(return_type) = return_type else {
+        // No expected return type only removes the assignability verdict; the
+        // value still owes its own diagnostics. Skipping it left every
+        // expression in an unannotated function unchecked — unresolved names,
+        // UMD globals behind JSX tags, property access — which is why a
+        // component written as `const C = () => { return <div/>; }` reported
+        // nothing at all.
+        // …but with no expectation there is also no contextual parameter type
+        // to hand a callback or an object-literal method, so an implicit-any
+        // report here would describe surge's missing context rather than an
+        // omission in the source (tRPC's `new ReadableStream({ start(c) {…} })`
+        // inside a returned object is typed by the constructor, not by the
+        // return). Same reasoning as a degraded expectation.
+        ctx.degraded_expected_type_depth += 1;
+        let inferred = evaluate_expression(
+            expression,
+            return_statement.expression_span,
+            symbols,
+            ctx,
+        );
+        ctx.degraded_expected_type_depth -= 1;
+        if let InferredExpression::Known(source_type) = inferred {
+            ctx.note_contextual_return_type(&source_type);
+        }
         return;
     };
 
@@ -1230,6 +1389,7 @@ pub(crate) fn check_function_return_statement(
 
     match inferred_expression {
         InferredExpression::Known(source_type) => {
+            ctx.note_contextual_return_type(&source_type);
             // A sentinel anywhere in either side means surge lost part of the
             // shape, so a mismatch reflects the modelling gap rather than the
             // source — the same deep guard the variable-declaration check

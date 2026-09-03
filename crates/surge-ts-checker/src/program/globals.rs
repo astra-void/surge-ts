@@ -30,7 +30,9 @@ pub(crate) fn collect_global_type_declarations(
 
         ctx.set_file_name(parsed_file.file_name.clone());
         let collect_start = Instant::now();
+        ctx.merge_script_interfaces_with_globals = true;
         collect_type_declarations(&parsed_file.statements, ctx);
+        ctx.merge_script_interfaces_with_globals = false;
         let lowered_type_declarations = ctx.type_declarations.len() as u64;
         let collect_duration = collect_start.elapsed();
         record_program_file_timing(timings, &parsed_file.file_name, |timings| {

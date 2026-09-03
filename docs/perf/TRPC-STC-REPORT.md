@@ -1,5 +1,11 @@
 # Speculative Transactional Checking (STC) — engineering report
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `perf/speculative-transactional-checking`, started from the validated
 performance HEAD `1600ed5` (`a2c7247` code + docs) on
 `perf/trpc-allocation-volume`.

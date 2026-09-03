@@ -26,6 +26,17 @@ This is useful for early diagnostic-code compatibility, but it is not full upstr
 
 The checker now parses import/export syntax and treats files with import/export syntax as module files. Module files remain isolated from the global-script prepass in this phase.
 
+### Historical milestone notes
+
+**The `v0.5x`/`v0.6x` paragraphs below are historical milestone notes and do
+not describe current behavior.** In particular, package resolution,
+`node_modules` lookup, `paths`, `baseUrl`, and declaration-file semantics have
+since landed on the declaration side; see
+[CURRENT_STATUS.md](../../../CURRENT_STATUS.md) and
+[crates/surge-ts/MODULE_RESOLUTION.md](../../../crates/surge-ts/MODULE_RESOLUTION.md).
+What is still true here is the *scope of this directory*: the upstream fixture
+subset is intentionally small and is not a baseline-compatibility claim.
+
 v0.57.1 hardens the limited relative module-resolution-lite pass for loaded program files. v0.61 expands that pass to cover default imports, namespace imports, default exports, named re-exports, type-only re-exports, and star re-exports across already loaded `.ts` files, still with separate type and value namespaces. It still does not implement package resolution, `node_modules`, `paths`, `baseUrl`, star-as re-exports, or other CommonJS/declaration-file semantics. v0.63 adds package import stubbing to reduce cascades from non-relative imports. v0.67 keeps ordinary missing package imports on TS2307 but emits catalog-backed TS2882 for unresolved side-effect imports, matching TypeScript diagnostic priority without adding package lookup.
 
 v0.58 adds compatibility-report instrumentation for real-project triage. External project source should live under `.local-projects/` and should not be committed.

@@ -131,6 +131,42 @@ fn is_declaration_backed_lazy_signature(function_type: &FunctionType) -> bool {
         })
 }
 
+/// Runs `resolve` with the checker positioned in the signature's declaring
+/// file and namespace, so annotations written there (a module-local or imported
+/// name the caller cannot see) resolve against that scope rather than the call
+/// site's.
+fn with_declaring_scope<R>(
+    function_signature: &FunctionSignatureInfo,
+    ctx: &mut CheckerContext,
+    resolve: impl FnOnce(&mut CheckerContext) -> R,
+) -> R {
+    let declaring_file = function_signature
+        .declaring_file
+        .as_deref()
+        .filter(|file| *file != ctx.file_name);
+    let saved_file_name = declaring_file.map(|file| {
+        let saved = ctx.file_name.clone();
+        ctx.set_file_name(file.to_string());
+        saved
+    });
+    let namespace_prefix = function_signature.namespace_prefix.clone();
+    if let Some(prefix) = namespace_prefix.as_deref() {
+        ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix.to_string());
+    }
+
+    let resolved = resolve(ctx);
+
+    if namespace_prefix.is_some() {
+        ctx.namespace_member_prefix_stack.pop();
+        ctx.namespace_member_resolution_depth -= 1;
+    }
+    if let Some(saved) = saved_file_name {
+        ctx.set_file_name(saved);
+    }
+    resolved
+}
+
 pub(crate) fn instantiate_function_type_with_substitution<'a>(
     function_type: &'a FunctionType,
     function_signature: &FunctionSignatureInfo,
@@ -259,9 +295,13 @@ pub(crate) fn explicit_type_argument_substitution(
                 &TypeParameterSubstitution::new(),
             ),
             None => match type_parameter.default_type.clone() {
-                Some(default_type) => {
+                // A default annotation is written in the DECLARING file and may
+                // name that module's imports (`TSSRContext = NextPageContext`,
+                // which `@trpc/next` imports and the app calling it cannot see),
+                // so it resolves under the declaring scope, not the call site's.
+                Some(default_type) => with_declaring_scope(function_signature, ctx, |ctx| {
                     map_parsed_type_with_substitution(default_type, ctx, &substitution)
-                }
+                }),
                 // No default: the parameter is genuinely unconstrained here, so
                 // it degrades rather than leaking its name.
                 None => Type::Unknown,

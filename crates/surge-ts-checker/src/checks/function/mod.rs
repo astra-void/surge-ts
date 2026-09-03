@@ -447,12 +447,13 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                     &mut flow_state,
                     ctx,
                 );
-                ctx.close_contextual_return_frame();
+                let returned_void_like = ctx.close_contextual_return_frame();
 
                 let contextually_void = expected_type
                     .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void));
                 if !has_explicit_return_type
                     && !contextually_void
+                    && !returned_void_like
                     && ctx.options.no_implicit_returns
                     && body_flow.contains_return_with_value
                     && !body_flow.guarantees_exit

@@ -110,6 +110,18 @@ pub(crate) fn module_scope_declared_names(statements: &[ParsedStatement]) -> Has
     names
 }
 
+/// [`module_scope_declared_names`] minus the import bindings: the names the file
+/// declares itself. A type-only import of a name the file also declares is a
+/// duplicate-identifier error, not a type-only value use, so the declaration
+/// wins.
+pub(crate) fn module_scope_own_declared_names(statements: &[ParsedStatement]) -> HashSet<&str> {
+    let imported = import_bound_names(statements);
+    module_scope_declared_names(statements)
+        .into_iter()
+        .filter(|name| !imported.contains(name))
+        .collect()
+}
+
 /// Every local name a file's imports bind, type-only imports included. A
 /// type-only binding still shadows a same-named global — tsc reports using it
 /// as a value as TS1361, not as a UMD-global reference — and an import whose
@@ -157,6 +169,56 @@ pub(crate) fn import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str
     names
 }
 
+/// The local names a file's imports bind **in type space only**
+/// (`import type X from …`, `import type { X } from …`,
+/// `import type * as X from …`). Referencing one as a value is TS1361.
+pub(crate) fn type_only_import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str> {
+    let mut names = HashSet::new();
+
+    for statement in statements {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+
+        match &import.kind {
+            surge_ts_syntax::ParsedImportKind::Named {
+                is_type_only: true,
+                specifiers,
+            } => {
+                names.extend(
+                    specifiers
+                        .iter()
+                        .map(|specifier| specifier.local_name.as_str()),
+                );
+            }
+            surge_ts_syntax::ParsedImportKind::DefaultAndNamed {
+                local_name,
+                is_type_only: true,
+                specifiers,
+                ..
+            } => {
+                names.insert(local_name.as_str());
+                names.extend(
+                    specifiers
+                        .iter()
+                        .map(|specifier| specifier.local_name.as_str()),
+                );
+            }
+            surge_ts_syntax::ParsedImportKind::Namespace {
+                local_name,
+                is_type_only: true,
+                ..
+            }
+            | surge_ts_syntax::ParsedImportKind::TypeOnlyDefault { local_name, .. } => {
+                names.insert(local_name.as_str());
+            }
+            _ => {}
+        }
+    }
+
+    names
+}
+
 pub(crate) fn collect_ambient_globals(
     parsed_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
@@ -170,7 +232,9 @@ pub(crate) fn collect_ambient_globals(
     // type against whatever members were merged when its own file was processed,
     // dropping members contributed by files processed later.
     for parsed_file in parsed_files {
-        if !is_ambient_global_declaration_file(parsed_file, ctx) {
+        if !is_ambient_global_declaration_file(parsed_file, ctx)
+            || !publishes_ambient_globals(parsed_file)
+        {
             continue;
         }
 
@@ -212,7 +276,9 @@ pub(crate) fn collect_ambient_globals(
     // `declare class` constructors) against the now fully-merged type table, so
     // a variable typed by a split global interface sees every member.
     for parsed_file in parsed_files {
-        if !is_ambient_global_declaration_file(parsed_file, ctx) {
+        if !is_ambient_global_declaration_file(parsed_file, ctx)
+            || !publishes_ambient_globals(parsed_file)
+        {
             continue;
         }
 
@@ -512,6 +578,24 @@ fn is_ambient_global_declaration_file(
     }
 
     true
+}
+
+/// Whether the file's own top-level declarations reach the *global* scope. A
+/// declaration file carrying a top-level `import`/`export` is a module: its
+/// declarations are module-scoped no matter how the file was reached, and it
+/// augments the global scope only through `declare global` /
+/// `declare module "x"` blocks, which are collected separately. Publishing a
+/// module's declarations globally made the whole
+/// `@types/express-serve-static-core` surface global (a `/// <reference types>`
+/// directive in a dependency puts it in the effective `types` list), clobbering
+/// the real global `Response` with express's `status(code)` and resolving bare
+/// `NextFunction`/`ParamsDictionary` that tsc reports as unknown names.
+///
+/// Neither pass below can serve a module: both run before binding, so a module's
+/// import scope does not exist yet and its annotations would resolve against the
+/// global table alone. A module declaration file is therefore skipped outright.
+fn publishes_ambient_globals(parsed_file: &ParsedProgramFile) -> bool {
+    !parsed_file.is_module
 }
 
 /// Whether `file_name` belongs to one of the configured `compilerOptions.types`

@@ -54,8 +54,16 @@ pub fn check_source_with_options(
         ctx.push(diagnostic);
     }
 
+    ctx.merge_script_interfaces_with_globals = !parsed.is_module;
     collect_type_declarations(&parsed.statements, &mut ctx);
+    ctx.merge_script_interfaces_with_globals = false;
     collect_global_augmentations_from_statements(&parsed.statements, &mut ctx);
+    // Ambient value lowering (`declare var Document: {…}`) already resolved some
+    // of these names against the lib-only declarations. The file's own
+    // declarations have since merged into them, so the memoized resolutions are
+    // stale — program mode gets this from `begin_file_check`, which the
+    // single-file driver does not run.
+    ctx.replace_resolved_named_types(0);
     sync_global_this_symbol(&mut ctx);
     let mut merged_sym = ctx.ambient_global_symbols.clone();
     for (k, v) in ctx.symbols.iter() {
@@ -1354,9 +1362,31 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
 
     match existing {
         Existing::None => {
-            let _ = ctx
-                .type_declarations
-                .insert(interface.name.clone(), TypeDeclarationInfo::Interface(info));
+            // Declaration merging with the global scope: a script file's
+            // top-level `interface X` re-opens a same-named global interface.
+            // Modules shadow instead, and are never collected under this flag.
+            let ambient = ctx
+                .merge_script_interfaces_with_globals
+                .then(|| ctx.ambient_global_type_declarations.get_handle(&interface.name))
+                .flatten()
+                .filter(|handle| matches!(handle.get(), TypeDeclarationInfo::Interface(_)));
+            match ambient {
+                Some(handle) => {
+                    let TypeDeclarationInfo::Interface(ambient) = handle.get() else {
+                        unreachable!("handle filtered to interfaces above")
+                    };
+                    let incoming = filter_conflicting_interface_members(ambient, info, ctx);
+                    let merged = crate::symbols::merge_interface_infos(ambient, &incoming);
+                    let _ = ctx
+                        .type_declarations
+                        .insert(interface.name.clone(), TypeDeclarationInfo::Interface(merged));
+                }
+                None => {
+                    let _ = ctx
+                        .type_declarations
+                        .insert(interface.name.clone(), TypeDeclarationInfo::Interface(info));
+                }
+            }
         }
         Existing::Interface(handle) => {
             let TypeDeclarationInfo::Interface(existing) = handle.get() else {

@@ -588,6 +588,11 @@ pub struct ParsedObjectType {
     /// A bare call signature (`(value?: any): number`) on the object type,
     /// making values of this type callable without `new`.
     pub call_signature: Option<Box<ParsedFunctionType>>,
+    /// A construct signature. Carries the lowering of a constructor *type*
+    /// (`new (args) => T`, `abstract new (args) => T`), which is an object type
+    /// with only this signature — modelled distinctly from a call signature so
+    /// a plain function does not satisfy `T extends new (…) => …`.
+    pub construct_signature: Option<Box<ParsedFunctionType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -747,6 +752,16 @@ pub enum ParsedExpression {
         index_span: Option<TextSpan>,
     },
     OptionalCall {
+        callee: Box<ParsedExpression>,
+        callee_span: Option<TextSpan>,
+        type_arguments: Vec<ParsedType>,
+        arguments: Vec<ParsedCallArgument>,
+    },
+    /// A call whose callee is neither a bare identifier nor a static member —
+    /// an IIFE (`(() => { … })()`), a call on a call, a parenthesized
+    /// expression. Without it the whole call (and everything written inside the
+    /// callee) parsed to `Unknown` and was never checked.
+    ExpressionCall {
         callee: Box<ParsedExpression>,
         callee_span: Option<TextSpan>,
         type_arguments: Vec<ParsedType>,
@@ -1158,6 +1173,9 @@ impl ParsedType {
                 }
                 if let Some(call) = object.call_signature.as_ref() {
                     bytes += call.estimated_heap_bytes();
+                }
+                if let Some(construct) = object.construct_signature.as_ref() {
+                    bytes += construct.estimated_heap_bytes();
                 }
                 bytes
             }

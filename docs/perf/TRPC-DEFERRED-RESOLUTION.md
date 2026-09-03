@@ -1,5 +1,11 @@
 # tRPC deferred-resolution — engineering report & blocker
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `perf/stc-deferred-resolution`, on top of `1a245fd` (the ordered-delta
 replay report). Hardware: Apple M1 Pro (10 cores), 16 GB, macOS 27.0,
 rustc 1.94.0, mimalloc, release profile. Fixture: `.local-projects/trpc`.

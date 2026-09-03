@@ -146,6 +146,23 @@ pub(crate) fn evaluate_expression(
             Some(return_type) => InferredExpression::Known(return_type),
             None => InferredExpression::Unknown,
         },
+        ParsedExpression::ExpressionCall {
+            callee,
+            callee_span,
+            type_arguments,
+            arguments,
+        } => match crate::checks::call::check_expression_call(
+            callee,
+            *callee_span,
+            None,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ) {
+            Some(return_type) => InferredExpression::Known(return_type),
+            None => InferredExpression::Unknown,
+        },
         ParsedExpression::OptionalCall {
             callee,
             callee_span,

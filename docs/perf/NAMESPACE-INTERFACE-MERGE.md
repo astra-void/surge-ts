@@ -1,5 +1,16 @@
 # Namespace interface declaration merging (2026-08-20)
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+>
+> **Specifically superseded:** the merge described below as "implemented but
+> gated off (`SURGE_NS_IFACE_MERGE=1`)" is **on by default** as of commit
+> `4c6f584` (2026-08-28), together with the dotted-name retry. The gate is now
+> the opt-*out* `SURGE_NS_IFACE_MERGE=0` / `SURGE_NS_QUALIFIED_RETRY=0`.
+
 Correctness fix that is **implemented but gated off** (`SURGE_NS_IFACE_MERGE=1`),
 with the measurement that says why, and the trace evidence that names the real
 blocker — which turned out **not** to be the cycle truncation the counters first

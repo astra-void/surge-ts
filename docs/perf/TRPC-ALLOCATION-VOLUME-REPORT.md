@@ -1,5 +1,11 @@
 # tRPC allocation-volume program — engineering report
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `perf/trpc-allocation-volume`, started from `perf/trpc-5s @ 5515b68`.
 
 ## Outcome summary

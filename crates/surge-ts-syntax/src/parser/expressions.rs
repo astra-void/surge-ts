@@ -470,7 +470,15 @@ fn parse_call_expression_expression(
                 })
             }
         }
-        _ => None,
+        _ => {
+            let (callee, callee_span) = parse_expression(&call_expression.callee);
+            Some(ParsedExpression::ExpressionCall {
+                callee: Box::new(callee),
+                callee_span: Some(text_span_from_oxc_span(callee_span)),
+                type_arguments,
+                arguments,
+            })
+        }
     }
 }
 
@@ -624,7 +632,15 @@ fn parse_call_expression_expression_with_type_arguments(
                 })
             }
         }
-        _ => None,
+        _ => {
+            let (callee, callee_span) = parse_expression(&call_expression.callee);
+            Some(ParsedExpression::ExpressionCall {
+                callee: Box::new(callee),
+                callee_span: Some(text_span_from_oxc_span(callee_span)),
+                type_arguments,
+                arguments,
+            })
+        }
     }
 }
 

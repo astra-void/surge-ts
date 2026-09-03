@@ -8,6 +8,7 @@ use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan as SyntaxTextSpa
 use surge_ts_types::fx::{FxHashMap, FxHashSet};
 use surge_ts_types::{FunctionType, ProgramTypeStore, Type, current_program_type_store};
 
+use crate::infer::types::LazyMemberTemplateTable;
 use crate::program::ProgramTimings;
 use crate::symbols::{
     SymbolTable, TypeDeclarationInfo, TypeDeclarationScope, TypeDeclarationTable,
@@ -205,6 +206,7 @@ struct DeclarationEnvironmentData {
         Arc<Mutex<FxHashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
     physical_interface_overload_instantiations:
         Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
+    lazy_member_annotation_templates: Arc<Mutex<LazyMemberTemplateTable>>,
     ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
     ambient_file_type_scopes: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,
@@ -434,6 +436,7 @@ impl DeclarationEnvironmentData {
             program_resolved_generic_types: ctx.program_resolved_generic_types.clone(),
             program_instantiations: ctx.program_instantiations.clone(),
             physical_interface_instantiations: ctx.physical_interface_instantiations.clone(),
+            lazy_member_annotation_templates: ctx.lazy_member_annotation_templates.clone(),
             physical_interface_declaration_templates: ctx
                 .physical_interface_declaration_templates
                 .clone(),
@@ -501,6 +504,11 @@ pub(crate) struct ContextualReturnFrame {
     /// function without its own frame would record into, and be silenced by,
     /// an enclosing arrow's.
     active: bool,
+    /// Whether some `return <expr>` in this body yielded a `void`/`undefined`-
+    /// including type. tsc's `noImplicitReturns` check skips a function whose
+    /// return type admits `undefined` — a falling-through path then returns a
+    /// value the type already allows.
+    returned_void_like: bool,
 }
 
 impl CheckerContext {
@@ -528,12 +536,15 @@ impl CheckerContext {
             .is_some_and(|frame| frame.active)
     }
 
-    pub(crate) fn close_contextual_return_frame(&mut self) {
+    /// Returns whether some return in the closed body yielded a
+    /// `void`/`undefined`-including type.
+    pub(crate) fn close_contextual_return_frame(&mut self) -> bool {
         let Some(frame) = self.contextual_return_frames.pop() else {
-            return;
+            return false;
         };
+        let returned_void_like = frame.returned_void_like;
         if !frame.active || !frame.saw_any_return {
-            return;
+            return returned_void_like;
         }
         // Descending, so earlier indices stay valid as later ones are removed.
         for index in frame.diagnostic_indices.iter().rev() {
@@ -543,6 +554,26 @@ impl CheckerContext {
         }
         // `push_deduplicated` rebuilds its index when the length no longer
         // matches, which is what makes removing entries safe here.
+        returned_void_like
+    }
+
+    /// Records the type a `return <expr>` produced, for the `noImplicitReturns`
+    /// decision. Unlike the mismatch bookkeeping this is not gated on the frame
+    /// being the contextually-checked one — every body needs its own answer.
+    pub(crate) fn note_contextual_return_type(&mut self, ty: &surge_ts_types::Type) {
+        fn admits_undefined(ty: &surge_ts_types::Type) -> bool {
+            match ty {
+                surge_ts_types::Type::Void | surge_ts_types::Type::Undefined => true,
+                surge_ts_types::Type::Union(union) => union.types().iter().any(admits_undefined),
+                surge_ts_types::Type::Reference(reference) => admits_undefined(&reference.resolve()),
+                _ => false,
+            }
+        }
+        if admits_undefined(ty)
+            && let Some(frame) = self.contextual_return_frames.last_mut()
+        {
+            frame.returned_void_like = true;
+        }
     }
 
     pub(crate) fn note_contextual_return_is_any(&mut self) {
@@ -1070,6 +1101,11 @@ pub(crate) struct CheckerContext {
         Arc<Mutex<FxHashMap<InterfaceMemberInstantiationKey, FunctionType>>>,
     pub(crate) physical_interface_overload_instantiations:
         Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
+    /// Interned capture-site content for deferred interface member
+    /// annotations (`SURGE_LAZY_IFACE_MEMBERS`). Pure content keyed by
+    /// declaration identity and substitution fingerprint, so it is shared
+    /// across environments the way the parsed AST is.
+    pub(crate) lazy_member_annotation_templates: Arc<Mutex<LazyMemberTemplateTable>>,
     pub(crate) ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
     /// Per-file resolution scopes for files whose declarations live in ambient
     /// `declare module "…"` blocks: the blocks' own type declarations plus
@@ -1092,6 +1128,18 @@ pub(crate) struct CheckerContext {
     /// or imported shadows the name. Empty for script files, for files that
     /// bind every UMD name themselves, and under `allowUmdGlobalAccess`.
     pub(crate) file_umd_global_names: FxHashSet<Arc<str>>,
+    /// Set only while collecting a *script* file's top-level type declarations.
+    /// A script's `interface X` re-opens a same-named global interface
+    /// (declaration merging); a module's shadows it. Without the merge a script
+    /// that re-opens a DOM interface silently lost the lib's members — and, in
+    /// the other direction, the lib's shape replaced the file's own.
+    pub(crate) merge_script_interfaces_with_globals: bool,
+    /// Local names the file under check binds through a type-only import
+    /// (`import type React from "react"`). Referencing one as a value is
+    /// TS1361 — including the implicit factory reference every JSX tag makes
+    /// under `jsx: react`.
+    pub(crate) file_type_only_import_names: FxHashSet<Arc<str>>,
+    pub(crate) file_type_only_import_names_owner: Option<String>,
     /// The file [`Self::file_umd_global_names`] was computed for. Type
     /// resolution re-enters under a *declaring* file's name, and that file's
     /// shadowing is not the checked file's, so the set only applies while the
@@ -1262,6 +1310,7 @@ impl CheckerContext {
             physical_interface_declaration_templates: Arc::new(Mutex::new(FxHashMap::default())),
             physical_interface_method_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
             physical_interface_overload_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
+            lazy_member_annotation_templates: Arc::new(Mutex::new(FxHashMap::default())),
             ambient_modules: Arc::new(FxHashMap::default()),
             ambient_file_type_scopes: Arc::new(FxHashMap::default()),
             module_augmentations: Arc::new(FxHashMap::default()),
@@ -1269,6 +1318,9 @@ impl CheckerContext {
             umd_global_names: Arc::new(FxHashSet::default()),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
+            merge_script_interfaces_with_globals: false,
+            file_type_only_import_names: FxHashSet::default(),
+            file_type_only_import_names_owner: None,
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
             module_file_index_by_identity: Arc::new(FxHashMap::default()),
             module_scope_by_file: Arc::new(FxHashMap::default()),
@@ -1360,6 +1412,7 @@ impl CheckerContext {
             program_resolved_generic_types: data.program_resolved_generic_types.clone(),
             program_instantiations: data.program_instantiations.clone(),
             physical_interface_instantiations: data.physical_interface_instantiations.clone(),
+            lazy_member_annotation_templates: data.lazy_member_annotation_templates.clone(),
             physical_interface_declaration_templates: data
                 .physical_interface_declaration_templates
                 .clone(),
@@ -1378,6 +1431,9 @@ impl CheckerContext {
             umd_global_names: Arc::new(FxHashSet::default()),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
+            merge_script_interfaces_with_globals: false,
+            file_type_only_import_names: FxHashSet::default(),
+            file_type_only_import_names_owner: None,
             ambient_global_type_declarations: data.ambient_global_type_declarations.clone(),
             module_file_index_by_identity: data.module_file_index_by_identity.clone(),
             module_scope_by_file: data.module_scope_by_file.clone(),
@@ -1460,6 +1516,9 @@ impl CheckerContext {
             cache.clear();
         }
         if let Ok(mut cache) = self.physical_interface_overload_instantiations.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.lazy_member_annotation_templates.lock() {
             cache.clear();
         }
         self.substitution_store.clear();
@@ -1650,6 +1709,29 @@ impl CheckerContext {
     /// reports whether the file binds the name itself, as a value or a type —
     /// tsc reports a different diagnostic for a shadowing `import type`, so a
     /// bound name is left alone here either way.
+    /// Whether `name` reaches the file under check only through a type-only
+    /// import, which makes a value reference to it TS1361.
+    ///
+    /// The import must actually name something with a value meaning: importing
+    /// a *type* with `import type` and using it as a value is TS2693 in tsc
+    /// ("only refers to a type"), not TS1361.
+    pub(crate) fn is_type_only_import_value_reference(&self, name: &str) -> bool {
+        self.file_type_only_import_names_owner.as_deref() == Some(self.file_name.as_str())
+            && self.file_type_only_import_names.contains(name)
+            && self.lookup_type_declaration(name).is_none()
+    }
+
+    pub(crate) fn set_file_type_only_import_names<'a>(
+        &mut self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) {
+        self.file_type_only_import_names.clear();
+        self.file_type_only_import_names_owner = Some(self.file_name.clone());
+        for name in names {
+            self.file_type_only_import_names.insert(Arc::from(name));
+        }
+    }
+
     pub(crate) fn set_file_umd_global_names(
         &mut self,
         is_module: bool,
@@ -1689,6 +1771,8 @@ impl CheckerContext {
         self.diagnostic_keys_len = 0;
         self.file_umd_global_names.clear();
         self.file_umd_global_names_owner = None;
+        self.file_type_only_import_names.clear();
+        self.file_type_only_import_names_owner = None;
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"

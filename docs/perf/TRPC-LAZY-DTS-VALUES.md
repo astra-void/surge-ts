@@ -1,5 +1,11 @@
 # tRPC: lazy library value annotations — the shadow-environment capture design
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `perf/lazy-dts-values`. Second attempt at the final-round value-
 collection lever ([TRPC-THIN-PRELIMINARY-VALUES.md](TRPC-THIN-PRELIMINARY-VALUES.md)
 records the first attempt's both-ways drift and the decision to require a

@@ -1,14 +1,118 @@
 # Strict Drift Inventory
 
-Inventory of every remaining non-gating message-text and span/column drift in the
-oracle preset sweep, classified for follow-up. **Documentation only — no checker
-semantics, fixtures, gates, libs, or TypeScript version were changed.**
+Inventory of the non-gating message-text and span/column drift in the oracle
+preset sweep, classified for follow-up. **Documentation only — no checker
+semantics, fixtures, gates, libs, or TypeScript version are changed by this
+file.**
+
+Every drift recorded here still matches **code-count and file/code/line** under
+the normal gate. Drift is confined to the column and to the message text at an
+already-correct `(file, code, line)`. No drift implies a missing, extra,
+mis-filed, or mis-lined diagnostic.
+
+> **Document structure.** § "Current snapshot" below is the only section that
+> describes the present state. §§ 1–11 are a **dated historical log** of earlier
+> sweeps (75-preset and 78-preset registries) and the passes that closed them;
+> their counts, tables, and "remaining" lists do **not** describe current
+> behavior. The canonical current-state summary is
+> [CURRENT_STATUS.md](CURRENT_STATUS.md).
+
+## Current snapshot (2026-09-01)
+
+- Commit: `37dfb3a` (clean checkout)
+- TypeScript oracle: 7.0.2 (pinned)
+- Scope: all **117** registered oracle presets, `--maxDiagnostics 200`
+
+| Run | Command flags | Result |
+| --- | --- | --- |
+| Normal gate | (none) | **117 PASS / 0 FAIL** |
+| Strict messages | `--strictMessages` | **109 PASS / 8 FAIL** |
+| Strict spans | `--strictSpans` | **116 PASS / 1 FAIL** |
+| Both | `--strictMessages --strictSpans` | **108 PASS / 9 FAIL** |
+
+The two failing sets are disjoint (8 + 1 = 9), as in every previous sweep: a
+target that drifts on message text has matching spans, and vice versa. Across
+all 117 presets the sweep saw 199 `tsc` diagnostics and 199 `surge-ts`
+diagnostics with `onlyTsc = 0` and `onlyRust = 0`.
+
+### Message-text drift (8 targets, span matches)
+
+| Target | Loc | tsc message | surge message |
+| --- | --- | --- | --- |
+| `namespace-nested-member-lazy-scope-basic` | `src/index.ts:5:7` TS2322 | …type `'(value: string) => void'` | …type `'(string) => void'` |
+| `function-type-binding-pattern-param-basic` | `src/index.ts:8:7` TS2322 | `'<T extends FieldBag = FieldBag>(props: CtrlProps<T>) => string'` | `'(CtrlProps<T>) => string'` |
+| `interface-extends-call-signature-basic` | `src/index.ts:15:7` TS2322 | …type `'{ a: string; }'` | …type `'PropsOf<Exotic<{ a: string; }>>'` |
+| `query-generics-observer-basic` | `src/index.ts:34:3` TS2322 | `'(data: string) => void'` → `'(data: number) => void'` | `'(string) => void'` → `'(number) => void \| undefined'` |
+| `express-augmentation-cycle-collision-pinned` | `src/b.ts:7:7` TS2322 | `'import("…/node_modules/storekit/store").Store'` → `'Store'` | `'Store'` → `'Store'` |
+| `namespace-member-signature-siblings-basic` | `src/index.ts:9:14` TS2322 | `'Dispatch<SetStateAction<number>>'` | `'(number \| (number) => number) => void'` |
+| `enum-member-type-basic` | `src/index.ts:13:14`, `24:14` TS2322 | `'import("…/src/index").Color'` / `.Label` | `'number'` / `'string'` |
+| `ambient-module-sibling-scope-basic` | `src/index.ts:9:31` TS2345 | parameter of type `'Level'` | parameter of type `'"a" \| "b"'` |
+
+Four recurring classes, all display-level:
+
+1. **Function-type parameter names are dropped.** surge renders
+   `(string) => void` where tsc renders `(value: string) => void`, and drops
+   type-parameter lists from the signature head. Three of the eight rows.
+2. **Alias / nominal name vs. structural expansion, in both directions.**
+   Sometimes surge shows the alias where tsc shows the expansion
+   (`PropsOf<Exotic<…>>`), sometimes the reverse (`number` where tsc prints the
+   enum's nominal `import("…").Color`, `"a" | "b"` where tsc prints `Level`).
+3. **Same-named types from different declarations are indistinguishable.** tsc
+   disambiguates with an `import("<absolute path>").Name` form; surge prints the
+   bare name on both sides, so the message reads `'Store' is not assignable to
+   type 'Store'`. This is the honest rendering of a real distinction the
+   diagnostic text cannot currently express.
+4. **Optional-property union rendering leaks into the target type**
+   (`(number) => void | undefined`).
+
+### Span drift (1 target)
+
+`contextual-return-any-collapse-basic`, 3 of its 6 rows
+(`src/index.ts` lines 21, 42, 45, all TS2322). tsc anchors the diagnostic at the
+assignment/function position (column 14) and elaborates downward through a
+nested "Types of property 'x' are incompatible" chain to the leaf mismatch;
+surge anchors directly at the leaf property (columns 47, 86, 106) and reports
+only the leaf message. Line, file, and code match on every row; the differing
+column also moves these rows out of the exact-location message comparison, so
+they never surface as `messageMatch = false`. This is the same bucket-5 pattern
+described in § 1 of the historical log below.
+
+### Commands
+
+```bash
+pnpm run oracle:sweep -- --all --maxDiagnostics 200
+```
+
+```bash
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages
+```
+
+```bash
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans
+```
+
+```bash
+pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans
+```
+
+The strict runs exit non-zero by design when drift exists.
+
+---
+
+# Historical log
+
+**Everything below is a dated record of earlier sweeps.** The registry was 75
+presets at § 1 and 78 by § 10; it is 117 now. Counts, "remaining" lists, and
+"stays clean" statements in these sections describe the state at the time of
+that pass only.
+
+## 1. Sweep of 2026-06-17 (75 presets)
 
 - Date: 2026-06-17
 - TypeScript oracle version: pinned (unchanged)
 - Scope: all 75 registered oracle presets, `--maxDiagnostics 200`
 
-## 1. Summary
+### 1.1 Summary
 
 | Run | Command flags | Result | Notes |
 | --- | --- | --- | --- |

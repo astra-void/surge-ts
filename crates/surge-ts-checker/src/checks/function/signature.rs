@@ -641,6 +641,35 @@ pub(crate) fn function_signature_info(
     })
 }
 
+/// [`function_signature_info`] for a value whose *annotation* is a generic
+/// function type (`declare const f: <T>() => Box<T>`, or an arrow assigned to an
+/// annotated binding). Without it a call supplying explicit type arguments had
+/// nothing to re-resolve the return annotation against, so the result kept the
+/// uninstantiated `Box<T>` and degraded — vitest's
+/// `__getSpy<OnError>()` then read as not callable.
+pub(crate) fn function_type_signature_info(
+    function_type: &surge_ts_syntax::ParsedFunctionType,
+    declaring_file: &str,
+) -> Arc<FunctionSignatureInfo> {
+    let value_parameters = function_type
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this);
+    Arc::new(FunctionSignatureInfo {
+        type_parameters: function_type.type_parameters.clone(),
+        parameter_types: value_parameters
+            .clone()
+            .map(|parameter| Some(parameter.ty.clone()))
+            .collect(),
+        parameter_names: value_parameters
+            .map(|parameter| parameter.name.clone())
+            .collect(),
+        return_type: Some((*function_type.return_type).clone()),
+        declaring_file: Some(Arc::from(declaring_file)),
+        namespace_prefix: None,
+    })
+}
+
 /// [`function_signature_info`] for a member published under a qualified
 /// `ns.member` key. Instantiation re-resolves the written annotations, whose
 /// bare sibling names (`Dispatch` inside `React.useState`) only resolve under
@@ -1045,7 +1074,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
         insert_parameter_bindings(&parameter, parameter_type, &mut scopes);
     }
 
-    with_type_parameter_scope(type_parameters, ctx, |ctx| {
+    let returned_void_like = with_type_parameter_scope(type_parameters, ctx, |ctx| {
         // A declaration's own frame, never active — it has a real signature, so
         // its returns are checked. Opening one stops a nested declaration from
         // recording into an enclosing arrow's frame.
@@ -1057,13 +1086,14 @@ pub(crate) fn check_function_body_with_signature_and_this(
             &mut flow_state,
             ctx,
         );
-        ctx.close_contextual_return_frame();
+        ctx.close_contextual_return_frame()
     });
 
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
         emit_missing_return_diagnostic(body_flow, missing_return_span, ctx);
     } else if !has_explicit_return_type
         && !is_constructor
+        && !returned_void_like
         && ctx.options.no_implicit_returns
         && body_flow.contains_return_with_value
         && !body_flow.guarantees_exit

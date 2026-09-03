@@ -1,5 +1,11 @@
 # tRPC 5-second mission — session report (2026-07-18, part 2)
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `main`, session commits `46a02de..d45de1f` on top of `3375bc6`.
 Hardware: Apple M1 Pro (10 cores), 16 GB, macOS 27.0, rustc 1.94.0, release
 profile. Fixture: `.local-projects/trpc` @ `3e0e9793eb7f8c4cfbe70a1dccb72f8d355e3c8b`.

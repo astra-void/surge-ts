@@ -610,7 +610,7 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
         )),
         "join" => Some(function_type(vec![Type::String], Type::String, true, 0)),
         "concat" => Some(function_type(
-            vec![Type::Any],
+            vec![Type::Array(Box::new(Type::Any))],
             Type::Array(Box::new(element.clone())),
             true,
             0,
@@ -641,19 +641,35 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             false,
             0,
         )),
+        // `fill(value: T, start?: number, end?: number)` — positional, not
+        // variadic; modelling it as variadic checked `start`/`end` against `T`.
         "fill" => Some(function_type(
-            vec![element.clone()],
+            vec![element.clone(), Type::Number, Type::Number],
+            Type::Array(Box::new(element.clone())),
+            false,
+            1,
+        )),
+        // `splice(start: number, deleteCount?: number, ...items: T[])`.
+        "splice" => Some(function_type(
+            vec![
+                Type::Number,
+                Type::Number,
+                Type::Array(Box::new(element.clone())),
+            ],
             Type::Array(Box::new(element.clone())),
             true,
             1,
         )),
-        "splice" => Some(function_type(
-            vec![Type::Number],
-            Type::Array(Box::new(element.clone())),
+        // `push`/`unshift` take `...items: T[]`: the rest parameter is stored as
+        // the array it is written as, so an element type that is itself an
+        // array or tuple (`string[][]`, `[string, string][]`) is not unwrapped
+        // a second time by variadic argument checking.
+        "push" | "unshift" => Some(function_type(
+            vec![Type::Array(Box::new(element.clone()))],
+            Type::Number,
             true,
             0,
         )),
-        "push" | "unshift" => Some(function_type(vec![element.clone()], Type::Number, true, 1)),
         "pop" | "shift" => Some(function_type(
             vec![],
             element_or_undefined(element),
@@ -666,10 +682,18 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             false,
             1,
         )),
-        "indexOf" | "lastIndexOf" => {
-            Some(function_type(vec![element.clone()], Type::Number, true, 1))
-        }
-        "includes" => Some(function_type(vec![element.clone()], Type::Boolean, true, 1)),
+        "indexOf" | "lastIndexOf" => Some(function_type(
+            vec![element.clone(), Type::Number],
+            Type::Number,
+            false,
+            1,
+        )),
+        "includes" => Some(function_type(
+            vec![element.clone(), Type::Number],
+            Type::Boolean,
+            false,
+            1,
+        )),
         // Iterator-producing methods. The result carries the yielded element so
         // `for…of arr.values()` / `.entries()` / `.keys()` derive the loop
         // variable type instead of degrading to `unknown`.

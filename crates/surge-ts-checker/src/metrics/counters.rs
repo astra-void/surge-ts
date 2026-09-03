@@ -140,6 +140,8 @@ pub(crate) struct ProgramCounters {
     pub(crate) lazy_reference_degraded_expansion_count: u64,
     pub(crate) lazy_reference_degraded_memo_hit_count: u64,
     pub(crate) lazy_member_annotation_create_count: u64,
+    pub(crate) lazy_member_template_hit_count: u64,
+    pub(crate) lazy_member_template_miss_count: u64,
     pub(crate) generic_instantiation_count: u64,
     pub(crate) lazy_intersection_create_count: u64,
     pub(crate) lazy_intersection_peel_count: u64,

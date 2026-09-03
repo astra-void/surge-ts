@@ -33,6 +33,14 @@ message = "Type '{0}' does not satisfy the expected type '{1}'."
 arity = 2
 
 [[diagnostic]]
+code = "TS1361"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' cannot be used as a value because it was imported using 'import type'."
+arity = 1
+
+[[diagnostic]]
 code = "TS2304"
 category = "Error"
 source = "typescript"

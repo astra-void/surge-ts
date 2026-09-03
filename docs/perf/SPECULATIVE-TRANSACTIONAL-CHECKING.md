@@ -1,5 +1,10 @@
 # Speculative Transactional Checking (STC) — architecture & design
 
+> **Design reference, not a status report.** It describes an intended or
+> in-progress design; the numbers it quotes are from the date it was
+> written. Whether the design has landed, and under which feature gate, is
+> recorded in [CURRENT_STATUS.md](../../CURRENT_STATUS.md).
+
 This document is the design reference for parallelizing `surge-ts` semantic
 work while keeping `--jobs auto` output byte-identical to the trusted serial
 `--jobs 1` path. It consolidates the Stage 0 census

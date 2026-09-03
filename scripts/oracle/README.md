@@ -211,10 +211,13 @@ prints the full per-preset oracle output. `--json` emits a stable object with
   reported and informational unless you pass `--strictMessages`, which exits
   with code 1 when any same-location message text differs from `tsc`.
 - It does not require exact span parity.
-- It does not add full package resolution, `paths` /
-  `baseUrl`, full declaration-file semantics, `lib.d.ts`, `@types`,
-  or project references. (It only supports declaration-oriented `node_modules` lookup.)
-- It does not add declaration merging parity or TypeScript's full ambient-module semantics.
+- It does not add *any* checker behavior. The harness only runs the two
+  compilers and compares their output; module resolution, declaration
+  semantics, `lib.d.ts` loading, `@types` discovery, and declaration merging
+  are whatever the checker itself implements. For what that currently covers,
+  see [CURRENT_STATUS.md](../../CURRENT_STATUS.md) and
+  [PUBLIC_API.md](../../PUBLIC_API.md) — do not read this list as a checker
+  support statement.
 - File mode currently only accepts `.ts` files. Project mode is still the
   preferred oracle for multi-file compatibility checks, and file mode may drift
   from project mode because single-file TypeScript runs use default compiler

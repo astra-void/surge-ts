@@ -302,6 +302,8 @@ export const fixturePresets: Record<string, string> = {
   'ambient-namespace-value-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-namespace-value-merge-basic/tsconfig.json'),
   'ambient-global-namespace-value-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-global-namespace-value-merge-basic/tsconfig.json'),
   'umd-global-module-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/umd-global-module-reference-basic/tsconfig.json'),
+  'import-type-value-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/import-type-value-reference-basic/tsconfig.json'),
+  'unannotated-return-expression-checks-basic': path.join(workspaceRoot, 'tests/compat-projects/unannotated-return-expression-checks-basic/tsconfig.json'),
   'module-augmentation-unresolved-no-cascade': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-unresolved-no-cascade/tsconfig.json'),
   'interface-method-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-method-merge-basic/tsconfig.json'),
   'class-interface-merge-policy-pinned': path.join(workspaceRoot, 'tests/compat-projects/class-interface-merge-policy-pinned/tsconfig.json'),
