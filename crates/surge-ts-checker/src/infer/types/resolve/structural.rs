@@ -54,7 +54,6 @@ pub(crate) fn resolve_function_type(
 
     for parameter in function_type.parameters.iter().cloned() {
         let is_this = parameter.is_this;
-        let is_rest = parameter.rest;
         let resolved_parameter =
             resolve_function_type_parameter(parameter, ctx, resolving, &local_substitution);
         had_error |= resolved_parameter.had_error;
@@ -64,13 +63,7 @@ pub(crate) fn resolve_function_type(
         if is_this {
             continue;
         }
-        // A rest parameter is written as the array type but checked element-wise,
-        // so store its element type to match variadic call/argument checking.
-        if is_rest {
-            parameters.push(rest_element_type(resolved_parameter.ty));
-        } else {
-            parameters.push(resolved_parameter.ty);
-        }
+        parameters.push(resolved_parameter.ty);
     }
 
     let return_type = resolve_parsed_type(
@@ -91,20 +84,13 @@ pub(crate) fn resolve_function_type(
     }
 }
 
-fn rest_element_type(ty: Type) -> Type {
-    match ty {
-        Type::Array(element) => *element,
-        other => other,
-    }
-}
-
 /// [`resolve_function_type`] with lazy components (Stage 2 of member-level
 /// lazy expansion): the FunctionType shell — arity, variadic, required count,
 /// `this`/rest handling — is built exactly as the eager path builds it, but an
 /// eligible parameter or return annotation becomes a lazy component reference
 /// resolved on first read. `this` and rest parameters always resolve eagerly
-/// (`this` is typing metadata outside arity; a rest annotation is stored as
-/// its ELEMENT type, which a deferred wrapper would mis-shape).
+/// (`this` is typing metadata outside arity; a rest annotation is consumed by
+/// variadic call checking, which a deferred wrapper would mis-shape).
 pub(crate) fn resolve_function_type_lazy_components(
     function_type: std::sync::Arc<ParsedFunctionType>,
     ctx: &mut CheckerContext,
@@ -174,11 +160,7 @@ pub(crate) fn resolve_function_type_lazy_components(
             continue;
         }
         value_index += 1;
-        if is_rest {
-            parameters.push(rest_element_type(resolved_parameter.ty));
-        } else {
-            parameters.push(resolved_parameter.ty);
-        }
+        parameters.push(resolved_parameter.ty);
     }
 
     // The return annotation stays eager: a call's result flows through the

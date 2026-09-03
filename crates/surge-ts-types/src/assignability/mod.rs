@@ -539,6 +539,29 @@ fn expanded_signature(function: &FunctionType) -> (std::borrow::Cow<'_, [Type]>,
     )
 }
 
+/// Widens a variadic signature's parameter list so a positional comparison
+/// reaches every slot the rest parameter covers. A rest parameter is stored as
+/// the array it is written as (`...items: T[]` -> `T[]`), so comparing it
+/// positionally against a plainly declared `(a: T, b: T) => …` needs the array
+/// expanded into `width` copies of its element.
+fn widen_variadic_parameters<'a>(
+    parameters: std::borrow::Cow<'a, [Type]>,
+    is_variadic: bool,
+    width: usize,
+) -> std::borrow::Cow<'a, [Type]> {
+    if !is_variadic {
+        return parameters;
+    }
+    let Some(Type::Array(element)) = parameters.last() else {
+        return parameters;
+    };
+    let leading = parameters.len() - 1;
+    let element = element.as_ref().clone();
+    let mut widened = parameters[..leading].to_vec();
+    widened.resize(width.max(leading + 1), element);
+    std::borrow::Cow::Owned(widened)
+}
+
 fn type_includes_undefined(ty: &Type) -> bool {
     match ty {
         Type::Undefined => true,
@@ -560,8 +583,11 @@ fn is_signature_assignable_to(
     target: &FunctionType,
     bivariant_parameters: bool,
 ) -> bool {
-    let (source_parameters, source_required, _) = expanded_signature(source);
+    let (source_parameters, source_required, source_variadic) = expanded_signature(source);
     let (target_parameters, _, target_variadic) = expanded_signature(target);
+    let width = source_parameters.len().max(target_parameters.len());
+    let source_parameters = widen_variadic_parameters(source_parameters, source_variadic, width);
+    let target_parameters = widen_variadic_parameters(target_parameters, target_variadic, width);
 
     // A source function may declare fewer parameters than the target expects —
     // the surplus arguments the target would pass are simply ignored — but it
