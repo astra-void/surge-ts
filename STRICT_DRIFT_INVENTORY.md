@@ -1,41 +1,95 @@
 # Strict Drift Inventory
 
 Inventory of the non-gating message-text and span/column drift in the oracle
-preset sweep, classified for follow-up. **Documentation only — no checker
-semantics, fixtures, gates, libs, or TypeScript version are changed by this
-file.**
+preset sweep. **As of 2026-09-03 there is none** — both strict sweeps are green
+across all 122 registered presets. The tables are kept as worked examples of
+what each class of drift looked like and what closed it.
 
-Every drift recorded here still matches **code-count and file/code/line** under
-the normal gate. Drift is confined to the column and to the message text at an
-already-correct `(file, code, line)`. No drift implies a missing, extra,
-mis-filed, or mis-lined diagnostic.
+Drift, when it exists, is confined to the column and to the message text at an
+already-correct `(file, code, line)`: every entry recorded here still matched
+**code-count and file/code/line** under the normal gate. Drift never implies a
+missing, extra, mis-filed, or mis-lined diagnostic.
 
 > **Document structure.** § "Current snapshot" below is the only section that
-> describes the present state. §§ 1–11 are a **dated historical log** of earlier
+> describes the present state; the drift tables under it are labelled
+> *Historical* and record deltas that no longer reproduce. §§ 1–11 are a **dated historical log** of earlier
 > sweeps (75-preset and 78-preset registries) and the passes that closed them;
 > their counts, tables, and "remaining" lists do **not** describe current
 > behavior. The canonical current-state summary is
 > [CURRENT_STATUS.md](CURRENT_STATUS.md).
 
-## Current snapshot (2026-09-01)
+## Current snapshot (2026-09-03)
 
-- Commit: `37dfb3a` (clean checkout)
+- Commit: `b090760` (clean checkout; built and run from a detached worktree)
 - TypeScript oracle: 7.0.2 (pinned)
-- Scope: all **117** registered oracle presets, `--maxDiagnostics 200`
+- Scope: all **122** registered oracle presets, `--maxDiagnostics 200`
 
 | Run | Command flags | Result |
 | --- | --- | --- |
-| Normal gate | (none) | **117 PASS / 0 FAIL** |
-| Strict messages | `--strictMessages` | **109 PASS / 8 FAIL** |
-| Strict spans | `--strictSpans` | **116 PASS / 1 FAIL** |
-| Both | `--strictMessages --strictSpans` | **108 PASS / 9 FAIL** |
+| Normal gate | (none) | **122 PASS / 0 FAIL** |
+| Strict messages | `--strictMessages` | **122 PASS / 0 FAIL** |
+| Strict spans | `--strictSpans` | **122 PASS / 0 FAIL** |
+| Both | `--strictMessages --strictSpans` | **122 PASS / 0 FAIL** |
 
-The two failing sets are disjoint (8 + 1 = 9), as in every previous sweep: a
-target that drifts on message text has matching spans, and vice versa. Across
-all 117 presets the sweep saw 199 `tsc` diagnostics and 199 `surge-ts`
-diagnostics with `onlyTsc = 0` and `onlyRust = 0`.
+**There is no strict drift left on the registered presets.** Across all 122 the
+sweep saw 206 `tsc` diagnostics and 206 `surge-ts` diagnostics with
+`onlyTsc = 0`, `onlyRust = 0`, `messageDriftOnly = 0` and `spanDriftOnly = 0`.
 
-### Message-text drift (8 targets, span matches)
+This is a statement about these fixtures, not about arbitrary code, and the
+strict flags stay **non-gating**: a preset added tomorrow may record a drift
+without failing the normal gate, which is the point of keeping the dimensions
+separate.
+
+### What closed the nine drifts (2026-09-03)
+
+The eight message-text targets and one span target inventoried below were all
+closed at this commit. The tables are kept because they are the worked examples
+— each row names the exact delta the fix had to erase.
+
+**The rule that made it safe: display data belongs on the type *handle* or in
+the diagnostic layer, never on the interned payload or a `TypeReference`'s
+`display`.** `store.rs` compares `left.display == right.display` when deciding
+whether one interned payload may substitute another, so changing a display
+string changes which cached expansion is reused — and that changes diagnostics.
+Two attempts that edited display strings directly were measured and reverted
+(one cost 2 trpc false positives, one cost 18 across ky/unnamed/trpc).
+
+What worked, per class:
+
+1. **Function-type parameter names and type-parameter heads** — carried on
+   `FunctionType`, not `FunctionTypePayload`, so signatures differing only in
+   parameter names still share one canonical payload. `name()` memoizes into the
+   *shared* payload, so a handle-local rendering must bypass the memo.
+2. **Alias names for unions and signatures** — the same handle-local trick on
+   `UnionType`/`FunctionType`. `type Level = "a" | "b"` renders as `Level` while
+   the interned member list is untouched, so nothing that inspects
+   `Type::Union` had to learn to peel.
+3. **Alias vs expansion, in both directions** — a generic instantiation renders
+   from its *resolved* arguments (`Dispatch<SetStateAction<number>>`), and a
+   conditional alias renders as the branch it resolved to via a handle flag on
+   `TypeReference` that redirects rendering while leaving `id`, `display` and
+   every sharing decision byte-identical.
+4. **Same-named types from different declarations** — the diagnostic layer
+   qualifies the non-local side (`import("/abs/path/store").Store`) when the two
+   rendered names would collide, recovering the declaring file from the nominal
+   id both `ObjectType.alias_id` and `TypeReference.id` already carry.
+5. **Enum nominal names** — a literal has no handle, so the *alias* resolution
+   wraps an enum-lowered type in a nominal reference whose display carries the
+   enum. tsc qualifies an exported enum and names a file-local one bare; a
+   single member displays as the enum, not `Enum.Member`.
+6. **Optional-property union rendering** — the object-literal mismatch names the
+   property's written type, not the optionality-widened `T | undefined`, which
+   is what tsc's elaboration reports.
+7. **The span target** — a contextually-typed arrow's return mismatch is now
+   reported as one whole-signature TS2322 on the assignment, rendered from the
+   widened union of the types the body actually returned. A block-body arrow
+   never derived its return type from the body, which is why an earlier attempt
+   at this was inert.
+
+Nominal enum *assignability* was tried and reverted; see
+`tests/compat-projects/nominal-enum-display-basic/README.md`.
+
+### Historical: message-text drift (8 targets, span matched) — closed 2026-09-03
 
 | Target | Loc | tsc message | surge message |
 | --- | --- | --- | --- |
@@ -65,7 +119,7 @@ Four recurring classes, all display-level:
 4. **Optional-property union rendering leaks into the target type**
    (`(number) => void | undefined`).
 
-### Span drift (1 target)
+### Historical: span drift (1 target) — closed 2026-09-03
 
 `contextual-return-any-collapse-basic`, 3 of its 6 rows
 (`src/index.ts` lines 21, 42, 45, all TS2322). tsc anchors the diagnostic at the
@@ -95,14 +149,28 @@ pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans
 ```
 
-The strict runs exit non-zero by design when drift exists.
+The strict runs exit non-zero by design when drift exists. Pass
+`--strictMessages --strictSpans` as two separate arguments; the sweep rejects
+them quoted as one.
+
+**Keep the build worktree alive until the measurements are done.** The
+generated default-lib subset is resolved through `env!("CARGO_MANIFEST_DIR")`
+(`crates/surge-ts-checker/src/default_lib/loader.rs`), so a binary built in a
+throwaway worktree stops finding `generated-libs/` the moment that worktree is
+removed — even if the binary itself was copied elsewhere first. The failure is
+silent apart from a `unknown lib 'es2024.full'` warning on stderr, and it
+surfaces as a flood of `TS2304 Cannot find name 'Promise'` on any preset whose
+tsconfig does not pin `lib`. Presets that resolve a physical `lib*.d.ts` set are
+unaffected, so the damage looks target-specific rather than environmental. Note
+that the pinned oracle (`typescript@7.0.2`) ships **no** `lib*.d.ts` files at
+all, which is why the generated fallback carries these fixtures.
 
 ---
 
 # Historical log
 
 **Everything below is a dated record of earlier sweeps.** The registry was 75
-presets at § 1 and 78 by § 10; it is 117 now. Counts, "remaining" lists, and
+presets at § 1 and 78 by § 10; it is 122 now. Counts, "remaining" lists, and
 "stays clean" statements in these sections describe the state at the time of
 that pass only.
 

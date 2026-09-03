@@ -21,7 +21,7 @@ than copying them.
 | Field | Value |
 | --- | --- |
 | Date | 2026-09-03 |
-| Commit | `f63641d` (clean checkout; built and measured from a detached worktree at that commit) |
+| Commit | `b090760` (clean checkout; built and measured from a detached worktree at that commit) |
 | Hardware | Apple M1 Pro (MacBookPro18,1), 10 cores, 16 GiB RAM |
 | OS | macOS 27.0 (build 26A5425a) |
 | Toolchain | rustc 1.94.0, Node v22.23.2, pnpm 11.13.0, TypeScript oracle 7.0.2 |
@@ -48,36 +48,31 @@ unaffected and are recorded; see
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1764 / 1764 passed** |
+| Workspace tests | `cargo nextest run --workspace` | **1786 / 1786 passed** |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **119 / 119 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | 111 / 119 (8 message-text drifts) |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | 118 / 119 (1 span drift) |
-| Oracle preset sweep — both strict flags | same + both | 110 / 119 (the two sets are disjoint) |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **122 / 122 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **122 / 122 passed** |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **122 / 122 passed** |
+| Oracle preset sweep — both strict flags | same + both | **122 / 122 passed** |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
-| Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 1 of 34 |
+| Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 119 presets the
-sweep saw 203 `tsc` diagnostics and 203 `surge-ts` diagnostics, with
-`onlyTsc = 0` and `onlyRust = 0`. Message text and exact span/column are
-**separate, non-gating dimensions** unless the strict flags are passed.
+parity against the upstream TypeScript compiler. Across all 122 presets the
+sweep saw 206 `tsc` diagnostics and 206 `surge-ts` diagnostics, with
+`onlyTsc = 0` and `onlyRust = 0`.
 
-The 9 strict-drifting targets are **unchanged in membership** from the
-2026-09-01 sweep and are inventoried, with their exact message and span deltas,
-in [STRICT_DRIFT_INVENTORY.md § Current snapshot](STRICT_DRIFT_INVENTORY.md#current-snapshot-2026-09-01).
-Only the header counts in that document (117 presets, 199 diagnostics) predate
-this sweep; its drift tables still describe current behavior.
+**Message text and span/column now match on every registered preset.** Both
+strict sweeps are green for the first time — the nine drifting targets recorded
+on 2026-09-01 were closed at this commit, and their deltas plus the fixes are
+kept in
+[STRICT_DRIFT_INVENTORY.md § Current snapshot](STRICT_DRIFT_INVENTORY.md#current-snapshot-2026-09-03).
+The strict flags are still *separate dimensions* — a future preset may reopen
+one without failing the normal gate — so the exit codes remain non-gating in CI
+even though they currently exit zero.
 
 `diagnostics-pack`, the compact emitted-diagnostic fixture, is green at **31/31**
 and passes the normal gate *and* both strict gates.
-
-**No gate is red, but `unnamed` no longer holds the 0/0 it was recorded at on
-2026-09-01.** Its enforced gate is a *count ceiling* of 34 over-reports, not an
-exactness claim, so one surge-only diagnostic still passes; the exactness
-recorded in the previous snapshot does not reproduce. The cause is diagnosed in
-[§ Open over-report](#open-over-report-unnamed) below, and the ceiling is a
-ratchet that should be lowered to 1 once a fixture pins the behavior.
 
 ---
 
@@ -134,9 +129,9 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 119 oracle presets under `tests/compat-projects/`, all green at the normal
-  gate (see the table above).
-- 343 compat-project fixtures in total; the ones not registered as oracle
+- 122 oracle presets under `tests/compat-projects/`, all green at the normal
+  gate **and at both strict gates** (see the table above).
+- 346 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
@@ -155,9 +150,9 @@ Detailed history, drift taxonomies, and burn-down records live in
 | --- | --- | ---: | ---: | --- |
 | **ky** (sindresorhus/ky 2.0.2) | `3419113` | 0 | 0 | **exact** — strict false-positive gate |
 | **ofetch** (unjs/ofetch) | `1dbc37f` | 1 | 1 | **exact** — same file/code/line and message text (TS5108) |
-| **zod** | `912f0f5` | 21 | 22 | 1 surge-only over-report (unchanged) |
-| **unnamed** (local Next.js App Router app) | local | 0 | 1 | 1 surge-only over-report — **was 0/0 on 2026-09-01** |
-| **trpc** | `dfbafa8` | 1244 | 1191 | measured baseline, **not** a parity target |
+| **zod** | `912f0f5` | 21 | 21 | **exact** — every diagnostic matched, message text included |
+| **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
+| **trpc** | `dfbafa8` | 1244 | 1190 | measured baseline, **not** a parity target |
 | **auth-kit** | — | — | — | **not measured** — the project is absent on this machine |
 
 Notes that matter:
@@ -169,68 +164,22 @@ Notes that matter:
   (a ratchet that only moves down) plus a precondition that `tsc` still reports
   0. Both *skip* cleanly when the project or the `typescript` package is absent
   (no third-party source is vendored).
-- **zod** still over-reports by exactly one diagnostic:
-  `packages/zod/src/v3/types.ts:92:42 TS2339 Property 'value' does not exist on
-  type 'INVALID'.` All 21 `tsc` diagnostics are matched, message text included.
-  zod is otherwise the most stable perf benchmark in the corpus.
+- **zod is exact at this commit.** All 21 `tsc` diagnostics are matched at
+  file/code/line *and* message text (21/21). The one long-standing over-report
+  (`packages/zod/src/v3/types.ts:92:42 TS2339`) was a generic type-predicate
+  guard that never narrowed; it is closed. zod remains the most stable perf
+  benchmark in the corpus.
 - **trpc** is a *measured baseline*, never a parity claim. `tsc` itself reports
   over a thousand diagnostics there (many from examples with unresolved
   workspace imports), and the divergence is two-sided. At this commit the
-  file/code/line drift is **207**: 130 diagnostics `tsc` reports and surge does
-  not (led by TS7006 ×38, TS2339 ×29, TS2686 ×12, TS2883 ×10) and 77 surge-only
-  (led by TS2339 ×18, TS7006 ×13, TS2322 ×10). On the 1,114 locations both
+  file/code/line drift is **206**: 130 diagnostics `tsc` reports and surge does
+  not (led by TS7006 ×38, TS2339 ×29, TS2686 ×12, TS2883 ×10) and 76 surge-only
+  (led by TS2339 ×18, TS7006 ×13, TS2322 ×9). On the 1,114 locations both
   compilers agree on, message text matches **1114 / 1114**.
 - `auth-kit` is a private project that is not present on this machine. Its
   last recorded result was 0/0 (see
   [STRICT_DRIFT_INVENTORY.md § 11](STRICT_DRIFT_INVENTORY.md)); that figure is
   **not** carried forward as current, and this snapshot did not run it.
-
-### Open over-report: `unnamed`
-
-One surge-only diagnostic, in a Next.js data-table component:
-
-```
-app/[locale]/application/data-table.tsx:649:67
-TS2322  Type 'undefined' is not assignable to type '() => void'.
-```
-
-**Root cause — a conditional expression checked against an optional property.**
-When an object-literal (or JSX-attribute) value is a conditional expression, each
-branch is checked against the *bare* declared type of the target property, with
-the optionality-implied `undefined` stripped. The `undefined` branch then fails.
-Minimal reproduction, on which `tsc` is silent:
-
-```ts
-interface Props { cb?: () => void; n?: number }
-declare function take(p: Props): void;
-declare const flag: boolean;
-
-take({ cb: undefined });                  // ok
-take({ cb: flag ? () => {} : undefined }); // surge-only TS2322
-take({ n: flag ? 1 : undefined });         // surge-only TS2322
-
-const maybe: (() => void) | undefined = flag ? () => {} : undefined;
-take({ cb: maybe });                       // ok
-```
-
-The bug is **latent, not new**: the reproduction above fails identically on a
-binary built at `37dfb3a`, the previous snapshot commit, where `unnamed` was
-nevertheless 0/0. What changed is reachability — the offending attribute sits
-inside a `return (…)` with no contextual type, and `10a1f5e` ("check a return
-expression that has no expected type") is what began checking that position.
-Bisected by building each commit in a clean worktree and re-running the same
-comparison:
-
-| Commit | `tsc` | `surge-ts` |
-| --- | ---: | ---: |
-| `37dfb3a` (previous snapshot) | 0 | 0 |
-| `27c0b92` (parent of `10a1f5e`) | 0 | 0 |
-| `10a1f5e` (start of the 2026-09-03 work) | 0 | **3** |
-| `f63641d` (this snapshot) | 0 | 1 |
-
-`10a1f5e` introduced all three; two of them (`TS2741`, a missing `href` on a
-`Link` in two email templates) were closed by the 2026-09-03 commits. This one
-was not, and no fixture pins it yet.
 
 ---
 
@@ -250,10 +199,6 @@ snapshot without re-verification and are labelled as such.
   number;` then `const bad: string = f(1)` — `tsc` reports TS2322, surge
   reports nothing. A full overload-resolution implementation exists on a branch
   but is blocked on a measured ~+79% CPU regression.
-- **A conditional expression assigned to an optional property drops the
-  implied `undefined`.** *(found 2026-09-03.)* See
-  [§ Open over-report](#open-over-report-unnamed) — the only known open false
-  positive on a corpus where `tsc` reports nothing.
 - **Module augmentation is lost through a star re-export wrapper.**
   *(re-probed 2026-09-03.)* With `declare module "core"` in a `.d.ts` and
   `export * from "core"` in `wrapper`, importing the augmented interface from
@@ -301,6 +246,20 @@ snapshot without re-verification and are labelled as such.
   binding) each cost three to four times more false positives than they
   recovered. Do not restate the sentinel-suppression claim without a
   reproduction.
+
+### Fixed at this commit (2026-09-03)
+
+- **Every strict-sweep drift.** The nine targets recorded on 2026-09-01 — eight
+  message-text, one span — are closed; both strict sweeps are green. The fixes
+  and the rule that made them safe (display metadata rides on the type *handle*
+  or the diagnostic layer, never the interned payload) are in
+  [STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md).
+- **A conditional assigned to an optional property** no longer reports a
+  surge-only TS2322 on its `undefined` branch, which restored `unnamed` to 0/0.
+- **A generic user-defined type predicate now narrows** (`x is OK<T>` with `T`
+  inferred from the tested argument), which took zod to exact 21/21.
+- **`void` / `delete` / `~` operands are checked.** They previously lowered to a
+  node that dropped the operand, so nothing inside them was ever seen.
 
 ### Previously documented, now fixed (verified 2026-09-01)
 
@@ -374,57 +333,40 @@ projects, hardware, allocators, or build profiles, and they are not a compiler
 comparison.
 
 tRPC monorepo at `.local-projects/trpc`, checkout `dfbafa8` (2026-07-26),
-project mode, `--jobs auto`, cold process over a warm filesystem cache, command
-`surge --project .local-projects/trpc/tsconfig.json --format json --maxDiagnostics 10000 --jobs auto`.
-Measured as an **interleaved A/B**: two release binaries built from clean
-worktrees at `37dfb3a` (the previous snapshot) and `f63641d` (this one), run
-alternately, ten runs each after one warmup per binary.
+project mode, `--jobs auto`, cold process over a warm filesystem cache. Measured
+as an **interleaved A/B** against a release binary built from a clean worktree at
+`f63641d`, the previous snapshot commit: alternating runs, five pairs.
 
-| Metric | `37dfb3a` | `f63641d` |
+| Metric | `f63641d` | `b090760` |
 | --- | ---: | ---: |
-| Peak physical footprint | 1.852–1.861 GB | **1.040–1.053 GB** |
-| Diagnostics emitted | 1,228 | **1,191** |
-| Diagnostic output SHA-256 | `b49dc940…5ceb11b1` | `af8e047d…a5561474` |
-| Wall time, median — **invalid, see caveat** | 13.4 s | 7.9 s |
+| Peak physical footprint | 1.048 GB | **1.086 GB** (+3.7%) |
+| Diagnostics emitted | 1,191 | **1,190** |
+| Wall time, median | 3.88 s | 4.04 s (+4.1%) |
 
-**Peak memory is the reliable result here: a 44% reduction, with each binary's
-ten runs spreading by under 1.5%.** It also cross-validates against the
-previous snapshot, which independently recorded 1.856–1.863 GB for the
-`37dfb3a` binary on 2026-09-01.
+**The +3.7% footprint is the price of this commit's diagnostic display
+metadata** — parameter names, alias names and render flags now ride on every
+`UnionType`/`FunctionType` handle. It reproduced to within 0.2 points across
+every A/B run of the session, including runs on a loaded machine where wall time
+did not. Interning the parameter-name strings is the obvious reduction if it
+needs to come down: `value`/`props`/`event` repeat heavily across a program.
 
-The diagnostic hash is byte-identical across all ten runs of each binary, and a
-separate `--jobs 1` run of `f63641d` produces that same
-`af8e047d…a5561474` — that is the determinism evidence, and it is a stronger
-artifact than any wall-clock median. The `37dfb3a` hash reproduces the value
-recorded in the 2026-09-01 snapshot exactly, which confirms the two snapshots
-measured the same workload.
+The wall-time row is the one quiet-machine measurement of the session; later
+re-runs landed between +3% and +10% under load averages of 25–92 and are not
+quotable. Treat +4% as the honest figure and re-measure before quoting anything
+tighter.
 
-**Wall time was not measured under acceptable conditions and should not be
-quoted as a snapshot number.** The machine carried an unrelated concurrent test
-run (load average 120–145) throughout the window. The evidence that this
-invalidates the absolute figures is direct: the *same* `37dfb3a` binary medians
-at 13.4 s today against the 9.11 s recorded for it on 2026-09-01. Only the
-interleaved ratio survives that, and even it is noisy — per-pair ratios ranged
-0.96×–2.23× over ten pairs (one pair had `f63641d` slower), with a median near
-1.7×. Re-measure on a quiet machine before recording a median here or in
-[BENCHMARKS.md](BENCHMARKS.md).
-
-**Other caveats, all of which still matter:**
+**Caveats, all of which matter:**
 
 - The local tRPC checkout is `dfbafa8`, **not** the `3e0e979` commit pinned by
-  the historical run in [BENCHMARKS.md](BENCHMARKS.md). The workload itself
-  differs, so neither column above is comparable to the older 19.7–19.9 s
-  figures; treat that row as a separate measurement, not a before/after pair.
+  the historical run in [BENCHMARKS.md](BENCHMARKS.md). The workload differs, so
+  neither column is comparable to the older 19.7–19.9 s figures.
 - Peak RSS on this workload varies ±30–50% run to run *in general*; the tight
-  spread observed here is a property of this measurement session, not a
-  guarantee. Memory comparisons require interleaved A/B runs in one session,
-  never two batches measured at different times. See
+  spread here is a property of interleaving, not a guarantee. Memory comparisons
+  require interleaved A/B runs in one session. See
   [BENCHMARKS.md § Methodology](BENCHMARKS.md#methodology).
 - There is no incremental or persistent mode; every run is a full check.
-- A speed number is only meaningful alongside a known diagnostic surface. The
-  surface changed between these two commits (1,228 → 1,191 diagnostics, with
-  trpc file/code/line drift at 207 on the newer one), so this is **not** a
-  like-for-like speed comparison of identical work.
+- The diagnostic surface moved by one (1,191 → 1,190, the optional-property
+  false positive), so this is not a like-for-like comparison of identical work.
 
 Performance history, methodology, and the reproduction recipe live in
 [BENCHMARKS.md](BENCHMARKS.md); the detailed engineering investigations live in
@@ -436,13 +378,12 @@ Performance history, methodology, and the reproduction recipe live in
 
 - **No full TypeScript compatibility claim.** The oracle gate establishes
   parity on the covered fixtures and projects only.
-- **No message-text or span/column parity claim** beyond what the strict
-  sweeps actually show (currently 8 message drifts and 1 span drift across 119
-  presets, all of which still match code-count and file/code/line).
-- **No claim that `unnamed` is at exact parity.** It was 0/0 on 2026-09-01 and
-  is 0/1 here; its enforced gate is a ceiling, not an exactness assertion.
+- **No general message-text or span/column parity claim.** Both strict sweeps
+  are green across the 122 registered presets at this commit, which is a
+  statement about those fixtures — not about arbitrary code. The strict flags
+  stay non-gating so a new preset can record a drift without failing CI.
 - **No claim that trpc matches `tsc`.** It is a workload and a measured
-  baseline.
+  baseline; 206 diagnostics still differ in each direction combined.
 - **No wall-clock performance claim at this commit** — see the caveat above.
 - **No cross-tool performance claim.** `pnpm bench:compilers` exists as a
   developer aid; its output is local-machine-relative and is not a marketing
@@ -538,6 +479,16 @@ Real-project targets are gated on the checkout being present locally
 (`.local-projects/` is gitignored and no third-party source is vendored). When
 a project is absent, record it as *not measured* rather than carrying forward
 an older number as current.
+
+**Do not delete the build worktree until every measurement is finished.** The
+generated default-lib subset resolves through `env!("CARGO_MANIFEST_DIR")`
+(`crates/surge-ts-checker/src/default_lib/loader.rs`), so a binary built in a
+throwaway worktree loses `generated-libs/` as soon as that worktree goes away —
+copying the binary out first does not help. The pinned oracle
+(`typescript@7.0.2`) ships no `lib*.d.ts` of its own, so fixtures that do not
+pin `lib` depend on that fallback and collapse into `TS2304 Cannot find name
+'Promise'` with only a `unknown lib 'es2024.full'` warning on stderr to say
+why.
 
 **Rule of thumb when updating this file:** do not change a number here unless
 you ran the command that produces it. If you are recording someone else's
