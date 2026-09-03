@@ -988,13 +988,19 @@ pub(super) struct PredicateGuardInfo {
     /// under that prefix (see
     /// [`crate::symbols::FunctionSignatureInfo::namespace_prefix`]).
     pub(super) namespace_prefix: Option<std::sync::Arc<str>>,
+    /// The callee's signature, kept so a generic predicate (`x is OK<T>`) can
+    /// infer `T` from the tested argument at the guard site.
+    pub(super) signature: std::sync::Arc<crate::symbols::FunctionSignatureInfo>,
+    /// Position of the tested parameter in `signature.parameter_types`.
+    pub(super) parameter_index: usize,
 }
 
 /// Extracts a user-defined type-predicate guard from a call condition. The
 /// callee's collected signature must declare a non-asserts `param is T`
-/// predicate over a named value parameter, the call must not be generic (an
-/// unsubstituted type parameter in `T` cannot be resolved at the guard site),
-/// and the argument in the tested position must be a bare identifier.
+/// predicate over a named value parameter, the call must not carry explicit
+/// type arguments, and the argument in the tested position must be a bare
+/// identifier. A *generic* predicate is kept: its type parameters are inferred
+/// from the tested argument's own type when the guard is resolved.
 pub(super) fn parse_type_predicate_condition(
     condition: &ParsedExpression,
     signature_of: &mut dyn FnMut(
@@ -1032,9 +1038,6 @@ pub(super) fn parse_type_predicate_condition(
         return None;
     }
     let signature = signature_of(callee_name)?;
-    if !signature.type_parameters.is_empty() {
-        return None;
-    }
     let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = &signature.return_type else {
         return None;
     };
@@ -1053,6 +1056,8 @@ pub(super) fn parse_type_predicate_condition(
         predicate_type,
         declaring_file: signature.declaring_file.clone(),
         namespace_prefix: signature.namespace_prefix.clone(),
+        parameter_index: index,
+        signature,
     })
 }
 

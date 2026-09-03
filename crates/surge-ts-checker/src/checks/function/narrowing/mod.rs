@@ -535,13 +535,112 @@ fn collect_reference_guards<'a>(
     }
 }
 
+/// Binds a generic predicate's type parameters for the guard site. A
+/// non-generic predicate needs none.
+fn predicate_type_argument_substitution(
+    guard: &PredicateGuardInfo,
+    subject_ty: Option<&Type>,
+    ctx: &mut CheckerContext,
+) -> Option<crate::infer::TypeParameterSubstitution> {
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    if guard.signature.type_parameters.is_empty() {
+        return Some(substitution);
+    }
+    // A property path means the tested value is not the whole argument, so the
+    // parameter annotation cannot be matched against the subject's type.
+    if !guard.path.is_empty() {
+        return None;
+    }
+    let subject_ty = subject_ty?;
+    let parameter_type = guard
+        .signature
+        .parameter_types
+        .get(guard.parameter_index)?
+        .as_ref()?;
+    for type_parameter in &guard.signature.type_parameters {
+        substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
+    }
+    crate::checks::call::collect_inferred_type_argument(
+        parameter_type,
+        subject_ty,
+        &mut substitution,
+        false,
+        ctx,
+        0,
+    );
+
+    // A parameter written as an *alias* whose expansion is a union
+    // (`x: SyncParseReturnType<T>` = `OK<T> | DIRTY<T> | INVALID`) leaves nothing
+    // to align the alias's argument against, so `T` stays unbound. The predicate
+    // is still usable: narrowing only ever *filters* the subject's own union
+    // members, so binding the leftovers to `Any` selects the right member and
+    // the members that survive keep their own precision.
+    let unresolved: Vec<&surge_ts_syntax::ParsedTypeParameter> = guard
+        .signature
+        .type_parameters
+        .iter()
+        .filter(|type_parameter| substitution.is_placeholder(&type_parameter.name))
+        .collect();
+    if !unresolved.is_empty() {
+        let mut filled = substitution.clone_with_reason(TypeCopyReason::ScopeOrContext);
+        for type_parameter in unresolved {
+            filled.insert(type_parameter.name.clone(), Type::Any);
+        }
+        return predicate_filters_subject_union(guard, &filled, subject_ty, ctx)
+            .then_some(filled);
+    }
+    Some(substitution)
+}
+
+/// Whether an `Any`-filled predicate would narrow `subject_ty` by *selecting*
+/// among its union members rather than by replacing it wholesale. Only the
+/// selecting outcome is sound when the predicate's type arguments are unknown:
+/// [`super::guards::narrow_by_predicate`] substitutes the predicate itself when
+/// no member matches or the subject is not a union, which would install the
+/// `Any` fillers as real types.
+fn predicate_filters_subject_union(
+    guard: &PredicateGuardInfo,
+    substitution: &crate::infer::TypeParameterSubstitution,
+    subject_ty: &Type,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let Type::Union(union) = subject_ty.peeled() else {
+        return false;
+    };
+    let Some(predicate_ty) = resolve_predicate_type_in_declaring_scope(guard, substitution, ctx)
+    else {
+        return false;
+    };
+    let members = union.types();
+    let matching = members
+        .iter()
+        .filter(|member| surge_ts_types::is_assignable_to(member, &predicate_ty))
+        .count();
+    matching > 0 && matching < members.len()
+}
+
 /// Resolves a predicate guard's target type under the predicate's declaring
 /// file (see [`crate::symbols::FunctionSignatureInfo::declaring_file`]). A
 /// resolution that degrades (`had_error` or the `Unknown` sentinel) proves
 /// nothing — narrowing on it would manufacture facts from a modeling gap — so
-/// it yields `None`.
+/// it yields `None`. A generic predicate needs its `T` bound first, inferred
+/// from `subject_ty`; without a subject type, or when a type parameter stays
+/// unbound and the filled predicate would not merely select among the subject's
+/// union members, the guard is dropped.
 fn resolve_predicate_guard_type(
     guard: &PredicateGuardInfo,
+    subject_ty: Option<&Type>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let substitution = predicate_type_argument_substitution(guard, subject_ty, ctx)?;
+    resolve_predicate_type_in_declaring_scope(guard, &substitution, ctx)
+}
+
+/// Resolves `guard.predicate_type` under the signature's declaring file and
+/// namespace prefix, with `substitution` bound for its type parameters.
+fn resolve_predicate_type_in_declaring_scope(
+    guard: &PredicateGuardInfo,
+    substitution: &crate::infer::TypeParameterSubstitution,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     let declaring_file = guard
@@ -563,7 +662,7 @@ fn resolve_predicate_guard_type(
             guard.predicate_type.clone(),
             ctx,
             &mut Vec::new(),
-            &crate::infer::TypeParameterSubstitution::new(),
+            substitution,
         )
     });
     if guard.namespace_prefix.is_some() {
@@ -602,7 +701,7 @@ fn narrow_predicate_call_in_scope(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let Some(predicate_ty) = resolve_predicate_guard_type(&guard, ctx) else {
+    let Some(predicate_ty) = resolve_predicate_guard_type(&guard, Some(&subject_ty), ctx) else {
         return true;
     };
     let Some(narrowed) = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
@@ -777,7 +876,7 @@ fn narrow_single_guard_for_identifier(
             .and_then(|symbol| symbol.function_signature.clone())
     }) && guard.subject == var_name
     {
-        let predicate_ty = resolve_predicate_guard_type(&guard, ctx)?;
+        let predicate_ty = resolve_predicate_guard_type(&guard, Some(ty), ctx)?;
         return narrow_by_predicate(ty, &predicate_ty, branch_is_true);
     }
     if let Some((ParsedExpression::Identifier { name, .. }, property, literal, eq)) =
@@ -1195,7 +1294,7 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let predicate_ty = resolve_predicate_guard_type(&guard, ctx)?;
+    let predicate_ty = resolve_predicate_guard_type(&guard, Some(&subject_ty), ctx)?;
     let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
     })?;
@@ -1360,7 +1459,7 @@ fn narrow_predicate_reference_guards_in_scope(
     if guard.path.is_empty() {
         return;
     }
-    let Some(predicate_ty) = resolve_predicate_guard_type(&guard, ctx) else {
+    let Some(predicate_ty) = resolve_predicate_guard_type(&guard, None, ctx) else {
         return;
     };
     narrow_reference_in_scope(

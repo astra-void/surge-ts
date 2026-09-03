@@ -78,9 +78,17 @@ pub(crate) fn check_variable_declaration_against_symbols(
     // `typeof <value>` annotation can see locals/globals. The variable checker
     // moves `ctx.symbols` out into `symbols`, so without this the typeof lookup
     // would run against an empty table and spuriously report TS2304.
+
+    // A generic annotation is kept for call-site instantiation; a type-predicate
+    // annotation is kept so `if (isFoo(x))` can narrow — neither is recoverable
+    // from the resolved callable type alone.
     let declared_function_type = match &variable.declared_type {
         Some(surge_ts_syntax::ParsedType::Function(function_type))
-            if !function_type.type_parameters.is_empty() =>
+            if !function_type.type_parameters.is_empty()
+                || matches!(
+                    function_type.return_type.as_ref(),
+                    surge_ts_syntax::ParsedType::Predicate(_)
+                ) =>
         {
             Some(function_type.clone())
         }
