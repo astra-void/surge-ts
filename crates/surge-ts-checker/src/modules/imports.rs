@@ -658,6 +658,14 @@ fn resolve_default_import(
     };
 
     let Some(default_symbol) = export_table.get_shared_value("default") else {
+        // `export = X` has no `default` *value* export, but under
+        // `esModuleInterop` a default import still names that target's type —
+        // `import EventEmitter from "events"` then `extends EventEmitter<T>` has
+        // to resolve. Only the type side: binding the value here instead of the
+        // synthetic `any` exposes express's unresolved handler overloads and
+        // costs ten implicit-any false positives for the three it saves.
+        bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
+
         if allows_synthetic_default_import(ctx, resolved_index, program_files) {
             bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
             return;

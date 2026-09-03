@@ -40,6 +40,17 @@ pub(crate) fn collect_exports_from_statement(
                     *export_assignment_symbol = Some(symbol);
                 }
 
+                // `export = Emitter` makes the target the module's default for an
+                // importer too, type side included — `import Emitter from "events"`
+                // then `class X extends Emitter<T>` has to resolve `Emitter` as a
+                // type. The default import looks the type up under `default`, which
+                // only a literal `export default` would otherwise populate.
+                if let Some(declaration) = local_type_declarations.get(exported_name)
+                    && type_declarations.get("default").is_none()
+                {
+                    let _ = type_declarations.insert("default", declaration.clone());
+                }
+
                 // When the export target is a `declare namespace <name>`, its type
                 // members were collected under `<name>.<member>` keys. Carry them into
                 // the export table so a namespace import (`import * as React`) can
