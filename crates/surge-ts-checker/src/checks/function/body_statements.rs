@@ -1347,13 +1347,16 @@ pub(crate) fn check_function_return_statement(
         // inside a returned object is typed by the constructor, not by the
         // return). Same reasoning as a degraded expectation.
         ctx.degraded_expected_type_depth += 1;
-        let _ = evaluate_expression(
+        let inferred = evaluate_expression(
             expression,
             return_statement.expression_span,
             symbols,
             ctx,
         );
         ctx.degraded_expected_type_depth -= 1;
+        if let InferredExpression::Known(source_type) = inferred {
+            ctx.note_contextual_return_type(&source_type);
+        }
         return;
     };
 
@@ -1386,6 +1389,7 @@ pub(crate) fn check_function_return_statement(
 
     match inferred_expression {
         InferredExpression::Known(source_type) => {
+            ctx.note_contextual_return_type(&source_type);
             // A sentinel anywhere in either side means surge lost part of the
             // shape, so a mismatch reflects the modelling gap rather than the
             // source — the same deep guard the variable-declaration check

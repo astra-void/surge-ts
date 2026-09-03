@@ -1074,7 +1074,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
         insert_parameter_bindings(&parameter, parameter_type, &mut scopes);
     }
 
-    with_type_parameter_scope(type_parameters, ctx, |ctx| {
+    let returned_void_like = with_type_parameter_scope(type_parameters, ctx, |ctx| {
         // A declaration's own frame, never active — it has a real signature, so
         // its returns are checked. Opening one stops a nested declaration from
         // recording into an enclosing arrow's frame.
@@ -1086,13 +1086,14 @@ pub(crate) fn check_function_body_with_signature_and_this(
             &mut flow_state,
             ctx,
         );
-        ctx.close_contextual_return_frame();
+        ctx.close_contextual_return_frame()
     });
 
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
         emit_missing_return_diagnostic(body_flow, missing_return_span, ctx);
     } else if !has_explicit_return_type
         && !is_constructor
+        && !returned_void_like
         && ctx.options.no_implicit_returns
         && body_flow.contains_return_with_value
         && !body_flow.guarantees_exit

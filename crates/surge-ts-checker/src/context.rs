@@ -504,6 +504,11 @@ pub(crate) struct ContextualReturnFrame {
     /// function without its own frame would record into, and be silenced by,
     /// an enclosing arrow's.
     active: bool,
+    /// Whether some `return <expr>` in this body yielded a `void`/`undefined`-
+    /// including type. tsc's `noImplicitReturns` check skips a function whose
+    /// return type admits `undefined` — a falling-through path then returns a
+    /// value the type already allows.
+    returned_void_like: bool,
 }
 
 impl CheckerContext {
@@ -531,12 +536,15 @@ impl CheckerContext {
             .is_some_and(|frame| frame.active)
     }
 
-    pub(crate) fn close_contextual_return_frame(&mut self) {
+    /// Returns whether some return in the closed body yielded a
+    /// `void`/`undefined`-including type.
+    pub(crate) fn close_contextual_return_frame(&mut self) -> bool {
         let Some(frame) = self.contextual_return_frames.pop() else {
-            return;
+            return false;
         };
+        let returned_void_like = frame.returned_void_like;
         if !frame.active || !frame.saw_any_return {
-            return;
+            return returned_void_like;
         }
         // Descending, so earlier indices stay valid as later ones are removed.
         for index in frame.diagnostic_indices.iter().rev() {
@@ -546,6 +554,26 @@ impl CheckerContext {
         }
         // `push_deduplicated` rebuilds its index when the length no longer
         // matches, which is what makes removing entries safe here.
+        returned_void_like
+    }
+
+    /// Records the type a `return <expr>` produced, for the `noImplicitReturns`
+    /// decision. Unlike the mismatch bookkeeping this is not gated on the frame
+    /// being the contextually-checked one — every body needs its own answer.
+    pub(crate) fn note_contextual_return_type(&mut self, ty: &surge_ts_types::Type) {
+        fn admits_undefined(ty: &surge_ts_types::Type) -> bool {
+            match ty {
+                surge_ts_types::Type::Void | surge_ts_types::Type::Undefined => true,
+                surge_ts_types::Type::Union(union) => union.types().iter().any(admits_undefined),
+                surge_ts_types::Type::Reference(reference) => admits_undefined(&reference.resolve()),
+                _ => false,
+            }
+        }
+        if admits_undefined(ty)
+            && let Some(frame) = self.contextual_return_frames.last_mut()
+        {
+            frame.returned_void_like = true;
+        }
     }
 
     pub(crate) fn note_contextual_return_is_any(&mut self) {
