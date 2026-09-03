@@ -336,6 +336,7 @@ export const fixturePresets: Record<string, string> = {
   'literal-intersection-never-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-intersection-never-basic/tsconfig.json'),
   'intersection-degraded-operand-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-degraded-operand-basic/tsconfig.json'),
   'ambient-module-sibling-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-sibling-scope-basic/tsconfig.json'),
+  'optional-property-conditional-undefined-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-property-conditional-undefined-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

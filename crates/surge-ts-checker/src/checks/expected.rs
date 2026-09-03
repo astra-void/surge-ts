@@ -726,9 +726,6 @@ fn evaluate_object_literal_with_expected_type(
             continue;
         };
 
-        let contextual_property_type = with_type_copy_reason(TypeCopyReason::ExpectedType, || {
-            expected_property.ty.clone()
-        });
         let expected_property_type = if expected_property.is_optional() {
             surge_ts_types::union_type(vec![
                 with_type_copy_reason(TypeCopyReason::ExpectedType, || {
@@ -741,6 +738,12 @@ fn evaluate_object_literal_with_expected_type(
                 expected_property.ty.clone()
             })
         };
+        // Without `exactOptionalPropertyTypes` an optional property's type
+        // *includes* `undefined` — tsc folds it in at declaration resolution —
+        // so the contextual type has to carry it. A conditional value is checked
+        // branch by branch against the contextual type, and `flag ? x : undefined`
+        // fails on its `undefined` branch otherwise.
+        let contextual_property_type = expected_property_type.clone();
 
         // A `get`/`set` accessor is written as a function but *is* the property:
         // contextually type it as one returning the expected type, then compare
@@ -791,9 +794,25 @@ fn evaluate_object_literal_with_expected_type(
                 );
                 record_assignability_check();
                 if !is_assignable_to(&actual_type, &expected_property_type) {
-                    let actual_type_name =
-                        source_display_name(&actual_type, &expected_property_type);
-                    let expected_type_name = expected_property_type.name();
+                    // The comparison target carries the optionality-implied
+                    // `undefined`, but tsc's elaboration names the property's
+                    // written type — a value that is not `undefined` failed
+                    // against that, not against the widened union.
+                    let reported_target = if actual_type == Type::Undefined {
+                        &expected_property_type
+                    } else {
+                        &expected_property.ty
+                    };
+                    let actual_type_name = source_display_name(&actual_type, reported_target);
+                    let expected_type_name = reported_target.name();
+                    let (actual_type_name, expected_type_name) =
+                        crate::checks::expr::disambiguated_pair(
+                            &actual_type,
+                            actual_type_name,
+                            reported_target,
+                            expected_type_name,
+                            &ctx.file_name,
+                        );
                     let diagnostic = Diagnostic::ts2322(
                         &actual_type_name,
                         &expected_type_name,

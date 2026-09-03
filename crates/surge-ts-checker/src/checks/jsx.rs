@@ -357,7 +357,7 @@ fn check_attributes(
 
         let expected_property =
             props_object.and_then(|object| object.get_property(&attribute.name));
-        let contextual_type = expected_property.map(|property| property.ty.clone());
+        let contextual_type = expected_property.map(optional_aware_property_type);
 
         let attribute_type = infer_attribute_type(
             attribute,
@@ -445,6 +445,17 @@ fn infer_attribute_type(
     }
 }
 
+/// An optional prop's type includes `undefined` without
+/// `exactOptionalPropertyTypes`, both as the contextual type for its value and
+/// as the target it is compared against.
+fn optional_aware_property_type(property: &ObjectProperty) -> Type {
+    if property.is_optional() {
+        union_type(vec![property.ty.clone(), Type::Undefined])
+    } else {
+        property.ty.clone()
+    }
+}
+
 /// Reports TS2322 when a known prop's value is not assignable to its declared
 /// type, pointing at the attribute name (tsc's span for JSX prop mismatches).
 fn check_known_prop(
@@ -454,11 +465,7 @@ fn check_known_prop(
     fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    let expected_type = if property.is_optional() {
-        union_type(vec![property.ty.clone(), Type::Undefined])
-    } else {
-        property.ty.clone()
-    };
+    let expected_type = optional_aware_property_type(property);
 
     if attribute_type.is_unknown() {
         return;
