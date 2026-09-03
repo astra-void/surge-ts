@@ -468,8 +468,13 @@ fn check_known_prop(
         return;
     }
 
-    let source = source_display_name(attribute_type, &expected_type);
-    let target = expected_type.name();
+    let (source, target) = crate::checks::expr::disambiguated_pair(
+        attribute_type,
+        source_display_name(attribute_type, &expected_type),
+        &expected_type,
+        expected_type.name(),
+        &ctx.file_name,
+    );
     ctx.push(diagnostic_with_syntax_span(
         Diagnostic::ts2322(&source, &target, ctx.file_name.clone()),
         attribute.name_span.or(fallback_span),

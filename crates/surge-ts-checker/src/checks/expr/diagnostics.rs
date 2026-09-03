@@ -128,6 +128,54 @@ pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
     }
 }
 
+/// The declaring file of a named type, recovered from the nominal id both
+/// object aliases and lazy references carry (`<file>\0<name>`).
+fn declaring_file_of(ty: &Type) -> Option<String> {
+    let id = match ty {
+        Type::Object(object) => object.alias_id.as_deref()?,
+        Type::Reference(reference) => reference.id.as_ref(),
+        _ => return None,
+    };
+    let (file, _) = id.split_once('\0')?;
+    (!file.is_empty()).then(|| file.to_string())
+}
+
+/// tsc disambiguates two same-named types by qualifying the non-local one with
+/// the module it came from (`import("/abs/path/to/store").Store`), so a message
+/// never reads `'Store' is not assignable to type 'Store'`. The local side keeps
+/// its bare name.
+pub(crate) fn disambiguated_type_name(ty: &Type, rendered: &str, current_file: &str) -> String {
+    let Some(file) = declaring_file_of(ty) else {
+        return rendered.to_string();
+    };
+    if file == current_file {
+        return rendered.to_string();
+    }
+    let module = [".d.ts", ".d.mts", ".d.cts", ".tsx", ".ts", ".mts", ".cts"]
+        .iter()
+        .find_map(|extension| file.strip_suffix(extension))
+        .unwrap_or(&file);
+    format!("import(\"{module}\").{rendered}")
+}
+
+/// Renders both sides of an assignability diagnostic, qualifying whichever is
+/// non-local when the two would otherwise print the same name.
+pub(crate) fn disambiguated_pair(
+    source: &Type,
+    source_name: String,
+    target: &Type,
+    target_name: String,
+    current_file: &str,
+) -> (String, String) {
+    if source_name != target_name {
+        return (source_name, target_name);
+    }
+    (
+        disambiguated_type_name(source, &source_name, current_file),
+        disambiguated_type_name(target, &target_name, current_file),
+    )
+}
+
 /// Type name for an operand of an operator diagnostic (TS2365/TS2367), matching
 /// tsc, which always widens fresh literal operands for display (e.g.
 /// `1 === "string"` -> `'number'` and `'string'`).

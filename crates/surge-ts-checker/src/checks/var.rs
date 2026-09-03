@@ -155,6 +155,14 @@ pub(crate) fn check_variable_declaration_against_symbols(
                     let inferred_type_name =
                         source_display_name(inferred_initializer_type, declared_type);
                     let declared_type_name = declared_type.name();
+                    let (inferred_type_name, declared_type_name) =
+                        crate::checks::expr::disambiguated_pair(
+                            inferred_initializer_type,
+                            inferred_type_name,
+                            declared_type,
+                            declared_type_name,
+                            &ctx.file_name,
+                        );
                     let diagnostic = Diagnostic::ts2322(
                         &inferred_type_name,
                         &declared_type_name,

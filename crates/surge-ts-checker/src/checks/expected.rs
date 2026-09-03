@@ -1080,8 +1080,13 @@ fn push_expected_type_mismatch(
     diagnostic_kind: ExpectedTypeDiagnostic,
     ctx: &mut CheckerContext,
 ) {
-    let source_type_name = source_display_name(source_type, expected_type);
-    let expected_type_name = expected_type.name();
+    let (source_type_name, expected_type_name) = crate::checks::expr::disambiguated_pair(
+        source_type,
+        source_display_name(source_type, expected_type),
+        expected_type,
+        expected_type.name(),
+        &ctx.file_name,
+    );
     let diagnostic = match diagnostic_kind {
         ExpectedTypeDiagnostic::TypeNotAssignable => Diagnostic::ts2322(
             &source_type_name,
