@@ -306,9 +306,65 @@ pub(crate) fn check_arrow_function_expression(
     check_arrow_function_expression_with_expected_type(arrow, None, symbols, ctx)
 }
 
+/// Emits the whole-signature TS2322 tsc reports when a contextually-typed
+/// arrow's returns do not fit, anchored on the assignment target.
+#[allow(clippy::too_many_arguments)]
+fn emit_contextual_signature_mismatch(
+    parameter_types: &[Type],
+    returned_types: &[Type],
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    is_variadic: bool,
+    required_parameter_count: usize,
+    expected_type: &FunctionType,
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if returned_types.is_empty() {
+        return;
+    }
+    // tsc widens the fresh literals a returned object literal carries, so
+    // `return { ok: "nope" }` renders as `{ ok: string; }`.
+    let returned = crate::checks::expr::widen_type(&surge_ts_types::union_type(
+        returned_types.to_vec(),
+    ));
+    let source = alloc_function_type(
+        parameter_types.to_vec(),
+        returned,
+        is_variadic,
+        required_parameter_count,
+    )
+    .with_parameter_names(signature::written_binding_names(parameters));
+    let source = Type::Function(source);
+    let target = Type::Function(expected_type.clone());
+    let (source_name, target_name) = crate::checks::expr::disambiguated_pair(
+        &source,
+        source.name(),
+        &target,
+        target.name(),
+        &ctx.file_name,
+    );
+    ctx.push(crate::spans::diagnostic_with_syntax_span(
+        Diagnostic::ts2322(&source_name, &target_name, ctx.file_name.clone()),
+        span,
+    ));
+}
+
 pub(crate) fn check_arrow_function_expression_with_expected_type(
     arrow: ParsedArrowFunction,
     expected_type: Option<&FunctionType>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    check_arrow_function_expression_anchored(arrow, expected_type, None, symbols, ctx)
+}
+
+/// [`check_arrow_function_expression_with_expected_type`] with the span tsc
+/// anchors a whole-signature mismatch on — the assignment target, not the
+/// failing return.
+pub(crate) fn check_arrow_function_expression_anchored(
+    arrow: ParsedArrowFunction,
+    expected_type: Option<&FunctionType>,
+    target_span: Option<surge_ts_syntax::TextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> FunctionType {
@@ -447,6 +503,24 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
                     &mut flow_state,
                     ctx,
                 );
+                // tsc reports a contextually-typed arrow whose returns do not fit
+                // as one whole-signature mismatch on the assignment, with the leaf
+                // as nested elaboration. Take the leaf verdicts back and render
+                // that instead.
+                if let Some(returned_types) = ctx.take_contextual_return_mismatch()
+                    && let Some(expected_type) = expected_type
+                {
+                    emit_contextual_signature_mismatch(
+                        &parameter_types,
+                        &returned_types,
+                        &parameters,
+                        function_type.is_variadic(),
+                        function_type.required_parameter_count(),
+                        expected_type,
+                        target_span.or(arrow_span),
+                        ctx,
+                    );
+                }
                 let returned_void_like = ctx.close_contextual_return_frame();
 
                 let contextually_void = expected_type

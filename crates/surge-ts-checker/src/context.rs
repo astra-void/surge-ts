@@ -509,6 +509,11 @@ pub(crate) struct ContextualReturnFrame {
     /// return type admits `undefined` — a falling-through path then returns a
     /// value the type already allows.
     returned_void_like: bool,
+    /// The types this body's `return <expr>`s produced, for rendering the whole
+    /// signature tsc names when a contextually-typed arrow does not fit.
+    /// Collected only for an active frame, and capped — the render only needs a
+    /// faithful union, not every duplicate.
+    returned_types: Vec<surge_ts_types::Type>,
 }
 
 impl CheckerContext {
@@ -569,11 +574,42 @@ impl CheckerContext {
                 _ => false,
             }
         }
-        if admits_undefined(ty)
-            && let Some(frame) = self.contextual_return_frames.last_mut()
-        {
-            frame.returned_void_like = true;
+        if let Some(frame) = self.contextual_return_frames.last_mut() {
+            if admits_undefined(ty) {
+                frame.returned_void_like = true;
+            }
+            if frame.active
+                && frame.returned_types.len() < 16
+                && !frame.returned_types.iter().any(|existing| existing == ty)
+            {
+                frame
+                    .returned_types
+                    .push(surge_ts_types::with_type_copy_reason(
+                        surge_ts_types::TypeCopyReason::ReturnChecking,
+                        || ty.clone(),
+                    ));
+            }
         }
+    }
+
+    /// Takes the return-mismatch verdicts an active frame recorded, removing the
+    /// leaf diagnostics and handing back the types the body actually returned.
+    /// tsc reports one whole-signature mismatch on the assignment instead, so the
+    /// caller renders that from the join of these.
+    pub(crate) fn take_contextual_return_mismatch(&mut self) -> Option<Vec<surge_ts_types::Type>> {
+        let frame = self.contextual_return_frames.last_mut()?;
+        if !frame.active || frame.saw_any_return || frame.diagnostic_indices.is_empty() {
+            return None;
+        }
+        let indices = std::mem::take(&mut frame.diagnostic_indices);
+        let returned_types = std::mem::take(&mut frame.returned_types);
+        // Descending, so earlier indices stay valid as later ones are removed.
+        for index in indices.iter().rev() {
+            if *index < self.diagnostics.len() {
+                self.diagnostics.remove(*index);
+            }
+        }
+        Some(returned_types)
     }
 
     pub(crate) fn note_contextual_return_is_any(&mut self) {

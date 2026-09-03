@@ -1430,8 +1430,20 @@ pub(crate) fn check_function_return_statement(
                 ctx.in_contextual_return_check = was_in_return_check;
             }
         }
-        InferredExpression::UnresolvedIdentifier { .. } => {}
-        InferredExpression::MissingProperty { .. } => {}
-        InferredExpression::Unknown => {}
+        // The expected-type evaluation collapses to the sentinel once it has
+        // reported a leaf mismatch, so the return's own type has to come from the
+        // diagnostic-free path — it is what renders the whole signature tsc names
+        // on the assignment. Only reached on a mismatch inside a contextually
+        // typed body, so this costs nothing on a clean return.
+        InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. }
+        | InferredExpression::Unknown => {
+            if ctx.in_contextual_return_body()
+                && let InferredExpression::Known(source_type) =
+                    crate::infer::infer_expression(expression, symbols, ctx)
+            {
+                ctx.note_contextual_return_type(&source_type);
+            }
+        }
     }
 }

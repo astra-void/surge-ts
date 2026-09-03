@@ -166,9 +166,10 @@ fn evaluate_expression_with_expected_type_inner(
     if let (Type::Function(expected_function_type), ParsedExpression::ArrowFunction(arrow)) =
         (expected_type, expression)
     {
-        let function_type = check_arrow_function_expression_with_expected_type(
+        let function_type = crate::checks::function::check_arrow_function_expression_anchored(
             with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
             Some(expected_function_type),
+            target_span,
             symbols,
             ctx,
         );
@@ -182,9 +183,10 @@ fn evaluate_expression_with_expected_type_inner(
         (expected_type, expression)
     {
         if let Some(call_signature) = expected_object.call_signature() {
-            let function_type = check_arrow_function_expression_with_expected_type(
+            let function_type = crate::checks::function::check_arrow_function_expression_anchored(
                 with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
                 Some(call_signature),
+                target_span,
                 symbols,
                 ctx,
             );
