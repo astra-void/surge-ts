@@ -1,5 +1,11 @@
 # tRPC 5-second program — Stage 0 baseline
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `perf/trpc-5s`, worktree `../surge-ts-trpc-5s`.
 `TRPC_5S_BASELINE_COMMIT = d0e1b4cb2ff7333d0f792fd5e8a5b3288af7c3dd` (current `main`).
 

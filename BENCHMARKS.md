@@ -6,22 +6,67 @@ one commit — none of it is a universal compiler comparison. Comparisons
 against other tools or other configurations must be re-measured on the same
 machine in the same session (see Methodology).
 
-## Recorded run: tRPC repository
+The single current measurement, together with the correctness gates taken at
+the same commit, lives in [CURRENT_STATUS.md](CURRENT_STATUS.md). This document
+carries the methodology, the reproduction recipe, and the recorded-run history.
+
+## Recorded run: tRPC repository (current)
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-09-01 |
+| surge-ts commit | `37dfb3a` (measured from a clean detached worktree) |
+| Fixture | tRPC repository checkout, commit `dfbafa8ef178a5a3d23ef9461caa9494b3ef7f95` (2026-07-26), placed at `.local-projects/trpc` |
+| Hardware | Apple M1 Pro (MacBookPro18,1), 10 cores, 16 GiB RAM |
+| OS | macOS 27.0 (build 26A5425a) |
+| Toolchain | rustc 1.94.0, Node v22.23.2, pnpm 11.13.0 |
+| Build profile | cargo `release` |
+| Allocator | system (the default; see allocator notes below) |
+| Command | `surge --project .local-projects/trpc/tsconfig.json --format json --maxDiagnostics 10000 --jobs <N>`, cold process per run |
+| Run policy | warm filesystem cache, 1 warmup + 5 timed cold-process runs per job level, median reported |
+
+Results:
+
+| Metric | jobs = 1 | jobs = auto |
+| --- | ---: | ---: |
+| Wall time, median | 9.11 s | 9.16 s |
+| Wall time, min / max | 8.72 s / 10.47 s | 8.88 s / 9.46 s |
+| Peak physical footprint (`phys_footprint`) | 1.849–1.857 GB | 1.856–1.863 GB |
+| Diagnostics emitted | 1,228 | 1,228 |
+| Diagnostic output SHA-256 | `b49dc9405ed793cd565d4ef4473541ef389e249d06f00452bfc3b94b5ceb11b1` | identical |
+
+The diagnostic hash pins the complete diagnostic output: it is byte-identical
+across all ten timed runs and between `--jobs 1` and `--jobs auto`. That is the
+determinism artifact, and it is stronger than the wall-clock medians.
+
+Correctness gates at the same commit — workspace tests, the oracle preset
+sweep (normal and both strict dimensions), and the real-project parity matrix —
+are recorded in [CURRENT_STATUS.md](CURRENT_STATUS.md#verification-snapshot).
+
+> **The fixture commit changed.** The historical run below used tRPC
+> `3e0e9793eb7f8c4cfbe70a1dccb72f8d355e3c8b`; the checkout measured above is
+> `dfbafa8`. The workload is therefore not the same one, and the two rows are
+> **not** a before/after pair. `tsc` itself reports a different diagnostic
+> count on the two checkouts (1,282 vs 1,244). Any claim about speedup over
+> time has to re-measure both sides on the same checkout, interleaved, on the
+> same machine.
+
+## Historical recorded run: tRPC repository (2026-07-16)
+
+**Historical — does not describe current behavior or the current fixture.**
+Kept as a measured-at-the-time record.
 
 | Field | Value |
 | --- | --- |
 | Date | 2026-07-16 |
 | surge-ts commit | `6fc9e6c` |
-| Fixture | tRPC repository checkout, commit `3e0e9793eb7f8c4cfbe70a1dccb72f8d355e3c8b`, placed at `.local-projects/trpc` |
+| Fixture | tRPC repository checkout, commit `3e0e9793eb7f8c4cfbe70a1dccb72f8d355e3c8b` |
 | Hardware | Apple M1 Pro, 10 cores, 16 GiB RAM |
 | OS | macOS 27.0 (build 26A5378n) |
 | Toolchain | rustc 1.94.0, Node v24.12.0, pnpm 11.13.0 |
-| Build profile | cargo `release` |
-| Allocator | system (the default; see allocator notes below) |
+| Build profile | cargo `release`; allocator: system |
 | Command | release `surge --project .local-projects/trpc/tsconfig.json` (project mode), cold process per run |
 | Run policy | warm filesystem cache, median of 3 cold-process runs |
-
-Results:
 
 | Metric | jobs = 1 | jobs = auto |
 | --- | ---: | ---: |
@@ -32,15 +77,9 @@ Results:
 | `FunctionType` payloads created | 942,756 | — |
 | Diagnostic output SHA-256 | `4d69a2d5f549616083afa9c9e3bccc3484a8bdc96457988fd1f060b805b5ee59` | identical |
 
-The diagnostic hash pins the complete diagnostic output: it is identical
-between `--jobs 1` and `--jobs auto`, and identical across repeated runs. A
-per-run diagnostic count is intentionally not published here because no
-validated count was recorded alongside this run; the hash is the stronger
-artifact.
-
-Correctness gates at the same commit: workspace tests 1,521/1,521
-(`cargo nextest run --workspace`) and oracle preset sweep 83/83
-(`pnpm run oracle:sweep -- --all --maxDiagnostics 200`).
+Correctness gates recorded at that commit (historical): workspace tests
+1,521/1,521 and oracle preset sweep 83/83. Both counts have since grown; see
+[CURRENT_STATUS.md](CURRENT_STATUS.md) for the current figures.
 
 ## Methodology
 
@@ -76,13 +115,19 @@ Correctness gates at the same commit: workspace tests 1,521/1,521
    pnpm install
    ```
 
-2. Place a tRPC checkout at `.local-projects/trpc`, pinned to the recorded
-   commit (the checkout is not distributed with this repository):
+2. Place a tRPC checkout at `.local-projects/trpc`, pinned to the commit of
+   the run you are reproducing (the checkout is not distributed with this
+   repository). For the current recorded run:
 
    ```bash
    git clone https://github.com/trpc/trpc .local-projects/trpc
-   git -C .local-projects/trpc checkout 3e0e9793eb7f8c4cfbe70a1dccb72f8d355e3c8b
+   git -C .local-projects/trpc checkout dfbafa8ef178a5a3d23ef9461caa9494b3ef7f95
    ```
+
+   For the 2026-07-16 historical run, check out
+   `3e0e9793eb7f8c4cfbe70a1dccb72f8d355e3c8b` instead. Confirm which commit is
+   actually on disk (`git -C .local-projects/trpc rev-parse HEAD`) before
+   recording a number — the two checkouts are different workloads.
 
 3. Build the release CLI:
 
@@ -135,17 +180,25 @@ comparable.
 
 Details for all four live in [scripts/bench/README.md](scripts/bench/README.md).
 
-## Engineering history (same workload, same machine)
+## Engineering history
 
-Both rows below are the tRPC workload above on the same machine, release
-build, system allocator. Earlier optimization stages exist but their exact
-configurations were not recorded well enough to publish.
+**Historical rows — point-in-time records, not current state.** All are the
+tRPC workload on the same machine, release build, system allocator. Earlier
+optimization stages exist but their exact configurations were not recorded well
+enough to publish.
 
-| Stage | Wall median (jobs = 1) | Peak physical footprint |
-| --- | ---: | ---: |
-| Canonical-type-graph stage | 47.42 s | ~3.86 GiB |
-| CPU-optimization pass (commit `6fc9e6c`) | 19.86 s | 3.75–3.88 GiB |
+| Stage | tRPC checkout | Wall median (jobs = 1) | Peak physical footprint |
+| --- | --- | ---: | ---: |
+| Canonical-type-graph stage | `3e0e979` | 47.42 s | ~3.86 GiB |
+| CPU-optimization pass (commit `6fc9e6c`) | `3e0e979` | 19.86 s | 3.75–3.88 GiB |
+| Current recorded run (commit `37dfb3a`) | `dfbafa8` | 9.11 s | ~1.85 GB |
 
-Measurements taken from different binaries, allocators, or build profiles are
-not comparable to this table without re-running both sides interleaved on the
+The last row is on a **different tRPC checkout** than the first two, so the
+column is not a clean progression — see the note under the current recorded
+run. Measurements taken from different binaries, allocators, or build profiles
+are likewise not comparable without re-running both sides interleaved on the
 same machine.
+
+The detailed optimization investigations behind these stages — including the
+designs that were measured and *rejected* — are in [docs/perf/](docs/perf/) as
+point-in-time engineering reports.

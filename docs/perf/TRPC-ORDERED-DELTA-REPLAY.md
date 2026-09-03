@@ -1,5 +1,11 @@
 # tRPC ordered-delta pipelined replay — engineering report & blocker
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `main`, session commits `a7d9a6b` (primitive + tests) and `8c5822f`
 (check-tail integration) on top of `2155be4`. Hardware: Apple M1 Pro (10
 cores), 16 GB, macOS 27.0, rustc 1.94.0, mimalloc, release profile. Fixture:

@@ -4,6 +4,10 @@
 tsc-compatible diagnostics in noEmit-style project checks. `TypeScript` below
 refers to the language/ecosystem being checked, not the project.
 
+This document describes the **design**. For the current measured state — gate
+results, real-project parity, known limitations, feature gates, benchmarks —
+see [CURRENT_STATUS.md](CURRENT_STATUS.md).
+
 This workspace is organized as small crates with stable public façades and internal modules that can evolve without forcing broad API churn.
 
 > Naming note: the public project and reports are named `surge-ts`, and the CLI
@@ -13,6 +17,12 @@ This workspace is organized as small crates with stable public façades and inte
 > `surge::project-has-no-source-files`).
 
 ## Current compatibility baseline
+
+> **Numbers live elsewhere.** The verified gate results, real-project parity
+> matrix, current limitations, and benchmark figures are in
+> [CURRENT_STATUS.md](CURRENT_STATUS.md); the stable/exact-parity contract is in
+> [PUBLIC_API.md](PUBLIC_API.md). This section describes the *shape* of the
+> baseline, not its current counts.
 
 Project mode loads the physical `lib*.d.ts` graph from the pinned local
 `typescript` package by default. Standard/DOM/global library surfaces and the
@@ -26,29 +36,24 @@ representations rather than ambient library declarations. Node core-module
 knowledge, where it exists, is diagnostic/resolution support (e.g. missing-module
 hints), not Node global type synthesis.
 
-Measured state: the auth-kit real-project baseline matches TypeScript exactly
-(0/0), the oracle preset sweep is green across all registered presets (83 at
-commit 6fc9e6c; the count grows as fixtures are added) under the normal gate, and the
-`diagnostics-pack` preset is green. The normal gate is diagnostic code-count and
-file/code/line; message-text and span/column drift are reported but non-gating
-unless `--strictMessages` / `--strictSpans` are passed. Performance notes and
-measurement artifacts live in [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md);
-this baseline is not a claim of full TypeScript, `lib.d.ts`, DOM, Node, or React
-parity.
+The oracle gate is **diagnostic code-count and file/code/line**; message text
+and span/column are separate, non-gating dimensions unless `--strictMessages` /
+`--strictSpans` are passed. Nothing about this baseline is a claim of full
+TypeScript, `lib.d.ts`, DOM, Node, or React parity.
 
 ## Historical version notes
 
-The version-tagged notes throughout this document record how the checker reached
-the current state and do not all describe current behavior. In particular, the
-pre-physical-lib "synthetic built-ins" (v0.72) and "generated default-lib as the
-ambient default" (v0.85) descriptions are historical: physical `lib*.d.ts`
-loading is now the default and the generated subset is a fallback.
+The version-tagged milestone notes that used to sit here have moved to
+[docs/history/ARCHITECTURE-VERSION-NOTES.md](docs/history/ARCHITECTURE-VERSION-NOTES.md).
+They record how the checker reached its current shape and **do not all describe
+current behavior** — in particular the pre-physical-lib "synthetic built-ins"
+(`v0.72`) and "generated default-lib as the ambient default" (`v0.85`)
+descriptions are superseded: physical `lib*.d.ts` loading is the default and the
+generated subset is the fallback. The `v0.x` / `v1.x` labels are internal
+milestone markers, not releases or crate versions
+([CURRENT_STATUS.md § Versioning](CURRENT_STATUS.md#versioning)).
 
-v0.68.1 hardens diagnostic coverage metadata, ensuring that `support = "emitted"` is backed by test and oracle evidence via an emitted-diagnostics manifest. The `diagnostics-pack` fixture is the compact oracle-backed project for supported emitted diagnostics, now pinned to exact parity in the preset sweep. v0.69 supports narrow bare package declaration entrypoints. v0.69.1 hardens/refactors this support. v0.72/v0.72.1 used synthetic built-ins, not physical `lib.d.ts` (since superseded by physical-lib loading). `Array<T>` and `ReadonlyArray<T>` are modeled enough to preserve element diagnostics. v0.81 adds narrow synthetic lowering for `Record`, `Partial`, `Pick`, and `Omit` on top of the mapped-types foundation introduced in v0.80.1. v0.85 added a generated default-lib foundation from the local TypeScript package and loaded those generated declarations as ambient default libs; that path is now the fallback behind physical-lib loading, and `noLib: true` disables both. Full lib.d.ts parity remains future work. v0.82 hardens project/file discovery so project mode cannot silently compare as zero diagnostics when the project surface was never loaded; it also makes `.tsx` visibility explicit without claiming JSX support.
-
-v0.48 introduced the crate-level module split across types, diagnostics, config, syntax, and checker. v0.48.1 finishes the checker/config/syntax hardening pass by moving the remaining internals into focused submodules while keeping the public crate-root APIs stable.
-
-v1.2.5 continues that direction inside `surge-ts-checker` by decomposing the largest checker internals from single files into directory submodules, with no public-API change: `checks/call/` (`mod`, `builtins`, `property`, `instantiate`), `checks/function/` (`mod`, `signature`, `body`, `narrowing`), `infer/expression/` (`mod`, `literals`, `operators`, `access`, `functions`), `infer/types/` (`mod`, `resolve`, `interface`, `utility`, `cache`, `diagnostics`), `modules/` (`mod`, `imports`, `exports`, `resolution`, `diagnostics`), `program/` (`mod`, `binding`, `statements`, `globals`, `ambient`), and `flow/` (`mod`, `branch`, `expr`, `facts`). Counter instrumentation also moved into a dedicated `metrics` module gated behind `--timings`.
+## Crate layout
 
 | Crate | Responsibility |
 | --- | --- |
@@ -59,6 +64,9 @@ v1.2.5 continues that direction inside `surge-ts-checker` by decomposing the lar
 | `surge-ts-config` | `tsconfig.json` loading, normalization, and file discovery |
 | `surge-ts` | Embeddable umbrella crate: `Project` (config load, package/`paths` resolution, default-lib loading, import-graph expansion) plus re-exported checker APIs |
 | `surge-ts-cli` | CLI orchestration (built on `surge-ts`) |
+
+A second table, mapping each crate to its role plus the codegen crate, is in
+[§ Naming](#naming).
 
 ## Checking pipeline
 
@@ -148,15 +156,21 @@ Cross-cutting performance rules:
 - New feature work should land in focused modules, not in crate root files.
 - Public crate-root exports should stay stable unless a breaking change is intentional.
 - Internal helpers should prefer `pub(crate)` visibility.
-- Minimal interfaces are currently implemented as shared type declarations that
-  lower to object types in the syntax/checker split; future phases should keep
-  that surface small until extends, members, and merging are intentionally added.
-- Checker inference is split into expression inference and parsed type resolution or language-service
-  behavior into the Rust crates.
-- Future phases should add new modules for interfaces, arrays/tuples, and imports/exports rather than re-expanding monolithic files; literal types are already represented and should be hardened in-place before broader type-system expansion.
-- Config, syntax, and checker logic should stay in their dedicated submodule trees rather than returning to crate-root files.
-- After v0.61, the next phase should still be chosen from `--compatReport`
-  output, not from a fixed feature wish list.
+- Checker inference is split into expression inference and parsed-type
+  resolution; keep those two responsibilities separate.
+- New feature work should add focused modules rather than re-expanding
+  monolithic files. Config, syntax, and checker logic stay in their dedicated
+  submodule trees rather than returning to crate-root files.
+- The next phase should be chosen from measured output — the oracle sweep and
+  `--compatReport` — not from a fixed feature wish list.
+
+  > Historical note: earlier revisions of this section described interfaces,
+  > arrays/tuples, literal types, and imports/exports as *future* work with
+  > deliberately minimal surfaces. All of those have landed and are pinned by
+  > oracle presets; see [PUBLIC_API.md](PUBLIC_API.md) § 2 for the verified
+  > feature areas. The "Suggested Homes For Future Features" table below is
+  > kept as a routing guide for where such work belongs, not as a list of what
+  > is missing.
 
 ## Suggested Homes For Future Features
 
@@ -205,7 +219,8 @@ flag details.
 
 ## Declaration Ingestion
 
-v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable before any package or lib discovery work lands.
+The `.d.ts` ingestion surface below is current behavior (it originated in the
+`v0.64`/`v0.65` milestones).
 
 - Loaded `.d.ts` files can contribute ambient globals and exact `declare module "pkg"` blocks.
 - Ambient modules resolve before package import stubbing fallback.
@@ -213,7 +228,7 @@ v0.65 hardens the v0.64 `.d.ts` foundation so ambient behavior is predictable be
 - Duplicate `interface` declarations merge (same file, across global files, reopened `declare module` blocks, and `declare global`); a conflicting property type reports TS2717 with the first declaration winning. Duplicate ambient `var`/`const`/`function` globals stay first-wins / pinned.
 - A `declare module "pkg"` block in a module file augments an already-resolved target (merging exported interfaces, adding new exported functions/types); augmenting an unresolved target keeps the TS2307 no-cascade policy.
 - Unsupported declaration syntax stays parser-safe and emits a stable pinned diagnostic.
-- Current project mode supports focused declaration-side modern package resolution (conditional/pattern `exports`, `imports`, `typesVersions`, self-name), configured `@types`/`typeRoots`, class/static/constructor semantics, physical `lib*.d.ts` loading by default (generated subset as fallback), JSX props checking, and a narrow declaration-merging/module-augmentation slice. Full automatic `@types` discovery, full `lib.d.ts`/Node parity, and full TypeScript parity remain out of scope. `baseUrl` non-relative specifier resolution is supported in the loader (the option is deprecated upstream but honored for compatibility).
+- Current project mode supports declaration-side modern package resolution (conditional/pattern `exports`, `imports`, `typesVersions`, self-name), `types`/`typeRoots` and `@types` discovery under TypeScript 6/7 semantics (including the `types: ["*"]` wildcard — see [crates/surge-ts-cli/AUTO_TYPES.md](crates/surge-ts-cli/AUTO_TYPES.md)), recursive `/// <reference types="…" />` following from dependency declaration files, class/static/constructor semantics, physical `lib*.d.ts` loading by default (generated subset as fallback), JSX props checking, and a declaration-merging/module-augmentation slice. `baseUrl` non-relative specifier resolution is supported in the loader (the option is deprecated upstream but honored for compatibility). Full `lib.d.ts`/DOM/Node parity, full runtime/JS package resolution, and full TypeScript parity remain out of scope; the current gap list is in [CURRENT_STATUS.md](CURRENT_STATUS.md#known-limitations).
 
 ## Naming
 

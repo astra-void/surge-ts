@@ -1,5 +1,10 @@
 # Member-level lazy interface expansion — design (2026-08-28)
 
+> **Design reference, not a status report.** It describes an intended or
+> in-progress design; the numbers it quotes are from the date it was
+> written. Whether the design has landed, and under which feature gate, is
+> recorded in [CURRENT_STATUS.md](../../CURRENT_STATUS.md).
+
 Status: designed, Stage 1 in progress. Successor to the degraded-peel pin
 (`LazyInstantiation.degraded_memo`) and the deferral tiers in
 `resolve/named.rs`. Prereq for flipping `SURGE_AMBIENT_BLOCK_IMPORTS` on by

@@ -1,5 +1,11 @@
 # tRPC: thin exportable-value collection — 10.5s → 8.2s (−21%)
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `perf/thin-preliminary-values`. The session started from the
 5-second-goal arithmetic: frontend ~1.4s is squeezed, the parallel paths
 (check, analysis) are all measured at wall parity, so the only route runs

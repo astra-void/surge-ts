@@ -132,8 +132,8 @@ Selection rules (in `surge_ts_config::paths`):
   `baseUrl` when set, else the config directory. Oracle note (tsc 7.0.2):
   `baseUrl` itself is flagged TS5102 and non-relative targets TS5090 at the
   *config* level, but resolution still succeeds against the config directory
-  — surge matches the resolution behavior; the config diagnostics are
-  deferred.
+  — surge matches the resolution behavior. TS5102/TS5108 are emitted (see
+  below); TS5090 is still deferred.
 * When no pattern matches and `baseUrl` is set, the bare specifier resolves
   against `baseUrl` directly.
 
@@ -213,5 +213,8 @@ Inputs that could order-depend and how they are pinned:
   ends resolution (no `node_modules` fallback). surge's `paths` pass and
   package-declaration pass are independent, so such a specifier can still
   resolve as a package. Pre-existing divergence, kept for now.
-* Config-level diagnostics TS5090 (non-relative `paths` target without
-  `baseUrl`) and TS5102 (`baseUrl` removed in TS7).
+* Config-level diagnostic TS5090 (non-relative `paths` target without
+  `baseUrl`). **Not** TS5102/TS5108 — removed-compiler-option reporting is
+  implemented in the CLI (`crates/surge-ts-cli/src/main.rs`, table in
+  `crates/surge-ts-config/src/removed_options.rs`) and is what makes the
+  `ofetch` corpus match exactly.

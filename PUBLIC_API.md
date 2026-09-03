@@ -10,6 +10,11 @@ For the full measured-compatibility record (including in-progress areas, drift
 categories, and historical notes), see [`REAL_PROJECT_COMPAT.md`](REAL_PROJECT_COMPAT.md).
 Anything **not** listed here should be treated as unstable or out of scope.
 
+This document is the **contract**, not the status board. It deliberately avoids
+volatile counts (preset totals, test totals, per-project diagnostic numbers,
+benchmark medians) — those live in [`CURRENT_STATUS.md`](CURRENT_STATUS.md) and
+are re-measured there.
+
 ---
 
 ## 1. Public API
@@ -234,29 +239,40 @@ a regression gate** — diagnostic code-count and file/code/line match — on th
 fixtures and projects listed below. These are guarded by the oracle harness and
 cargo fixtures, so a regression fails CI.
 
-### 2.1 Real projects at exact `0/0`
+### 2.1 Real projects held at exact parity
 
-| Project | Shape | Status |
+| Project | Shape | Gate |
 | --- | --- | --- |
-| **auth-kit** | TypeScript backend (`class`/`declare class` heritage, `NextRequest` shape, 65 files) | `tsc = 0`, surge `= 0`; exact match. Regression-pinned. |
-| **ky** | [sindresorhus/ky](https://github.com/sindresorhus/ky) 2.0.2 Fetch-API/DOM (`exactOptionalPropertyTypes`, ~29 files) | `tsc = 0`, surge `= 0`; exact match. Gated by `pnpm run real:ky:test`. |
+| **ky** | [sindresorhus/ky](https://github.com/sindresorhus/ky) 2.0.2 Fetch-API/DOM (`exactOptionalPropertyTypes`, ~29 files) | `pnpm run real:ky:test` — strict false-positive corpus (`tsc = 0`) |
+| **unnamed** | local Next.js App Router app (`moduleResolution: bundler`, `jsx: react-jsx`, `strict`, `paths`) | `pnpm run real:unnamed:test` — strict false-positive corpus (`tsc = 0`) |
+| **auth-kit** | TypeScript backend (`class`/`declare class` heritage, `NextRequest` shape, 65 files) | `pnpm run real:auth-kit` — strict false-positive corpus (`tsc = 0`), private project |
 
-Both are strict false-positive corpora: `tsc` reports `0`, so any surge
-diagnostic would be a regression. The gates **skip** cleanly when the project or
-the `typescript` package is absent (the source is never vendored).
+A strict false-positive corpus is one where `tsc` reports zero diagnostics, so
+*any* surge diagnostic is a regression rather than a judgement call. The gates
+**skip** cleanly when the project or the `typescript` package is absent (the
+source is never vendored) — a skipped gate is not a passing gate. Which of
+these was last actually measured, and with what result, is recorded in
+[`CURRENT_STATUS.md`](CURRENT_STATUS.md#real-project-compatibility).
 
-> Note: ky's source-level parity is `0/0`, but three non-zero suppression
+`ofetch` is additionally held at exact parity on a non-zero baseline (`tsc`
+reports one `TS5108`, matched by surge at the same file/code/line and message
+text).
+
+> Note: ky's source-level parity is exact, but three non-zero suppression
 > counters (`suppressedRustOnly`, `suppressedDeclaration`, `externalModuleStubs`)
-> are still pending a transparency audit — see `REAL_PROJECT_COMPAT.md`. The
-> source-file comparison itself is exact.
+> are still pending a transparency audit — see
+> [`crates/surge-ts-checker/SUPPRESSED_DIAGNOSTICS_AUDIT.md`](crates/surge-ts-checker/SUPPRESSED_DIAGNOSTICS_AUDIT.md).
+> The source-file comparison itself is exact.
 
 ### 2.2 Oracle-gated preset registry
 
-The oracle preset sweep holds a registry of **~77 fixtures** at the normal gate
-(code-count and file/code/line). The `diagnostics-pack` preset is held at exact
-**31/31** emitted-diagnostic parity (duplicate-declaration TS2451/TS2393, TDZ
-TS2448+TS2454, missing-return TS2355/TS2366 span placement, use-site
-generic-arity TS2314/TS2315).
+Every fixture registered in `scripts/oracle/compare-tsc.ts` is held at the
+normal gate (code-count and file/code/line). The registry grows as fixtures are
+added; the current count and its last verified result are in
+[`CURRENT_STATUS.md`](CURRENT_STATUS.md#gates). The `diagnostics-pack` preset is
+held at exact **31/31** emitted-diagnostic parity (duplicate-declaration
+TS2451/TS2393, TDZ TS2448+TS2454, missing-return TS2355/TS2366 span placement,
+use-site generic-arity TS2314/TS2315).
 
 Run the gate:
 
@@ -326,23 +342,43 @@ The verified feature areas (each backed by one or more gated presets):
   DOM-physical-lib props, generic-angle disambiguation, unresolved-no-cascade.
 
 > **Scope boundary:** JSX support is parser-safe element/prop validation, **not**
-> full React contextual typing or the JSX transform. Broad React/JSX contextual
-> callback inference (TS7031/TS7006), generated Next.js route types, namespaces,
-> and enums remain **out of scope** — see `REAL_PROJECT_COMPAT.md` §unnamed.
+> full React contextual typing or the JSX transform. Prop mismatches on
+> *type-parameter-dependent* props of generic components are still missed, and
+> full React/JSX contextual inference and generated Next.js route types remain
+> out of scope. (Namespaces and enums are no longer in this list — both are
+> modelled and gated by presets; the older "namespaces and enums are out of
+> scope" phrasing is historical.) The current gap list is in
+> [`CURRENT_STATUS.md`](CURRENT_STATUS.md#known-limitations).
 
 ---
 
 ## 3. How to re-verify
 
 ```bash
-cargo nextest run --workspace          # Rust crates incl. gated fixtures
-pnpm run oracle:test                   # oracle preset gate
-pnpm run real:ky:test                  # ky 0/0 gate (skips if absent)
+cargo nextest run --workspace
+```
+
+```bash
+pnpm run oracle:test
+```
+
+```bash
 pnpm run oracle:sweep -- --all --maxDiagnostics 200
+```
+
+```bash
+pnpm run real:ky:test
+```
+
+```bash
+pnpm run real:unnamed:test
 ```
 
 A target fails the gate only on diagnostic code-count or file/code/line
 mismatch; message-text and span/column drift are reported but non-gating unless
-`--strictMessages` / `--strictSpans` is passed.
-</content>
-</invoke>
+`--strictMessages` / `--strictSpans` is passed. The real-project gates *skip*
+when the project or the `typescript` package is absent — check the output, a
+skip is not a pass.
+
+The last recorded results for all of these are in
+[`CURRENT_STATUS.md`](CURRENT_STATUS.md#verification-snapshot).

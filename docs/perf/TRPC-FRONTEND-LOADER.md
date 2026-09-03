@@ -1,5 +1,11 @@
 # tRPC frontend loader — session report (2026-07-20)
 
+> **Historical engineering report — a point-in-time record.** It documents a
+> specific investigation as it stood on its own date and does **not**
+> describe current behavior, current counts, or current performance. For the
+> current state see [CURRENT_STATUS.md](../../CURRENT_STATUS.md); for
+> benchmark methodology see [BENCHMARKS.md](../../BENCHMARKS.md).
+
 Branch `perf/frontend-loader-io`, commits `28c3113..4a2c28d` on top of `c1cf8c9`.
 Hardware: Apple M1 Pro (10 cores), 16 GB, macOS 27.0, release profile.
 Fixture: `.local-projects/trpc`. Canonical command:

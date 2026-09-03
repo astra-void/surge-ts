@@ -75,13 +75,17 @@ Default mode for unresolved packages:
 - keeps unknown stubs
 - leaves relative missing modules and resolved package declaration errors unchanged
 
-## Still Unsupported
+## Support surface
 
-These forms remain intentionally out of scope for v0.70.1:
+> Updated 2026-09-01. Several entries in this section previously listed
+> already-landed features as unsupported; the corrections are inline below. The
+> current gap list is in
+> [CURRENT_STATUS.md](../../CURRENT_STATUS.md#known-limitations).
 
 - Modern package declaration resolution is supported on the declaration side: conditional and pattern `exports`, the `imports` field, `typesVersions`, package self-name imports, and exact subpaths. Full runtime/JS entrypoint resolution and `main` parity remain out of scope.
 - explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
-- `baseUrl` resolution remains unsupported/deprecated
+- `baseUrl` non-relative specifier resolution **is** supported in the loader
+  (the option is deprecated upstream but honored for compatibility)
 - Project mode loads the physical `lib*.d.ts` graph from the local TypeScript package as ambient default libs by default; the generated default-lib subset is the fallback used only when that package cannot be found. `noLib: true` disables both, keeping standard/DOM globals unavailable. `@types` discovery is supported through configured `compilerOptions.types`/`typeRoots`; full automatic `@types` discovery and full lib.d.ts/Node parity remain out of scope.
 - The v0.64/v0.65 declaration-ingestion foundation supports a small loaded `.d.ts` ambient subset, including exact `declare module "pkg"` blocks.
   - Ambient modules and resolved package entrypoints resolve before package stubbing.
@@ -89,10 +93,13 @@ These forms remain intentionally out of scope for v0.70.1:
   - Reopened ambient module declarations and module augmentations merge their exported interfaces (declaration merging) within the supported subset; full namespace/enum/overload-ordering merging is out of scope.
   - Exact specifier only.
   - No wildcard ambient module support.
-- `import = require(...)`
-- `export =`
-- Mixed default + named imports
-- CommonJS semantics
+- `import = require(...)` and `export =` **are** supported for the
+  declaration-side surface, gated by the `node-decl-callable-namespace-basic`,
+  `package-types-export-equals-*`, and `package-types-import-require-*`
+  fixtures. Callable-function + namespace merging through `export =` works;
+  the *same-file* merge still drops callability (false TS2349).
+- Still out of scope: mixed default + named imports in a single clause, full
+  CommonJS runtime semantics, and full runtime/JS entrypoint resolution.
 
 ## Notes
 

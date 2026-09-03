@@ -28,9 +28,12 @@ Alias limitations:
   type-parameter substitution
 - constraints are parsed and stored but are not enforced yet
 - explicit `paths` aliases and declaration-only package entries share the same internal resolved module map
-- `baseUrl` resolution remains unsupported/deprecated
-- full package resolution remains unsupported
-- full tsconfig path ecosystem features such as rootDirs/projectReferences remain unsupported
+- `baseUrl` non-relative specifier resolution **is** supported in the loader
+  (deprecated upstream, honored for compatibility) — the earlier "unsupported"
+  line here was stale
+- full **runtime/JS** package resolution remains unsupported; the
+  declaration side resolves `exports`/`imports`/`typesVersions`/self-name
+- `rootDirs` and project references remain unsupported
 - program-mode relative module visibility now includes default imports,
   namespace imports, named re-exports, type-only re-exports, and star
   re-exports for loaded `.ts` files

@@ -8,6 +8,11 @@ changes in these areas require an interleaved before/after benchmark and an
 oracle sweep (see the "Performance and correctness guardrails" section of
 [AGENTS.md](../AGENTS.md)).
 
+These rules are current and enforceable. The measured *results* of past
+optimization work are point-in-time records and live in
+[docs/perf/](perf/); the current measured state is
+[CURRENT_STATUS.md](../CURRENT_STATUS.md).
+
 ## Checker-context rules
 
 - **Never deep-clone `CheckerOptions`.** `CheckerContext.options` is an
@@ -147,8 +152,23 @@ Notes on individual patterns:
   `UnionType::new`, `ObjectType::new`); `Arc::new` on a fresh payload is the
   miss/fallback path only.
 
-## Future / experimental (not implemented)
+## Retained-memory model (implemented)
 
-Retained-memory reduction (a region-store redesign and related work) is being
-explored on a separate branch. Nothing in this document describes it, and no
-current code implements it.
+The retained-memory program landed as the series ending at `8f0c3a9`; the
+region model, its reset/drop boundaries, and the mechanisms later work must
+preserve are documented in
+[crates/surge-ts-checker/MEMORY_REGIONS.md](../crates/surge-ts-checker/MEMORY_REGIONS.md),
+with the measurement evidence and the rejected designs in
+[MEMORY-OPTIMIZATION-REPORT.md](MEMORY-OPTIMIZATION-REPORT.md). The
+memory-lifetime rules that changes in this area must obey are listed in
+[AGENTS.md](../AGENTS.md) § "Memory-Lifetime Rules".
+
+Designs that were evaluated and **deliberately not implemented** (a pooled
+`WorkerScratch`, in-place `resolved_named_types` reuse, per-file
+`lazy_resolution_snapshot` clearing, borrowed statement checking) are listed
+with their reasoning in `MEMORY_REGIONS.md` § "Evaluated and deliberately not
+implemented". Do not re-propose them without new measured evidence.
+
+> An earlier revision of this section said the retained-memory work was
+> "being explored on a separate branch" with "no current code implementing
+> it". That is no longer true.
