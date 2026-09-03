@@ -335,6 +335,21 @@ pub(crate) fn infer_expression(
                 },
             }
         }
+        // An IIFE and friends: the callee is an arbitrary expression, so its type
+        // is inferred rather than looked up by name. Unlike `OptionalCall` the
+        // result is not widened with `undefined`.
+        ParsedExpression::ExpressionCall { callee, .. } => {
+            match infer_expression(callee, symbols, ctx) {
+                InferredExpression::Known(Type::Function(function_type)) => {
+                    InferredExpression::Known(clone_type_with_metrics(
+                        function_type.return_type(),
+                        CopySource::CallReturn,
+                    ))
+                }
+                InferredExpression::Known(Type::Any) => InferredExpression::Known(Type::Any),
+                _ => InferredExpression::Unknown,
+            }
+        }
         ParsedExpression::OptionalCall { callee, .. } => {
             let callee_type = match infer_expression(callee, symbols, ctx) {
                 InferredExpression::Known(ty) => ty,

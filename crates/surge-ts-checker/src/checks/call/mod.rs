@@ -495,6 +495,57 @@ pub(crate) fn check_new_like(
     }
 }
 
+/// Checks a call whose callee is an arbitrary expression (an IIFE, a call on a
+/// call). The callee and the arguments are always evaluated so everything
+/// written inside them is checked; the result is the callee's return type.
+pub(crate) fn check_expression_call(
+    callee: &surge_ts_syntax::ParsedExpression,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let callee_result = evaluate_expression(callee, callee_span, symbols, ctx);
+
+    let callee_type = match callee_result {
+        InferredExpression::Known(ty) => ty.peeled(),
+        _ => {
+            ctx.degraded_expected_type_depth += 1;
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            ctx.degraded_expected_type_depth -= 1;
+            return None;
+        }
+    };
+
+    match callee_type {
+        Type::Function(function_type) => check_function_type_call(
+            &function_type,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ),
+        // A callee surge could not reduce to a signature still has one for tsc,
+        // so the arguments are evaluated under a degraded expectation: their own
+        // diagnostics surface, but an implicit-any report describing surge's
+        // missing contextual type does not (`describe.each(cases)(name, cb)`).
+        _ => {
+            ctx.degraded_expected_type_depth += 1;
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            ctx.degraded_expected_type_depth -= 1;
+            None
+        }
+    }
+}
+
 pub(crate) fn check_optional_call_like(
     callee: &surge_ts_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,

@@ -386,7 +386,8 @@ pub(crate) fn check_expression_flow_impl(
         ParsedExpression::OptionalPropertyCall { object, .. } => {
             check_expression_flow_impl(object, fallback_span, flow_state, statement_index, ctx)
         }
-        ParsedExpression::OptionalCall { callee, .. } => {
+        ParsedExpression::OptionalCall { callee, .. }
+        | ParsedExpression::ExpressionCall { callee, .. } => {
             check_expression_flow_impl(callee, fallback_span, flow_state, statement_index, ctx)
         }
         ParsedExpression::NullishCoalescing { left, right, .. } => {

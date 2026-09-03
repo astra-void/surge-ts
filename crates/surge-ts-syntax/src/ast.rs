@@ -757,6 +757,16 @@ pub enum ParsedExpression {
         type_arguments: Vec<ParsedType>,
         arguments: Vec<ParsedCallArgument>,
     },
+    /// A call whose callee is neither a bare identifier nor a static member —
+    /// an IIFE (`(() => { … })()`), a call on a call, a parenthesized
+    /// expression. Without it the whole call (and everything written inside the
+    /// callee) parsed to `Unknown` and was never checked.
+    ExpressionCall {
+        callee: Box<ParsedExpression>,
+        callee_span: Option<TextSpan>,
+        type_arguments: Vec<ParsedType>,
+        arguments: Vec<ParsedCallArgument>,
+    },
     NullishCoalescing {
         left: Box<ParsedExpression>,
         left_span: Option<TextSpan>,
