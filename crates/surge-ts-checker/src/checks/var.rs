@@ -78,6 +78,14 @@ pub(crate) fn check_variable_declaration_against_symbols(
     // `typeof <value>` annotation can see locals/globals. The variable checker
     // moves `ctx.symbols` out into `symbols`, so without this the typeof lookup
     // would run against an empty table and spuriously report TS2304.
+    let declared_function_type = match &variable.declared_type {
+        Some(surge_ts_syntax::ParsedType::Function(function_type))
+            if !function_type.type_parameters.is_empty() =>
+        {
+            Some(function_type.clone())
+        }
+        _ => None,
+    };
     let declared_type = variable.declared_type.map(|declared_type| {
         let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
         let resolved = map_parsed_type(declared_type, ctx);
@@ -199,6 +207,14 @@ pub(crate) fn check_variable_declaration_against_symbols(
         }
         _ => None,
     };
+    // An explicit *generic* function-type annotation supplies the callable
+    // shape, but not the parsed return annotation a call with explicit type
+    // arguments needs to re-resolve.
+    let function_signature = function_signature.or_else(|| {
+        declared_function_type.as_ref().map(|function_type| {
+            crate::checks::function::function_type_signature_info(function_type, &ctx.file_name)
+        })
+    });
 
     declared_type.or(inferred_symbol_type).map(|ty| {
         Arc::new(SymbolInfo {

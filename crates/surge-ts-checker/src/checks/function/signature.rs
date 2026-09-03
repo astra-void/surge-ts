@@ -641,6 +641,35 @@ pub(crate) fn function_signature_info(
     })
 }
 
+/// [`function_signature_info`] for a value whose *annotation* is a generic
+/// function type (`declare const f: <T>() => Box<T>`, or an arrow assigned to an
+/// annotated binding). Without it a call supplying explicit type arguments had
+/// nothing to re-resolve the return annotation against, so the result kept the
+/// uninstantiated `Box<T>` and degraded — vitest's
+/// `__getSpy<OnError>()` then read as not callable.
+pub(crate) fn function_type_signature_info(
+    function_type: &surge_ts_syntax::ParsedFunctionType,
+    declaring_file: &str,
+) -> Arc<FunctionSignatureInfo> {
+    let value_parameters = function_type
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this);
+    Arc::new(FunctionSignatureInfo {
+        type_parameters: function_type.type_parameters.clone(),
+        parameter_types: value_parameters
+            .clone()
+            .map(|parameter| Some(parameter.ty.clone()))
+            .collect(),
+        parameter_names: value_parameters
+            .map(|parameter| parameter.name.clone())
+            .collect(),
+        return_type: Some((*function_type.return_type).clone()),
+        declaring_file: Some(Arc::from(declaring_file)),
+        namespace_prefix: None,
+    })
+}
+
 /// [`function_signature_info`] for a member published under a qualified
 /// `ns.member` key. Instantiation re-resolves the written annotations, whose
 /// bare sibling names (`Dispatch` inside `React.useState`) only resolve under

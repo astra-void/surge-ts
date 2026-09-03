@@ -141,6 +141,7 @@ fn lower_enum_declaration(
                 properties,
                 string_index_type: None,
                 call_signature: None,
+                construct_signature: None,
             }))),
             initializer: None,
             initializer_span: None,

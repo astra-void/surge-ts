@@ -284,6 +284,18 @@ pub(crate) fn resolve_object_type(
             resolved_object = resolved_object.with_call_signature(function_type);
         }
     }
+    if let Some(construct_signature) = object_type.construct_signature.as_deref() {
+        let resolved = resolve_parsed_type(
+            ParsedType::Function(std::sync::Arc::new(construct_signature.clone())),
+            ctx,
+            resolving,
+            substitution,
+        );
+        had_error |= resolved.had_error;
+        if let Type::Function(function_type) = resolved.ty {
+            resolved_object = resolved_object.with_construct_signature(function_type);
+        }
+    }
 
     ResolvedType {
         ty: Type::Object(resolved_object),
