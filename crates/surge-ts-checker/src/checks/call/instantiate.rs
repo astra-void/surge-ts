@@ -452,7 +452,11 @@ pub(crate) fn infer_type_argument_substitution(
             parameter_type,
             &argument_type,
             &mut substitution,
-            false,
+            widens_a_fresh_literal_argument(
+                parameter_type,
+                &argument.expression,
+                &function_signature.type_parameters,
+            ),
             ctx,
             0,
         );
@@ -467,6 +471,42 @@ pub(crate) fn infer_type_argument_substitution(
 
     substitution
 }
+
+/// tsc infers the *widened* type from a literal expression — `behaviorSubject(1)`
+/// is `BehaviorSubject<number>`, so a later `value.next(2)` is fine. The literal
+/// survives only when it is not fresh (`{ n: 1 } as const`, an annotated
+/// binding) or when the parameter's constraint asks for one, so this is limited
+/// to a literal written at the call site inferring a bare type parameter.
+fn widens_a_fresh_literal_argument(
+    parameter_type: &ParsedType,
+    argument: &surge_ts_syntax::ParsedExpression,
+    type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
+) -> bool {
+    if !matches!(
+        argument,
+        surge_ts_syntax::ParsedExpression::StringLiteral(_)
+            | surge_ts_syntax::ParsedExpression::NumberLiteral(_)
+            | surge_ts_syntax::ParsedExpression::BooleanLiteral(_)
+    ) {
+        return false;
+    }
+    let ParsedType::Named(named) = parameter_type else {
+        return false;
+    };
+    if !named.type_arguments.is_empty() {
+        return false;
+    }
+    // Only an *unconstrained* parameter widens. A constraint decides on its own
+    // whether the literal survives — `T extends string` and `T extends keyof O`
+    // keep it, and so does a named alias for a literal union, which cannot be
+    // told apart from any other alias without resolving it. Widening those
+    // collapsed `Field extends EditableField` to `string` and made
+    // `Student[Field]` an invalid index.
+    type_parameters.iter().any(|type_parameter| {
+        type_parameter.name == named.name && type_parameter.constraint.is_none()
+    })
+}
+
 
 /// tsc infers an array-literal argument as a *tuple* when the inference target
 /// is a tuple-shaped type parameter, and keeps its element literal types when
