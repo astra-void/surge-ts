@@ -537,7 +537,7 @@ pub fn array_property_names() -> &'static [&'static str] {
         "length", "map", "find", "findLast", "findIndex", "findLastIndex", "filter", "some",
         "every", "forEach", "flatMap", "flat", "reduce", "reduceRight", "join", "concat", "slice",
         "sort", "reverse", "fill", "splice", "push", "pop", "shift", "unshift", "at", "indexOf",
-        "lastIndexOf", "includes", "values", "keys", "entries",
+        "lastIndexOf", "includes", "values", "keys", "entries", "toString", "toLocaleString",
     ]
 }
 
@@ -629,6 +629,7 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             1,
         )),
         "join" => Some(function_type(vec![Type::String], Type::String, true, 0)),
+        "toString" | "toLocaleString" => Some(function_type(vec![], Type::String, false, 0)),
         "concat" => Some(function_type(
             vec![Type::Array(Box::new(Type::Any))],
             Type::Array(Box::new(element.clone())),
@@ -768,6 +769,21 @@ mod tests {
     #[test]
     fn string_literal_type_name_quotes_value() {
         assert_eq!(Type::StringLiteral("ok".to_string()).name(), r#""ok""#);
+    }
+
+    // `toString`/`toLocaleString` come from `Object.prototype` and every array
+    // answers them; leaving them out of the surface reported TS2339.
+    #[test]
+    fn array_answers_the_object_string_conversions() {
+        for name in ["toString", "toLocaleString"] {
+            assert!(array_property_names().contains(&name), "{name}");
+            let member = array_member_type(name, &Type::String).expect(name);
+            let Type::Function(function_type) = member else {
+                panic!("{name} must be callable");
+            };
+            assert!(function_type.parameters().is_empty(), "{name}");
+            assert_eq!(function_type.return_type(), &Type::String, "{name}");
+        }
     }
 
     #[test]
