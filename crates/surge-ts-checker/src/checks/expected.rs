@@ -595,6 +595,31 @@ fn evaluate_array_literal_with_expected_type(
     ))))
 }
 
+/// Every element's own widened type, with an element that does not resolve
+/// standing in as `any` — tsc's error type, which it renders the same way
+/// (`Type '[string, number, any]' is not assignable to type '[string, number]'`).
+/// The inference is a probe, so its diagnostics are discarded: the unresolved
+/// element is reported by the pass that owns it, not by this message.
+fn literal_element_types(
+    elements: &[surge_ts_syntax::ParsedArrayElement],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Vec<Type> {
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut element_types = Vec::with_capacity(elements.len());
+    for element in elements {
+        let element_type = match crate::infer::infer_expression(&element.expression, symbols, ctx) {
+            crate::infer::InferredExpression::Known(ty) if !ty.is_unknown() => {
+                crate::checks::expr::widen_type(&ty)
+            }
+            _ => Type::Any,
+        };
+        element_types.push(element_type);
+    }
+    ctx.truncate_diagnostics(diagnostics_before);
+    element_types
+}
+
 fn evaluate_tuple_literal_with_expected_type(
     elements: &[surge_ts_syntax::ParsedArrayElement],
     expected_elements: &[Type],
@@ -604,7 +629,11 @@ fn evaluate_tuple_literal_with_expected_type(
 ) -> InferredExpression {
     for (index, element) in elements.iter().enumerate() {
         if index >= expected_elements.len() {
-            let source_type_name = Type::Array(Box::new(Type::Unknown)).name();
+            // The literal is longer than the tuple allows. tsc names the source by
+            // its own widened element types (`Type '[number]' is not assignable to
+            // type '[]'`); the hardcoded `unknown[]` this used to print named
+            // neither side truthfully.
+            let source_type_name = Type::Tuple(literal_element_types(elements, symbols, ctx)).name();
             let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
             let diagnostic =
                 Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());
