@@ -146,20 +146,16 @@ pub(crate) fn check_property_call_like(
     let object_ty =
         match crate::checks::expr::evaluate_expression(object, object_span, symbols, ctx) {
             crate::infer::InferredExpression::Known(ty) => ty,
-            // The receiver did not resolve. When its `any` is the *source's* —
-            // an import whose module was reported unresolved — tsc is in the same
-            // position and still checks the arguments, so dropping them here
-            // leaves whole callback bodies unchecked. When the receiver is
-            // instead something surge failed to model, walking the arguments
-            // reports that gap rather than the source (measured: four false
-            // positive on the unnamed corpus: `process.exit` inside such an
-            // argument resolves against a `NodeJS.Process` whose members came
-            // back incomplete, which is surge's gap and not the source's), so
-            // those stay skipped.
+            // The receiver did not resolve, but the arguments are still code:
+            // an unresolved name, a missing member or an implicit-any parameter
+            // inside them is reported by tsc regardless of what the callee is.
+            // Dropping the call here left whole callback bodies — JSX subtrees
+            // included — unchecked. `evaluate_arguments_context_free` still
+            // decides *implicit-any* by receiver provenance, so a chain that
+            // merely collapsed to `any` does not start reporting parameters tsc
+            // contextually types.
             _ => {
-                if receiver_any_is_genuine(object, symbols) {
-                    evaluate_arguments_context_free(object, arguments, symbols, ctx);
-                }
+                evaluate_arguments_context_free(object, arguments, symbols, ctx);
                 return None;
             }
         };
