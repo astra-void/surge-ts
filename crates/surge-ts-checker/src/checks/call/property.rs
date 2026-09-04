@@ -69,15 +69,20 @@ fn evaluate_arguments_context_free(
     ctx: &mut CheckerContext,
 ) {
     let genuine = receiver_any_is_genuine(object, symbols);
-    if !genuine {
+    let saved_depth = ctx.degraded_expected_type_depth;
+    if genuine {
+        // tsc has no contextual parameter type here either, so it *does* report
+        // these parameters. An enclosing suppression — a builder chain surge
+        // could not model further out — must not hide that: the provenance of
+        // this receiver is decided, and it outranks the ambient guess.
+        ctx.degraded_expected_type_depth = 0;
+    } else {
         ctx.degraded_expected_type_depth += 1;
     }
     for argument in arguments {
         let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
     }
-    if !genuine {
-        ctx.degraded_expected_type_depth -= 1;
-    }
+    ctx.degraded_expected_type_depth = saved_depth;
 }
 
 /// Whether an `any`-typed receiver is `any` because the *source* says so, rather
@@ -92,7 +97,7 @@ fn evaluate_arguments_context_free(
 /// midway (a generic builder surge could not model). tsc still contextually
 /// types those callbacks, so reporting implicit-any there describes surge's gap
 /// rather than the source.
-fn receiver_any_is_genuine(object: &ParsedExpression, symbols: &SymbolTable) -> bool {
+pub(crate) fn receiver_any_is_genuine(object: &ParsedExpression, symbols: &SymbolTable) -> bool {
     match object {
         ParsedExpression::Identifier { name, .. } => symbols
             .get(name)
