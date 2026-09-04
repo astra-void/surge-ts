@@ -323,13 +323,21 @@ pub(crate) fn check_new_like(
             // These pin the generic construct signature so the executor's callback
             // parameters are typed (`resolve: (value: T | PromiseLike<T>) => void`
             // becomes `... void | PromiseLike<void> ...`, making `resolve()` valid).
+            // Explicit type arguments name things visible at the CALL, including
+            // function locals and parameters (`new Promise<typeof opts.input>`);
+            // `ctx.symbols` is the file-level table and does not hold them, so
+            // resolving against it reported the local as an unresolved name.
             let explicit_args: Option<Vec<Type>> = if !type_arguments.is_empty() {
-                Some(
-                    type_arguments
-                        .iter()
-                        .map(|argument| crate::infer::map_parsed_type(argument.clone(), ctx))
-                        .collect(),
-                )
+                let saved_symbols = std::mem::replace(
+                    &mut ctx.symbols,
+                    symbols.clone_with_reason(TypeCopyReason::CallResolution),
+                );
+                let resolved = type_arguments
+                    .iter()
+                    .map(|argument| crate::infer::map_parsed_type(argument.clone(), ctx))
+                    .collect();
+                ctx.symbols = saved_symbols;
+                Some(resolved)
             } else {
                 None
             };
@@ -392,7 +400,13 @@ pub(crate) fn check_new_like(
                 span: None,
                 type_arguments,
             }));
-            return Some(crate::infer::map_parsed_type(named, ctx));
+            let saved_symbols = std::mem::replace(
+                &mut ctx.symbols,
+                symbols.clone_with_reason(TypeCopyReason::CallResolution),
+            );
+            let instance = crate::infer::map_parsed_type(named, ctx);
+            ctx.symbols = saved_symbols;
+            return Some(instance);
         }
     }
 
