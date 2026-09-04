@@ -128,7 +128,20 @@ pub(crate) fn check_property_call_like(
     let object_ty =
         match crate::checks::expr::evaluate_expression(object, object_span, symbols, ctx) {
             crate::infer::InferredExpression::Known(ty) => ty,
-            _ => return None,
+            // The receiver did not resolve. When its `any` is the *source's* —
+            // an import whose module was reported unresolved — tsc is in the same
+            // position and still checks the arguments, so dropping them here
+            // leaves whole callback bodies unchecked. When the receiver is
+            // instead something surge failed to model, walking the arguments
+            // reports that gap rather than the source (measured: four false
+            // positives on the unnamed corpus, from a `filter(pred)` narrowing
+            // and a Node global surge models loosely), so those stay skipped.
+            _ => {
+                if receiver_any_is_genuine(object, symbols) {
+                    evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                }
+                return None;
+            }
         };
 
     let object_type_name = object_ty.name();

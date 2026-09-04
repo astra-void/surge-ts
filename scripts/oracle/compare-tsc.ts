@@ -341,6 +341,7 @@ export const fixturePresets: Record<string, string> = {
   'nominal-enum-display-basic': path.join(workspaceRoot, 'tests/compat-projects/nominal-enum-display-basic/tsconfig.json'),
   'export-equals-default-import-type-basic': path.join(workspaceRoot, 'tests/compat-projects/export-equals-default-import-type-basic/tsconfig.json'),
   'unresolved-import-callback-implicit-any-basic': path.join(workspaceRoot, 'tests/compat-projects/unresolved-import-callback-implicit-any-basic/tsconfig.json'),
+  'callable-object-function-members-basic': path.join(workspaceRoot, 'tests/compat-projects/callable-object-function-members-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
