@@ -630,9 +630,16 @@ fn check_program_with_stats_and_jobs_inner(
     let ambient_collection_start = Instant::now();
     emit_parser_diagnostics(&parsed_files, &mut ctx);
     ctx.begin_resolution_stage();
+    // `declare global` block types first: `collect_ambient_globals` lowers a
+    // script declaration file's `declare var` against the ambient *type* table,
+    // and @types/node's `globals.d.ts` (a script) declares `var process:
+    // NodeJS.Process` while the interface itself is re-opened from `process.d.ts`
+    // inside a `declare global`. Lowering the value before that merge froze
+    // `process` against whatever partial `NodeJS.Process` existed — a local
+    // one-member augmentation, leaving `process.exit` and `process.env` missing.
+    crate::driver::collect_global_augmentations(&parsed_files, &mut ctx);
     collect_ambient_globals(&parsed_files, &mut ctx, timings.as_ref());
     collect_umd_global_names(&parsed_files, &mut ctx);
-    crate::driver::collect_global_augmentations(&parsed_files, &mut ctx);
     collect_ambient_modules(&parsed_files, &mut ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
         timings.ambient_collection += ambient_collection_start.elapsed()
