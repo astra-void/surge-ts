@@ -144,6 +144,16 @@ pub(crate) fn check_function_declaration(
             ctx,
         );
 
+        // The first registration for this name replaces what the collection
+        // pre-pass installed — the check pass resolves the signature under the
+        // right scope, so its answer is the authoritative one. A *later*
+        // declaration of the same name is an overload, and replacing again would
+        // leave only the last one: `declare function f(v: number): string`
+        // followed by `declare function f(v: number, r: number): string` made
+        // `f(1)` a false TS2554.
+        let first_registration = ctx
+            .checked_function_declaration_names
+            .insert(std::sync::Arc::from(name.as_str()));
         let duplicate = {
             let symbols = &mut ctx.symbols;
             register_function_signature(
@@ -151,7 +161,7 @@ pub(crate) fn check_function_declaration(
                 with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || function_type.clone()),
                 Some(signature_info.clone()),
                 symbols,
-                true,
+                first_registration,
                 has_body,
             )
         };

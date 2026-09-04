@@ -1176,6 +1176,12 @@ pub(crate) struct CheckerContext {
     /// under `jsx: react`.
     pub(crate) file_type_only_import_names: FxHashSet<Arc<str>>,
     pub(crate) file_type_only_import_names_owner: Option<String>,
+    /// Function names the authoritative check pass has already registered in the
+    /// file under check. The first registration *replaces* the signature the
+    /// collection pre-pass installed (the check pass resolves it under the right
+    /// scope); every later one is an overload of the same name and must merge
+    /// into it, or only the last declaration would survive.
+    pub(crate) checked_function_declaration_names: FxHashSet<Arc<str>>,
     /// The file [`Self::file_umd_global_names`] was computed for. Type
     /// resolution re-enters under a *declaring* file's name, and that file's
     /// shadowing is not the checked file's, so the set only applies while the
@@ -1356,6 +1362,7 @@ impl CheckerContext {
             file_umd_global_names_owner: None,
             merge_script_interfaces_with_globals: false,
             file_type_only_import_names: FxHashSet::default(),
+            checked_function_declaration_names: FxHashSet::default(),
             file_type_only_import_names_owner: None,
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
             module_file_index_by_identity: Arc::new(FxHashMap::default()),
@@ -1469,6 +1476,7 @@ impl CheckerContext {
             file_umd_global_names_owner: None,
             merge_script_interfaces_with_globals: false,
             file_type_only_import_names: FxHashSet::default(),
+            checked_function_declaration_names: FxHashSet::default(),
             file_type_only_import_names_owner: None,
             ambient_global_type_declarations: data.ambient_global_type_declarations.clone(),
             module_file_index_by_identity: data.module_file_index_by_identity.clone(),
@@ -1809,6 +1817,7 @@ impl CheckerContext {
         self.file_umd_global_names_owner = None;
         self.file_type_only_import_names.clear();
         self.file_type_only_import_names_owner = None;
+        self.checked_function_declaration_names.clear();
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"
