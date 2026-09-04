@@ -1157,6 +1157,9 @@ pub struct ParsedCall {
 pub struct ParsedCallArgument {
     pub expression: ParsedExpression,
     pub span: Option<TextSpan>,
+    /// `f(...xs)`. The count this contributes depends on the spread's own type,
+    /// so a call carrying one has no statically known argument count.
+    pub spread: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

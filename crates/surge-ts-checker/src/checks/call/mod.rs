@@ -685,8 +685,13 @@ pub(crate) fn check_function_type_call(
         required -= 1;
     }
 
+    // `f(...xs)` supplies as many arguments as the spread's type has elements,
+    // which is one for a tuple of one and any number for an array. Counting the
+    // spread as a single argument made `three(...tupleOfThree)` a false TS2554,
+    // so a call carrying one has no statically known count and skips the check.
+    let has_spread_argument = arguments.iter().any(|argument| argument.spread);
     let too_many = !function_type.is_variadic() && actual > expected;
-    if actual < required || too_many {
+    if !has_spread_argument && (actual < required || too_many) {
         let expected_count = if actual < required {
             required
         } else {
@@ -709,6 +714,15 @@ pub(crate) fn check_function_type_call(
     }
 
     for (i, argument) in arguments.iter().enumerate() {
+        // A spread stands for however many arguments its type holds, so it does
+        // not line up with the parameter at this position — checking it against
+        // one would report the whole tuple against a single parameter. Its own
+        // expression is still evaluated so errors inside it surface.
+        if argument.spread {
+            let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            continue;
+        }
+
         // For a variadic signature the trailing rest parameter (declared as an
         // array) matches each remaining argument against its *element* type, not
         // the array itself — `cn(...inputs: string[])` accepts `cn("a", "b")`.

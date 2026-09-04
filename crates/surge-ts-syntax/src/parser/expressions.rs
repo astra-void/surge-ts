@@ -662,7 +662,16 @@ fn parse_property_call_expression_with_type_arguments(
 
 fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
     let (expression, span) = match argument {
-        Argument::SpreadElement(_) => (ParsedExpression::Unknown, argument.span()),
+        // The spread's own expression is still code — an unresolved name or a
+        // bad member inside it is reported the same way — so it is parsed, and
+        // the argument carries the flag the arity check needs.
+        Argument::SpreadElement(spread) => {
+            return ParsedCallArgument {
+                expression: parse_expression(&spread.argument).0,
+                span: Some(text_span_from_oxc_span(argument.span())),
+                spread: true,
+            };
+        }
         Argument::BooleanLiteral(boolean_literal) => (
             ParsedExpression::BooleanLiteral(boolean_literal.value),
             argument.span(),
@@ -759,6 +768,7 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                             span: Some(text_span_from_oxc_span(as_expression.span)),
                         },
                         span: Some(text_span_from_oxc_span(as_expression.span)),
+                        spread: false,
                     };
                 }
             }
@@ -808,6 +818,7 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
     ParsedCallArgument {
         expression,
         span: Some(text_span_from_oxc_span(span)),
+        spread: false,
     }
 }
 
