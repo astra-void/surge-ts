@@ -508,6 +508,21 @@ fn widens_a_fresh_literal_argument(
 }
 
 
+/// What a tuple-shaped constraint says its elements are. `[A, ...A[]] | []` —
+/// zod's `tuple` and every other "one or more, or none" signature — describes
+/// the elements in its non-empty member; the `[]` member only says the argument
+/// may also be empty. Without looking through the union the parameter stayed
+/// unsolved and landed on that empty tuple, so every well-formed argument
+/// reported `Type '[…]' is not assignable to type '[]'`.
+fn tuple_element_constraint(constraint: &ParsedType) -> Option<&ParsedType> {
+    match constraint {
+        ParsedType::Array(element) => Some(element.as_ref()),
+        ParsedType::Tuple(elements) => elements.first(),
+        ParsedType::Union(members) => members.iter().find_map(tuple_element_constraint),
+        _ => None,
+    }
+}
+
 /// tsc infers an array-literal argument as a *tuple* when the inference target
 /// is a tuple-shaped type parameter, and keeps its element literal types when
 /// that tuple's element type is itself a parameter constrained to a primitive.
@@ -539,11 +554,7 @@ fn array_literal_tuple_inference(
         .find(|type_parameter| type_parameter.name == named.name)?
         .constraint
         .as_ref()?;
-    let element_constraint = match constraint {
-        ParsedType::Array(element) => element.as_ref(),
-        ParsedType::Tuple(elements) => elements.first()?,
-        _ => return None,
-    };
+    let element_constraint = tuple_element_constraint(constraint)?;
     let keep_literals = matches!(
         element_constraint,
         ParsedType::String | ParsedType::Number | ParsedType::Boolean
