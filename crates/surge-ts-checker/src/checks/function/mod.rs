@@ -438,7 +438,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
 
         let mut scopes =
             ScopeStack::from_root(symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup));
-        scopes.push_child();
+        scopes.push_function_scope();
         for (index, parameter) in parameters.iter().enumerate() {
             let parameter_type = parameter_types.get(index).unwrap_or(&Type::Any);
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);

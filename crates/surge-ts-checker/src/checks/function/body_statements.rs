@@ -89,7 +89,7 @@ pub(crate) fn check_function_variable_declaration(
             local_name.as_str(),
             SymbolInfo {
                 ty: Type::Unknown,
-                kind: SymbolKind::Var,
+                kind: symbol_kind_for_variable(variable_kind),
                 function_signature: None,
             },
         );

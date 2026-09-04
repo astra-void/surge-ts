@@ -20,6 +20,10 @@ pub(crate) struct ScopeFrame {
     /// `pop_child` alongside `visible_shadows`. Only the narrowing paths write
     /// here, so it is empty in nearly every frame.
     declared_shadows: HashMap<Arc<str>, Option<Type>>,
+    /// A function body's own frame, which `var` hoisting stops at. Every other
+    /// frame is a block (`{}`, an `if` branch, a loop or a `switch` case), and a
+    /// `var` declared there stays visible after it.
+    is_function_scope: bool,
 }
 
 impl ScopeStack {
@@ -39,6 +43,7 @@ impl ScopeStack {
                 symbols: SymbolTable::with_parent(root),
                 visible_shadows: HashMap::new(),
                 declared_shadows: HashMap::new(),
+                is_function_scope: true,
             }],
         }
     }
@@ -139,6 +144,15 @@ impl ScopeStack {
         self.frames.push(ScopeFrame::default());
     }
 
+    /// A function body's own frame. `var` hoisting stops here, and the parameter
+    /// bindings it holds must not escape into the enclosing body.
+    pub(crate) fn push_function_scope(&mut self) {
+        self.frames.push(ScopeFrame {
+            is_function_scope: true,
+            ..ScopeFrame::default()
+        });
+    }
+
     pub(crate) fn pop_child(&mut self) {
         assert!(
             !self.frames.is_empty(),
@@ -150,6 +164,23 @@ impl ScopeStack {
                 .set_declared_type(name, previous_declared);
         }
         for (name, previous_symbol) in frame.visible_shadows {
+            // `var` is function-scoped: a block that declared one leaves it
+            // visible after the block, and the shadow it displaced moves up so
+            // the enclosing frame restores it instead.
+            if !frame.is_function_scope
+                && self
+                    .visible_symbols
+                    .get(&name)
+                    .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::Var))
+            {
+                if let Some(parent) = self.frames.last_mut() {
+                    parent
+                        .visible_shadows
+                        .entry(name)
+                        .or_insert(previous_symbol);
+                    continue;
+                }
+            }
             match previous_symbol {
                 Some(previous_symbol) => {
                     record_scope_stack_visible_symbol_handle_copy_count(1);

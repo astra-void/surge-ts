@@ -1097,7 +1097,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
             },
         );
     }
-    scopes.push_child();
+    scopes.push_function_scope();
     let mut flow_state = FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
     );
