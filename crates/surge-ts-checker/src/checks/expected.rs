@@ -59,13 +59,13 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
     // A degraded expectation carries no contextual parameter types, so any
     // callback or method written against it would be reported implicit-any for
     // a shape surge failed to model rather than one the source omits.
-    if matches!(expected_type, Some(Type::Unknown)) {
+    if expected_type.is_some_and(expectation_is_degraded) {
         ctx.degraded_expected_type_depth += 1;
         let result = evaluate_expression_with_expected_type_inner(
             expression,
             fallback_span,
             target_span,
-            expected_type,
+            Some(&Type::Unknown),
             expected_diagnostic,
             symbols,
             ctx,
@@ -82,6 +82,24 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
         symbols,
         ctx,
     )
+}
+
+/// Whether the expectation is the degradation sentinel, directly or as a member
+/// of a union.
+///
+/// A union carrying the sentinel is not a narrower expectation than the sentinel
+/// alone — it is the same "surge does not know", with one shape it happened to
+/// resolve. Contextual typing must not pick that shape: merging zod's two
+/// `tuple` overloads yields `unknown | []`, and selecting the empty tuple made
+/// every `z.tuple([a, b])` report `Type '[A, B]' is not assignable to type '[]'`.
+/// A *written* `unknown` is [`Type::GenuineUnknown`], so a real annotation never
+/// lands here.
+fn expectation_is_degraded(expected_type: &Type) -> bool {
+    match expected_type {
+        Type::Unknown => true,
+        Type::Union(union) => union.types().iter().any(|member| *member == Type::Unknown),
+        _ => false,
+    }
 }
 
 fn evaluate_expression_with_expected_type_inner(
