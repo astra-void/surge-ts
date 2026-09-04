@@ -387,10 +387,14 @@ fn check_attributes(
                         let property = ObjectProperty::required(index_type.clone());
                         check_known_prop(attribute, attribute_type, &property, fallback_span, ctx);
                     }
-                } else if attribute.name.contains('-') {
+                } else if attribute.name.contains('-')
+                    || matches!(attribute.name.as_str(), "key" | "ref")
+                {
                     // tsc never excess-checks hyphenated JSX attribute names
                     // (`data-slot`, `aria-*` — isKnownProperty), on components
-                    // and intrinsics alike.
+                    // and intrinsics alike. `key` and `ref` are reserved by the
+                    // JSX runtime and are removed from the props check the same
+                    // way, so `<Item key={id} … />` is not an excess property.
                 } else if first_excess.is_none() {
                     first_excess = Some(attribute.name_span);
                 }
