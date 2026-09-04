@@ -267,12 +267,24 @@ pub(super) fn evaluate_index_access(
                 symbol.ty,
                 Type::Object(_) | Type::Function(_) | Type::Reference(_)
             );
-            if receiver_is_object_like
-                && matches!(
-                    index_type,
-                    Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
-                )
-            {
+            let Some(key) = literal_index_key(&index_type) else {
+                return InferredExpression::Unknown;
+            };
+
+            // A literal key names a member. An index signature answers it too —
+            // a numeric key is converted to a string, which is why
+            // `record[1]` reads a `Record<number, T>` and a `Record<string, T>`
+            // alike. Only a receiver that declares neither is a real TS2339.
+            if let Type::Object(object_type) = symbol.ty.peeled() {
+                if let Some(member) = object_type.get_property_access_type(&key) {
+                    return InferredExpression::Known(member);
+                }
+                if let Some(index_type) = object_type.string_index_type.as_deref() {
+                    return InferredExpression::Known(index_type.clone());
+                }
+            }
+
+            if receiver_is_object_like {
                 let object_type_name = symbol.ty.name();
                 ctx.push(diagnostic_with_syntax_span(
                     Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone()),
@@ -281,6 +293,17 @@ pub(super) fn evaluate_index_access(
             }
             InferredExpression::Unknown
         }
+    }
+}
+
+/// The member name a literal computed key stands for. A string index signature
+/// is keyed by the *string* form, so `1` and `"1"` name the same member.
+fn literal_index_key(index_type: &Type) -> Option<String> {
+    match index_type {
+        Type::StringLiteral(value) => Some(value.clone()),
+        Type::NumberLiteral(NumberLiteralType { value }) => Some(value.clone()),
+        Type::BooleanLiteral(value) => Some(value.to_string()),
+        _ => None,
     }
 }
 

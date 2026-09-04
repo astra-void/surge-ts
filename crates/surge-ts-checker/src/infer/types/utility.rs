@@ -338,7 +338,7 @@ pub(crate) fn resolve_record_utility_type(
         };
     };
 
-    if key_type == Type::String {
+    if record_key_is_open(&key_type) {
         return ResolvedType {
             ty: Type::Object(alloc_object_type(
                 PropertyMap::default(),
@@ -348,7 +348,7 @@ pub(crate) fn resolve_record_utility_type(
         };
     }
 
-    let Some(keys) = string_literal_union_keys(&key_type) else {
+    let Some(keys) = record_literal_keys(&key_type) else {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,
@@ -522,6 +522,34 @@ pub(crate) fn resolve_return_type_utility_type(
     ResolvedType {
         ty: function_type.return_type().clone(),
         had_error: false,
+    }
+}
+
+/// Whether a `Record` key admits arbitrary members, which makes the record an
+/// index signature rather than a fixed property set. `number` and `symbol` are
+/// as open as `string`; so is a union that contains one of them.
+fn record_key_is_open(key_type: &Type) -> bool {
+    match key_type {
+        Type::String | Type::Number | Type::Symbol => true,
+        Type::Union(union) => union.types().iter().any(record_key_is_open),
+        _ => false,
+    }
+}
+
+/// The property names a literal `Record` key enumerates. A numeric key names the
+/// member by its text, the same way an object literal's numeric key does.
+fn record_literal_keys(key_type: &Type) -> Option<Vec<String>> {
+    match key_type {
+        Type::StringLiteral(value) => Some(vec![value.clone()]),
+        Type::NumberLiteral(literal) => Some(vec![literal.value.clone()]),
+        Type::Union(union) => {
+            let mut keys = Vec::new();
+            for variant in union.types() {
+                keys.extend(record_literal_keys(variant)?);
+            }
+            Some(keys)
+        }
+        _ => None,
     }
 }
 
