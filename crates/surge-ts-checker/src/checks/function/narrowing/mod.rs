@@ -619,6 +619,37 @@ fn predicate_filters_subject_union(
     matching > 0 && matching < members.len()
 }
 
+/// The target type of a value that *is* a type predicate (`isFoo` passed to
+/// `filter`), resolved in the signature's declaring scope. `None` when the value
+/// carries no collected signature, its return is not a predicate, or the
+/// predicate is generic — a `T` there needs a guard site to infer against.
+pub(crate) fn predicate_target_of_value(
+    name: &str,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let signature = symbols.get(name)?.function_signature.clone()?;
+    if !signature.type_parameters.is_empty() {
+        return None;
+    }
+    let surge_ts_syntax::ParsedType::Predicate(predicate) = signature.return_type.as_ref()? else {
+        return None;
+    };
+    if predicate.asserts {
+        return None;
+    }
+    let guard = PredicateGuardInfo {
+        subject: String::new(),
+        path: Vec::new(),
+        predicate_type: predicate.ty.clone()?,
+        declaring_file: signature.declaring_file.clone(),
+        namespace_prefix: signature.namespace_prefix.clone(),
+        parameter_index: 0,
+        signature,
+    };
+    resolve_predicate_type_in_declaring_scope(&guard, &crate::infer::TypeParameterSubstitution::new(), ctx)
+}
+
 /// Resolves a predicate guard's target type under the predicate's declaring
 /// file (see [`crate::symbols::FunctionSignatureInfo::declaring_file`]). A
 /// resolution that degrades (`had_error` or the `Unknown` sentinel) proves

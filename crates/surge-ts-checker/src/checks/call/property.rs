@@ -114,6 +114,24 @@ pub(crate) fn receiver_any_is_genuine(object: &ParsedExpression, symbols: &Symbo
     }
 }
 
+/// `Array.prototype.filter` narrows its element type when the callback is a type
+/// predicate (`rows.filter(isCode)` is `Code[]`). The predicate lives on the
+/// argument's collected signature, not on its resolved callable type, so it is
+/// read from there; anything else falls through to the ordinary `filter` model.
+fn filtered_element_type(
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let [argument] = arguments else {
+        return None;
+    };
+    let ParsedExpression::Identifier { name, .. } = &argument.expression else {
+        return None;
+    };
+    crate::checks::function::predicate_target_of_value(name, symbols, ctx)
+}
+
 pub(crate) fn check_property_call_like(
     object: &ParsedExpression,
     object_span: Option<SyntaxTextSpan>,
@@ -134,8 +152,10 @@ pub(crate) fn check_property_call_like(
             // leaves whole callback bodies unchecked. When the receiver is
             // instead something surge failed to model, walking the arguments
             // reports that gap rather than the source (measured: four false
-            // positives on the unnamed corpus, from a `filter(pred)` narrowing
-            // and a Node global surge models loosely), so those stay skipped.
+            // positive on the unnamed corpus: `process.exit` inside such an
+            // argument resolves against a `NodeJS.Process` whose members came
+            // back incomplete, which is surge's gap and not the source's), so
+            // those stay skipped.
             _ => {
                 if receiver_any_is_genuine(object, symbols) {
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
@@ -145,6 +165,14 @@ pub(crate) fn check_property_call_like(
         };
 
     let object_type_name = object_ty.name();
+
+    // Computed before the dispatch below so the narrowed element can be matched
+    // on: `filter` with a type-predicate callback yields that predicate's type.
+    let filtered_element = if property_name == "filter" && matches!(object_ty, Type::Array(_)) {
+        filtered_element_type(arguments, symbols, ctx)
+    } else {
+        None
+    };
 
     if property_name == "all" && is_promise_all_receiver(&object_ty) {
         return check_promise_all_call(arguments, call_span.or(property_span), symbols, ctx);
@@ -198,6 +226,12 @@ pub(crate) fn check_property_call_like(
             Some(Type::Any)
         }
         Type::Unknown | Type::GenuineUnknown => None,
+        Type::Array(_) if filtered_element.is_some() => {
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            filtered_element.map(|element| Type::Array(Box::new(element)))
+        }
         Type::Array(element_type) if property_name == "map" => check_array_map_call(
             element_type.as_ref(),
             property_span,
