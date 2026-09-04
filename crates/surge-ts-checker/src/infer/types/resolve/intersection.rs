@@ -361,9 +361,28 @@ fn merge_intersection_members_now(
 
         for object in &object_members {
             for (name, property) in object.properties.iter() {
-                properties
-                    .entry(name.clone())
-                    .or_insert_with(|| property.clone());
+                // A property declared by more than one operand is the
+                // *intersection* of what they declare, not the first one:
+                // `Row & { identity: Code }` narrows `identity` from
+                // `Code | NameOnly` down to `Code`. Keeping the first made every
+                // type-predicate narrowing through an intersection read the
+                // unnarrowed union.
+                match properties.get(name) {
+                    Some(existing) => {
+                        let merged_property = surge_ts_types::ObjectProperty {
+                            ty: merge_intersection_members(vec![
+                                existing.ty.clone(),
+                                property.ty.clone(),
+                            ]),
+                            optional: existing.is_optional() && property.is_optional(),
+                            method: existing.method,
+                        };
+                        properties.insert(name.clone(), merged_property);
+                    }
+                    None => {
+                        properties.insert(name.clone(), property.clone());
+                    }
+                }
             }
             if string_index_type.is_none()
                 && let Some(index) = object.string_index_type.as_deref()
