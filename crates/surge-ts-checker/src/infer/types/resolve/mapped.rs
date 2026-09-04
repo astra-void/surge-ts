@@ -5,6 +5,34 @@ use surge_ts_types::{ObjectProperty, PropertyMap};
 
 use crate::arena::alloc_object_type;
 
+/// Whether a mapped type's key constraint admits arbitrary members, which makes
+/// the result an index signature rather than a fixed property set. Mirrors
+/// `record_key_is_open`, the built-in-lib path's rule for the same question.
+fn mapped_key_is_open(constraint: &Type) -> bool {
+    match constraint {
+        Type::String | Type::Number | Type::Symbol => true,
+        Type::Union(union) => union.types().iter().any(mapped_key_is_open),
+        _ => false,
+    }
+}
+
+/// The property names a literal key constraint enumerates. A numeric key names
+/// the member by its text, the same way an object literal's numeric key does.
+fn mapped_literal_keys(constraint: &Type) -> Option<Vec<String>> {
+    match constraint {
+        Type::StringLiteral(value) => Some(vec![value.clone()]),
+        Type::NumberLiteral(literal) => Some(vec![literal.value.clone()]),
+        Type::Union(union) => {
+            let mut keys = Vec::new();
+            for variant in union.types() {
+                keys.extend(mapped_literal_keys(variant)?);
+            }
+            Some(keys)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn resolve_mapped_type(
     mapped: ParsedMappedType,
     ctx: &mut CheckerContext,
@@ -29,16 +57,17 @@ pub(crate) fn resolve_mapped_type(
         };
     }
 
-    // A `string` (non-literal) key constraint maps to a string index signature:
-    // `{ [P in string]: T }` is `{ [k: string]: T }`. This is how `Record<string,
-    // T>` resolves when it routes through its mapped-type body (physical libs)
-    // rather than the built-in `resolve_record_utility_type` fast path. Without
-    // this the mapped type collapsed to `unknown`, which surfaced as a spurious
-    // missing-property error wherever the `Record` was a union member.
-    if matches!(resolved_constraint.ty, Type::String) {
+    // A non-literal key constraint maps to an index signature: `{ [P in string]: T }`
+    // is `{ [k: string]: T }`, and `number`/`symbol` are as open as `string`
+    // (`keyof any` is all three). This is how `Record<K, T>` resolves when it
+    // routes through its mapped-type body — the physical lib declares it as
+    // `{ [P in K]: T }` — rather than the built-in `resolve_record_utility_type`
+    // fast path. Without this the mapped type collapsed to `unknown`, which
+    // surfaced as a spurious missing-property error on every read.
+    if mapped_key_is_open(&resolved_constraint.ty) {
         let mut value_substitution =
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
-        value_substitution.insert(mapped.key_name.clone(), Type::String);
+        value_substitution.insert(mapped.key_name.clone(), resolved_constraint.ty.clone());
         let resolved_value =
             resolve_parsed_type(*mapped.value_type, ctx, resolving, &value_substitution);
         return ResolvedType {
@@ -50,29 +79,11 @@ pub(crate) fn resolve_mapped_type(
         };
     }
 
-    let keys = match resolved_constraint.ty {
-        Type::StringLiteral(s) => vec![s],
-        Type::Union(union) => {
-            let mut keys = Vec::new();
-            for variant in union.types() {
-                match variant {
-                    Type::StringLiteral(s) => keys.push(s.clone()),
-                    _ => {
-                        return ResolvedType {
-                            ty: Type::Unknown,
-                            had_error: false,
-                        };
-                    }
-                }
-            }
-            keys
-        }
-        _ => {
-            return ResolvedType {
-                ty: Type::Unknown,
-                had_error: false,
-            };
-        }
+    let Some(keys) = mapped_literal_keys(&resolved_constraint.ty) else {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
     };
 
     let homomorphic_source = keyof_operand.and_then(|operand| {

@@ -54,6 +54,33 @@ fn a_literal_union_record_key_enumerates_properties() {
     assert_eq!(codes(&diagnostics), vec!["TS2339"]);
 }
 
+// A written mapped type takes the same rule as the built-in `Record` — the
+// physical lib declares `Record<K, T>` as `{ [P in K]: T }`, so only this path
+// runs there, and `number`/`symbol` keys collapsed the whole type to the
+// sentinel.
+#[test]
+fn a_mapped_type_with_an_open_key_is_an_index_signature() {
+    let diagnostics = check(
+        "type ByKey<K extends string | number> = { [P in K]: boolean };\n\
+         declare const byString: ByKey<string>;\n\
+         declare const byNumber: ByKey<number>;\n\
+         export const a: boolean = byString[\"k\"];\n\
+         export const b: boolean = byNumber[1];\n",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn a_mapped_type_with_literal_keys_still_enumerates_them() {
+    let diagnostics = check(
+        "type ByKey<K extends string | number> = { [P in K]: boolean };\n\
+         declare const byLiteral: ByKey<1 | 2>;\n\
+         export const a: boolean = byLiteral[1];\n\
+         export const b = byLiteral[3];\n",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+}
+
 // A receiver with neither the member nor an index signature still reports.
 #[test]
 fn a_missing_numeric_member_still_reports() {
