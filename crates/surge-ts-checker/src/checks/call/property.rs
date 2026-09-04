@@ -221,7 +221,14 @@ pub(crate) fn check_property_call_like(
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(Type::Any)
         }
-        Type::Unknown | Type::GenuineUnknown => None,
+        // The receiver degraded, but the arguments are still code — same
+        // reasoning as the unresolved-receiver arm above. `evaluate_arguments_
+        // context_free` keeps implicit-any gated on receiver provenance, so a
+        // callback whose contextual type surge lost is still not reported.
+        Type::Unknown | Type::GenuineUnknown => {
+            evaluate_arguments_context_free(object, arguments, symbols, ctx);
+            None
+        }
         Type::Array(_) if filtered_element.is_some() => {
             for argument in arguments {
                 let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
