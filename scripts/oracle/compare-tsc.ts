@@ -344,6 +344,7 @@ export const fixturePresets: Record<string, string> = {
   'callable-object-function-members-basic': path.join(workspaceRoot, 'tests/compat-projects/callable-object-function-members-basic/tsconfig.json'),
   'array-filter-type-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/array-filter-type-predicate-basic/tsconfig.json'),
   'ambient-script-var-global-augmented-type': path.join(workspaceRoot, 'tests/compat-projects/ambient-script-var-global-augmented-type/tsconfig.json'),
+  'ambient-global-function-overload-merge': path.join(workspaceRoot, 'tests/compat-projects/ambient-global-function-overload-merge/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

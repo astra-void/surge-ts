@@ -367,11 +367,14 @@ pub(crate) fn collect_ambient_globals(
                 _ => "unknown".to_string(),
             };
 
-            if ctx.ambient_global_symbols.get(&name).is_none() {
+            if let Some(merged) = crate::driver::merged_global_function_type(
+                ctx.ambient_global_symbols.get(&name),
+                fun_ty,
+            ) {
                 ctx.ambient_global_symbols.insert(
                     name,
                     crate::symbols::SymbolInfo {
-                        ty: surge_ts_types::Type::Function(fun_ty),
+                        ty: surge_ts_types::Type::Function(merged),
                         kind: crate::symbols::SymbolKind::Function,
                         function_signature: None,
                     },

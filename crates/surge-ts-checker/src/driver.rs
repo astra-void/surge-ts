@@ -300,6 +300,28 @@ fn collect_global_augmentation_block_types(
     block_table
 }
 
+/// A global function re-declared by another declaration file is an *overload*
+/// of the same name, not a shadow: `@types/node` re-declares `clearTimeout` for
+/// `NodeJS.Timeout` alongside the DOM's numeric one. First-wins kept only the
+/// first, so the other's call sites reported TS2345.
+pub(crate) fn merged_global_function_type(
+    existing: Option<&crate::symbols::SymbolInfo>,
+    incoming: surge_ts_types::FunctionType,
+) -> Option<surge_ts_types::FunctionType> {
+    match existing {
+        None => Some(incoming),
+        Some(existing) => match (&existing.ty, existing.kind) {
+            (surge_ts_types::Type::Function(existing), crate::symbols::SymbolKind::Function) => {
+                Some(crate::infer::types::interface::merge_overload_signatures(
+                    existing, &incoming,
+                ))
+            }
+            // A non-function binding of the same name keeps its own answer.
+            _ => None,
+        },
+    }
+}
+
 fn lower_global_augmentation_values(
     block_statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
@@ -404,12 +426,14 @@ fn lower_global_augmentation_values(
             _ => "unknown".to_string(),
         };
 
-        if ctx.ambient_global_symbols.get(&name).is_none() {
+        if let Some(merged) =
+            merged_global_function_type(ctx.ambient_global_symbols.get(&name), fun_ty)
+        {
             crate::program::record_augmentation_value_insertion();
             ctx.ambient_global_symbols.insert(
                 name,
                 crate::symbols::SymbolInfo {
-                    ty: surge_ts_types::Type::Function(fun_ty),
+                    ty: surge_ts_types::Type::Function(merged),
                     kind: crate::symbols::SymbolKind::Function,
                     function_signature: None,
                 },

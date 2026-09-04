@@ -10,7 +10,7 @@ use crate::symbols::TypeDeclarationInfo;
 
 pub(crate) mod cache;
 mod diagnostics;
-mod interface;
+pub(crate) mod interface;
 mod resolve;
 mod utility;
 
