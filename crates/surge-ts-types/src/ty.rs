@@ -176,7 +176,15 @@ impl Type {
 
     pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
         match self {
-            Type::Object(object) => object.get_property_access_type(name),
+            Type::Object(object) => object.get_property_access_type(name).or_else(|| {
+                // A callable or constructable object *is* a `Function`, so it
+                // carries `name`, `length`, `call`/`apply`/`bind` — `typeof C`
+                // and `new (...args: any[]) => T` both answer `.name`.
+                let signature = object
+                    .call_signature()
+                    .or_else(|| object.construct_signature())?;
+                function_property_access_type(signature, name)
+            }),
             Type::Array(element) => array_property_access_type(name, element.as_ref()),
             // A tuple is an array, so it carries every `Array.prototype` method
             // (`includes`, `map`, …) over the union of its element types — not just
