@@ -23,7 +23,7 @@ use surge_ts_syntax::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedImportKind,
     ParsedNamespaceDeclaration, ParsedStatement, ParsedType, TextSpan,
 };
-use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type, TypeCopyReason};
+use surge_ts_types::{FunctionType, Type, TypeCopyReason};
 
 use crate::checks::function as check_function;
 use crate::checks::var::{VariableCheckOptions, check_variable_declaration_with_symbols};

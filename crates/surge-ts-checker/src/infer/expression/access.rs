@@ -8,7 +8,6 @@ use surge_ts_syntax::{ParsedExpression, TextSpan};
 use surge_ts_types::{Type, is_assignable_to, union_type};
 
 use crate::context::CheckerContext;
-use crate::modules::{PROMISE_LIKE_VALUE_PROPERTY, promise_like_type};
 use crate::program::{record_program_timing, record_property_lookup};
 use crate::symbols::SymbolTable;
 
@@ -326,9 +325,6 @@ pub(crate) fn infer_property_call(
     let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
-        _ if property_name == "then" && promise_like_value_type(&object_type).is_some() => {
-            InferredExpression::Known(promise_like_type(Type::Unknown))
-        }
         Type::Array(element_type) if property_name == "find" => {
             InferredExpression::Known(surge_ts_types::union_type(vec![
                 element_type.as_ref().clone(),
@@ -415,15 +411,6 @@ pub(crate) fn infer_property_call(
 /// genuine error.
 fn no_lib_array_member(object_type: &Type, ctx: &CheckerContext) -> bool {
     ctx.options.no_lib && matches!(object_type, Type::Array(_))
-}
-
-fn promise_like_value_type(ty: &Type) -> Option<Type> {
-    let Type::Object(object_type) = ty.peeled() else {
-        return None;
-    };
-    object_type
-        .get_property_type(PROMISE_LIKE_VALUE_PROPERTY)
-        .cloned()
 }
 
 /// Non-optional element access on an arbitrary object expression (`expr[index]`).

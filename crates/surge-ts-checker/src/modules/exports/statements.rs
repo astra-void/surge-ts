@@ -181,7 +181,7 @@ pub(crate) fn collect_exports_from_statement(
                         {
                             function_type = FunctionType::new(
                                 function_type.parameters().to_vec(),
-                                promise_like_type(value_type),
+                                value_type,
                                 function_type.is_variadic(),
                                 function_type.required_parameter_count(),
                             );

@@ -12,7 +12,6 @@ use crate::checks::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_e
 use crate::checks::expr::evaluate_expression;
 use crate::context::CheckerContext;
 use crate::infer::InferredExpression;
-use crate::modules::{PROMISE_LIKE_VALUE_PROPERTY, promise_like_type};
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 
@@ -173,25 +172,16 @@ pub(crate) fn check_property_call_like(
     if property_name == "all" && is_promise_all_receiver(&object_ty) {
         return check_promise_all_call(arguments, call_span.or(property_span), symbols, ctx);
     }
-    if property_name == "then"
-        && let Some(value_type) = promise_like_value_type(&object_ty)
-    {
-        return check_promise_then_call(value_type, arguments, symbols, ctx);
-    }
     // `Promise<T>` is modeled as its awaited `T`, so a `.then`/`.catch`/`.finally`
     // chained on a promise-returning call lands on the value type and would be
     // reported as a missing member. Treat the receiver as the awaited value
-    // instead — the chain keeps its promise-like result so further links resolve.
+    // instead — the chain keeps its collapsed result so further links resolve.
     if matches!(property_name, "then" | "catch" | "finally")
-        && !object_ty.is_unknown()
-        && object_ty.get_property_access_type(property_name).is_none()
+        && !matches!(object_ty, Type::Unknown)
+        && !declares_own_property(&object_ty, property_name)
     {
-        // The receiver was already collapsed to its awaited value, so the chain's
-        // result is collapsed too — wrapping it back into a promise-like object
-        // would leak that synthetic shape into assignability checks.
         return if property_name == "then" {
             check_promise_then_call(object_ty, arguments, symbols, ctx)
-                .map(|result| promise_like_value_type(&result).unwrap_or(result))
         } else {
             Some(object_ty)
         };
@@ -441,15 +431,6 @@ pub(crate) fn check_property_call_like(
     }
 }
 
-fn promise_like_value_type(ty: &Type) -> Option<Type> {
-    let Type::Object(object_type) = ty.peeled() else {
-        return None;
-    };
-    object_type
-        .get_property_type(PROMISE_LIKE_VALUE_PROPERTY)
-        .cloned()
-}
-
 fn check_promise_then_call(
     value_type: Type,
     arguments: &[ParsedCallArgument],
@@ -457,7 +438,7 @@ fn check_promise_then_call(
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     let Some(callback) = arguments.first() else {
-        return Some(promise_like_type(Type::Unknown));
+        return Some(Type::Unknown);
     };
 
     let callback_type =
@@ -481,14 +462,21 @@ fn check_promise_then_call(
         | InferredExpression::Unknown => Type::Unknown,
     };
 
-    Some(promise_like_type(next_value))
+    Some(next_value)
+}
+
+/// Whether `ty` answers `name` from a member of its own, as opposed to from an
+/// index signature. A `.d.ts` class whose base could not be resolved is left open
+/// with a permissive string index, which would otherwise make every value look
+/// like a thenable.
+fn declares_own_property(ty: &Type, name: &str) -> bool {
+    if let Type::Object(object_type) = ty.peeled() {
+        return object_type.get_property_type(name).is_some();
+    }
+    ty.get_property_access_type(name).is_some()
 }
 
 fn promise_like_awaited_type(ty: &Type) -> Type {
-    if let Some(value_type) = promise_like_value_type(ty) {
-        return value_type;
-    }
-
     if let Type::Reference(reference) = ty {
         let base = reference
             .display

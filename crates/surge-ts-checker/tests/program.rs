@@ -525,6 +525,74 @@ fn program_node_fetch_json_result_reports_ts18046() {
     assert_eq!(codes(&diagnostics), vec!["TS18046"], "{diagnostics:#?}");
 }
 
+// A default-exported promise-returning function is collapsed to its awaited
+// value like every other `Promise<T>`, so a member read on the awaited result
+// resolves instead of landing on a synthetic promise stand-in.
+#[test]
+fn program_default_exported_promise_collapses_to_its_value() {
+    let mut options = CheckerOptions::default();
+    options.resolved_modules.insert(
+        "lib".to_string(),
+        "node_modules/lib/index.d.ts".to_string(),
+    );
+
+    let diagnostics = program_with_options(
+        &[
+            (
+                "node_modules/lib/index.d.ts",
+                "export interface Res { ok: boolean; status: number }\n\
+                 export default function grab(url: string): Promise<Res>;",
+            ),
+            (
+                "src/index.ts",
+                "import grab from 'lib';\n\
+                 export async function read() {\n\
+                     const res = await grab('u');\n\
+                     return res.status;\n\
+                 }\n\
+                 export function chain() {\n\
+                     return grab('u').then((res) => res.ok);\n\
+                 }",
+            ),
+        ],
+        options,
+    );
+
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+}
+
+// The collapse must not invent members: a name the awaited value does not
+// declare still reports.
+#[test]
+fn program_default_exported_promise_value_still_reports_a_missing_member() {
+    let mut options = CheckerOptions::default();
+    options.resolved_modules.insert(
+        "lib".to_string(),
+        "node_modules/lib/index.d.ts".to_string(),
+    );
+
+    let diagnostics = program_with_options(
+        &[
+            (
+                "node_modules/lib/index.d.ts",
+                "export interface Res { ok: boolean }\n\
+                 export default function grab(url: string): Promise<Res>;",
+            ),
+            (
+                "src/index.ts",
+                "import grab from 'lib';\n\
+                 export async function read() {\n\
+                     const res = await grab('u');\n\
+                     return res.missing;\n\
+                 }",
+            ),
+        ],
+        options,
+    );
+
+    assert_eq!(codes(&diagnostics), vec!["TS2339"], "{diagnostics:#?}");
+}
+
 #[test]
 fn program_api_no_lib_hides_generated_default_libs() {
     let diagnostics = program_with_options(
