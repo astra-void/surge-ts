@@ -5698,9 +5698,14 @@ path = "tests/smoke/callable_union_compatible_return_types_return_assignment_mis
 expected_diagnostics = ["TS2322"]
 
 [[case]]
-name = "callable-union-different-arity-still-non-callable-or-pinned"
-path = "tests/smoke/callable_union_different_arity_still_non_callable_or_pinned.ts"
-expected_diagnostics = ["TS2349"]
+# tsc reports nothing here: it synthesizes the union's call signature by
+# intersecting the parameters positionally, and a member that declares fewer of
+# them contributes nothing to the positions it omits. Verified against the
+# pinned TypeScript 7.0.2 oracle on 2026-09-07. The sibling
+# `different-parameter-type` case is the one that still reports.
+name = "callable-union-different-arity-is-callable"
+path = "tests/smoke/callable_union_different_arity_is_callable.ts"
+expected_diagnostics = []
 
 [[case]]
 name = "callable-union-different-parameter-type-still-non-callable-or-pinned"

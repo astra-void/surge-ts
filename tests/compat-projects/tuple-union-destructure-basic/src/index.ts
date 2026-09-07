@@ -74,3 +74,12 @@ export function callThroughANarrowedProperty(path: string): Promise<string> {
   }
   return Promise.resolve('');
 }
+
+type EnabledFn = (opts: { direction: 'up' | 'down' }) => boolean;
+
+declare const enabledOption: EnabledFn | undefined;
+
+export function callAcrossArities(): boolean {
+  const enabled = enabledOption ?? (() => true);
+  return enabled({ direction: 'up' });
+}

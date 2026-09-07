@@ -224,7 +224,14 @@ fn check_callable_union_call(
         return None;
     };
 
-    let representative = &members[0];
+    // tsc synthesizes the union's call signature by intersecting the parameters
+    // positionally, so the member that declares the most of them carries the
+    // arity. A member that simply takes fewer does not make the union
+    // uncallable.
+    let representative = members
+        .iter()
+        .max_by_key(|member| member.parameters().len())
+        .expect("a shared signature has at least one member");
     let return_types = members
         .iter()
         .map(|member| member.return_type().clone())
@@ -271,18 +278,24 @@ fn shared_signature_function_members(union: &UnionType) -> Option<Vec<FunctionTy
         members.push(union_member_call_signature(ty)?);
     }
 
-    let first = members.first()?;
+    // Compared against the member with the most parameters, not the first: a
+    // shorter member (`() => true`, a destructuring default beside
+    // `EnabledFn<T>`) contributes nothing to the positions it does not declare,
+    // and requiring equal arity made calling such a union a false TS2349.
+    // Positions present in *both* must still agree in the strong sense — that is
+    // what keeps a genuinely conflicting union uncallable.
+    let longest = members
+        .iter()
+        .max_by_key(|member| member.parameters().len())?;
     let shares_signature = members.iter().all(|member| {
-        member.parameters().len() == first.parameters().len()
-            && member.required_parameter_count() == first.required_parameter_count()
-            && member.is_variadic() == first.is_variadic()
+        member.is_variadic() == longest.is_variadic()
             && member
                 .parameters()
                 .iter()
-                .zip(first.parameters().iter())
-                .all(|(member_parameter, first_parameter)| {
-                    is_assignable_to(member_parameter, first_parameter)
-                        && is_assignable_to(first_parameter, member_parameter)
+                .zip(longest.parameters().iter())
+                .all(|(member_parameter, longest_parameter)| {
+                    is_assignable_to(member_parameter, longest_parameter)
+                        && is_assignable_to(longest_parameter, member_parameter)
                 })
     });
 
