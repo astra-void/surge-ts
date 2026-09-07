@@ -409,6 +409,16 @@ impl ReferenceTypeDirectiveResolver {
         opts: &ResolverOptions,
         cache: &mut PackageDeclarationResolverCache,
     ) {
+        // Built once, then maintained incrementally: `load_type_package_file` is
+        // the only place `inputs` grows here, and it inserts the very string it
+        // pushes as the input's `file_name`, so a per-round rebuild only
+        // re-derived what the set already held — at one canonicalize-cache probe
+        // and one `String` per input, per round.
+        let mut known_file_names: HashSet<String> = inputs
+            .iter()
+            .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
+            .collect();
+
         loop {
             let pending: Vec<(String, String)> = sources
                 .iter()
@@ -419,11 +429,6 @@ impl ReferenceTypeDirectiveResolver {
             if pending.is_empty() {
                 break;
             }
-
-            let mut known_file_names: HashSet<String> = inputs
-                .iter()
-                .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
-                .collect();
 
             for (file_name, source_text) in pending {
                 self.scanned_files.insert(file_name.clone());
