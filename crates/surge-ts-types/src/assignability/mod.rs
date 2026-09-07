@@ -134,6 +134,21 @@ fn discriminated_union_assignable(from: &Type, to_union: &crate::UnionType) -> b
     if members.len() > MAX_DISCRIMINATED_UNION_MEMBERS {
         return false;
     }
+
+    // Nothing below runs unless the source carries a property that could *be* a
+    // discriminant, so answer that from the source alone first. Peeling resolves
+    // and clones each member's structural form, and this whole function runs on
+    // every object-against-union comparison the member-wise check already
+    // rejected — peeling up to 32 members before knowing there is a candidate
+    // made the common "no discriminant here" answer the expensive one.
+    if !from_object.properties.values().any(|property| {
+        matches!(&property.ty, Type::Union(literals)
+            if literals.types().len() <= MAX_DISCRIMINANT_LITERALS
+                && literals.types().iter().all(is_unit_literal))
+    }) {
+        return false;
+    }
+
     let peeled_members: Vec<Type> = members.iter().map(Type::peeled).collect();
     if !peeled_members
         .iter()
