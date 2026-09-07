@@ -772,6 +772,25 @@ fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
     }
 }
 
+/// Whether a union member can never be the left operand of a *true*
+/// `instanceof` — a primitive, `undefined`/`null`, or `never`.
+fn is_definitely_not_an_object(member: &Type) -> bool {
+    matches!(
+        member,
+        Type::String
+            | Type::StringLiteral(_)
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::BigInt
+            | Type::Symbol
+            | Type::Undefined
+            | Type::Void
+            | Type::Never
+    )
+}
+
 /// Narrows a union by an `x instanceof Ctor` guard. `keep_matching` keeps the
 /// members that are instances of `Ctor` (the `=== true` branch); otherwise
 /// removes them. Members whose membership is undecidable are kept either way.
@@ -798,6 +817,25 @@ pub(super) fn narrow_union_by_instanceof(
         })
         .cloned()
         .collect();
+
+    if kept.is_empty() && keep_matching {
+        // No member *names* the constructor, but `x instanceof C` still proves
+        // the value is an object: a nominal member may be a subclass whose
+        // heritage this name-based test cannot see (`Maybe<TRPCClientError>`
+        // guarded by `instanceof Error`), while a primitive or nullish member
+        // definitely is not. Dropping only the definitely-not members is what
+        // keeps `error.message` from staying `string | undefined`.
+        let objects: Vec<Type> = union
+            .types()
+            .iter()
+            .filter(|member| !is_definitely_not_an_object(member))
+            .cloned()
+            .collect();
+        if !objects.is_empty() && objects.len() < union.types().len() {
+            return Some(union_type(objects));
+        }
+        return None;
+    }
 
     if kept.is_empty() || kept.len() == union.types().len() {
         return None;

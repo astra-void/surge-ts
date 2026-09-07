@@ -181,9 +181,16 @@ pub(crate) fn build_class_value_symbol(
     }
 
     let instance_type = class_instance_type(class, ctx);
-    let construct_signature = class_construct_signature(class, instance_type, ctx);
+    let construct_signature = class_construct_signature(class, instance_type.clone(), ctx);
 
     let mut properties = PropertyMap::default();
+    // Every class value carries `prototype`, typed as the instance — the shape
+    // `Object.setPrototypeOf(this, C.prototype)` reads. A static member named
+    // `prototype` is illegal in TypeScript, so nothing below can overwrite it.
+    properties.insert(
+        "prototype".into(),
+        ObjectProperty::required(instance_type),
+    );
     for member in &class.members {
         match member {
             ParsedClassMember::Property(property) if property.is_static => {
