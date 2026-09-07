@@ -73,6 +73,29 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
         ctx.degraded_expected_type_depth -= 1;
         return result;
     }
+    // An intersection that lost an operand keeps the survivor but marks it open.
+    // The members it could not enumerate are exactly the ones a callback would
+    // have been contextually typed by — tRPC's handler options are
+    // `HTTPBaseHandlerOptions & CreateContextCallback<…> & { … }`, and the
+    // middle operand is a conditional surge cannot decide — so an implicit-any
+    // reported inside such a literal describes the dropped operand, not the
+    // source. The expectation itself is kept: the properties surge *did*
+    // enumerate still type their values.
+    if expected_type.is_some_and(expectation_lost_an_operand) {
+        ctx.degraded_expected_type_depth += 1;
+        let result = evaluate_expression_with_expected_type_inner(
+            expression,
+            fallback_span,
+            target_span,
+            expected_type,
+            expected_diagnostic,
+            symbols,
+            ctx,
+        );
+        ctx.degraded_expected_type_depth -= 1;
+        return result;
+    }
+
     evaluate_expression_with_expected_type_inner(
         expression,
         fallback_span,
@@ -82,6 +105,21 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
         symbols,
         ctx,
     )
+}
+
+/// Whether the expectation is an object an intersection merge left *open*
+/// because one of its operands could not be modelled. Unlike the degradation
+/// sentinel this still carries real properties, so it stays the expectation and
+/// only the implicit-any reporting is suppressed.
+fn expectation_lost_an_operand(expected_type: &Type) -> bool {
+    match expected_type {
+        Type::Object(object) => object.synthetic_open_index,
+        Type::Reference(_) => match expected_type.peeled() {
+            Type::Object(object) => object.synthetic_open_index,
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// Whether the expectation is the degradation sentinel, directly or as a member
