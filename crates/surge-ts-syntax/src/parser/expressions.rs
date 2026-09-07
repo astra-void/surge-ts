@@ -551,14 +551,18 @@ fn parse_instantiation_expression(
         Expression::CallExpression(call_expression) => {
             parse_call_expression_expression_with_type_arguments(call_expression, type_arguments)
         }
+        // `f<T>` / `ns.f<T>` with no argument list is an instantiation
+        // expression, not a call — it denotes the function value with its type
+        // arguments already applied. Lowering it to a zero-argument call
+        // reported `TS2554` against a signature nothing here invokes. The
+        // instantiation is not modelled, so the reference keeps its generic
+        // type and a later call infers from its own arguments.
         Expression::StaticMemberExpression(member_expression) => {
-            parse_property_call_expression_with_type_arguments(member_expression, type_arguments)
+            parse_static_member_expression(member_expression)
         }
-        Expression::Identifier(identifier) => Some(ParsedExpression::Call {
-            callee_name: identifier.name.to_string(),
-            callee_span: Some(text_span_from_oxc_span(identifier.span)),
-            type_arguments,
-            arguments: Vec::new(),
+        Expression::Identifier(identifier) => Some(ParsedExpression::Identifier {
+            name: identifier.name.to_string(),
+            span: Some(text_span_from_oxc_span(identifier.span)),
         }),
         _ => None,
     }
@@ -642,22 +646,6 @@ fn parse_call_expression_expression_with_type_arguments(
             })
         }
     }
-}
-
-fn parse_property_call_expression_with_type_arguments(
-    member_expression: &StaticMemberExpression<'_>,
-    type_arguments: Vec<crate::ParsedType>,
-) -> Option<ParsedExpression> {
-    let (object, object_span) = parse_expression(&member_expression.object);
-    Some(ParsedExpression::PropertyCall {
-        object: Box::new(object),
-        object_span: Some(text_span_from_oxc_span(object_span)),
-        property_name: member_expression.property.name.to_string(),
-        property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
-        call_span: None,
-        type_arguments,
-        arguments: Vec::new(),
-    })
 }
 
 fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
