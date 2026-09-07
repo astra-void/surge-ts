@@ -68,6 +68,16 @@ pub(crate) fn missing_property_diagnostic(
     Diagnostic::ts2339(property_name, &object_type_name, file_name)
 }
 
+const OBJECT_PROTOTYPE_MEMBERS: &[&str] = &[
+    "constructor",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "toString",
+    "valueOf",
+];
+
 /// TS4111 under `noPropertyAccessFromIndexSignature`: a dotted `obj.foo` whose
 /// `foo` resolves through a string index signature rather than a declared
 /// property must instead be written `obj["foo"]`. No-op unless the flag is set.
@@ -80,6 +90,11 @@ pub(super) fn maybe_emit_index_signature_access(
     ctx: &mut CheckerContext,
 ) {
     if !ctx.options.no_property_access_from_index_signature {
+        return;
+    }
+    // `Object.prototype` members resolve on the apparent type, not through the
+    // index signature, so `record.constructor` is a plain property access to tsc.
+    if OBJECT_PROTOTYPE_MEMBERS.contains(&property_name) {
         return;
     }
     if let InferredExpression::Known(object_type) = infer_expression(object, symbols, ctx) {

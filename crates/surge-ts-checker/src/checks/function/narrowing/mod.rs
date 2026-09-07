@@ -674,9 +674,26 @@ fn resolve_predicate_type_in_declaring_scope(
     substitution: &crate::infer::TypeParameterSubstitution,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    let declaring_file = guard
-        .declaring_file
-        .as_deref()
+    resolve_predicate_type_under(
+        guard.predicate_type.clone(),
+        guard.declaring_file.as_deref(),
+        guard.namespace_prefix.as_deref(),
+        substitution,
+        ctx,
+    )
+}
+
+/// Resolves a predicate's written target type under the file (and namespace)
+/// that declared it. A resolution that degrades proves nothing, so it is
+/// dropped rather than narrowed to.
+fn resolve_predicate_type_under(
+    predicate_type: surge_ts_syntax::ParsedType,
+    declaring_file: Option<&str>,
+    namespace_prefix: Option<&str>,
+    substitution: &crate::infer::TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let declaring_file = declaring_file
         .filter(|file| *file != ctx.file_name)
         .map(str::to_string);
     let saved_file_name = declaring_file.map(|file| {
@@ -684,19 +701,14 @@ fn resolve_predicate_type_in_declaring_scope(
         ctx.set_file_name(file);
         saved
     });
-    if let Some(prefix) = guard.namespace_prefix.as_deref() {
+    if let Some(prefix) = namespace_prefix {
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix.to_string());
     }
     let resolved = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        crate::infer::types::resolve_parsed_type(
-            guard.predicate_type.clone(),
-            ctx,
-            &mut Vec::new(),
-            substitution,
-        )
+        crate::infer::types::resolve_parsed_type(predicate_type, ctx, &mut Vec::new(), substitution)
     });
-    if guard.namespace_prefix.is_some() {
+    if namespace_prefix.is_some() {
         ctx.namespace_member_prefix_stack.pop();
         ctx.namespace_member_resolution_depth -= 1;
     }
@@ -708,6 +720,158 @@ fn resolve_predicate_type_in_declaring_scope(
     }
     let ty = resolved.into_ty();
     (!matches!(ty, Type::Unknown)).then_some(ty)
+}
+
+/// A zero-argument method call (`type.isUnion()`) plus the reference it is
+/// called on, the shape a `this is T` predicate guards.
+fn parse_this_predicate_call(
+    condition: &ParsedExpression,
+) -> Option<(String, Vec<String>, &str)> {
+    let ParsedExpression::PropertyCall {
+        object,
+        property_name,
+        type_arguments,
+        arguments,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    if !type_arguments.is_empty() || !arguments.is_empty() {
+        return None;
+    }
+    let (subject, path) = reference_path(object)?;
+    Some((subject, path, property_name.as_str()))
+}
+
+/// The resolved target of a `this is T` method predicate declared on the
+/// receiver's own interface (`interface Type { isUnion(): this is UnionType }`).
+///
+/// Predicates are dropped when a signature resolves to a type — `x is T` and
+/// `this is T` both resolve to `boolean` — so the declaration has to be read
+/// back. Only the receiver's own declaration is consulted: an inherited
+/// predicate would need the heritage chain, which is not what the shapes this
+/// models (`ts.Type`'s `isUnion`/`isIntersection`) declare.
+fn this_predicate_target(
+    receiver_ty: &Type,
+    method: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Reference(reference) = receiver_ty else {
+        return None;
+    };
+    let id = reference.id.as_ref();
+    let separator = id.rfind('\u{0}')?;
+    let (declaring_file, declaration_name) = (&id[..separator], &id[separator + 1..]);
+    let declaration_name = declaration_name.to_string();
+
+    let found = {
+        let crate::symbols::TypeDeclarationInfo::Interface(info) =
+            ctx.lookup_type_declaration(&declaration_name)?
+        else {
+            return None;
+        };
+        if info.file_name.as_ref() != declaring_file {
+            return None;
+        }
+        let member = info.body.members.iter().find(|member| member.name == method)?;
+        let surge_ts_syntax::ParsedType::Function(function) = &member.ty else {
+            return None;
+        };
+        let surge_ts_syntax::ParsedType::Predicate(predicate) = function.return_type.as_ref()
+        else {
+            return None;
+        };
+        if predicate.asserts || predicate.parameter_name != "this" {
+            return None;
+        }
+        (predicate.ty.clone()?, info.file_name.to_string())
+    };
+    let (predicate_type, declaring_file) = found;
+    // A predicate written inside `declare namespace ts` names `ts.UnionType`,
+    // which only resolves under that prefix.
+    let namespace_prefix = declaration_name
+        .rfind('.')
+        .map(|dot| declaration_name[..dot].to_string());
+    resolve_predicate_type_under(
+        predicate_type,
+        Some(declaring_file.as_str()),
+        namespace_prefix.as_deref(),
+        &crate::infer::TypeParameterSubstitution::new(),
+        ctx,
+    )
+}
+
+/// Narrows `symbols` by a `this is T` method predicate, or `None` when the
+/// condition is not one (or it proves nothing new).
+fn narrow_this_predicate_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) -> Option<SymbolTable> {
+    let (subject, path, method) = parse_this_predicate_call(condition)?;
+    if !path.is_empty() {
+        return None;
+    }
+    let symbol = symbols.get(&subject)?;
+    let subject_ty = symbol.ty.clone();
+    let kind = symbol.kind;
+    let function_signature = symbol.function_signature.clone();
+    let target = this_predicate_target(&subject_ty, method, ctx)?;
+    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        narrow_by_predicate(&subject_ty, &target, branch_is_true)
+    })?;
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    narrowed_symbols.insert_narrowed(
+        subject,
+        SymbolInfo {
+            ty: narrowed,
+            kind,
+            function_signature,
+        },
+        subject_ty,
+    );
+    Some(narrowed_symbols)
+}
+
+/// The `ScopeStack` counterpart of [`narrow_this_predicate_symbol_table`].
+fn narrow_this_predicate_call_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let Some((subject, path, method)) = parse_this_predicate_call(condition) else {
+        return false;
+    };
+    if !path.is_empty() {
+        return false;
+    }
+    let Some(symbol) = scopes.resolve(&subject) else {
+        return false;
+    };
+    let subject_ty = symbol.ty.clone();
+    let kind = symbol.kind;
+    let function_signature = symbol.function_signature.clone();
+    let Some(target) = this_predicate_target(&subject_ty, method, ctx) else {
+        return false;
+    };
+    let Some(narrowed) = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        narrow_by_predicate(&subject_ty, &target, branch_is_true)
+    }) else {
+        return true;
+    };
+    let _ = scopes.insert_current_narrowed(
+        subject,
+        SymbolInfo {
+            ty: narrowed,
+            kind,
+            function_signature,
+        },
+        subject_ty,
+    );
+    true
 }
 
 /// Applies user-defined type-predicate narrowing (`isFoo(x)`) in place to a
@@ -770,6 +934,11 @@ fn narrow_type_for_identifier(
             operand,
             ..
         } => narrow_type_for_identifier(operand, var_name, ty, !branch_is_true, scopes, ctx),
+        _ if strip_boolean_literal_comparison(condition).is_some() => {
+            let (inner, flip) = strip_boolean_literal_comparison(condition)
+                .expect("boolean-literal comparison checked above");
+            narrow_type_for_identifier(inner, var_name, ty, branch_is_true != flip, scopes, ctx)
+        }
         ParsedExpression::Logical {
             left,
             operator: ParsedLogicalOperator::Or,
@@ -909,6 +1078,13 @@ fn narrow_single_guard_for_identifier(
     {
         let predicate_ty = resolve_predicate_guard_type(&guard, Some(ty), ctx)?;
         return narrow_by_predicate(ty, &predicate_ty, branch_is_true);
+    }
+    if let Some((subject, path, method)) = parse_this_predicate_call(condition)
+        && path.is_empty()
+        && subject == var_name
+        && let Some(target) = this_predicate_target(ty, method, ctx)
+    {
+        return narrow_by_predicate(ty, &target, branch_is_true);
     }
     if let Some((ParsedExpression::Identifier { name, .. }, property, literal, eq)) =
         parse_discriminant_condition(condition)
@@ -1141,6 +1317,109 @@ fn collect_guard_operand_identifiers(condition: &ParsedExpression, names: &mut V
     }
 }
 
+/// Identifiers a condition *proves* guarded in `branch_is_true`. Unlike
+/// [`collect_guard_operand_identifiers`], which ignores polarity, this walks the
+/// operand shapes whose individual outcomes the branch pins down: `!`, the `&&`
+/// operands of a true branch, and the `||` operands of a false one. That last
+/// case is what the fall-through of `if (typeof x !== "object" || !("p" in x))
+/// return;` needs — both disjuncts are false there, so both guards hold.
+///
+/// The true branch keeps the historical permissive reading of `A || B` (either
+/// disjunct counts), since tightening it would turn suppressed `TS18046`s into
+/// new false positives rather than removing any.
+pub(crate) fn collect_holding_guard_identifiers(
+    condition: &ParsedExpression,
+    branch_is_true: bool,
+    names: &mut Vec<String>,
+) {
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => collect_holding_guard_identifiers(operand, !branch_is_true, names),
+        _ if strip_boolean_literal_comparison(condition).is_some() => {
+            let (inner, flip) = strip_boolean_literal_comparison(condition)
+                .expect("boolean-literal comparison checked above");
+            collect_holding_guard_identifiers(inner, branch_is_true != flip, names);
+        }
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or,
+            right,
+            ..
+        } if !branch_is_true => {
+            collect_holding_guard_identifiers(left, false, names);
+            collect_holding_guard_identifiers(right, false, names);
+        }
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And,
+            right,
+            ..
+        } if branch_is_true => {
+            collect_holding_guard_identifiers(left, true, names);
+            collect_holding_guard_identifiers(right, true, names);
+        }
+        ParsedExpression::Logical {
+            operator: ParsedLogicalOperator::Or,
+            ..
+        } if branch_is_true => collect_guard_operand_identifiers(condition, names),
+        ParsedExpression::Logical { .. } => {}
+        _ => {
+            let name = if branch_is_true {
+                guard_operand_identifier(condition).map(str::to_string)
+            } else {
+                // `typeof x !== "tag"` being false is itself a guard that holds.
+                match parse_typeof_condition(condition) {
+                    Some((ParsedExpression::Identifier { name, .. }, _, false)) => {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(name) = name
+                && !names.iter().any(|existing| *existing == name)
+            {
+                names.push(name);
+            }
+        }
+    }
+}
+
+/// The `||` counterpart of [`narrow_truthy_operand_symbol_table`]: `a || b` only
+/// evaluates `b` when `a` is falsy, so `b` sees every guard `a`'s falsity proves.
+pub(crate) fn narrow_falsy_operand_symbol_table(
+    operand: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<SymbolTable> {
+    let structured = narrow_condition_symbol_table(operand, symbols, false);
+
+    let mut guarded_identifiers = Vec::new();
+    collect_holding_guard_identifiers(operand, false, &mut guarded_identifiers);
+    if guarded_identifiers.is_empty() {
+        return structured;
+    }
+
+    let base = structured.as_ref().unwrap_or(symbols);
+    let mut narrowed = base.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    let mut changed = structured.is_some();
+    for name in &guarded_identifiers {
+        let downgraded = narrowed.get(name).and_then(|symbol| {
+            matches!(symbol.ty, Type::GenuineUnknown).then(|| SymbolInfo {
+                ty: Type::Unknown,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            })
+        });
+        if let Some(downgraded) = downgraded {
+            narrowed.insert(name.clone(), downgraded);
+            changed = true;
+        }
+    }
+    changed.then_some(narrowed)
+}
+
 /// Narrows for a branch by any recognized type guard: a discriminated-union
 /// equality test (`x.kind === "a"`), a `typeof x === "tag"` test, an
 /// `x instanceof Ctor` test, an `Array.isArray(x)` test, an `in`
@@ -1159,6 +1438,9 @@ pub(crate) fn narrow_condition_symbol_table(
     } = condition
     {
         return narrow_condition_symbol_table(operand, symbols, !branch_is_true);
+    }
+    if let Some((inner, flip)) = strip_boolean_literal_comparison(condition) {
+        return narrow_condition_symbol_table(inner, symbols, branch_is_true != flip);
     }
 
     // Every operand of an `&&` holds in its true branch, so a chain narrows by
@@ -1316,6 +1598,12 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
         return right_narrowed.or(left_narrowed);
     }
 
+    if let Some(narrowed) =
+        narrow_this_predicate_symbol_table(condition, symbols, branch_is_true, ctx)
+    {
+        return Some(narrowed);
+    }
+
     let guard = parse_type_predicate_condition(condition, &mut |name| {
         symbols
             .get(name)
@@ -1463,6 +1751,10 @@ fn narrow_predicate_reference_guards_in_scope(
         narrow_predicate_reference_guards_in_scope(operand, scopes, !branch_is_true, ctx);
         return;
     }
+    if let Some((inner, flip)) = strip_boolean_literal_comparison(condition) {
+        narrow_predicate_reference_guards_in_scope(inner, scopes, branch_is_true != flip, ctx);
+        return;
+    }
 
     if let ParsedExpression::Logical {
         left,
@@ -1520,6 +1812,10 @@ fn narrow_value_guards_in_scope(
         narrow_value_guards_in_scope(operand, scopes, !branch_is_true, ctx);
         return;
     }
+    if let Some((inner, flip)) = strip_boolean_literal_comparison(condition) {
+        narrow_value_guards_in_scope(inner, scopes, branch_is_true != flip, ctx);
+        return;
+    }
 
     // In the branch where the condition holds, a guard on a genuinely-`unknown`
     // value narrows it (tsc), so a later access inside the branch is not a
@@ -1528,6 +1824,10 @@ fn narrow_value_guards_in_scope(
     // `narrow_truthy_operand_symbol_table`.
     if branch_is_true {
         downgrade_guarded_genuine_unknown_in_scope(condition, scopes);
+    } else {
+        let mut names = Vec::new();
+        collect_holding_guard_identifiers(condition, false, &mut names);
+        downgrade_genuine_unknown_in_scope(&names, scopes);
     }
 
     if narrow_logical_guard_in_scope(condition, scopes, branch_is_true, ctx) {
@@ -1549,6 +1849,9 @@ fn narrow_value_guards_in_scope(
         return;
     }
     if narrow_predicate_call_in_scope(condition, scopes, branch_is_true, ctx) {
+        return;
+    }
+    if narrow_this_predicate_call_in_scope(condition, scopes, branch_is_true, ctx) {
         return;
     }
     if narrow_truthy_reference_in_scope(condition, scopes, branch_is_true) {
@@ -1973,7 +2276,11 @@ pub(crate) fn evaluate_condition_expression_with_truthy_guards(
                 symbols,
                 ctx,
             );
-            let narrowed_symbols = narrow_truthy_guarded_symbol_table(left, symbols);
+            // `b` in `a || b` runs only when `a` is falsy, so it also sees the
+            // guards that falsity proves.
+            let falsy = narrow_falsy_operand_symbol_table(left, symbols);
+            let narrowed_symbols =
+                narrow_truthy_guarded_symbol_table(left, falsy.as_ref().unwrap_or(symbols));
             let right_result = evaluate_condition_expression_with_truthy_guards(
                 right,
                 right_span.or(fallback_span),

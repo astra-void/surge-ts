@@ -244,8 +244,8 @@ pub(crate) fn evaluate_expression(
             // `a` guard: a structured guard (`x.kind === "k" && x.k`, `"p" in x &&
             // x.p`) plus each identifier/property the `&&` chain proves non-nullish
             // (`a.b && a.b > c`).
-            let narrowed = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::And)
-                .then(|| {
+            let narrowed = match operator {
+                surge_ts_syntax::ParsedLogicalOperator::And => {
                     let guarded =
                         crate::checks::function::narrow_truthy_operand_symbol_table(left, symbols);
                     // That path only knows the syntactic guards; a user-defined
@@ -256,8 +256,15 @@ pub(crate) fn evaluate_expression(
                         guarded.as_ref().unwrap_or(symbols),
                     );
                     downgraded.or(guarded)
-                })
-                .flatten();
+                }
+                // `a || b` only evaluates `b` when `a` is falsy, so the guards
+                // `a`'s falsity proves hold on the right (`typeof x !== "object"
+                // || !("p" in x) || typeof x.p !== "string"`).
+                surge_ts_syntax::ParsedLogicalOperator::Or => {
+                    crate::checks::function::narrow_falsy_operand_symbol_table(left, symbols)
+                }
+                _ => None,
+            };
             // A user-defined predicate in the chain narrows its subject for the
             // right operand too (`ts.isImportDeclaration(n) && n.moduleSpecifier`).
             // `a || b` only evaluates `b` when `a` is falsy, so a negated

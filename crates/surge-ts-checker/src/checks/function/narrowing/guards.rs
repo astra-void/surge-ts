@@ -624,6 +624,54 @@ pub(super) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
     Some(union_type(kept))
 }
 
+/// A guard compared against a boolean literal (`isObject(o) === false`,
+/// `guard(x) !== true`) is the same guard with a possibly flipped branch.
+/// Returns the inner condition and whether the polarity flips.
+///
+/// Restricted to call-shaped and negated inner expressions: a bare
+/// `flag === false` is an ordinary equality test, not a type guard, and
+/// rewriting it would change unrelated truthiness narrowing.
+pub(super) fn strip_boolean_literal_comparison(
+    condition: &ParsedExpression,
+) -> Option<(&ParsedExpression, bool)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let equality = match operator {
+        ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::Equals => true,
+        ParsedBinaryOperator::StrictNotEquals | ParsedBinaryOperator::NotEquals => false,
+        _ => return None,
+    };
+    fn guard_shaped(expression: &ParsedExpression) -> bool {
+        matches!(
+            expression,
+            ParsedExpression::Call { .. }
+                | ParsedExpression::PropertyCall { .. }
+                | ParsedExpression::Unary {
+                    operator: ParsedUnaryOperator::Not,
+                    ..
+                }
+        )
+    }
+    let (inner, literal) = match (left.as_ref(), right.as_ref()) {
+        (inner, ParsedExpression::BooleanLiteral(literal)) if guard_shaped(inner) => {
+            (inner, *literal)
+        }
+        (ParsedExpression::BooleanLiteral(literal), inner) if guard_shaped(inner) => {
+            (inner, *literal)
+        }
+        _ => return None,
+    };
+    Some((inner, equality != literal))
+}
+
 /// Parses a `typeof x === "tag"` / `!==` guard, returning the operand expression,
 /// the tag string, and whether the operator is equality (vs inequality).
 pub(super) fn parse_typeof_condition(
