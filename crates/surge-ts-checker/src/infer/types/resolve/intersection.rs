@@ -73,6 +73,38 @@ pub(crate) fn resolve_intersection_type(
 /// at 8x a shape that is rare in practice; wider unions keep the single merge.
 const MAX_DISTRIBUTED_UNION_ARITY: usize = 8;
 
+/// Nesting bound for union distribution. Each arm's merge peels its operands,
+/// and peeling a deferred intersection reference re-enters the merge — a
+/// self-referential shape recursed until the stack gave out once *every* union
+/// operand distributed rather than only a lone one. Beyond this depth the merge
+/// falls through to the single open form, which is what it did for these shapes
+/// before distribution reached them at all.
+const MAX_DISTRIBUTION_DEPTH: u32 = 2;
+
+thread_local! {
+    static DISTRIBUTION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+struct DistributionDepth;
+
+impl DistributionDepth {
+    fn enter() -> Option<Self> {
+        DISTRIBUTION_DEPTH.with(|depth| {
+            if depth.get() >= MAX_DISTRIBUTION_DEPTH {
+                return None;
+            }
+            depth.set(depth.get() + 1);
+            Some(Self)
+        })
+    }
+}
+
+impl Drop for DistributionDepth {
+    fn drop(&mut self) {
+        DISTRIBUTION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
 fn merge_intersection_members(members: Vec<Type>) -> Type {
     if members.iter().any(|ty| matches!(ty, Type::Any)) {
         return Type::Any;
@@ -139,43 +171,54 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     // `(A | B) & C` is `(A & C) | (B & C)`. The object merge below only reads
     // `Type::Object` operands, so an undistributed union operand contributes
     // nothing: the merged surface keeps only `C`'s properties and every use of an
-    // `A`/`B` member is reported as an excess property. Distribution rebuilds the
-    // merged property map once per arm, so it is bounded — a wider union, or a
-    // second union operand (whose product is quadratic), instead falls through to
-    // the single merge marked open, which suppresses the excess-property report
-    // for the names surge did not enumerate.
-    let mut union_operands = members
+    // `A`/`B` member is reported as an excess property.
+    //
+    // Every union operand distributes, not just a lone one — tRPC's server-side
+    // helper options are `(queryClient | queryClientConfig) & (external |
+    // internal)`, two unions, and keeping only the first one's members made
+    // every `router`/`ctx`/`client` read a false TS2339. The bound is on the
+    // *product*: each arm rebuilds the whole merged property map, so the cap
+    // holds the worst case at `MAX_DISTRIBUTED_UNION_ARITY` merges however the
+    // operands split. Anything wider falls through to the single merge marked
+    // open, which suppresses the excess-property report for the names surge did
+    // not enumerate.
+    let union_operands: Vec<(usize, Vec<Type>)> = members
         .iter()
         .enumerate()
         .filter_map(|(index, ty)| match ty {
-            Type::Union(union) => Some((index, union.types())),
+            Type::Union(union) => Some((index, union.types().to_vec())),
             _ => None,
+        })
+        .collect();
+    let unenumerated_union_operand = !union_operands.is_empty();
+    let product = union_operands
+        .iter()
+        .try_fold(1usize, |product, (_, arms)| {
+            (!arms.is_empty()).then(|| product.saturating_mul(arms.len()))
         });
-    let lone_union_operand = match (union_operands.next(), union_operands.next()) {
-        (Some(lone), None) => Some(lone),
-        _ => None,
-    };
-    let unenumerated_union_operand = members.iter().any(|ty| matches!(ty, Type::Union(_)));
-    if let Some((index, arms)) = lone_union_operand
-        && !arms.is_empty()
-        && arms.len() <= MAX_DISTRIBUTED_UNION_ARITY
+    if let Some(product) = product
+        && !union_operands.is_empty()
+        && product <= MAX_DISTRIBUTED_UNION_ARITY
+        && let Some(_guard) = DistributionDepth::enter()
     {
-        let arms = arms.to_vec();
         let operand_names: Vec<String> = members.iter().map(Type::name).collect();
-        let distributed: Vec<Type> = arms
-            .into_iter()
-            .map(|arm| {
-                let mut operands = members.clone();
-                let mut names = operand_names.clone();
-                names[index] = arm.name();
-                operands[index] = arm;
-                merge_intersection_members_now(
-                    operands,
-                    Some(names.join(" & ")),
-                    dropped_unmodelled_operand,
-                )
-            })
-            .collect();
+        let mut distributed = Vec::with_capacity(product);
+        for selection in 0..product {
+            let mut operands = members.clone();
+            let mut names = operand_names.clone();
+            let mut remaining = selection;
+            for (index, arms) in &union_operands {
+                let arm = &arms[remaining % arms.len()];
+                remaining /= arms.len();
+                names[*index] = arm.name();
+                operands[*index] = arm.clone();
+            }
+            distributed.push(merge_intersection_members_now(
+                operands,
+                Some(names.join(" & ")),
+                dropped_unmodelled_operand,
+            ));
+        }
         return surge_ts_types::union_type(distributed);
     }
 
