@@ -2,7 +2,7 @@ use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{ParsedBinaryOperator, ParsedUnaryOperator, TextSpan as SyntaxTextSpan};
 use surge_ts_types::{Type, union_type};
 
-use crate::checks::expr::operand_display_name;
+use crate::checks::expr::{operand_display_name, widen_type};
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::InferredExpression;
 
@@ -395,18 +395,28 @@ fn evaluate_equality_binary(
 
     if !types_overlap_for_equality(left_type, right_type) {
         let file_name = ctx.file_name.clone();
+        let (left_name, right_name) = equality_operand_display_names(left_type, right_type);
         push_diagnostic(
             ctx,
-            Diagnostic::ts2367(
-                &operand_display_name(left_type),
-                &operand_display_name(right_type),
-                file_name,
-            ),
+            Diagnostic::ts2367(&left_name, &right_name, file_name),
             fallback_span,
         );
     }
 
     InferredExpression::Known(Type::Boolean)
+}
+
+/// Operand names for TS2367, mirroring tsc's `getBaseTypesIfUnrelated`: the
+/// widened operands are reported only when widening does not make them
+/// comparable. `1 === "string"` reads `'number'` and `'string'`, while
+/// `"a" === "b"` and a literal-union subject keep their literal names.
+fn equality_operand_display_names(left: &Type, right: &Type) -> (String, String) {
+    let left_base = widen_type(left);
+    let right_base = widen_type(right);
+    if types_overlap_for_equality(&left_base, &right_base) {
+        return (left.name(), right.name());
+    }
+    (left_base.name(), right_base.name())
 }
 
 fn inferred_type(result: &InferredExpression) -> Option<&Type> {

@@ -7446,6 +7446,12 @@ fn then_chain_on_awaited_call_result_resolves() {
 
 // Assigning to a union-declared variable narrows it (the lazy-singleton idiom),
 // but only within the block that assigned — a branch assignment must not leak.
+//
+// The `pick` half also pins literal-equality narrowing: `target` is
+// `"draft-07"` on both edges into the second test, so tsc 7.0.2 reports
+// `TS2367` there (verified against the oracle at the same file/code/line/column
+// and message text). This assertion held `[]` while surge had no
+// literal-equality narrowing at all.
 #[test]
 fn assignment_narrows_union_within_its_block_only() {
     let diagnostics = check_source(
@@ -7467,7 +7473,7 @@ fn assignment_narrows_union_within_its_block_only() {
          export const use = [get, pick];\n",
         "example.ts",
     );
-    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+    assert_eq!(codes(&diagnostics), vec!["TS2367"]);
 }
 
 // An overload group folds into one callable shape: a call selecting a later

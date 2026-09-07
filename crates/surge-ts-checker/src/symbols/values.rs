@@ -299,6 +299,15 @@ impl SymbolTable {
     /// Walks the parent chain in lockstep with `get`, so a scope that declares
     /// its own `name` (an inner function shadowing a narrowed outer binding)
     /// stops the search rather than inheriting the outer declaration's type.
+    /// The names this table itself narrowed, i.e. the ones whose entry holds a
+    /// narrowed type with the pre-narrowing type recorded beside it.
+    pub(crate) fn narrowed_names(&self) -> impl Iterator<Item = &Arc<str>> {
+        self.declared_types
+            .as_ref()
+            .into_iter()
+            .flat_map(|declared_types| declared_types.keys())
+    }
+
     pub(crate) fn declared_type(&self, name: &str) -> Option<&Type> {
         if self.symbols.contains_key(name) {
             return self

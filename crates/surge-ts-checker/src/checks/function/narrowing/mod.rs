@@ -1200,6 +1200,11 @@ fn narrow_single_guard_for_identifier(
     {
         return narrow_union_by_nullish(ty, branch_is_true == eq);
     }
+    if let Some((name, literal, eq)) = parse_identifier_literal_equality(condition)
+        && name == var_name
+    {
+        return narrow_by_literal_equality(ty, &literal, branch_is_true == eq);
+    }
     if let Some((ParsedExpression::Identifier { name, .. }, property)) =
         parse_in_condition(condition)
         && name == var_name
@@ -1233,16 +1238,16 @@ fn collect_equality_guard_subjects(condition: &ParsedExpression, names: &mut Vec
         }
         _ => {
             let subject = match parse_discriminant_condition(condition) {
-                Some((ParsedExpression::Identifier { name, .. }, _, _, _)) => Some(name),
+                Some((ParsedExpression::Identifier { name, .. }, _, _, _)) => Some(name.as_str()),
                 _ => match parse_nullish_equality_condition(condition) {
-                    Some((ParsedExpression::Identifier { name, .. }, _)) => Some(name),
-                    _ => None,
+                    Some((ParsedExpression::Identifier { name, .. }, _)) => Some(name.as_str()),
+                    _ => parse_identifier_literal_equality(condition).map(|(name, _, _)| name),
                 },
             };
             if let Some(name) = subject
                 && !names.iter().any(|existing| existing == name)
             {
-                names.push(name.clone());
+                names.push(name.to_string());
             }
         }
     }
@@ -1561,13 +1566,94 @@ pub(crate) fn narrow_condition_symbol_table(
         return narrow_condition_symbol_table(right, base, true).or(left_narrowed);
     }
 
+    // `A || B` holds when either disjunct does, so the subject is the union of
+    // what each proves. A disjunct that narrows nothing leaves the subject
+    // unconstrained, and the union collapses back to the declared type — which
+    // is why both sides have to narrow for this to say anything.
+    if branch_is_true
+        && let ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or,
+            right,
+            ..
+        } = condition
+    {
+        return union_disjunct_narrowings(
+            symbols,
+            &narrow_condition_symbol_table(left, symbols, true)?,
+            &narrow_condition_symbol_table(right, symbols, true)?,
+        );
+    }
+
     narrow_discriminant_symbol_table(condition, symbols, branch_is_true)
+        .or_else(|| narrow_literal_equality_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_typeof_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_instanceof_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_array_isarray_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_property_presence_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_nullish_equality_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_reference_guard_symbol_table(condition, symbols, branch_is_true))
+}
+
+/// Merges the two disjunct narrowings of an `A || B` true branch: each name
+/// either side narrowed becomes the union of what both leave it as.
+fn union_disjunct_narrowings(
+    symbols: &SymbolTable,
+    left: &SymbolTable,
+    right: &SymbolTable,
+) -> Option<SymbolTable> {
+    let mut names: Vec<Arc<str>> = left.narrowed_names().cloned().collect();
+    for name in right.narrowed_names() {
+        if !names.contains(name) {
+            names.push(Arc::clone(name));
+        }
+    }
+
+    let mut merged = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    let mut changed = false;
+    for name in names {
+        let (Some(declared), Some(left_symbol), Some(right_symbol)) =
+            (symbols.get(&name), left.get(&name), right.get(&name))
+        else {
+            continue;
+        };
+        let narrowed = union_type(vec![left_symbol.ty.clone(), right_symbol.ty.clone()]);
+        if narrowed == declared.ty {
+            continue;
+        }
+        let declared_ty = declared.ty.clone();
+        let narrowed_symbol = SymbolInfo {
+            ty: narrowed,
+            kind: declared.kind,
+            function_signature: declared.function_signature.clone(),
+        };
+        merged.insert_narrowed(Arc::clone(&name), narrowed_symbol, declared_ty);
+        changed = true;
+    }
+
+    changed.then_some(merged)
+}
+
+/// Narrows `symbols` by a bare `x === "lit"` / `x !== 3` test.
+fn narrow_literal_equality_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let (name, literal, eq) = parse_identifier_literal_equality(condition)?;
+    let symbol = symbols.get(name)?;
+    let narrowed = narrow_by_literal_equality(&symbol.ty, &literal, branch_is_true == eq)?;
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    narrowed_symbols.insert_narrowed(
+        name.to_string(),
+        SymbolInfo {
+            ty: narrowed,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        },
+        symbol.ty.clone(),
+    );
+    Some(narrowed_symbols)
 }
 
 /// Narrows `symbols` by a truthy or `typeof` guard on a reference the
@@ -1962,6 +2048,9 @@ fn narrow_value_guards_in_scope(
     if narrow_nullish_equality_in_scope(condition, scopes, branch_is_true) {
         return;
     }
+    if narrow_literal_equality_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
 
     let parsed = {
         let symbols = scopes.visible_symbols();
@@ -2327,6 +2416,40 @@ fn narrow_nullish_equality_in_scope(
             keep_matching: branch_is_true == eq,
         },
         scopes,
+    );
+    true
+}
+
+/// Applies `x === "lit"` / `x !== 3` narrowing in place to a `ScopeStack`.
+/// Composite conditions reach the same leaf through
+/// [`narrow_single_guard_for_identifier`]; this is the bare form, which never
+/// enters that path. Returns whether the subject narrowed.
+fn narrow_literal_equality_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let Some((name, literal, eq)) = parse_identifier_literal_equality(condition) else {
+        return false;
+    };
+    let Some(symbol) = scopes.resolve(name) else {
+        return false;
+    };
+    let declared = symbol.ty.clone();
+    let kind = symbol.kind;
+    let function_signature = symbol.function_signature.clone();
+    let Some(narrowed) = narrow_by_literal_equality(&declared, &literal, branch_is_true == eq)
+    else {
+        return false;
+    };
+    let _ = scopes.insert_current_narrowed(
+        name.to_string(),
+        SymbolInfo {
+            ty: narrowed,
+            kind,
+            function_signature,
+        },
+        declared,
     );
     true
 }

@@ -137,6 +137,118 @@ pub(super) fn narrow_union_by_discriminant(
     Some(union_type(kept))
 }
 
+/// Parses `value === "lit"` / `value !== 3` on a bare identifier — the
+/// whole-value form of an equality test, as opposed to the discriminant form
+/// (`value.kind === "lit"`) [`parse_discriminant_condition_with`] handles.
+/// Returns the identifier, the literal type, and whether the operator is an
+/// equality test.
+pub(super) fn parse_identifier_literal_equality(
+    condition: &'_ ParsedExpression,
+) -> Option<(&'_ str, Type, bool)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let eq = match operator {
+        ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::Equals => true,
+        ParsedBinaryOperator::StrictNotEquals | ParsedBinaryOperator::NotEquals => false,
+        _ => return None,
+    };
+
+    if let ParsedExpression::Identifier { name, .. } = left.as_ref()
+        && let Some(literal) = literal_expression_value(right)
+    {
+        return Some((name.as_str(), literal, eq));
+    }
+    if let ParsedExpression::Identifier { name, .. } = right.as_ref()
+        && let Some(literal) = literal_expression_value(left)
+    {
+        return Some((name.as_str(), literal, eq));
+    }
+    None
+}
+
+/// The wide primitive a unit literal inhabits, so `raw === "query"` can narrow a
+/// plainly `string`-typed binding down to the literal the way tsc does.
+fn literal_base_primitive(literal: &Type) -> Option<Type> {
+    match literal {
+        Type::StringLiteral(_) => Some(Type::String),
+        Type::NumberLiteral(_) => Some(Type::Number),
+        Type::BooleanLiteral(_) => Some(Type::Boolean),
+        _ => None,
+    }
+}
+
+/// Whether narrowing a subject by a literal equality test says anything at all.
+/// A degraded or `any` subject carries no members to filter, and narrowing it to
+/// the literal would invent a type the value never had.
+fn literal_equality_applies(ty: &Type) -> bool {
+    !ty.is_unknown() && !matches!(ty, Type::Any | Type::GenuineUnknown | Type::Never)
+}
+
+/// Narrows `ty` by `=== <literal>` (`keep_matching`) or `!== <literal>`.
+///
+/// The matching branch keeps the union members the literal can inhabit, and
+/// replaces a member the literal is strictly narrower than — `string` for
+/// `"query"` — with the literal itself. The complement drops only the members
+/// that *are* the literal; a wider member survives, since a `string` that is not
+/// `"query"` is still a `string`.
+pub(super) fn narrow_by_literal_equality(
+    ty: &Type,
+    literal: &Type,
+    keep_matching: bool,
+) -> Option<Type> {
+    if !literal_equality_applies(ty) {
+        return None;
+    }
+    let base = literal_base_primitive(literal)?;
+
+    let Type::Union(union) = ty else {
+        if !keep_matching || *ty != base {
+            return None;
+        }
+        return Some(literal.clone());
+    };
+
+    let members = union.types();
+    if keep_matching {
+        let mut kept: Vec<Type> = Vec::new();
+        for member in members {
+            let narrowed = if *member == *literal {
+                literal.clone()
+            } else if *member == base {
+                literal.clone()
+            } else {
+                continue;
+            };
+            if !kept.contains(&narrowed) {
+                kept.push(narrowed);
+            }
+        }
+        if kept.is_empty() {
+            return None;
+        }
+        let narrowed = union_type(kept);
+        (narrowed != *ty).then_some(narrowed)
+    } else {
+        let kept: Vec<Type> = members
+            .iter()
+            .filter(|member| **member != *literal)
+            .cloned()
+            .collect();
+        if kept.is_empty() || kept.len() == members.len() {
+            return None;
+        }
+        Some(union_type(kept))
+    }
+}
+
 /// Parses an `expr === null` / `expr === undefined` (or `!==`) test. Returns the
 /// tested expression and whether the operator is an equality test. `null` and
 /// `undefined` are the same [`Type::Undefined`] in this model, so both spellings
