@@ -20,8 +20,8 @@ than copying them.
 
 | Field | Value |
 | --- | --- |
-| Date | 2026-09-03 |
-| Commit | `b090760` (clean checkout; built and measured from a detached worktree at that commit) |
+| Date | 2026-09-07 |
+| Commit | `bda16e0` (clean checkout; built and measured from a detached worktree at that commit) |
 | Hardware | Apple M1 Pro (MacBookPro18,1), 10 cores, 16 GiB RAM |
 | OS | macOS 27.0 (build 26A5425a) |
 | Toolchain | rustc 1.94.0, Node v22.23.2, pnpm 11.13.0, TypeScript oracle 7.0.2 |
@@ -37,35 +37,32 @@ detached worktree at the commit you intend to cite and point the harness at it
 with `SURGE_TS_BIN`, so an in-progress working tree cannot leak into a recorded
 number.
 
-**One number in this snapshot is deliberately absent.** Wall-clock benchmark
-medians were **not** re-measured at this commit: the machine was carrying an
-unrelated concurrent test run (load average ~120–145) for the whole
-measurement window. Peak memory, diagnostic counts, and the output hash are
-unaffected and are recorded; see
-[§ Current performance state](#current-performance-state).
+**This snapshot carries an open regression that is not from the work at this
+commit.** tRPC's peak memory footprint and wall time roughly doubled between the
+previous snapshot and this one, bisected to `4b3bcc0`; the measurement and the
+bisect are in [§ Current performance state](#current-performance-state).
 
 ### Gates
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1786 / 1786 passed** |
+| Workspace tests | `cargo nextest run --workspace` | **1828 / 1828 passed** |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **122 / 122 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **122 / 122 passed** |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **122 / 122 passed** |
-| Oracle preset sweep — both strict flags | same + both | **122 / 122 passed** |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **136 / 136 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **136 / 136 passed** |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **136 / 136 passed** |
+| Oracle preset sweep — both strict flags | same + both | **136 / 136 passed** |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
 | Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 122 presets the
-sweep saw 206 `tsc` diagnostics and 206 `surge-ts` diagnostics, with
+parity against the upstream TypeScript compiler. Across all 136 presets the
+sweep saw 225 `tsc` diagnostics and 225 `surge-ts` diagnostics, with
 `onlyTsc = 0` and `onlyRust = 0`.
 
-**Message text and span/column now match on every registered preset.** Both
-strict sweeps are green for the first time — the nine drifting targets recorded
-on 2026-09-01 were closed at this commit, and their deltas plus the fixes are
-kept in
+**Message text and span/column match on every registered preset.** Both strict
+sweeps have been green since 2026-09-03; the nine drifting targets recorded on
+2026-09-01 were closed then, and their deltas plus the fixes are kept in
 [STRICT_DRIFT_INVENTORY.md § Current snapshot](STRICT_DRIFT_INVENTORY.md#current-snapshot-2026-09-03).
 The strict flags are still *separate dimensions* — a future preset may reopen
 one without failing the normal gate — so the exit codes remain non-gating in CI
@@ -129,9 +126,9 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 122 oracle presets under `tests/compat-projects/`, all green at the normal
+- 136 oracle presets under `tests/compat-projects/`, all green at the normal
   gate **and at both strict gates** (see the table above).
-- 346 compat-project fixtures in total; the ones not registered as oracle
+- 360 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
@@ -152,7 +149,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **ofetch** (unjs/ofetch) | `1dbc37f` | 1 | 1 | **exact** — same file/code/line and message text (TS5108) |
 | **zod** | `912f0f5` | 21 | 21 | **exact** — every diagnostic matched, message text included |
 | **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
-| **trpc** | `dfbafa8` | 1244 | 1190 | measured baseline, **not** a parity target |
+| **trpc** | `dfbafa8` | 1244 | 1153 | measured baseline, **not** a parity target |
 | **auth-kit** | — | — | — | **not measured** — the project is absent on this machine |
 
 Notes that matter:
@@ -172,10 +169,13 @@ Notes that matter:
 - **trpc** is a *measured baseline*, never a parity claim. `tsc` itself reports
   over a thousand diagnostics there (many from examples with unresolved
   workspace imports), and the divergence is two-sided. At this commit the
-  file/code/line drift is **206**: 130 diagnostics `tsc` reports and surge does
-  not (led by TS7006 ×38, TS2339 ×29, TS2686 ×12, TS2883 ×10) and 76 surge-only
-  (led by TS2339 ×18, TS7006 ×13, TS2322 ×9). On the 1,114 locations both
-  compilers agree on, message text matches **1114 / 1114**.
+  file/code/line drift is **155**: 123 diagnostics `tsc` reports and surge does
+  not (led by TS7006 ×38, TS2339 ×29, TS2883 ×10, TS18048 ×8) and 32 surge-only
+  (led by TS2339 ×9, TS2349 ×5, TS2322 ×4, TS7006 ×3, TS4111 ×3). On the 1,121
+  locations both compilers agree on, message text matches **1121 / 1121**.
+  The surge-only side came down from 65 at `019fb8b` over the 2026-09-07
+  session; what remains is listed in
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#trpc-surge-only-inventory-2026-09-07).
 - `auth-kit` is a private project that is not present on this machine. Its
   last recorded result was 0/0 (see
   [STRICT_DRIFT_INVENTORY.md § 11](STRICT_DRIFT_INVENTORY.md)); that figure is
@@ -333,27 +333,42 @@ projects, hardware, allocators, or build profiles, and they are not a compiler
 comparison.
 
 tRPC monorepo at `.local-projects/trpc`, checkout `dfbafa8` (2026-07-26),
-project mode, `--jobs auto`, cold process over a warm filesystem cache. Measured
-as an **interleaved A/B** against a release binary built from a clean worktree at
-`f63641d`, the previous snapshot commit: alternating runs, five pairs.
+project mode, `--jobs auto`, cold process over a warm filesystem cache, peak
+*physical footprint* from `/usr/bin/time -l`. Every column is an **interleaved
+A/B** against release binaries built from clean worktrees at the named commits.
 
-| Metric | `f63641d` | `b090760` |
+| Metric | `b090760` (prev. snapshot) | `019fb8b` (session start) | `bda16e0` (this commit) |
+| --- | ---: | ---: | ---: |
+| Peak physical footprint, median | 1.013 GB | 2.012 GB | **2.009 GB** |
+| Wall time, median | 4.85 s | 8.23 s | **8.06 s** |
+| Diagnostics emitted | 1,190 | 1,186 | **1,153** |
+
+`b090760` ↔ `bda16e0` is four interleaved pairs and `b090760` ↔ `019fb8b` three,
+both on a quiet machine (load average ~6). `019fb8b` ↔ `bda16e0` is twelve
+pairs, taken earlier under an unrelated external workload (load averages
+72–106): the footprint held at 2.004–2.017 GB on both sides and the wall-time
+medians straddled zero (8.73 s vs 8.97 s), so **this session is neutral on
+both** and its wall-time delta is not quotable more tightly than that.
+
+**There is an open ~2x memory regression on this workload, and it is not from
+this session.** Peak footprint doubled and wall time roughly doubled somewhere
+between the previous snapshot and the start of the 2026-09-07 session. Bisected
+by interleaved measurement over that range:
+
+| Commit | Peak footprint | Wall |
 | --- | ---: | ---: |
-| Peak physical footprint | 1.048 GB | **1.086 GB** (+3.7%) |
-| Diagnostics emitted | 1,191 | **1,190** |
-| Wall time, median | 3.88 s | 4.04 s (+4.1%) |
+| `b08adb7` fix(check): narrow Array.filter by a type-predicate callback | 1.011 GB | 5.7–7.0 s |
+| `4b3bcc0` fix(program): merge declare-global types before lowering ambient script values | **2.009 GB** | 10.8 s |
 
-**The +3.7% footprint is the price of this commit's diagnostic display
-metadata** — parameter names, alias names and render flags now ride on every
-`UnionType`/`FunctionType` handle. It reproduced to within 0.2 points across
-every A/B run of the session, including runs on a loaded machine where wall time
-did not. Interning the parameter-name strings is the obvious reduction if it
-needs to come down: `value`/`props`/`event` repeat heavily across a program.
+Those two are adjacent, so `4b3bcc0` is the commit that introduced it. Later
+commits recovered part of the wall-clock cost (10.8 s → ~8 s) but none of the
+memory. This is unresolved and unattributed work, recorded here rather than
+carried silently: [AGENTS.md](AGENTS.md) makes a doubling on the flagship
+workload a blocker-class number.
 
-The wall-time row is the one quiet-machine measurement of the session; later
-re-runs landed between +3% and +10% under load averages of 25–92 and are not
-quotable. Treat +4% as the honest figure and re-measure before quoting anything
-tighter.
+The diagnostic count moved because that was the point of the 2026-09-07 session:
+33 fewer emitted diagnostics on tRPC, every one of them a surge-only
+over-report (see [§ Real-project compatibility](#real-project-compatibility)).
 
 **Caveats, all of which matter:**
 
@@ -365,8 +380,8 @@ tighter.
   require interleaved A/B runs in one session. See
   [BENCHMARKS.md § Methodology](BENCHMARKS.md#methodology).
 - There is no incremental or persistent mode; every run is a full check.
-- The diagnostic surface moved by one (1,191 → 1,190, the optional-property
-  false positive), so this is not a like-for-like comparison of identical work.
+- The diagnostic surface moved by 33 (1,186 → 1,153), so this is not a
+  like-for-like comparison of identical work.
 
 Performance history, methodology, and the reproduction recipe live in
 [BENCHMARKS.md](BENCHMARKS.md); the detailed engineering investigations live in
@@ -379,11 +394,11 @@ Performance history, methodology, and the reproduction recipe live in
 - **No full TypeScript compatibility claim.** The oracle gate establishes
   parity on the covered fixtures and projects only.
 - **No general message-text or span/column parity claim.** Both strict sweeps
-  are green across the 122 registered presets at this commit, which is a
+  are green across the 136 registered presets at this commit, which is a
   statement about those fixtures — not about arbitrary code. The strict flags
   stay non-gating so a new preset can record a drift without failing CI.
 - **No claim that trpc matches `tsc`.** It is a workload and a measured
-  baseline; 206 diagnostics still differ in each direction combined.
+  baseline; 155 diagnostics still differ in each direction combined.
 - **No wall-clock performance claim at this commit** — see the caveat above.
 - **No cross-tool performance claim.** `pnpm bench:compilers` exists as a
   developer aid; its output is local-machine-relative and is not a marketing

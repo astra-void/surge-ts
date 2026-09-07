@@ -15,23 +15,18 @@ Cargo crates are still named `surge-ts-*`; the CLI binary is `surge`.
 > reproductions. Where a number appears in both places, `CURRENT_STATUS.md` is
 > the one that gets re-measured.
 
-Verified on 2026-09-01 at commit `37dfb3a` (TypeScript 7.0.2 oracle, Apple M1
-Pro, release build):
+The per-project counts are volatile, so they live in
+[CURRENT_STATUS.md § Real-project compatibility](CURRENT_STATUS.md#real-project-compatibility)
+and nowhere else; that table is the one that gets re-measured. What lives here
+is the detail behind it: the per-project drift inventories below, the
+burn-down history, and the known-limitation reproductions.
 
-| Project | `tsc` | `surge-ts` | Verdict |
-| --- | ---: | ---: | --- |
-| ky | 0 | 0 | exact |
-| unnamed | 0 | 0 | exact |
-| ofetch | 1 | 1 | exact, including file/code/line and message text |
-| zod | 21 | 22 | one surge-only over-report |
-| trpc | 1,244 | 1,228 | measured baseline, not a parity target |
-| auth-kit | 0 | 0 | **last recorded** result; the project is absent on this machine and was not re-measured |
-
-- The oracle preset sweep is **117/117** under the normal gate (diagnostic
-  code-count and file/code/line). Message-text and span/column drift are
-  reported but non-gating unless `--strictMessages` / `--strictSpans` are
-  passed; the current strict state is 109/117 and 116/117 respectively (see
-  [STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md)).
+- The oracle preset sweep is green under the normal gate (diagnostic code-count
+  and file/code/line). Message-text and span/column drift are reported but
+  non-gating unless `--strictMessages` / `--strictSpans` are passed (see
+  [STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md)). The preset count and
+  the current strict state are recorded in
+  [CURRENT_STATUS.md § Gates](CURRENT_STATUS.md#gates).
 - The compact `diagnostics-pack` preset is green at exact 31/31 parity under
   the normal gate *and* both strict gates. It pins duplicate declaration /
   function-implementation parity (TS2451/TS2393 on every conflicting
@@ -58,6 +53,39 @@ Pro, release build):
   [BENCHMARKS.md](BENCHMARKS.md); everything older is in
   [docs/history/](docs/history/) and [docs/perf/](docs/perf/) as a
   point-in-time record.
+
+## trpc surge-only inventory (2026-09-07)
+
+Measured at commit `bda16e0` against the pinned TypeScript 7.0.2 oracle, tRPC
+checkout `dfbafa8`. `tsc` reports 1,244 diagnostics there and surge-ts 1,153;
+this section lists only the **surge-only** side — locations where surge reports
+something `tsc` does not. It is a burn-down list, not a parity claim: the
+`tsc`-only side (123 at this commit) is tracked separately, and neither side is
+gated.
+
+The surge-only side was 65 at `019fb8b` and is 32 here. What closed, and the
+oracle preset that pins each, is in the commit range `019fb8b..bda16e0`:
+`this-type-predicate-narrowing-basic`, `guard-polarity-narrowing-basic`,
+`overload-merge-contextual-callback-basic`, `namespace-callback-parameter-basic`,
+`exit-and-alias-narrowing-basic`, `generator-missing-return-basic`,
+`assertion-and-nonnullable-basic`, `class-prototype-instanceof-basic`, plus the
+local-shadow case added to `umd-global-module-reference-basic`.
+
+The 32 that remain, with the root cause where it is known:
+
+| Location | Code | Root cause |
+| --- | --- | --- |
+| `packages/react-query/src/server/ssgProxy.ts:95` ×2, `:112` | TS2339 | `A & (B \| C)` where the union half is built from a conditional type collapses to `A` alone, so `'router' in opts` has nothing to narrow. Not reduced to a minimal case yet — synthetic `A & (B \| C)` narrows correctly. |
+| `packages/server/src/unstable-core-do-not-import/http/resolveResponse.ts:309`, `:746` | TS2339 | Array destructuring of a union-of-tuples alias (`ResultTuple<T>`); the reported property name is the *initializer's*, so the destructure lowering is picking the wrong side. Not reduced. |
+| `packages/server/src/__tests__/trpcServerResource.ts:53`, `:64`, `:85` | TS7006 ×2, TS2349 | Object literal with a spread *and* method shorthand passed to a generic function; the methods lose their contextual signature. Not reduced — synthetic spread+method literals type correctly. |
+| `examples/next-sse-chat/src/server/db/schema.ts:13`, `:61` ×2 | TS4111 | drizzle's `pgTable(...)` result degrades to a string index signature, so column access reads as index-signature access under `noPropertyAccessFromIndexSignature`. |
+| `packages/server/src/unstable-core-do-not-import/router.ts:75` | TS2314 | `DecorateRouterRecord<TRecord>` resolves to the two-parameter declaration in `packages/react-query`, a cross-module type-name leak. Not reduced. |
+| `packages/upgrade/src/bin/index.ts:5` | TS2307 | `import { version } from '../../package.json'` — JSON module resolution. |
+| `packages/server/src/observable/observable.test.ts:1` | TS2305 | `import { EventEmitter } from 'stream'` — `@types/node`'s `stream` module imports `EventEmitter` without re-exporting it, so the resolution `tsc` uses here is not the one surge takes. |
+| `examples/nuxt/nuxt.config.ts:2` | TS2304 | `defineNuxtConfig` comes from Nuxt's generated `.nuxt` types. |
+| `examples/next-prisma-starter/src/pages/index.tsx:100` | TS7006 | JSX intrinsic attribute (`<form onSubmit={…}>`) loses its contextual callback type in this example's React setup. Not reduced. |
+| `packages/client/src/links/loggerLink.ts:204`, `:230`; `packages/tests/server/___testHelpers.ts:57`; `packages/server/src/unstable-core-do-not-import/router.ts:432`; `examples/next-sse-chat/src/server/auth.tsx:80` | TS2339, TS2349 ×4 | "not callable" / missing member on a value whose type came out of trpc's generic builder machinery. Each needs its own reduction. |
+| the remaining 9 | TS2322 ×4, TS2345 ×2, TS2339 ×2, TS2554, TS2353 | one-off assignability and arity divergences, not yet reduced |
 
 ## Compatibility fixture matrix
 
@@ -593,7 +621,12 @@ the divergence from surge is two-sided.
   `pnpm run oracle:compare -- --project .local-projects/trpc --maxDiagnostics 10000`
   (raw counts via `surge -p .local-projects/trpc/tsconfig.json`).
 
-### Current measurement (2026-09-01, commit `37dfb3a`)
+### Measurement of 2026-09-01 (commit `37dfb3a`)
+
+**Point-in-time record; not current.** The current counts are in
+[CURRENT_STATUS.md § Real-project compatibility](CURRENT_STATUS.md#real-project-compatibility),
+and the surge-only side is broken down in
+[§ trpc surge-only inventory](#trpc-surge-only-inventory-2026-09-07) above.
 
 Checkout `dfbafa8ef178a5a3d23ef9461caa9494b3ef7f95` (2026-07-26).
 
