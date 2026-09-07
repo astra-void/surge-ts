@@ -746,6 +746,13 @@ pub(super) fn narrow_typeof_symbol_table(
 /// primitive, or a differently-named object); `None` when undecidable (`any`/
 /// `unknown`), so the member is kept in both branches.
 fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
+    // `x instanceof Array` decides array-ness, not a nominal name match: an
+    // array member renders as `T[]` and a tuple as `[A, B]`, so the name compare
+    // below rejected both and `messageOrMessages instanceof Array ? … : [ … ]`
+    // narrowed nothing. Same membership test `Array.isArray` uses.
+    if ctor_name == "Array" && !matches!(member, Type::Any | Type::Unknown | Type::GenuineUnknown) {
+        return Some(is_array_like_member(member));
+    }
     match member {
         Type::Any | Type::Unknown | Type::GenuineUnknown => None,
         Type::String
@@ -789,6 +796,20 @@ fn is_definitely_not_an_object(member: &Type) -> bool {
             | Type::Void
             | Type::Never
     )
+}
+
+/// Whether a union member is an array or tuple, including one written in
+/// generic form (`Array<T>` / `ReadonlyArray<T>`), which stays a nominal
+/// reference rather than a [`Type::Array`].
+fn is_array_like_member(member: &Type) -> bool {
+    match member {
+        Type::Array(_) | Type::Tuple(_) => true,
+        Type::Reference(reference) => matches!(
+            reference.id.split('\u{0}').next_back(),
+            Some("Array" | "ReadonlyArray")
+        ),
+        _ => false,
+    }
 }
 
 /// Narrows a union by an `x instanceof Ctor` guard. `keep_matching` keeps the

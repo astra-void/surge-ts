@@ -34,3 +34,15 @@ class Marker {
 export const markerPrototype: Marker = Marker.prototype;
 
 export const prototypeIsNotTheStaticSide: number = Marker.prototype;
+
+interface Message {
+  id: number;
+}
+
+export function sendOneOrMany(
+  messageOrMessages: Message | Message[],
+): number {
+  const messages =
+    messageOrMessages instanceof Array ? messageOrMessages : [messageOrMessages];
+  return messages.length;
+}

@@ -71,6 +71,14 @@ pub(crate) fn check_function_variable_declaration(
                 std::sync::Arc::new(initializer.clone()),
             );
         }
+        // `const [error, value] = tuple` lowers to one `tuple[N]` binding per
+        // element; remembering which element each one is makes the group
+        // dependent when `tuple` is a union of tuples.
+        if matches!(variable_kind, ParsedVariableKind::Const)
+            && let Some((source, index)) = tuple_destructure_source(initializer)
+        {
+            flow_state.record_tuple_destructure_binding(local_name.clone(), source, index);
+        }
     }
 
     check_local_duplicate_declaration(&variable, scopes, ctx);
@@ -230,7 +238,131 @@ fn is_condition_shaped(expression: &ParsedExpression) -> bool {
     }
 }
 
-/// Narrows by a condition and, when it named a discriminant alias, by the
+/// The `(source, index)` an array-destructured binding was lowered from
+/// (`const [a, b] = xs` lowers each binding to `xs[0]`, `xs[1]`).
+fn tuple_destructure_source(expression: &ParsedExpression) -> Option<(String, usize)> {
+    let ParsedExpression::IndexAccess {
+        object_name, index, ..
+    } = expression
+    else {
+        return None;
+    };
+    let ParsedExpression::NumberLiteral(value) = index.as_ref() else {
+        return None;
+    };
+    Some((object_name.clone(), value.parse::<usize>().ok()?))
+}
+
+/// The binding an `if` condition proves truthy (`true`) or falsy (`false`),
+/// when the condition is exactly that binding or its negation.
+fn truthiness_tested_binding(
+    condition: &ParsedExpression,
+    branch_is_true: bool,
+) -> Option<(&str, bool)> {
+    match condition {
+        ParsedExpression::Identifier { name, .. } => Some((name.as_str(), branch_is_true)),
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => truthiness_tested_binding(operand, !branch_is_true),
+        _ => None,
+    }
+}
+
+/// Applies tsc's destructured-discriminated-union narrowing: `const [error,
+/// value] = tuple` over a *union of tuples* binds dependent names, so proving
+/// `error` falsy rules out the union members whose first element is not
+/// nullish, and `value` is retyped from the survivors.
+///
+/// Only the source's own union is filtered — each sibling is re-derived from
+/// it, never narrowed on its own — so a binding whose element is identical in
+/// every surviving member keeps exactly the type it already had.
+fn narrow_tuple_destructure_siblings(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+    flow_state: &FunctionFlowState,
+) {
+    let Some((tested, holds)) = truthiness_tested_binding(condition, branch_is_true) else {
+        return;
+    };
+    let Some((source, tested_index)) = flow_state.tuple_destructure_binding(tested) else {
+        return;
+    };
+    let source = source.to_string();
+    let Some(symbol) = scopes.resolve(&source) else {
+        return;
+    };
+    let Type::Union(union) = symbol.ty.peeled() else {
+        return;
+    };
+    let members: Vec<Type> = union.types().iter().map(Type::peeled).collect();
+    if !members.iter().all(|member| matches!(member, Type::Tuple(_))) {
+        return;
+    }
+
+    let kept: Vec<&Type> = members
+        .iter()
+        .filter(|member| {
+            let Type::Tuple(elements) = member else {
+                return false;
+            };
+            match elements.get(tested_index) {
+                // Truthy rules out an element that can only be nullish; falsy
+                // rules out one that can never be. Anything else stays: this is
+                // a discriminant test, not a general truthiness analysis.
+                Some(element) => element_is_nullish(element) != holds,
+                None => false,
+            }
+        })
+        .collect();
+    if kept.is_empty() || kept.len() == members.len() {
+        return;
+    }
+
+    for (name, index) in flow_state.tuple_destructure_siblings(&source) {
+        let Some(symbol) = scopes.resolve(&name) else {
+            continue;
+        };
+        let declared = symbol.ty.clone();
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let selected: Vec<Type> = kept
+            .iter()
+            .filter_map(|member| match member {
+                Type::Tuple(elements) => elements.get(index).cloned(),
+                _ => None,
+            })
+            .collect();
+        if selected.len() != kept.len() {
+            continue;
+        }
+        let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+            union_type(selected)
+        });
+        if narrowed == declared {
+            continue;
+        }
+        let _ = scopes.insert_current_narrowed(
+            name,
+            SymbolInfo {
+                ty: narrowed,
+                kind,
+                function_signature,
+            },
+            declared,
+        );
+    }
+}
+
+/// Whether a tuple element can only be `undefined`/`null` — the shape a
+/// discriminated result tuple uses for its "absent" slot.
+fn element_is_nullish(element: &Type) -> bool {
+    matches!(element, Type::Undefined | Type::Void | Type::Never)
+}
+
+/// Narrows by a condition and, when it named a discriminant alias, by the/// Narrows by a condition and, when it named a discriminant alias, by the
 /// rewritten form as well. Both are applied: the written condition narrows the
 /// alias binding itself (`if (transformer)` proves the local non-nullish), the
 /// rewrite narrows the object it came from (`opts.transformer`).
@@ -239,12 +371,14 @@ fn narrow_condition_and_aliases_in_scope(
     rewritten: Option<&ParsedExpression>,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
+    flow_state: &FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
     narrow_discriminant_in_scope(base, scopes, branch_is_true, ctx);
     if let Some(rewritten) = rewritten {
         narrow_discriminant_in_scope(rewritten, scopes, branch_is_true, ctx);
     }
+    narrow_tuple_destructure_siblings(base, scopes, branch_is_true, flow_state);
 }
 
 /// Whether an initializer is a static property reference over identifiers
@@ -625,6 +759,7 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 true,
+                flow_state,
                 ctx,
             );
         flow_state.begin_branch_capture();
@@ -654,6 +789,7 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 false,
+                flow_state,
                 ctx,
             );
             flow_state.begin_branch_capture();
@@ -673,6 +809,7 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 false,
+                flow_state,
                 ctx,
             );
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
@@ -686,6 +823,7 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 true,
+                flow_state,
                 ctx,
             );
         check_function_body(
@@ -708,6 +846,7 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 false,
+                flow_state,
                 ctx,
             );
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
@@ -723,6 +862,7 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 false,
+                flow_state,
                 ctx,
             );
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);

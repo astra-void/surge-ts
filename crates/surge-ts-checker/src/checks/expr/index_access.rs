@@ -271,6 +271,16 @@ pub(super) fn evaluate_index_access(
                 return InferredExpression::Unknown;
             };
 
+            // A nominal alias can peel to a tuple, or to a union distributing
+            // over them (`type ResultTuple<T> = [undefined, T] | [Err, undefined]`).
+            // The `Type::Tuple` arm above only sees an *unpeeled* tuple, so a
+            // literal index on the alias fell through to here and was reported as
+            // a property missing from the receiver — named after the receiver
+            // binding, since that is what this arm has in hand.
+            if let Some(element_type) = literal_tuple_element(&symbol.ty.peeled(), &key) {
+                return InferredExpression::Known(element_type);
+            }
+
             // A literal key names a member. An index signature answers it too —
             // a numeric key is converted to a string, which is why
             // `record[1]` reads a `Record<number, T>` and a `Record<string, T>`
@@ -293,6 +303,28 @@ pub(super) fn evaluate_index_access(
             }
             InferredExpression::Unknown
         }
+    }
+}
+
+/// The element a literal numeric key selects out of a tuple, distributing over a
+/// union of them. `None` when the receiver is not tuple-shaped, or when any
+/// member lacks the index — an out-of-range key is a real error, left to the
+/// caller.
+fn literal_tuple_element(ty: &Type, key: &str) -> Option<Type> {
+    match ty {
+        Type::Tuple(elements) => elements.get(key.parse::<usize>().ok()?).cloned(),
+        Type::Union(union) => {
+            let members = union.types();
+            if members.is_empty() {
+                return None;
+            }
+            let mut selected = Vec::with_capacity(members.len());
+            for member in members {
+                selected.push(literal_tuple_element(&member.peeled(), key)?);
+            }
+            Some(union_type(selected))
+        }
+        _ => None,
     }
 }
 

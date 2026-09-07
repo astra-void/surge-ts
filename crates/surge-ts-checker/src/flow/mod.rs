@@ -89,6 +89,12 @@ pub(crate) struct FunctionFlowState {
     /// opts`, `const kind = node.kind`) to that reference, so testing the alias
     /// narrows the object it came from — tsc's aliased-discriminant narrowing.
     discriminant_aliases: HashMap<String, Arc<ParsedExpression>>,
+    /// Maps a `const` bound to one element of an array destructure
+    /// (`const [error, value] = tuple`) to its source binding and index. When
+    /// the source is a *union of tuples* the bindings are dependent: testing one
+    /// rules out union members and so retypes its siblings, which is what tsc's
+    /// destructured-discriminated-union narrowing does.
+    tuple_destructure_bindings: HashMap<String, (String, usize)>,
 }
 
 impl Clone for FunctionFlowState {
@@ -108,6 +114,7 @@ impl Clone for FunctionFlowState {
             alias_guard_targets: self.alias_guard_targets.clone(),
             alias_guard_conditions: self.alias_guard_conditions.clone(),
             discriminant_aliases: self.discriminant_aliases.clone(),
+            tuple_destructure_bindings: self.tuple_destructure_bindings.clone(),
         }
     }
 }
@@ -195,6 +202,7 @@ impl FunctionFlowState {
             alias_guard_targets: HashMap::new(),
             alias_guard_conditions: HashMap::new(),
             discriminant_aliases: HashMap::new(),
+            tuple_destructure_bindings: HashMap::new(),
         }
     }
 
@@ -241,6 +249,35 @@ impl FunctionFlowState {
 
     pub(crate) fn discriminant_alias(&self, name: &str) -> Option<&ParsedExpression> {
         self.discriminant_aliases.get(name).map(Arc::as_ref)
+    }
+
+    /// Records that `name` is element `index` of the destructure of `source`
+    /// (see [`FunctionFlowState::tuple_destructure_bindings`] field docs).
+    pub(crate) fn record_tuple_destructure_binding(
+        &mut self,
+        name: String,
+        source: String,
+        index: usize,
+    ) {
+        self.tuple_destructure_bindings.insert(name, (source, index));
+    }
+
+    pub(crate) fn tuple_destructure_binding(&self, name: &str) -> Option<(&str, usize)> {
+        self.tuple_destructure_bindings
+            .get(name)
+            .map(|(source, index)| (source.as_str(), *index))
+    }
+
+    /// Every binding destructured out of `source`, with its index.
+    pub(crate) fn tuple_destructure_siblings(&self, source: &str) -> Vec<(String, usize)> {
+        let mut siblings: Vec<(String, usize)> = self
+            .tuple_destructure_bindings
+            .iter()
+            .filter(|(_, (binding_source, _))| binding_source == source)
+            .map(|(name, (_, index))| (name.clone(), *index))
+            .collect();
+        siblings.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+        siblings
     }
 
     pub(crate) fn is_enabled(&self) -> bool {

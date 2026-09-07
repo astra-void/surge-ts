@@ -11,8 +11,14 @@ still proves the value is an object, so the members that definitely are not one
 `Maybe<ClosedError>` stayed nullable through the guard and `error.message` read
 as `string | undefined`.
 
-The single intentional error is the last declaration: `prototype` really is the
-instance type, so binding it to a `number` reports.
+`x instanceof Array` is the same name test seen from the other side, and it
+decides array-*ness*, not a nominal name: an array member renders as `T[]` and a
+tuple as `[A, B]`, so comparing the name rejected both and
+`messageOrMessages instanceof Array ? … : [ … ]` narrowed nothing — `messages`
+kept the whole union and `.length` was a false `TS2339`.
+
+The single intentional error is `prototypeIsNotTheStaticSide`: `prototype`
+really is the instance type, so binding it to a `number` reports.
 
 (The `Marker` pair keeps that check on a class with a modelled instance shape;
 `ClosedError` inherits from the lib `Error`, whose instance surge treats
