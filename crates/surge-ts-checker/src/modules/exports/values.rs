@@ -707,13 +707,18 @@ fn publishable_member_signature<'a>(
     // The one exception is a type-predicate return (`node is ImportDeclaration`):
     // the namespace object's permissive member drops the predicate, so every
     // branch guarded by `ts.isImportDeclaration(node)` loses its narrowing.
+    // The second exception is a callback parameter (`ts.findConfigFile(dir,
+    // (fileName) => …)`): the permissive member types every argument as
+    // `any`, so the callback's own parameters become a false implicit-any.
     let is_type_predicate = matches!(return_type, Some(surge_ts_syntax::ParsedType::Predicate(_)));
-    if type_parameters.is_empty() && !is_type_predicate {
-        return false;
-    }
     let mut scan = SignatureNameScan::default();
+    let mut takes_callback = false;
     for parameter_type in parameter_types {
+        takes_callback |= parameter_type_is_callback(parameter_type);
         collect_signature_type_names(parameter_type, &mut scan);
+    }
+    if type_parameters.is_empty() && !is_type_predicate && !takes_callback {
+        return false;
     }
     if let Some(return_type) = return_type {
         collect_signature_type_names(return_type, &mut scan);
@@ -737,6 +742,20 @@ fn publishable_member_signature<'a>(
             || ctx.lookup_type_declaration(name).is_some()
             || namespace_exports_sibling_type(namespace, name, ctx)
     })
+}
+
+/// Whether a parameter is written as a callback — a function type, or an
+/// optional/union one containing a function type. Only the written form is
+/// consulted: resolving the annotation here would cost what publishing every
+/// namespace member costs.
+fn parameter_type_is_callback(parameter_type: &surge_ts_syntax::ParsedType) -> bool {
+    match parameter_type {
+        surge_ts_syntax::ParsedType::Function(_) => true,
+        surge_ts_syntax::ParsedType::Union(members) => {
+            members.iter().any(parameter_type_is_callback)
+        }
+        _ => false,
+    }
 }
 
 /// Whether a bare name in a namespace member's signature names a type the

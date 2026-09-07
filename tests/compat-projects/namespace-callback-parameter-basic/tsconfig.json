@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "module": "preserve",
+    "target": "es2022",
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*"]
+}

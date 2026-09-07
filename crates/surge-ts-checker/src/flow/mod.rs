@@ -78,6 +78,13 @@ pub(crate) struct FunctionFlowState {
     /// Used only to drop a guarded genuine-`unknown` to the degradation
     /// sentinel so a later access is not a spurious `TS18046`.
     alias_guard_targets: HashMap<String, Vec<String>>,
+    /// Maps a boolean `const` alias to the condition expression it was
+    /// initialized from (`const ok = name !== null && name.length > 0`), so a
+    /// later `if (ok)` narrows exactly as the written condition would. Only
+    /// `const` bindings with a plainly boolean initializer are recorded, so the
+    /// stored expression cannot go stale and the clone stays proportional to
+    /// guard aliases rather than to every local.
+    alias_guard_conditions: HashMap<String, Arc<ParsedExpression>>,
 }
 
 impl Clone for FunctionFlowState {
@@ -95,6 +102,7 @@ impl Clone for FunctionFlowState {
             scopes: self.scopes.clone(),
             branch_captures: self.branch_captures.clone(),
             alias_guard_targets: self.alias_guard_targets.clone(),
+            alias_guard_conditions: self.alias_guard_conditions.clone(),
         }
     }
 }
@@ -180,6 +188,7 @@ impl FunctionFlowState {
             scopes: Vec::new(),
             branch_captures: Vec::new(),
             alias_guard_targets: HashMap::new(),
+            alias_guard_conditions: HashMap::new(),
         }
     }
 
@@ -198,6 +207,20 @@ impl FunctionFlowState {
 
     pub(crate) fn alias_guard_targets(&self, name: &str) -> Option<&[String]> {
         self.alias_guard_targets.get(name).map(Vec::as_slice)
+    }
+
+    /// Records the condition a boolean `const` alias was initialized from (see
+    /// [`FunctionFlowState::alias_guard_conditions`] field docs).
+    pub(crate) fn record_alias_guard_condition(
+        &mut self,
+        name: String,
+        condition: Arc<ParsedExpression>,
+    ) {
+        self.alias_guard_conditions.insert(name, condition);
+    }
+
+    pub(crate) fn alias_guard_condition(&self, name: &str) -> Option<Arc<ParsedExpression>> {
+        self.alias_guard_conditions.get(name).cloned()
     }
 
     pub(crate) fn is_enabled(&self) -> bool {

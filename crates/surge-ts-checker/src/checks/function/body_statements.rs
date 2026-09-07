@@ -49,6 +49,17 @@ pub(crate) fn check_function_variable_declaration(
     if let Some(initializer) = variable.initializer.as_ref() {
         flow_state
             .record_alias_guard_targets(local_name.clone(), guarded_value_identifiers(initializer));
+        // A `const` whose initializer is plainly a condition keeps that
+        // condition, so a later `if (ok)` narrows exactly as the written
+        // expression would (tsc's aliased-condition narrowing).
+        if matches!(variable_kind, ParsedVariableKind::Const)
+            && is_condition_shaped(initializer)
+        {
+            flow_state.record_alias_guard_condition(
+                local_name.clone(),
+                std::sync::Arc::new(initializer.clone()),
+            );
+        }
     }
 
     check_local_duplicate_declaration(&variable, scopes, ctx);
@@ -183,6 +194,85 @@ pub(crate) fn check_function_block(
     scopes.push_child();
     check_function_body(block_body, return_type, scopes, flow_state, ctx);
     scopes.pop_child();
+}
+
+/// Whether an initializer is plainly a boolean condition — a logical chain, a
+/// negation, or a comparison. Deliberately narrow: a `const x = f()` is not
+/// recorded, so the aliased-condition clone stays proportional to guard
+/// aliases rather than to every `const` in the body.
+fn is_condition_shaped(expression: &ParsedExpression) -> bool {
+    use surge_ts_syntax::{ParsedBinaryOperator, ParsedUnaryOperator};
+    match expression {
+        ParsedExpression::Logical { .. } => true,
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            ..
+        } => true,
+        ParsedExpression::Binary { operator, .. } => matches!(
+            operator,
+            ParsedBinaryOperator::StrictEquals
+                | ParsedBinaryOperator::Equals
+                | ParsedBinaryOperator::StrictNotEquals
+                | ParsedBinaryOperator::NotEquals
+        ),
+        _ => false,
+    }
+}
+
+/// The condition an `if` really tests: an identifier bound to a boolean `const`
+/// guard stands for the expression it was initialized from.
+fn resolved_alias_condition(
+    condition: &ParsedExpression,
+    flow_state: &FunctionFlowState,
+) -> Option<std::sync::Arc<ParsedExpression>> {
+    let ParsedExpression::Identifier { name, .. } = condition else {
+        return None;
+    };
+    flow_state.alias_guard_condition(name)
+}
+
+/// Whether a branch body ends in a call to a `never`-returning function
+/// (`process.exit(1)`), which ends control flow exactly as a `return` does.
+/// [`analyze_function_body_flow`] is purely syntactic and cannot see a return
+/// type, so this one type-dependent case is decided here, where the scope is in
+/// hand — without it the fall-through of `if (!args.file) { …; process.exit(1); }`
+/// keeps the unnarrowed `string | undefined`.
+fn body_ends_in_never_call(body: &[ParsedFunctionBodyStatement], scopes: &ScopeStack) -> bool {
+    match body.last() {
+        Some(ParsedFunctionBodyStatement::Block(block)) => body_ends_in_never_call(block, scopes),
+        Some(ParsedFunctionBodyStatement::Expression(expression)) => {
+            call_returns_never(expression, scopes)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a call expression's callee is declared to return `never`.
+fn call_returns_never(expression: &ParsedExpression, scopes: &ScopeStack) -> bool {
+    let returns_never = |ty: &Type| {
+        matches!(ty, Type::Function(function) if matches!(function.return_type(), Type::Never))
+    };
+    match expression {
+        ParsedExpression::Call { callee_name, .. } => scopes
+            .resolve(callee_name)
+            .is_some_and(|symbol| returns_never(&symbol.ty)),
+        ParsedExpression::PropertyCall {
+            object,
+            property_name,
+            ..
+        } => {
+            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+                return false;
+            };
+            scopes.resolve(name).is_some_and(|symbol| {
+                symbol
+                    .ty
+                    .get_property_access_type(property_name)
+                    .is_some_and(|ty| returns_never(&ty))
+            })
+        }
+        _ => false,
+    }
 }
 
 /// `if (!ok) <exit>` where `ok` is a boolean alias of a guard expression
@@ -357,18 +447,28 @@ pub(crate) fn check_function_if_statement(
 ) {
     check_obvious_truthiness_condition(&if_statement.condition, if_statement.condition_span, ctx);
 
+    // `if (ok)` where `ok` is a boolean `const` alias narrows by the condition
+    // the alias was written as, not by the opaque identifier.
+    let alias_condition = resolved_alias_condition(&if_statement.condition, flow_state);
+    let narrowing_condition: &ParsedExpression =
+        alias_condition.as_deref().unwrap_or(&if_statement.condition);
+
     let then_flow = analyze_function_body_flow(&if_statement.then_body);
     let then_guarantees_value_return = then_flow.guarantees_value_return;
     // The code after `if (cond) <body>` sees `!cond` whenever the then-branch
     // cannot fall through — that includes `continue`/`break` (which only
     // `guarantees_exit` reports), not just a value `return`. Gating narrowing on
     // either keeps the old return-based behavior and adds early-`continue` guards.
-    let then_diverts_control = then_guarantees_value_return || then_flow.guarantees_exit;
+    let then_diverts_control = then_guarantees_value_return
+        || then_flow.guarantees_exit
+        || body_ends_in_never_call(&if_statement.then_body, scopes);
     let has_else_body = !if_statement.else_body.is_empty();
 
     let else_flow_diverts = has_else_body && {
         let else_flow = analyze_function_body_flow(&if_statement.else_body);
-        else_flow.guarantees_value_return || else_flow.guarantees_exit
+        else_flow.guarantees_value_return
+            || else_flow.guarantees_exit
+            || body_ends_in_never_call(&if_statement.else_body, scopes)
     };
     let mut joinable_assignments = Vec::new();
     if !has_else_body && !then_diverts_control {
@@ -407,7 +507,7 @@ pub(crate) fn check_function_if_statement(
     if flow_active {
         let mut branch_deltas = Vec::new();
         scopes.push_child();
-        narrow_discriminant_in_scope(&if_statement.condition, scopes, true, ctx);
+        narrow_discriminant_in_scope(narrowing_condition, scopes, true, ctx);
         flow_state.begin_branch_capture();
         check_function_body(
             if_statement.then_body,
@@ -421,7 +521,7 @@ pub(crate) fn check_function_if_statement(
         let then_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
         if !has_else_body {
-            join_branch_assignments(&then_assignment_types, &if_statement.condition, scopes, ctx);
+            join_branch_assignments(&then_assignment_types, narrowing_condition, scopes, ctx);
         }
         branch_deltas.push(then_delta);
 
@@ -430,7 +530,7 @@ pub(crate) fn check_function_if_statement(
             let else_diverts_control =
                 else_flow.guarantees_value_return || else_flow.guarantees_exit;
             scopes.push_child();
-            narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
+            narrow_discriminant_in_scope(narrowing_condition, scopes, false, ctx);
             flow_state.begin_branch_capture();
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let mut else_delta = flow_state.finish_branch_capture();
@@ -442,15 +542,15 @@ pub(crate) fn check_function_if_statement(
         }
 
         if !has_else_body && then_diverts_control {
-            narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
-            narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
+            narrow_truthy_guarded_identifiers(narrowing_condition, scopes);
+            narrow_discriminant_in_scope(narrowing_condition, scopes, false, ctx);
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
 
         merge_branch_deltas(flow_state, &branch_deltas, !has_else_body);
     } else {
         scopes.push_child();
-        narrow_discriminant_in_scope(&if_statement.condition, scopes, true, ctx);
+        narrow_discriminant_in_scope(narrowing_condition, scopes, true, ctx);
         check_function_body(
             if_statement.then_body,
             with_type_copy_reason(TypeCopyReason::ReturnChecking, || return_type.clone()),
@@ -461,12 +561,12 @@ pub(crate) fn check_function_if_statement(
         let then_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
         if !has_else_body {
-            join_branch_assignments(&then_assignment_types, &if_statement.condition, scopes, ctx);
+            join_branch_assignments(&then_assignment_types, narrowing_condition, scopes, ctx);
         }
 
         if has_else_body {
             scopes.push_child();
-            narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
+            narrow_discriminant_in_scope(narrowing_condition, scopes, false, ctx);
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let else_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
             scopes.pop_child();
@@ -474,8 +574,8 @@ pub(crate) fn check_function_if_statement(
         }
 
         if !has_else_body && then_diverts_control {
-            narrow_truthy_guarded_identifiers(&if_statement.condition, scopes);
-            narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
+            narrow_truthy_guarded_identifiers(narrowing_condition, scopes);
+            narrow_discriminant_in_scope(narrowing_condition, scopes, false, ctx);
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
     }
