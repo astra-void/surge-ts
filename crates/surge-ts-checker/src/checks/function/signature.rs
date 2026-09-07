@@ -862,6 +862,26 @@ pub(crate) fn should_track_unused_parameters(ctx: &CheckerContext) -> bool {
     ctx.options.no_unused_parameters && ctx.current_file_kind == FileKind::RootSource
 }
 
+/// Whether the body read `name`. `reads` is the parser's sorted, deduplicated
+/// read list (see `ParsedFunctionDeclaration::body_reads`), so this binary-
+/// searches instead of scanning: the callers ask once per binding, and a linear
+/// scan made unused-binding reporting quadratic in function size.
+fn body_reads_name(reads: &[String], name: &str) -> bool {
+    reads
+        .binary_search_by(|read| read.as_str().cmp(name))
+        .is_ok()
+}
+
+/// Checked once per reporting call rather than per binding, so verifying the
+/// order the binary search depends on does not itself reintroduce the linear
+/// scan in debug builds.
+fn debug_assert_reads_sorted(reads: &[String]) {
+    debug_assert!(
+        reads.windows(2).all(|pair| pair[0] < pair[1]),
+        "body_reads must stay sorted and deduplicated for the binary search"
+    );
+}
+
 /// Reports TS6133 for each identifier parameter whose name never appears in the
 /// body's collected reads (and is not `_`-prefixed). Object/array patterns and
 /// the `this` pseudo-parameter are skipped.
@@ -870,11 +890,12 @@ pub(crate) fn emit_unused_parameters(
     reads: &[String],
     ctx: &mut CheckerContext,
 ) {
+    debug_assert_reads_sorted(reads);
     for parameter in parameters {
         let ParsedBindingName::Identifier { name, span } = &parameter.binding_name else {
             continue;
         };
-        if name == "this" || name.starts_with('_') || reads.iter().any(|read| read == name) {
+        if name == "this" || name.starts_with('_') || body_reads_name(reads, name) {
             continue;
         }
         let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
@@ -899,12 +920,13 @@ pub(crate) fn emit_unused_locals(
     if !ctx.options.no_unused_locals || ctx.current_file_kind != FileKind::RootSource {
         return;
     }
+    debug_assert_reads_sorted(reads);
     let mut locals: Vec<(&str, Option<TextSpan>)> = Vec::new();
     let mut local_types: Vec<(&str, Option<TextSpan>)> = Vec::new();
     collect_local_var_declarations(statements, &mut locals);
     collect_local_type_declarations(statements, &mut local_types);
     for (name, span) in locals {
-        if reads.iter().any(|read| read == name) {
+        if body_reads_name(reads, name) {
             continue;
         }
         let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
@@ -915,7 +937,7 @@ pub(crate) fn emit_unused_locals(
         ctx.push(diagnostic);
     }
     for (name, span) in local_types {
-        if reads.iter().any(|read| read == name) {
+        if body_reads_name(reads, name) {
             continue;
         }
         let diagnostic = Diagnostic::ts6196(name, ctx.file_name.clone());

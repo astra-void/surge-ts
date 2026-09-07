@@ -971,6 +971,10 @@ pub struct ParsedFunctionDeclaration {
     /// All value-position identifier names read anywhere in the body (including
     /// nested functions, spreads, for-in, and object methods), collected from the
     /// full oxc AST during parsing. Backs unused-binding diagnostics (TS6133).
+    ///
+    /// Sorted and deduplicated: the unused-binding checks binary-search it, so a
+    /// producer that builds this list by hand must preserve that order or those
+    /// checks start missing reads (a false TS6133/TS6196).
     pub body_reads: Vec<String>,
     pub is_declare: bool,
     pub name: String,

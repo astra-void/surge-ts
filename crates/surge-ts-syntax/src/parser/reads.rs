@@ -56,6 +56,9 @@ impl<'a> Visit<'a> for ReadCollector {
     }
 }
 
+/// Sorts and deduplicates the collected names. Consumers binary-search the
+/// result rather than scanning it, so the sorted order is load-bearing, not a
+/// presentation choice.
 fn finish(mut collector: ReadCollector) -> Vec<String> {
     collector.names.sort_unstable();
     collector.names.dedup();
