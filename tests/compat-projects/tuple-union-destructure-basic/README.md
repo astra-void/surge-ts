@@ -22,6 +22,13 @@ union-call path only accepted bare `Type::Function` members, so calling one was
 a false `TS2349`. The property-call path had no union arm at all, so the same
 union reached through a member (`holder.run({ … })`) reported too.
 
+"Share one signature" is measured against the member with the *most*
+parameters: tsc synthesizes the union's signature by intersecting them
+positionally, so a shorter member — an option's `() => true` default beside its
+declared handler — contributes nothing to the positions it does not declare.
+Positions present in both still have to agree, which is what keeps a genuinely
+conflicting union uncallable.
+
 `theOtherSideNarrowsToo` pins the opposite polarity. The single intentional
-error is the last function: with no guard at all the element really is
-`RequestInfo | undefined`, so binding it to a `RequestInfo` reports.
+error is `unguardedElementKeepsItsUndefined`: with no guard at all the element
+really is `RequestInfo | undefined`, so binding it to a `RequestInfo` reports.
