@@ -16,6 +16,11 @@ narrowing. Only the source union is filtered and every sibling is re-derived
 from it, so a binding whose element is identical in every surviving member keeps
 the type it already had.
 
+A union whose members are *callable interfaces* — `AnyProcedure`, three
+`Procedure<…>` shapes in tRPC — is callable when they share one signature. The
+union-call path only accepted bare `Type::Function` members, so calling one was
+a false `TS2349`.
+
 `theOtherSideNarrowsToo` pins the opposite polarity. The single intentional
 error is the last function: with no guard at all the element really is
 `RequestInfo | undefined`, so binding it to a `RequestInfo` reports.

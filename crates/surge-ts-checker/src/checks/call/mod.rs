@@ -224,7 +224,7 @@ fn check_callable_union_call(
         return None;
     };
 
-    let representative = members[0];
+    let representative = &members[0];
     let return_types = members
         .iter()
         .map(|member| member.return_type().clone())
@@ -244,18 +244,31 @@ fn check_callable_union_call(
     })
 }
 
-/// Returns the function members of a union when every member is a function type
-/// that shares one Phase 1 call signature, or `None` when the union is not
-/// callable under Phase 1 rules (a non-function member, mismatched arity, or
-/// parameters that are not mutually assignable). Return-type differences are
+/// The call signature a union member contributes. A member is callable when it
+/// *is* a function type or when it peels to an object carrying a call signature
+/// — the shape a callable interface takes, which is how tRPC's `AnyProcedure`
+/// (a union of three `Procedure<…>` interfaces) is written. Peeling is safe
+/// here: this runs only when a union is actually being called.
+fn union_member_call_signature(ty: &Type) -> Option<FunctionType> {
+    match ty {
+        Type::Function(function_type) => Some(function_type.clone()),
+        _ => match ty.peeled() {
+            Type::Function(function_type) => Some(function_type),
+            Type::Object(object) => object.call_signature().cloned(),
+            _ => None,
+        },
+    }
+}
+
+/// Returns the call signatures of a union's members when every member is
+/// callable and they share one Phase 1 call signature, or `None` when the union
+/// is not callable under Phase 1 rules (a non-callable member, mismatched arity,
+/// or parameters that are not mutually assignable). Return-type differences are
 /// permitted and unified by the caller.
-fn shared_signature_function_members(union: &UnionType) -> Option<Vec<&FunctionType>> {
+fn shared_signature_function_members(union: &UnionType) -> Option<Vec<FunctionType>> {
     let mut members = Vec::with_capacity(union.types().len());
     for ty in union.types() {
-        match ty {
-            Type::Function(function_type) => members.push(function_type),
-            _ => return None,
-        }
+        members.push(union_member_call_signature(ty)?);
     }
 
     let first = members.first()?;

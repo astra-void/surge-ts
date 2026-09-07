@@ -38,3 +38,23 @@ export function unguardedElementKeepsItsUndefined(): void {
   const stillOptional: RequestInfo = info;
   void stillOptional;
 }
+
+interface QueryProcedure {
+  (opts: { path: string }): Promise<string>;
+  _def: { type: 'query' };
+}
+interface MutationProcedure {
+  (opts: { path: string }): Promise<string>;
+  _def: { type: 'mutation' };
+}
+type AnyProcedure = QueryProcedure | MutationProcedure;
+
+declare function procedureAt(path: string): AnyProcedure | undefined;
+
+export function callProcedure(path: string): Promise<string> {
+  const procedure = procedureAt(path);
+  if (!procedure) {
+    throw new Error('not found');
+  }
+  return procedure({ path });
+}
