@@ -58,13 +58,26 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let suppressed_ranges =
         super::suppressions::collect_suppressed_ranges(source_text, &parsed.program.comments);
 
-    let statements: Vec<crate::ParsedStatement> = parsed
-        .program
-        .body
-        .iter()
-        .filter_map(super::parse_statement)
-        .flatten()
-        .collect();
+    let collect_statements = || -> Vec<crate::ParsedStatement> {
+        parsed
+            .program
+            .body
+            .iter()
+            .filter_map(super::parse_statement)
+            .flatten()
+            .collect()
+    };
+
+    // Declaration files never participate in noUnusedLocals, and `declare`
+    // functions carry no body to index, so skip the read walk for them entirely
+    // (it would otherwise run over every dependency `.d.ts`). The conversion
+    // still asks each body for its reads; without an index those calls fall back
+    // to walking the body, which for a `.d.ts` is nothing.
+    let (module_reads, statements) = if file_name.ends_with(".d.ts") {
+        (Vec::new(), collect_statements())
+    } else {
+        super::reads::with_body_read_index(&parsed.program, collect_statements)
+    };
 
     let parser_errors = parsed
         .errors
@@ -80,14 +93,6 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
                     | crate::ParsedStatement::ExportDeclaration(_)
             )
         });
-
-    // Declaration files never participate in noUnusedLocals, so skip the
-    // module-wide read walk for them (avoids the cost on every dependency `.d.ts`).
-    let module_reads = if file_name.ends_with(".d.ts") {
-        Vec::new()
-    } else {
-        super::reads::collect_program_reads(&parsed.program)
-    };
 
     let import_call_specifiers =
         super::import_calls::collect_import_call_specifiers(&parsed.program, source_text);
