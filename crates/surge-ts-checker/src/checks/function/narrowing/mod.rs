@@ -2228,9 +2228,8 @@ fn resolve_constructor_instance_type(
         None => 0,
     };
     // Nothing this resolution reports belongs to the source, so drop whatever it
-    // raised. `push_deduplicated` rebuilds its index when the length moves, which
-    // is what makes truncating safe here.
-    let diagnostics_before = ctx.diagnostics.len();
+    // raised.
+    let diagnostics_before = ctx.diagnostics().len();
     let resolved = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         crate::infer::types::resolve_parsed_type(
             surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(
@@ -2245,7 +2244,7 @@ fn resolve_constructor_instance_type(
             &crate::infer::TypeParameterSubstitution::new(),
         )
     });
-    ctx.diagnostics.truncate(diagnostics_before);
+    ctx.truncate_diagnostics(diagnostics_before);
     if resolved.had_error() {
         return None;
     }

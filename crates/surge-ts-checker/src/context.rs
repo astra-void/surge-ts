@@ -553,12 +553,8 @@ impl CheckerContext {
         }
         // Descending, so earlier indices stay valid as later ones are removed.
         for index in frame.diagnostic_indices.iter().rev() {
-            if *index < self.diagnostics.len() {
-                self.diagnostics.remove(*index);
-            }
+            self.remove_diagnostic_at(*index);
         }
-        // `push_deduplicated` rebuilds its index when the length no longer
-        // matches, which is what makes removing entries safe here.
         returned_void_like
     }
 
@@ -605,9 +601,7 @@ impl CheckerContext {
         let returned_types = std::mem::take(&mut frame.returned_types);
         // Descending, so earlier indices stay valid as later ones are removed.
         for index in indices.iter().rev() {
-            if *index < self.diagnostics.len() {
-                self.diagnostics.remove(*index);
-            }
+            self.remove_diagnostic_at(*index);
         }
         Some(returned_types)
     }
@@ -1059,7 +1053,12 @@ pub(crate) struct CheckerContext {
     // to a `String` per comparison), so a context that emits D diagnostics was
     // O(D^2) — e.g. a single file with thousands of unresolved-name reports. The
     // set makes the check O(1); `diagnostic_keys_len` lets `push` detect when
-    // `diagnostics` was mutated directly (clear/take/truncate) and rebuild lazily.
+    // `diagnostics` was mutated directly (clear/take) and rebuild lazily.
+    //
+    // The shrinking paths on this type release their keys instead of relying on
+    // that rebuild (see `release_dedup_keys_for_tail`): they are speculative
+    // probes that run per generic call, and rebuilding per probe reinstated the
+    // same O(D^2) the index exists to remove.
     diagnostic_keys: HashSet<
         (
             String,
@@ -2308,7 +2307,46 @@ impl CheckerContext {
     }
 
     pub(crate) fn truncate_diagnostics(&mut self, len: usize) {
+        self.release_dedup_keys_for_tail(len);
         self.diagnostics.truncate(len);
+    }
+
+    /// Releases the push-dedup keys of `diagnostics[from..]` ahead of dropping
+    /// them, so the index stays in sync instead of going stale.
+    ///
+    /// A stale index makes the next `push` rebuild it from every remaining
+    /// diagnostic, allocating three `String`s apiece. The callers that shrink
+    /// `diagnostics` are speculative probes that discard what they emitted, and
+    /// they run per generic call and per named-type resolution — so leaving the
+    /// index stale turned a file's diagnostic count into a per-probe cost.
+    ///
+    /// A no-op when the index is already stale (`clear_diagnostic_keys`, or a
+    /// direct mutation of the field outside this type): claiming freshness there
+    /// would suppress diagnostics whose keys the set never held.
+    fn release_dedup_keys_for_tail(&mut self, from: usize) {
+        if from >= self.diagnostics.len() || self.diagnostic_keys_len != self.diagnostics.len() {
+            return;
+        }
+        for diagnostic in &self.diagnostics[from..] {
+            self.diagnostic_keys
+                .remove(&Self::diagnostic_dedup_key(diagnostic));
+        }
+        self.diagnostic_keys_len = from;
+    }
+
+    /// Drops the diagnostic at `index`, releasing its dedup key when the index
+    /// is in sync. `indices` in the contextual-return frames are ascending, so
+    /// callers walk them in reverse and earlier positions stay valid.
+    fn remove_diagnostic_at(&mut self, index: usize) {
+        if index >= self.diagnostics.len() {
+            return;
+        }
+        if self.diagnostic_keys_len == self.diagnostics.len() {
+            let key = Self::diagnostic_dedup_key(&self.diagnostics[index]);
+            self.diagnostic_keys.remove(&key);
+            self.diagnostic_keys_len -= 1;
+        }
+        self.diagnostics.remove(index);
     }
 
     /// Like [`truncate_diagnostics`] but also releases the
@@ -2329,6 +2367,7 @@ impl CheckerContext {
                 self.utility_diagnostic_keys.remove(&key);
             }
         }
+        self.release_dedup_keys_for_tail(len);
         self.diagnostics.truncate(len);
     }
 
@@ -2398,4 +2437,94 @@ pub(crate) struct UtilityDiagnosticKey {
 
 fn is_rust_only_compat_diagnostic(code: &str) -> bool {
     code.starts_with("surge::")
+}
+
+#[cfg(test)]
+mod diagnostic_dedup_index_tests {
+    use super::{CheckerContext, CheckerOptions};
+    use surge_ts_diagnostics::Diagnostic;
+
+    fn context() -> CheckerContext {
+        CheckerContext::new(
+            "a.ts".to_string(),
+            CheckerOptions::default(),
+            surge_ts_types::fx::FxHashMap::default(),
+        )
+    }
+
+    /// The shrinking paths release their dedup keys rather than invalidating the
+    /// index. If a release ever misses a key, the index would claim to be in sync
+    /// while holding a key for a diagnostic that is gone, and the re-emission a
+    /// speculative probe's discard is supposed to allow would be swallowed —
+    /// silently, as a missing diagnostic rather than a failure.
+    #[test]
+    fn truncated_diagnostic_can_be_pushed_again() {
+        let mut ctx = context();
+        ctx.push(Diagnostic::ts2304("Missing", "a.ts"));
+        assert_eq!(ctx.diagnostics().len(), 1);
+
+        ctx.truncate_diagnostics(0);
+        assert_eq!(ctx.diagnostics().len(), 0);
+
+        ctx.push(Diagnostic::ts2304("Missing", "a.ts"));
+        assert_eq!(ctx.diagnostics().len(), 1);
+    }
+
+    /// Truncation to a non-zero length must release only the discarded tail's
+    /// keys: the surviving prefix stays deduplicated.
+    #[test]
+    fn truncation_keeps_the_surviving_prefix_deduplicated() {
+        let mut ctx = context();
+        ctx.push(Diagnostic::ts2304("Kept", "a.ts"));
+        ctx.push(Diagnostic::ts2304("Dropped", "a.ts"));
+        assert_eq!(ctx.diagnostics().len(), 2);
+
+        ctx.truncate_diagnostics(1);
+
+        ctx.push(Diagnostic::ts2304("Kept", "a.ts"));
+        assert_eq!(
+            ctx.diagnostics().len(),
+            1,
+            "the surviving diagnostic's key must still suppress a repeat"
+        );
+
+        ctx.push(Diagnostic::ts2304("Dropped", "a.ts"));
+        assert_eq!(
+            ctx.diagnostics().len(),
+            2,
+            "the discarded diagnostic's key must have been released"
+        );
+    }
+
+    /// `truncate_diagnostics_releasing_utility_keys` releases the push-dedup key
+    /// alongside the once-guard key it is named for.
+    #[test]
+    fn utility_key_truncation_also_releases_the_push_dedup_key() {
+        let mut ctx = context();
+        ctx.push(Diagnostic::ts2304("Probe", "a.ts"));
+        ctx.truncate_diagnostics_releasing_utility_keys(0);
+
+        ctx.push(Diagnostic::ts2304("Probe", "a.ts"));
+        assert_eq!(ctx.diagnostics().len(), 1);
+    }
+
+    /// A context whose index was dropped (`clear_diagnostic_keys`) is stale, and a
+    /// shrink must leave it stale so the next push rebuilds — claiming freshness
+    /// there would suppress diagnostics whose keys the set never held.
+    #[test]
+    fn shrinking_a_stale_index_still_rebuilds() {
+        let mut ctx = context();
+        ctx.push(Diagnostic::ts2304("Kept", "a.ts"));
+        ctx.push(Diagnostic::ts2304("Dropped", "a.ts"));
+        ctx.clear_diagnostic_keys();
+
+        ctx.truncate_diagnostics(1);
+
+        ctx.push(Diagnostic::ts2304("Kept", "a.ts"));
+        assert_eq!(
+            ctx.diagnostics().len(),
+            1,
+            "the rebuild must re-derive the surviving diagnostic's key"
+        );
+    }
 }
