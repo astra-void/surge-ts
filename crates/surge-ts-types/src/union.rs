@@ -408,8 +408,12 @@ fn fine_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8, budget: &mut u32) 
                 combined = combined.wrapping_add(property_hasher.finish());
             }
             combined.hash(hasher);
-            // `call_signature`, `construct_signature`, and `is_intersection`
-            // are excluded from `ObjectType` equality and must stay unhashed.
+            // `call_signature` and `construct_signature` do participate in
+            // `ObjectType` equality but are left unhashed anyway: omitting an
+            // equality field only costs collisions, which are safe here, while
+            // walking two more signatures per object is not worth it.
+            // `is_intersection` is genuinely excluded from equality and must
+            // stay unhashed.
             match &object.string_index_type {
                 Some(index) => {
                     1u8.hash(hasher);
@@ -438,6 +442,14 @@ fn fine_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8, budget: &mut u32) 
 /// participate in equality are hashed, and always structurally — never by
 /// pointer, since `ObjectType`/`FunctionType`/`UnionType` equality accepts
 /// structurally-equal values behind distinct `Arc`s.
+///
+/// Hashing *fewer* equality fields is always safe — it only produces
+/// collisions, which [`dedup_members`] resolves with a structural compare.
+/// But every colliding pair costs one such compare, so a key that collapses a
+/// whole shape class puts the hashed path back at O(n^2): this arm hashed
+/// nothing at all for functions, and only property *names* for objects, so a
+/// union of distinct signatures — or of objects that share a property name set
+/// and differ in the types — landed entirely in one bucket.
 fn dedup_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8) {
     std::mem::discriminant(ty).hash(hasher);
     if depth >= 3 {
@@ -469,19 +481,42 @@ fn dedup_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8) {
         }
         Type::Object(object) => {
             object.properties.len().hash(hasher);
-            // IndexMap equality is order-independent, so property names must be
-            // mixed with a commutative combiner rather than hashed in iteration
-            // order.
-            let mut names: u64 = 0;
-            for name in object.properties.keys() {
-                let mut name_hasher = FxHasher::default();
-                name.hash(&mut name_hasher);
-                names = names.wrapping_add(name_hasher.finish());
+            // IndexMap equality is order-independent, so each property's
+            // contribution is mixed with a commutative combiner rather than
+            // hashed in iteration order. Each property walks under its own
+            // fresh hasher for the same reason.
+            let mut properties: u64 = 0;
+            for (name, property) in object.properties.iter() {
+                let mut property_hasher = FxHasher::default();
+                name.hash(&mut property_hasher);
+                property.optional.hash(&mut property_hasher);
+                dedup_key_into(&property.ty, &mut property_hasher, depth + 1);
+                properties = properties.wrapping_add(property_hasher.finish());
             }
-            names.hash(hasher);
-            object.string_index_type.is_some().hash(hasher);
+            properties.hash(hasher);
+            match &object.string_index_type {
+                Some(index) => {
+                    1u8.hash(hasher);
+                    dedup_key_into(index, hasher, depth + 1);
+                }
+                None => 0u8.hash(hasher),
+            }
         }
-        Type::Function(_) => {}
+        Type::Function(function) => {
+            // Every field here participates in `FunctionTypePayload`'s derived
+            // equality. `id`, `parameter_names`, `type_parameter_head` and
+            // `alias_name` live on the handle, not the payload, and must stay
+            // unhashed: they do not participate, so hashing one would make the
+            // key finer than equality and dedup would keep a duplicate.
+            let payload = &function.payload;
+            payload.parameters.len().hash(hasher);
+            payload.is_variadic.hash(hasher);
+            payload.required_parameter_count.hash(hasher);
+            for parameter in payload.parameters.iter() {
+                dedup_key_into(parameter, hasher, depth + 1);
+            }
+            dedup_key_into(&payload.return_type, hasher, depth + 1);
+        }
         _ => {}
     }
 }
@@ -580,7 +615,7 @@ fn record_union_type_copy_count_for_current_reason() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{NumberLiteralType, Type};
+    use crate::{FunctionType, NumberLiteralType, Type};
 
     #[test]
     fn literal_union_dedupes_exact_duplicates() {
@@ -770,6 +805,201 @@ mod tests {
             }
             other => panic!("expected union, got {other:?}"),
         }
+    }
+
+    /// A union of distinct function types used to land every member in one
+    /// `dedup_key` bucket (the arm hashed nothing but the discriminant), so the
+    /// hashed path degenerated to an O(n^2) sweep of structural compares. The
+    /// dedup *result* was always correct; this pins that it stays correct now
+    /// that the key discriminates, and `distinct_function_members_do_not_collide`
+    /// pins the bucketing itself.
+    #[test]
+    fn large_union_of_distinct_functions_keeps_every_member() {
+        let members: Vec<Type> = (0..40)
+            .map(|index| {
+                Type::Function(FunctionType::new(
+                    vec![Type::NumberLiteral(NumberLiteralType {
+                        value: index.to_string(),
+                    })],
+                    Type::String,
+                    false,
+                    1,
+                ))
+            })
+            .collect();
+        let mut doubled = members.clone();
+        doubled.extend(members.clone());
+
+        let ty = union_type(doubled);
+        match &ty {
+            Type::Union(union) => assert_eq!(union.types(), members.as_slice()),
+            other => panic!("expected union, got {other:?}"),
+        }
+    }
+
+    /// The consistency direction of the invariant: two structurally equal
+    /// signatures behind distinct handles must still share a key, or dedup would
+    /// keep a duplicate.
+    #[test]
+    fn equal_functions_share_a_dedup_key() {
+        let signature = || {
+            Type::Function(FunctionType::new(
+                vec![Type::String],
+                Type::Number,
+                false,
+                1,
+            ))
+        };
+        assert_eq!(signature(), signature());
+        assert_eq!(dedup_key(&signature()), dedup_key(&signature()));
+    }
+
+    /// The discrimination direction: distinct signatures must land in distinct
+    /// buckets. Without this the hashed path is quadratic in the union's width.
+    #[test]
+    fn distinct_function_members_do_not_collide() {
+        let by_return = Type::Function(FunctionType::new(vec![Type::String], Type::Number, false, 1));
+        let by_parameter =
+            Type::Function(FunctionType::new(vec![Type::Number], Type::Number, false, 1));
+        let by_arity = Type::Function(FunctionType::new(vec![], Type::Number, false, 0));
+
+        assert_ne!(dedup_key(&by_return), dedup_key(&by_parameter));
+        assert_ne!(dedup_key(&by_return), dedup_key(&by_arity));
+    }
+
+    /// The bucket-occupancy property the fix is actually for, asserted directly
+    /// rather than through a timing: every distinct signature in a wide union
+    /// must get its own key. With the old arm all 64 of these shared one bucket,
+    /// so inserting them cost 64*63/2 structural compares; a machine-independent
+    /// count is the honest way to pin that, since wall-clock here is dominated
+    /// by whatever else the host is running.
+    #[test]
+    fn wide_union_of_signatures_occupies_distinct_buckets() {
+        let members: Vec<Type> = (0..64)
+            .map(|index| {
+                Type::Function(FunctionType::new(
+                    vec![Type::StringLiteral(format!("p{index}"))],
+                    Type::Number,
+                    false,
+                    1,
+                ))
+            })
+            .collect();
+
+        let keys: std::collections::HashSet<u64> = members.iter().map(dedup_key).collect();
+        assert_eq!(
+            keys.len(),
+            members.len(),
+            "each distinct signature must land in its own dedup bucket"
+        );
+    }
+
+    /// The same property for the object shape class: a discriminated union whose
+    /// members share a property name set and differ in the discriminant's type.
+    #[test]
+    fn wide_union_of_same_shaped_objects_occupies_distinct_buckets() {
+        use crate::{ObjectProperty, ObjectType, PropertyMap};
+        use std::sync::Arc;
+
+        let members: Vec<Type> = (0..64)
+            .map(|index| {
+                let mut properties = PropertyMap::default();
+                properties.insert(
+                    "kind".into(),
+                    ObjectProperty::required(Type::StringLiteral(format!("k{index}"))),
+                );
+                properties.insert("value".into(), ObjectProperty::required(Type::Number));
+                Type::Object(ObjectType {
+                    properties: Arc::new(properties),
+                    property_map_id: None,
+                    string_index_type: None,
+                    alias_name: None,
+                    alias_id: None,
+                    construct_signature: None,
+                    call_signature: None,
+                    is_intersection: false,
+                    synthetic_open_index: false,
+                })
+            })
+            .collect();
+
+        let keys: std::collections::HashSet<u64> = members.iter().map(dedup_key).collect();
+        assert_eq!(
+            keys.len(),
+            members.len(),
+            "each discriminant literal must land in its own dedup bucket"
+        );
+    }
+
+    /// Objects that share a property *name* set and differ only in the property
+    /// types were the other collapsed shape class.
+    #[test]
+    fn objects_differing_only_in_property_types_do_not_collide() {
+        use crate::{ObjectProperty, ObjectType, PropertyMap};
+        use std::sync::Arc;
+
+        let object = |ty: Type| {
+            let mut properties = PropertyMap::default();
+            properties.insert("value".into(), ObjectProperty::required(ty));
+            Type::Object(ObjectType {
+                properties: Arc::new(properties),
+                property_map_id: None,
+                string_index_type: None,
+                alias_name: None,
+                alias_id: None,
+                construct_signature: None,
+                call_signature: None,
+                is_intersection: false,
+                synthetic_open_index: false,
+            })
+        };
+
+        assert_ne!(
+            dedup_key(&object(Type::String)),
+            dedup_key(&object(Type::Number))
+        );
+        assert_eq!(
+            dedup_key(&object(Type::String)),
+            dedup_key(&object(Type::String))
+        );
+    }
+
+    /// Property order must not reach the key: `PropertyMap` equality is
+    /// order-independent, so two equal objects built in different insertion
+    /// orders have to hash the same or dedup keeps a duplicate.
+    #[test]
+    fn property_order_does_not_change_the_dedup_key() {
+        use crate::{ObjectProperty, ObjectType, PropertyMap};
+        use std::sync::Arc;
+
+        let object = |reversed: bool| {
+            let mut properties = PropertyMap::default();
+            let mut entries = vec![
+                ("a", Type::String),
+                ("b", Type::Number),
+                ("c", Type::Boolean),
+            ];
+            if reversed {
+                entries.reverse();
+            }
+            for (name, ty) in entries {
+                properties.insert(name.into(), ObjectProperty::required(ty));
+            }
+            Type::Object(ObjectType {
+                properties: Arc::new(properties),
+                property_map_id: None,
+                string_index_type: None,
+                alias_name: None,
+                alias_id: None,
+                construct_signature: None,
+                call_signature: None,
+                is_intersection: false,
+                synthetic_open_index: false,
+            })
+        };
+
+        assert_eq!(object(false), object(true));
+        assert_eq!(dedup_key(&object(false)), dedup_key(&object(true)));
     }
 
     #[test]
