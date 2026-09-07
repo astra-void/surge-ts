@@ -585,6 +585,28 @@ fn type_includes_undefined(ty: &Type) -> bool {
     }
 }
 
+/// Whether a parameter slot accepts `void`, which makes tsc treat it as
+/// optional for arity purposes (`getMinArgumentCount` walks the trailing
+/// parameters back while they accept `void`). This is what lets a
+/// `Promise<void>` executor's `resolve` — `(value: void | PromiseLike<void>)
+/// => void` — be stored in a `() => void` slot.
+fn parameter_accepts_void(ty: &Type) -> bool {
+    match ty {
+        Type::Void => true,
+        Type::Union(union) => union.types().iter().any(parameter_accepts_void),
+        _ => false,
+    }
+}
+
+/// `required` with the trailing run of `void`-accepting parameters dropped.
+fn required_count_ignoring_trailing_void(parameters: &[Type], required: usize) -> usize {
+    let mut required = required.min(parameters.len());
+    while required > 0 && parameter_accepts_void(&parameters[required - 1]) {
+        required -= 1;
+    }
+    required
+}
+
 fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bool {
     is_signature_assignable_to(source, target, false)
 }
@@ -610,6 +632,7 @@ fn is_signature_assignable_to(
     // mirrors how tsc accepts `(v) => …` and `(v, i) => …` for an
     // `(element, index, array) => …` callback slot. The shared parameter prefix
     // is still checked bivariantly.
+    let source_required = required_count_ignoring_trailing_void(&source_parameters, source_required);
     if !target_variadic && source_required > target_parameters.len() {
         return false;
     }

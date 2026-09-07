@@ -356,6 +356,7 @@ export const fixturePresets: Record<string, string> = {
   'global-augmentation-merge-base-scope': path.join(workspaceRoot, 'tests/compat-projects/global-augmentation-merge-base-scope/tsconfig.json'),
   'tuple-union-destructure-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-union-destructure-basic/tsconfig.json'),
   'intersection-two-union-operands-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-two-union-operands-basic/tsconfig.json'),
+  'void-parameter-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/void-parameter-arity-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
