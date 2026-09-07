@@ -85,7 +85,12 @@ pub(crate) fn check_jsx_element(
     // report inside those attributes would describe surge's modelling gap rather
     // than the source. Suppress it for the element's attributes and children, the
     // same no-cascade rule a sentinel receiver gets elsewhere.
-    let unmodelled_props = props_type.as_ref().is_some_and(Type::is_unknown);
+    // An intrinsic element always declares props in `JSX.IntrinsicElements`, so
+    // failing to reduce them to an object is surge's modelling gap rather than
+    // the source's — `<form onSubmit={(event) => …}>` lost its handler's
+    // contextual type that way and reported the parameter implicit-any.
+    let unmodelled_props = props_type.as_ref().is_some_and(Type::is_unknown)
+        || (component_name.is_none() && props_object.is_none());
     if unmodelled_props {
         ctx.unmodelled_jsx_props_depth += 1;
     }
