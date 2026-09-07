@@ -355,18 +355,27 @@ fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceGuard<'_>) -
         }
         Type::Union(union) => {
             let mut narrowed_any = false;
-            let members: Vec<Type> = union
-                .types()
-                .iter()
-                .map(|member| match narrow_property_path(member, path, guard) {
+            let mut members: Vec<Type> = Vec::with_capacity(union.types().len());
+            for member in union.types() {
+                match narrow_property_path(member, path, guard) {
                     Some(narrowed) => {
                         narrowed_any = true;
-                        narrowed
+                        members.push(narrowed);
                     }
-                    None => member.clone(),
-                })
-                .collect();
-            narrowed_any.then(|| union_type(members))
+                    // A truthy test of `base?.p` also proves `base` itself is
+                    // not nullish — a nullish base makes the whole chain
+                    // `undefined`, which is falsy. Keeping the nullish member
+                    // left `opts?.t ? f(opts.t) : …` reading `opts.t` as
+                    // `string | undefined`.
+                    None if matches!(guard, ReferenceGuard::Truthy)
+                        && matches!(member, Type::Undefined | Type::Void) =>
+                    {
+                        narrowed_any = true;
+                    }
+                    None => members.push(member.clone()),
+                }
+            }
+            (narrowed_any && !members.is_empty()).then(|| union_type(members))
         }
         _ => None,
     }

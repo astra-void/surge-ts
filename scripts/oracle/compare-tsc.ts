@@ -359,6 +359,7 @@ export const fixturePresets: Record<string, string> = {
   'void-parameter-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/void-parameter-arity-basic/tsconfig.json'),
   'instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instantiation-expression-basic/tsconfig.json'),
   'literal-equality-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-equality-narrowing-basic/tsconfig.json'),
+  'optional-chain-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-guard-narrowing-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
