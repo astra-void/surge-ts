@@ -56,36 +56,37 @@ burn-down history, and the known-limitation reproductions.
 
 ## trpc surge-only inventory (2026-09-07)
 
-Measured at commit `5db229c` against the pinned TypeScript 7.0.2 oracle, tRPC
-checkout `dfbafa8`. `tsc` reports 1,244 diagnostics there and surge-ts 1,153;
+Measured at commit `8644a94` against the pinned TypeScript 7.0.2 oracle, tRPC
+checkout `dfbafa8`. `tsc` reports 1,244 diagnostics there and surge-ts 1,141;
 this section lists only the **surge-only** side — locations where surge reports
 something `tsc` does not. It is a burn-down list, not a parity claim: the
 `tsc`-only side (123 at this commit) is tracked separately, and neither side is
 gated.
 
-The surge-only side was 65 at `019fb8b` and is 32 here. What closed, and the
-oracle preset that pins each, is in the commit range `019fb8b..5db229c`:
+The surge-only side was 65 at `019fb8b` and is 20 here. What closed, and the
+oracle preset that pins each, is in the commit range `019fb8b..8644a94`:
 `this-type-predicate-narrowing-basic`, `guard-polarity-narrowing-basic`,
 `overload-merge-contextual-callback-basic`, `namespace-callback-parameter-basic`,
 `exit-and-alias-narrowing-basic`, `generator-missing-return-basic`,
-`assertion-and-nonnullable-basic`, `class-prototype-instanceof-basic`, plus the
-local-shadow case added to `umd-global-module-reference-basic`.
+`assertion-and-nonnullable-basic`, `class-prototype-instanceof-basic`,
+`tuple-union-destructure-basic`, `intersection-two-union-operands-basic`, plus
+the local-shadow case added to `umd-global-module-reference-basic`. Two of the
+fixes are not preset-pinned because their trigger is a shape surge fails to
+model and `tsc` types fine — a fixture would pin the modelling gap rather than
+the suppression; both are called out in their commits.
 
-The 32 that remain, with the root cause where it is known:
+The 20 that remain, with the root cause where it is known:
 
 | Location | Code | Root cause |
 | --- | --- | --- |
-| `packages/react-query/src/server/ssgProxy.ts:95` ×2, `:112` | TS2339 | `A & (B \| C)` where the union half is built from a conditional type collapses to `A` alone, so `'router' in opts` has nothing to narrow. Not reduced to a minimal case yet — synthetic `A & (B \| C)` narrows correctly. |
-| `packages/server/src/unstable-core-do-not-import/http/resolveResponse.ts:309`, `:746` | TS2339 | Array destructuring of a union-of-tuples alias (`ResultTuple<T>`); the reported property name is the *initializer's*, so the destructure lowering is picking the wrong side. Not reduced. |
-| `packages/server/src/__tests__/trpcServerResource.ts:53`, `:64`, `:85` | TS7006 ×2, TS2349 | Object literal with a spread *and* method shorthand passed to a generic function; the methods lose their contextual signature. Not reduced — synthetic spread+method literals type correctly. |
-| `examples/next-sse-chat/src/server/db/schema.ts:13`, `:61` ×2 | TS4111 | drizzle's `pgTable(...)` result degrades to a string index signature, so column access reads as index-signature access under `noPropertyAccessFromIndexSignature`. |
+| `examples/next-sse-chat/src/server/db/schema.ts:13`, `:61` ×2 | TS4111 | drizzle's `pgTable(...)` result degrades to a string index signature, so column access reads as index-signature access under `noPropertyAccessFromIndexSignature`. Only reproduces inside the full project — the same file checked on its own is clean. |
+| `packages/server/src/__tests__/trpcServerResource.ts:53`, `:64` | TS7006, TS2349 | `createHTTPHandler`'s options are an intersection whose `CreateContextCallback<…>` operand is a conditional over an unresolved router context. Replacing that operand with a plain object closes `:53`, so the contextual type is lost through the operand — but the object-literal path that loses it has not been isolated. |
 | `packages/server/src/unstable-core-do-not-import/router.ts:75` | TS2314 | `DecorateRouterRecord<TRecord>` resolves to the two-parameter declaration in `packages/react-query`, a cross-module type-name leak. Not reduced. |
-| `packages/upgrade/src/bin/index.ts:5` | TS2307 | `import { version } from '../../package.json'` — JSON module resolution. |
+| `packages/upgrade/src/bin/index.ts:5` | TS2307 | `import { version } from '../../package.json'`. `.json` specifiers are pinned unsupported in the relative-specifier classifier; `resolveJsonModule` is parsed but not implemented. |
 | `packages/server/src/observable/observable.test.ts:1` | TS2305 | `import { EventEmitter } from 'stream'` — `@types/node`'s `stream` module imports `EventEmitter` without re-exporting it, so the resolution `tsc` uses here is not the one surge takes. |
 | `examples/nuxt/nuxt.config.ts:2` | TS2304 | `defineNuxtConfig` comes from Nuxt's generated `.nuxt` types. |
-| `examples/next-prisma-starter/src/pages/index.tsx:100` | TS7006 | JSX intrinsic attribute (`<form onSubmit={…}>`) loses its contextual callback type in this example's React setup. Not reduced. |
-| `packages/client/src/links/loggerLink.ts:204`, `:230`; `packages/tests/server/___testHelpers.ts:57`; `packages/server/src/unstable-core-do-not-import/router.ts:432`; `examples/next-sse-chat/src/server/auth.tsx:80` | TS2339, TS2349 ×4 | "not callable" / missing member on a value whose type came out of trpc's generic builder machinery. Each needs its own reduction. |
-| the remaining 9 | TS2322 ×4, TS2345 ×2, TS2339 ×2, TS2554, TS2353 | one-off assignability and arity divergences, not yet reduced |
+| `packages/client/src/links/loggerLink.ts:204` | TS2339 | `props.result instanceof Error || ('error' in props.result.result && …)`: the right operand of an `||` needs the left's *falsity* to narrow a property path by `instanceof`, and the name-based member test cannot see that `TRPCClientError extends Error`. The union-aware fallback exists for identifiers, not for reference paths — that path has no `ctx` to resolve the constructor's instance type. |
+| the remaining 10 | TS2322 ×4, TS2345 ×2, TS2339 ×2, TS2554, TS2353 | one-off assignability, arity and member divergences inside tRPC's generic builder machinery; not yet reduced |
 
 ## Compatibility fixture matrix
 
