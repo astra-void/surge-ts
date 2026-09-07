@@ -1262,7 +1262,8 @@ fn exactly_one_callback_slot(left: &Type, right: &Type) -> bool {
 /// Collapse two function overloads into a single permissive signature: the
 /// required-parameter count is the smaller of the two (a call matching the
 /// shorter overload's arity is accepted), the parameter list is the longer of
-/// the two with positions widened to `any` where the overloads disagree (so the
+/// the two with positions widened to the degradation sentinel where the
+/// overloads disagree (so the
 /// merge never rejects an argument valid under either overload), and the result
 /// is variadic if either overload is. The shorter overload's return type is kept
 /// as the representative, matching the most basic form (e.g. `Array.from`'s
@@ -1320,7 +1321,11 @@ pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> F
             Some(other) if exactly_one_callback_slot(ty, other) => {
                 surge_ts_types::union_type(vec![ty.clone(), other.clone()])
             }
-            Some(_) => Type::Any,
+            // The degradation sentinel rather than `any`: the overloads do
+            // constrain this slot, surge just cannot say how, and `any` would
+            // claim the source omitted a contextual type — turning a callback
+            // nested in the argument into a false implicit-any report.
+            Some(_) => Type::Unknown,
             None => ty.clone(),
         })
         .collect::<Vec<_>>();

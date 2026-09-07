@@ -219,12 +219,13 @@ fn evaluate_expression_with_expected_type_inner(
     // with several callable members stays context-free: picking one there needs
     // signature matching and guessing wrong types the parameters as the wrong shape.
     if let (Type::Union(union), ParsedExpression::ArrowFunction(_)) = (expected_type, expression) {
-        let mut callable = union
+        let callable: Vec<&Type> = union
             .types()
             .iter()
-            .filter(|member| is_contextual_callable(member));
-        if let (Some(member), None) = (callable.next(), callable.next()) {
-            let member = with_type_copy_reason(TypeCopyReason::ExpectedType, || member.clone());
+            .filter(|member| is_contextual_callable(member))
+            .collect();
+        if let [member] = callable.as_slice() {
+            let member = with_type_copy_reason(TypeCopyReason::ExpectedType, || (*member).clone());
             return evaluate_expression_with_expected_type_anchored(
                 expression,
                 fallback_span,
@@ -234,6 +235,22 @@ fn evaluate_expression_with_expected_type_inner(
                 symbols,
                 ctx,
             );
+        }
+        // Several callable members of the same arity. tsc never sees this
+        // union: it resolves the overload first and contextually types the
+        // arrow from the one it picked. surge merges overloads into a single
+        // permissive signature instead, so the union is its own artifact and an
+        // implicit-any report here would describe that gap rather than the
+        // source (`ws.addEventListener("close", (event) => …)`, whose merged
+        // listener slot holds both the generic overload's callback and
+        // `EventListenerOrEventListenerObject`). Members of *differing* arity
+        // are a genuinely ambiguous union, which tsc also refuses to type — the
+        // implicit-any there is real, so it still reports.
+        if callable.len() > 1 && callable_members_share_arity(&callable) {
+            ctx.degraded_expected_type_depth += 1;
+            let result = evaluate_expression(expression, fallback_span, symbols, ctx);
+            ctx.degraded_expected_type_depth -= 1;
+            return result;
         }
     }
 
@@ -523,6 +540,33 @@ fn join_nullish_coalescing(
             }
         }
         _ => InferredExpression::Unknown,
+    }
+}
+
+/// Whether every callable member takes the same number of parameters.
+fn callable_members_share_arity(members: &[&Type]) -> bool {
+    let mut arity = None;
+    for member in members {
+        let Some(signature) = contextual_call_signature(member) else {
+            return false;
+        };
+        let count = signature.parameters().len();
+        match arity {
+            None => arity = Some(count),
+            Some(existing) if existing == count => {}
+            Some(_) => return false,
+        }
+    }
+    arity.is_some()
+}
+
+/// The call signature a union member contributes to contextual typing.
+fn contextual_call_signature(ty: &Type) -> Option<surge_ts_types::FunctionType> {
+    let peeled = ty.peeled();
+    match peeled {
+        Type::Function(function) => Some(function),
+        Type::Object(object) => object.call_signature().cloned(),
+        _ => None,
     }
 }
 

@@ -347,6 +347,7 @@ export const fixturePresets: Record<string, string> = {
   'ambient-global-function-overload-merge': path.join(workspaceRoot, 'tests/compat-projects/ambient-global-function-overload-merge/tsconfig.json'),
   'this-type-predicate-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/this-type-predicate-narrowing-basic/tsconfig.json'),
   'guard-polarity-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/guard-polarity-narrowing-basic/tsconfig.json'),
+  'overload-merge-contextual-callback-basic': path.join(workspaceRoot, 'tests/compat-projects/overload-merge-contextual-callback-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

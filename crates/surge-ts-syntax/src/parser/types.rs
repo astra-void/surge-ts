@@ -572,7 +572,8 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
 /// [`ParsedFunctionType`], shared by interface and object-type-literal parsing.
 /// Folds two call-signature overloads into one permissive signature: the longer
 /// parameter list wins, a position typed differently across overloads widens to
-/// `any`, and a position absent (or optional) in either overload is optional.
+/// the degradation sentinel, and a position absent (or optional) in either
+/// overload is optional.
 /// The return type is taken from the first overload. This mirrors the checker's
 /// `merge_overload_signatures`, applied at parse time because a type literal
 /// stores a single call signature.
@@ -608,7 +609,13 @@ pub(crate) fn merge_parsed_call_signatures(
             if let Some(other) = shorter.parameters.get(index)
                 && other.ty != merged.ty
             {
-                merged.ty = ParsedType::Any;
+                // The degradation sentinel, not `any`: the overloads really do
+                // constrain this slot, surge just cannot say how. `any` claims
+                // the source wrote no contextual type, so a callback nested in
+                // the argument (`new ReadableStream({ start(controller) {} })`,
+                // whose three `new` overloads disagree on the source object)
+                // became a false implicit-any report.
+                merged.ty = ParsedType::Unknown;
             }
             if index >= min_required && !merged.rest {
                 merged.optional = true;
