@@ -122,7 +122,8 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
         })
         .collect();
 
-    crate::program::collect_ambient_globals(&parsed_files, ctx, None);
+    crate::program::collect_ambient_global_types(&parsed_files, ctx, None);
+    crate::program::lower_ambient_global_values(&parsed_files, ctx);
     ctx.set_file_name(original_file_name);
 }
 

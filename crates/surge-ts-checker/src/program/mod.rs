@@ -630,15 +630,23 @@ fn check_program_with_stats_and_jobs_inner(
     let ambient_collection_start = Instant::now();
     emit_parser_diagnostics(&parsed_files, &mut ctx);
     ctx.begin_resolution_stage();
-    // `declare global` block types first: `collect_ambient_globals` lowers a
-    // script declaration file's `declare var` against the ambient *type* table,
-    // and @types/node's `globals.d.ts` (a script) declares `var process:
-    // NodeJS.Process` while the interface itself is re-opened from `process.d.ts`
-    // inside a `declare global`. Lowering the value before that merge froze
-    // `process` against whatever partial `NodeJS.Process` existed — a local
-    // one-member augmentation, leaving `process.exit` and `process.env` missing.
+    // Three ordered steps, and the order is load-bearing in both directions.
+    //
+    // Ambient global *types* merge first so the ambient declaration is the merge
+    // base: a merged interface takes its declaring file and resolution scope
+    // from whichever fragment merged first, and only the ambient one can resolve
+    // the member annotations.
+    //
+    // `declare global` block types merge second, before any value is lowered:
+    // @types/node's `globals.d.ts` (a script) declares `var process:
+    // NodeJS.Process` while the interface's members are re-opened from
+    // `process.d.ts` inside a `declare global`, so lowering the value first
+    // froze `process` against whatever partial `NodeJS.Process` existed.
+    //
+    // Ambient *values* lower last, against the fully merged table.
+    collect_ambient_global_types(&parsed_files, &mut ctx, timings.as_ref());
     crate::driver::collect_global_augmentations(&parsed_files, &mut ctx);
-    collect_ambient_globals(&parsed_files, &mut ctx, timings.as_ref());
+    lower_ambient_global_values(&parsed_files, &mut ctx);
     collect_umd_global_names(&parsed_files, &mut ctx);
     collect_ambient_modules(&parsed_files, &mut ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {

@@ -219,18 +219,25 @@ pub(crate) fn type_only_import_bound_names(statements: &[ParsedStatement]) -> Ha
     names
 }
 
-pub(crate) fn collect_ambient_globals(
+/// Collects and merges every ambient global *type* declaration across all
+/// declaration files. The default lib graph splits a single global interface
+/// across files (e.g. `ArrayConstructor` gains `isArray` in lib.es5 and
+/// `from`/`of` in lib.es2015.core), and a `declare var Array: ArrayConstructor`
+/// would otherwise freeze the variable's type against whatever members were
+/// merged when its own file was processed, dropping members contributed by files
+/// processed later.
+///
+/// Runs before [`collect_global_augmentation_types`][crate::driver::collect_global_augmentations]
+/// so the *ambient* declaration is the merge base. A merged interface takes its
+/// declaring file and resolution scope from whichever fragment merged first, and
+/// only the ambient one can resolve the member annotations: letting a
+/// `declare global` block win that role resolved `NodeJS.Process`'s members
+/// under the augmenting module's scope, where none of their type names exist.
+pub(crate) fn collect_ambient_global_types(
     parsed_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) {
-    // Phase 1: collect and merge every ambient global *type* declaration across
-    // all declaration files before any value symbol is lowered. The default lib
-    // graph splits a single global interface across files (e.g. `ArrayConstructor`
-    // gains `isArray` in lib.es5 and `from`/`of` in lib.es2015.core), and a
-    // `declare var Array: ArrayConstructor` would otherwise freeze the variable's
-    // type against whatever members were merged when its own file was processed,
-    // dropping members contributed by files processed later.
     for parsed_file in parsed_files {
         if !is_ambient_global_declaration_file(parsed_file, ctx)
             || !publishes_ambient_globals(parsed_file)
@@ -271,10 +278,21 @@ pub(crate) fn collect_ambient_globals(
         ctx.type_declarations = saved_type_declarations;
         ctx.type_declaration_scope = saved_type_declaration_scope;
     }
+}
 
-    // Phase 2: lower ambient value symbols (functions, `declare var`s, and
-    // `declare class` constructors) against the now fully-merged type table, so
-    // a variable typed by a split global interface sees every member.
+/// Lowers ambient value symbols (functions, `declare var`s, and `declare class`
+/// constructors) against the fully-merged type table, so a variable typed by a
+/// split global interface sees every member.
+///
+/// Runs *after* the `declare global` augmentation types are merged:
+/// @types/node's `globals.d.ts` (a script) declares `var process:
+/// NodeJS.Process` while the interface's members are re-opened from
+/// `process.d.ts` inside a `declare global`, so lowering the value before that
+/// merge froze `process` against whatever partial `NodeJS.Process` existed.
+pub(crate) fn lower_ambient_global_values(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) {
     for parsed_file in parsed_files {
         if !is_ambient_global_declaration_file(parsed_file, ctx)
             || !publishes_ambient_globals(parsed_file)
