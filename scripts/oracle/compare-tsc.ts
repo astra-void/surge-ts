@@ -361,6 +361,7 @@ export const fixturePresets: Record<string, string> = {
   'literal-equality-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-equality-narrowing-basic/tsconfig.json'),
   'optional-chain-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-guard-narrowing-basic/tsconfig.json'),
   'promise-like-intersection-basic': path.join(workspaceRoot, 'tests/compat-projects/promise-like-intersection-basic/tsconfig.json'),
+  'namespace-merged-function-export-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-merged-function-export-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

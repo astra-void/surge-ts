@@ -1,6 +1,13 @@
 use super::*;
 use surge_ts_syntax::ParsedExpression;
 
+/// The shape [`apply_merging_namespace_value_members`] leaves behind when a
+/// namespace merges into a function: an object carrying the function's call
+/// signature plus the namespace's value members.
+fn namespace_merged_callable(ty: &Type) -> bool {
+    matches!(ty, Type::Object(object) if object.call_signature.is_some())
+}
+
 pub(crate) fn collect_exports_from_statement(
     statement: &ParsedStatement,
     exportable_values: &SymbolTable,
@@ -284,7 +291,15 @@ pub(crate) fn collect_exports_from_statement(
             );
         }
         ParsedStatement::FunctionDeclaration(function) => {
-            if let Some(symbol) = local_symbols.get_shared(&function.name) {
+            // A same-named `namespace` merges its value members into the
+            // function (`fs.realpathSync.native`), and that merge lives in
+            // `exportable_values`. The local symbol is the bare function and
+            // would drop them, so the merged shape — an object that kept the
+            // call signature — wins where it exists.
+            let merged = exportable_values
+                .get_shared(&function.name)
+                .filter(|symbol| namespace_merged_callable(&symbol.ty));
+            if let Some(symbol) = merged.or_else(|| local_symbols.get_shared(&function.name)) {
                 if symbols.get(&function.name).is_none() {
                     symbols.insert_shared(function.name.clone(), symbol);
                 }
