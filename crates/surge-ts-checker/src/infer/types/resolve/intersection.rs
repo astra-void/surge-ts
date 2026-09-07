@@ -117,7 +117,14 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     // must stay OPEN — a closed merge would flag every dropped member's use as an
     // excess property. A surviving nominal reference is returned untouched (see
     // the lone-survivor comment below).
-    let dropped_unmodelled_operand = members.iter().any(|ty| matches!(ty, Type::Unknown));
+    // `Type::Void` counts as a loss too: `PromiseLike<T>` is modelled as its
+    // awaited `T`, so `PromiseLike<void> & { pull(): void }` reaches here as
+    // `void & {…}` with the promise's own `then` gone. Leaving the object
+    // surface closed reported `then` as an excess property on every value
+    // written against such a type.
+    let dropped_unmodelled_operand = members
+        .iter()
+        .any(|ty| matches!(ty, Type::Unknown | Type::Void));
     let open_if_unmodelled = |ty: Type| -> Type {
         match ty {
             Type::Object(object)
