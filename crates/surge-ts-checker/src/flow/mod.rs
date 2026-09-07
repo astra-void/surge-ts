@@ -85,6 +85,10 @@ pub(crate) struct FunctionFlowState {
     /// stored expression cannot go stale and the clone stays proportional to
     /// guard aliases rather than to every local.
     alias_guard_conditions: HashMap<String, Arc<ParsedExpression>>,
+    /// Maps a `const` bound to a property reference (`const { direction } =
+    /// opts`, `const kind = node.kind`) to that reference, so testing the alias
+    /// narrows the object it came from — tsc's aliased-discriminant narrowing.
+    discriminant_aliases: HashMap<String, Arc<ParsedExpression>>,
 }
 
 impl Clone for FunctionFlowState {
@@ -103,6 +107,7 @@ impl Clone for FunctionFlowState {
             branch_captures: self.branch_captures.clone(),
             alias_guard_targets: self.alias_guard_targets.clone(),
             alias_guard_conditions: self.alias_guard_conditions.clone(),
+            discriminant_aliases: self.discriminant_aliases.clone(),
         }
     }
 }
@@ -189,6 +194,7 @@ impl FunctionFlowState {
             branch_captures: Vec::new(),
             alias_guard_targets: HashMap::new(),
             alias_guard_conditions: HashMap::new(),
+            discriminant_aliases: HashMap::new(),
         }
     }
 
@@ -221,6 +227,20 @@ impl FunctionFlowState {
 
     pub(crate) fn alias_guard_condition(&self, name: &str) -> Option<Arc<ParsedExpression>> {
         self.alias_guard_conditions.get(name).cloned()
+    }
+
+    /// Records the property reference a `const` alias was bound to (see
+    /// [`FunctionFlowState::discriminant_aliases`] field docs).
+    pub(crate) fn record_discriminant_alias(
+        &mut self,
+        name: String,
+        reference: Arc<ParsedExpression>,
+    ) {
+        self.discriminant_aliases.insert(name, reference);
+    }
+
+    pub(crate) fn discriminant_alias(&self, name: &str) -> Option<&ParsedExpression> {
+        self.discriminant_aliases.get(name).map(Arc::as_ref)
     }
 
     pub(crate) fn is_enabled(&self) -> bool {

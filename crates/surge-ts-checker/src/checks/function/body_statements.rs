@@ -60,6 +60,17 @@ pub(crate) fn check_function_variable_declaration(
                 std::sync::Arc::new(initializer.clone()),
             );
         }
+        // A `const` bound to a property reference is a discriminant alias:
+        // `const { direction } = opts` lowers to `direction = opts.direction`,
+        // and testing `direction` narrows `opts`.
+        if matches!(variable_kind, ParsedVariableKind::Const)
+            && is_property_reference(initializer)
+        {
+            flow_state.record_discriminant_alias(
+                local_name.clone(),
+                std::sync::Arc::new(initializer.clone()),
+            );
+        }
     }
 
     check_local_duplicate_declaration(&variable, scopes, ctx);
@@ -216,6 +227,107 @@ fn is_condition_shaped(expression: &ParsedExpression) -> bool {
                 | ParsedBinaryOperator::NotEquals
         ),
         _ => false,
+    }
+}
+
+/// Narrows by a condition and, when it named a discriminant alias, by the
+/// rewritten form as well. Both are applied: the written condition narrows the
+/// alias binding itself (`if (transformer)` proves the local non-nullish), the
+/// rewrite narrows the object it came from (`opts.transformer`).
+fn narrow_condition_and_aliases_in_scope(
+    base: &ParsedExpression,
+    rewritten: Option<&ParsedExpression>,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) {
+    narrow_discriminant_in_scope(base, scopes, branch_is_true, ctx);
+    if let Some(rewritten) = rewritten {
+        narrow_discriminant_in_scope(rewritten, scopes, branch_is_true, ctx);
+    }
+}
+
+/// Whether an initializer is a static property reference over identifiers
+/// (`opts.direction`, `node.kind.value`) — the shape a discriminant alias takes.
+fn is_property_reference(expression: &ParsedExpression) -> bool {
+    match expression {
+        ParsedExpression::PropertyAccess { object, .. }
+        | ParsedExpression::OptionalPropertyAccess { object, .. } => {
+            matches!(object.as_ref(), ParsedExpression::Identifier { .. })
+                || is_property_reference(object)
+        }
+        _ => false,
+    }
+}
+
+/// Substitutes discriminant aliases for the references they were bound to, so
+/// `if (direction === "up")` narrows `opts` exactly as `opts.direction === "up"`
+/// would. `None` when the condition names no alias.
+fn rewrite_discriminant_aliases(
+    condition: &ParsedExpression,
+    flow_state: &FunctionFlowState,
+) -> Option<ParsedExpression> {
+    match condition {
+        ParsedExpression::Identifier { name, .. } => flow_state.discriminant_alias(name).cloned(),
+        ParsedExpression::Unary {
+            operator,
+            operator_span,
+            operand,
+            operand_span,
+        } => {
+            let rewritten = rewrite_discriminant_aliases(operand, flow_state)?;
+            Some(ParsedExpression::Unary {
+                operator: *operator,
+                operator_span: *operator_span,
+                operand: Box::new(rewritten),
+                operand_span: *operand_span,
+            })
+        }
+        ParsedExpression::Binary {
+            left,
+            left_span,
+            operator,
+            operator_span,
+            right,
+            right_span,
+        } => {
+            let new_left = rewrite_discriminant_aliases(left, flow_state);
+            let new_right = rewrite_discriminant_aliases(right, flow_state);
+            if new_left.is_none() && new_right.is_none() {
+                return None;
+            }
+            Some(ParsedExpression::Binary {
+                left: Box::new(new_left.unwrap_or_else(|| left.as_ref().clone())),
+                left_span: *left_span,
+                operator: *operator,
+                operator_span: *operator_span,
+                right: Box::new(new_right.unwrap_or_else(|| right.as_ref().clone())),
+                right_span: *right_span,
+            })
+        }
+        ParsedExpression::Logical {
+            left,
+            left_span,
+            operator,
+            operator_span,
+            right,
+            right_span,
+        } => {
+            let new_left = rewrite_discriminant_aliases(left, flow_state);
+            let new_right = rewrite_discriminant_aliases(right, flow_state);
+            if new_left.is_none() && new_right.is_none() {
+                return None;
+            }
+            Some(ParsedExpression::Logical {
+                left: Box::new(new_left.unwrap_or_else(|| left.as_ref().clone())),
+                left_span: *left_span,
+                operator: *operator,
+                operator_span: *operator_span,
+                right: Box::new(new_right.unwrap_or_else(|| right.as_ref().clone())),
+                right_span: *right_span,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -450,8 +562,9 @@ pub(crate) fn check_function_if_statement(
     // `if (ok)` where `ok` is a boolean `const` alias narrows by the condition
     // the alias was written as, not by the opaque identifier.
     let alias_condition = resolved_alias_condition(&if_statement.condition, flow_state);
-    let narrowing_condition: &ParsedExpression =
+    let base_condition: &ParsedExpression =
         alias_condition.as_deref().unwrap_or(&if_statement.condition);
+    let rewritten_condition = rewrite_discriminant_aliases(base_condition, flow_state);
 
     let then_flow = analyze_function_body_flow(&if_statement.then_body);
     let then_guarantees_value_return = then_flow.guarantees_value_return;
@@ -507,7 +620,13 @@ pub(crate) fn check_function_if_statement(
     if flow_active {
         let mut branch_deltas = Vec::new();
         scopes.push_child();
-        narrow_discriminant_in_scope(narrowing_condition, scopes, true, ctx);
+        narrow_condition_and_aliases_in_scope(
+                base_condition,
+                rewritten_condition.as_ref(),
+                scopes,
+                true,
+                ctx,
+            );
         flow_state.begin_branch_capture();
         check_function_body(
             if_statement.then_body,
@@ -521,7 +640,7 @@ pub(crate) fn check_function_if_statement(
         let then_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
         if !has_else_body {
-            join_branch_assignments(&then_assignment_types, narrowing_condition, scopes, ctx);
+            join_branch_assignments(&then_assignment_types, base_condition, scopes, ctx);
         }
         branch_deltas.push(then_delta);
 
@@ -530,7 +649,13 @@ pub(crate) fn check_function_if_statement(
             let else_diverts_control =
                 else_flow.guarantees_value_return || else_flow.guarantees_exit;
             scopes.push_child();
-            narrow_discriminant_in_scope(narrowing_condition, scopes, false, ctx);
+            narrow_condition_and_aliases_in_scope(
+                base_condition,
+                rewritten_condition.as_ref(),
+                scopes,
+                false,
+                ctx,
+            );
             flow_state.begin_branch_capture();
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let mut else_delta = flow_state.finish_branch_capture();
@@ -542,15 +667,27 @@ pub(crate) fn check_function_if_statement(
         }
 
         if !has_else_body && then_diverts_control {
-            narrow_truthy_guarded_identifiers(narrowing_condition, scopes);
-            narrow_discriminant_in_scope(narrowing_condition, scopes, false, ctx);
+            narrow_truthy_guarded_identifiers(base_condition, scopes);
+            narrow_condition_and_aliases_in_scope(
+                base_condition,
+                rewritten_condition.as_ref(),
+                scopes,
+                false,
+                ctx,
+            );
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
 
         merge_branch_deltas(flow_state, &branch_deltas, !has_else_body);
     } else {
         scopes.push_child();
-        narrow_discriminant_in_scope(narrowing_condition, scopes, true, ctx);
+        narrow_condition_and_aliases_in_scope(
+                base_condition,
+                rewritten_condition.as_ref(),
+                scopes,
+                true,
+                ctx,
+            );
         check_function_body(
             if_statement.then_body,
             with_type_copy_reason(TypeCopyReason::ReturnChecking, || return_type.clone()),
@@ -561,12 +698,18 @@ pub(crate) fn check_function_if_statement(
         let then_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
         if !has_else_body {
-            join_branch_assignments(&then_assignment_types, narrowing_condition, scopes, ctx);
+            join_branch_assignments(&then_assignment_types, base_condition, scopes, ctx);
         }
 
         if has_else_body {
             scopes.push_child();
-            narrow_discriminant_in_scope(narrowing_condition, scopes, false, ctx);
+            narrow_condition_and_aliases_in_scope(
+                base_condition,
+                rewritten_condition.as_ref(),
+                scopes,
+                false,
+                ctx,
+            );
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let else_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
             scopes.pop_child();
@@ -574,8 +717,14 @@ pub(crate) fn check_function_if_statement(
         }
 
         if !has_else_body && then_diverts_control {
-            narrow_truthy_guarded_identifiers(narrowing_condition, scopes);
-            narrow_discriminant_in_scope(narrowing_condition, scopes, false, ctx);
+            narrow_truthy_guarded_identifiers(base_condition, scopes);
+            narrow_condition_and_aliases_in_scope(
+                base_condition,
+                rewritten_condition.as_ref(),
+                scopes,
+                false,
+                ctx,
+            );
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
     }
