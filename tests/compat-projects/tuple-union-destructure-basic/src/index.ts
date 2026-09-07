@@ -58,3 +58,19 @@ export function callProcedure(path: string): Promise<string> {
   }
   return procedure({ path });
 }
+
+declare const holder: {
+  run: QueryProcedure | MutationProcedure;
+  maybeRun?: QueryProcedure | ((opts: { path: string }) => Promise<string>);
+};
+
+export function callThroughAProperty(path: string): Promise<string> {
+  return holder.run({ path });
+}
+
+export function callThroughANarrowedProperty(path: string): Promise<string> {
+  if (typeof holder.maybeRun === 'function') {
+    return holder.maybeRun({ path });
+  }
+  return Promise.resolve('');
+}

@@ -330,6 +330,22 @@ pub(crate) fn check_property_call_like(
                     }
                     Type::Any => result_types.push(Type::Any),
                     Type::Unknown | Type::GenuineUnknown => return None,
+                    // A member whose own type is a union of callables sharing
+                    // one signature is callable, and one carrying the
+                    // degradation sentinel proves nothing — the same rules the
+                    // bare-call path applies.
+                    Type::Union(union) => {
+                        let return_type = super::check_callable_union_call(
+                            &union,
+                            property_span,
+                            call_span,
+                            type_arguments,
+                            arguments,
+                            symbols,
+                            ctx,
+                        )?;
+                        result_types.push(return_type);
+                    }
                     _ => {
                         ctx.push(diagnostic_with_syntax_span(
                             Diagnostic::ts2349(ctx.file_name.clone()),
@@ -416,6 +432,18 @@ pub(crate) fn check_property_call_like(
                     Some(Type::Any)
                 }
                 Type::Unknown | Type::GenuineUnknown => None,
+                // See the union arm in the multi-receiver loop above: a property
+                // typed as a union of callables is callable, and one carrying the
+                // degradation sentinel is not a source error.
+                Type::Union(union) => super::check_callable_union_call(
+                    &union,
+                    property_span,
+                    call_span,
+                    type_arguments,
+                    arguments,
+                    symbols,
+                    ctx,
+                ),
                 _ => {
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2349(ctx.file_name.clone()),
