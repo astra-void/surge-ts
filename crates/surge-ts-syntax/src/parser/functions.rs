@@ -71,6 +71,7 @@ pub(crate) fn parse_function_declaration_named(
         return_type_span,
         body,
         has_body: function.body.is_some(),
+        is_generator: function.generator,
         body_reads: function
             .body
             .as_ref()

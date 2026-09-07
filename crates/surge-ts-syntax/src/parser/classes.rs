@@ -164,6 +164,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         return_type,
                         body,
                         has_body: method.value.body.is_some(),
+                        is_generator: method.value.generator,
                         body_reads,
                     }))
                 }

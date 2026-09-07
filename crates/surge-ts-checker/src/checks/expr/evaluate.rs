@@ -7,7 +7,7 @@ pub(crate) fn evaluate_expression(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     record_expression_check();
-    crate::checks::check_umd_global_value_reference(expression, fallback_span, ctx);
+    crate::checks::check_umd_global_value_reference(expression, fallback_span, symbols, ctx);
     match expression {
         // The inference pass types the literal but does not check it, so a
         // property value's own errors — an unresolved name, a bad member, an

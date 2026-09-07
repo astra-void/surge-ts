@@ -450,6 +450,8 @@ pub struct ParsedClassMethod {
     pub body: Vec<ParsedFunctionBodyStatement>,
     /// See [`ParsedFunctionDeclaration::has_body`].
     pub has_body: bool,
+    /// See [`ParsedFunctionDeclaration::is_generator`].
+    pub is_generator: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -981,6 +983,10 @@ pub struct ParsedFunctionDeclaration {
     /// False for an overload signature (no body block); its parameters are not
     /// subject to TS6133.
     pub has_body: bool,
+    /// `function*` / `async function*`. A generator's declared return type
+    /// describes what it *yields*, so tsc does not require it to `return` a
+    /// value — the missing-return checks skip it.
+    pub is_generator: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

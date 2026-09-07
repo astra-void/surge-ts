@@ -1030,6 +1030,7 @@ pub(crate) fn check_function_body_with_signature(
     has_explicit_return_type: bool,
     missing_return_span: Option<TextSpan>,
     body_reads: Option<&[String]>,
+    is_generator: bool,
     ctx: &mut CheckerContext,
 ) {
     check_function_body_with_signature_and_this(
@@ -1044,6 +1045,7 @@ pub(crate) fn check_function_body_with_signature(
         None,
         false,
         body_reads,
+        is_generator,
         ctx,
     );
 }
@@ -1068,6 +1070,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     this_type: Option<Type>,
     is_constructor: bool,
     body_reads: Option<&[String]>,
+    is_generator: bool,
     ctx: &mut CheckerContext,
 ) {
     let body_flow = analyze_function_body_flow(&body);
@@ -1132,6 +1135,12 @@ pub(crate) fn check_function_body_with_signature_and_this(
         );
         ctx.close_contextual_return_frame()
     });
+
+    // A generator's declared type describes what it *yields*, so tsc requires no
+    // `return` and reports neither TS2355 nor TS7030 on it.
+    if is_generator {
+        return;
+    }
 
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
         emit_missing_return_diagnostic(body_flow, missing_return_span, ctx);

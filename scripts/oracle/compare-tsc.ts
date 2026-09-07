@@ -350,6 +350,7 @@ export const fixturePresets: Record<string, string> = {
   'overload-merge-contextual-callback-basic': path.join(workspaceRoot, 'tests/compat-projects/overload-merge-contextual-callback-basic/tsconfig.json'),
   'namespace-callback-parameter-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-callback-parameter-basic/tsconfig.json'),
   'exit-and-alias-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/exit-and-alias-narrowing-basic/tsconfig.json'),
+  'generator-missing-return-basic': path.join(workspaceRoot, 'tests/compat-projects/generator-missing-return-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

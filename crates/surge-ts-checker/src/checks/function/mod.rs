@@ -126,6 +126,7 @@ pub(crate) fn check_function_declaration(
         body,
         has_body,
         body_reads,
+        is_generator,
         ..
     } = function;
 
@@ -203,6 +204,7 @@ pub(crate) fn check_function_declaration(
             return_type.is_some(),
             return_type_span.or(name_span),
             has_body.then(|| body_reads.as_slice()),
+            is_generator,
             ctx,
         );
     });
@@ -228,6 +230,7 @@ pub(crate) fn check_function_declaration_body(
         body,
         has_body,
         body_reads,
+        is_generator,
         ..
     } = function;
 
@@ -255,6 +258,7 @@ pub(crate) fn check_function_declaration_body(
         return_type.is_some(),
         return_type_span.or(name_span),
         has_body.then(|| body_reads.as_slice()),
+        is_generator,
         ctx,
     );
     record_program_timing(ctx.timings.as_ref(), |timings| {

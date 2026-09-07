@@ -97,6 +97,7 @@ fn value_reference_head(expression: &ParsedExpression) -> Option<(&str, Option<T
 pub(crate) fn check_umd_global_value_reference(
     expression: &ParsedExpression,
     fallback_span: Option<TextSpan>,
+    symbols: &crate::symbols::SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     if ctx.file_umd_global_names.is_empty() && ctx.file_type_only_import_names.is_empty() {
@@ -107,8 +108,14 @@ pub(crate) fn check_umd_global_value_reference(
         return;
     };
 
-    if !ctx.is_type_only_import_value_reference(name) && !ctx.is_umd_global_value_reference(name) {
-        return;
+    if !ctx.is_type_only_import_value_reference(name) {
+        // A value binding in scope shadows the UMD global entirely — `const qs =
+        // searchParams.toString()` is the local, not `@types/qs`. A type-only
+        // import is itself a symbol-table entry, so the shadow test belongs to
+        // the UMD branch alone.
+        if !ctx.is_umd_global_value_reference(name) || symbols.get(name).is_some() {
+            return;
+        }
     }
 
     let name = name.to_string();
