@@ -351,6 +351,7 @@ export const fixturePresets: Record<string, string> = {
   'namespace-callback-parameter-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-callback-parameter-basic/tsconfig.json'),
   'exit-and-alias-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/exit-and-alias-narrowing-basic/tsconfig.json'),
   'generator-missing-return-basic': path.join(workspaceRoot, 'tests/compat-projects/generator-missing-return-basic/tsconfig.json'),
+  'assertion-and-nonnullable-basic': path.join(workspaceRoot, 'tests/compat-projects/assertion-and-nonnullable-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

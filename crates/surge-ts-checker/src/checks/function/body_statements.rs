@@ -1486,7 +1486,7 @@ pub(crate) fn update_assigned_symbol_type(
 pub(crate) fn check_function_expression_statement(
     expression: ParsedExpression,
     statement_index: usize,
-    scopes: &ScopeStack,
+    scopes: &mut ScopeStack,
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
@@ -1511,6 +1511,10 @@ pub(crate) fn check_function_expression_statement(
 
     let visible_symbols = visible_symbols(scopes);
     let _ = evaluate_expression(&expression, None, &visible_symbols, ctx);
+
+    // `assertIsObject(obj);` narrows from here to the end of the block, not
+    // inside a branch, so the narrowing is applied at the statement.
+    crate::checks::function::narrow_assertion_call_in_scope(&expression, scopes, ctx);
 }
 
 /// Whether a return value could possibly infer as `any`, so the probe below is

@@ -916,6 +916,108 @@ fn narrow_predicate_call_in_scope(
     true
 }
 
+/// Applies an assertion call's narrowing (`assertIsObject(obj);`) to the
+/// enclosing scope. Unlike a `x is T` predicate, an `asserts x is T` signature
+/// narrows from the *statement* onward rather than inside a branch, so it is
+/// applied where the expression statement is checked.
+pub(crate) fn narrow_assertion_call_in_scope(
+    expression: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedExpression::Call {
+        callee_name,
+        type_arguments,
+        arguments,
+        ..
+    } = expression
+    else {
+        return;
+    };
+    if !type_arguments.is_empty() {
+        return;
+    }
+    let Some(signature) = scopes
+        .resolve(callee_name)
+        .and_then(|symbol| symbol.function_signature.clone())
+    else {
+        return;
+    };
+    // A generic assertion needs its `T` bound at the call site, which this path
+    // has no inference for; leaving it alone keeps the declared type.
+    if !signature.type_parameters.is_empty() {
+        return;
+    }
+    let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = signature.return_type.as_ref()
+    else {
+        return;
+    };
+    if !predicate.asserts || predicate.parameter_name == "this" {
+        return;
+    }
+    let Some(index) = signature
+        .parameter_names
+        .iter()
+        .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))
+    else {
+        return;
+    };
+    let Some(argument) = arguments.get(index) else {
+        return;
+    };
+    let Some((subject, path)) = reference_path(&argument.expression) else {
+        return;
+    };
+    let Some(symbol) = scopes.resolve(&subject) else {
+        return;
+    };
+    let subject_ty = symbol.ty.clone();
+    let kind = symbol.kind;
+    let function_signature = symbol.function_signature.clone();
+
+    // `asserts x` with no target proves only that `x` is truthy.
+    let Some(predicate_type) = predicate.ty.clone() else {
+        if path.is_empty() {
+            let narrowed = surge_ts_types::remove_nullish(&subject_ty);
+            if narrowed != subject_ty {
+                let _ = scopes.insert_current_narrowed(
+                    subject,
+                    SymbolInfo {
+                        ty: narrowed,
+                        kind,
+                        function_signature,
+                    },
+                    subject_ty,
+                );
+            }
+        }
+        return;
+    };
+    let Some(target) = resolve_predicate_type_under(
+        predicate_type,
+        signature.declaring_file.as_deref(),
+        signature.namespace_prefix.as_deref(),
+        &crate::infer::TypeParameterSubstitution::new(),
+        ctx,
+    ) else {
+        return;
+    };
+    let Some(narrowed) = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        narrowed_predicate_subject(&subject_ty, &path, &target, true)
+    }) else {
+        return;
+    };
+    let _ = scopes.insert_current_narrowed(
+        subject,
+        SymbolInfo {
+            ty: narrowed,
+            kind,
+            function_signature,
+        },
+        subject_ty,
+    );
+}
+
 /// Narrows `ty` for variable `var_name` under `condition`, returning the narrowed
 /// type or `None` when the condition does not constrain `var_name` (or leaves it
 /// unchanged). Composes `||` (true branch: union of disjuncts — every disjunct

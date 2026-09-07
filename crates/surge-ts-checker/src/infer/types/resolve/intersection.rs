@@ -312,6 +312,25 @@ fn merge_intersection_members_now(
         })
         .collect();
 
+    // An object operand excludes `null`/`undefined`, so `undefined & {}` is
+    // `never`. That reduction is what makes `NonNullable<T>` — defined as
+    // `T & {}` — actually drop the nullish arms once the union is distributed;
+    // without it the brand-collapse below handed `undefined` back and every
+    // `NonNullable<…>` kept its `| undefined`.
+    //
+    // `void` is deliberately excluded even though tsc reduces it the same way:
+    // surge models `PromiseLike<void>` as its awaited `void`, so
+    // `PromiseLike<void> & { pull(): void }` reaches here as `void & {…}` and
+    // reducing it to `never` would strip the contextual type off every method
+    // written against it. Skipped, too, when an operand was dropped as
+    // unmodelled: the surviving object may not be the whole story.
+    if !dropped_unmodelled_operand
+        && !object_members.is_empty()
+        && members.iter().any(|ty| matches!(ty, Type::Undefined))
+    {
+        return Type::Never;
+    }
+
     // Brand idiom: `string & { _?: never }` (and other `Base & {…all-optional…}`
     // shapes, e.g. `LiteralUnion<L, B> = L | (B & { _?: never })`). When every
     // object operand only contributes optional members, the object side is a
