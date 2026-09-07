@@ -56,7 +56,7 @@ burn-down history, and the known-limitation reproductions.
 
 ## trpc surge-only inventory (2026-09-07)
 
-Measured at commit `bda16e0` against the pinned TypeScript 7.0.2 oracle, tRPC
+Measured at commit `5db229c` against the pinned TypeScript 7.0.2 oracle, tRPC
 checkout `dfbafa8`. `tsc` reports 1,244 diagnostics there and surge-ts 1,153;
 this section lists only the **surge-only** side — locations where surge reports
 something `tsc` does not. It is a burn-down list, not a parity claim: the
@@ -64,7 +64,7 @@ something `tsc` does not. It is a burn-down list, not a parity claim: the
 gated.
 
 The surge-only side was 65 at `019fb8b` and is 32 here. What closed, and the
-oracle preset that pins each, is in the commit range `019fb8b..bda16e0`:
+oracle preset that pins each, is in the commit range `019fb8b..5db229c`:
 `this-type-predicate-narrowing-basic`, `guard-polarity-narrowing-basic`,
 `overload-merge-contextual-callback-basic`, `namespace-callback-parameter-basic`,
 `exit-and-alias-narrowing-basic`, `generator-missing-return-basic`,
