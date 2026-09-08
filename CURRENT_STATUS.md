@@ -21,7 +21,7 @@ than copying them.
 | Field | Value |
 | --- | --- |
 | Date | 2026-09-07 |
-| Commit | `8905e69` (clean checkout; built and measured from a detached worktree at that commit) |
+| Commit | `5689e39` (clean checkout; built and measured from a detached worktree at that commit) |
 | Hardware | Apple M1 Pro (MacBookPro18,1), 10 cores, 16 GiB RAM |
 | OS | macOS 27.0 (build 26A5425a) |
 | Toolchain | rustc 1.94.0, Node v22.23.2, pnpm 11.13.0, TypeScript oracle 7.0.2 |
@@ -46,18 +46,18 @@ level at this commit; the bisect and the before/after are in
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1846 / 1846 passed** |
+| Workspace tests | `cargo nextest run --workspace` | **1859 / 1859 passed** |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **145 / 145 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **145 / 145 passed** |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **145 / 145 passed** |
-| Oracle preset sweep — both strict flags | same + both | **145 / 145 passed** |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **147 / 147 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **147 / 147 passed** |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **147 / 147 passed** |
+| Oracle preset sweep — both strict flags | same + both | **147 / 147 passed** |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
 | Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 145 presets the
-sweep saw 236 `tsc` diagnostics and 236 `surge-ts` diagnostics, with
+parity against the upstream TypeScript compiler. Across all 147 presets the
+sweep saw 241 `tsc` diagnostics and 241 `surge-ts` diagnostics, with
 `onlyTsc = 0` and `onlyRust = 0`.
 
 **Message text and span/column match on every registered preset.** Both strict
@@ -126,9 +126,9 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 145 oracle presets under `tests/compat-projects/`, all green at the normal
+- 147 oracle presets under `tests/compat-projects/`, all green at the normal
   gate **and at both strict gates** (see the table above).
-- 369 compat-project fixtures in total; the ones not registered as oracle
+- 371 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
@@ -149,7 +149,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **ofetch** (unjs/ofetch) | `1dbc37f` | 1 | 1 | **exact** — same file/code/line and message text (TS5108) |
 | **zod** | `912f0f5` | 21 | 21 | **exact** — every diagnostic matched, message text included |
 | **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
-| **trpc** | `dfbafa8` | 1244 | 1135 | measured baseline, **not** a parity target |
+| **trpc** | `dfbafa8` | 1244 | 1134 | measured baseline, **not** a parity target |
 | **auth-kit** | — | — | — | **not measured** — the project is absent on this machine |
 
 Notes that matter:
@@ -169,9 +169,9 @@ Notes that matter:
 - **trpc** is a *measured baseline*, never a parity claim. `tsc` itself reports
   over a thousand diagnostics there (many from examples with unresolved
   workspace imports), and the divergence is two-sided. At this commit the
-  file/code/line drift is **137**: 123 diagnostics `tsc` reports and surge does
-  not (led by TS7006 ×38, TS2339 ×29, TS2883 ×10, TS18048 ×8) and 14 surge-only
-  (TS4111 ×3, TS2339 ×2, TS2322 ×2, and seven single codes). On the 1,121
+  file/code/line drift is **136**: 123 diagnostics `tsc` reports and surge does
+  not (led by TS7006 ×38, TS2339 ×29, TS2883 ×10, TS18048 ×8) and 13 surge-only
+  (TS4111 ×3, TS2339 ×2, TS2322 ×2, and six single codes). On the 1,121
   locations both compilers agree on, message text matches **1121 / 1121**.
   The surge-only side came down from 65 at `019fb8b` over the 2026-09-07/08
   session; what remains is listed in
@@ -349,8 +349,11 @@ both neutral and neither a perf change. `8644a94` against `79cbcfc`, four
 interleaved pairs: 1.013 -> 1.012 GB and 4.39 -> 4.46 s on tRPC, 0.516 -> 0.510
 GB and 3.40 -> 3.39 s on zod. This snapshot's commit against `8644a94`, four
 interleaved pairs: 1.089 -> 1.091 GB and 4.42 -> 4.40 s on tRPC, 0.547 -> 0.547
-GB and 3.35 -> 3.33 s on zod. (Absolute wall figures move between rounds with
-machine load; only the interleaved pairs within a round compare.)
+GB and 3.35 -> 3.33 s on zod. And this snapshot's commit against `8905e69`,
+which added JSON-module loading to the import graph: 1.086 -> 1.086 GB and
+5.05 -> 5.10 s on tRPC, 0.547 -> 0.548 GB and 3.80 -> 3.80 s on zod. (Absolute
+wall figures move between rounds with machine load; only the interleaved pairs
+within a round compare.)
 
 **A ~2x memory regression opened and closed inside this snapshot's range.**
 `4b3bcc0` reordered the ambient-global collection so that `declare global`
@@ -402,11 +405,11 @@ Performance history, methodology, and the reproduction recipe live in
 - **No full TypeScript compatibility claim.** The oracle gate establishes
   parity on the covered fixtures and projects only.
 - **No general message-text or span/column parity claim.** Both strict sweeps
-  are green across the 145 registered presets at this commit, which is a
+  are green across the 147 registered presets at this commit, which is a
   statement about those fixtures — not about arbitrary code. The strict flags
   stay non-gating so a new preset can record a drift without failing CI.
 - **No claim that trpc matches `tsc`.** It is a workload and a measured
-  baseline; 137 diagnostics still differ in each direction combined.
+  baseline; 136 diagnostics still differ in each direction combined.
 - **No wall-clock performance claim at this commit** — see the caveat above.
 - **No cross-tool performance claim.** `pnpm bench:compilers` exists as a
   developer aid; its output is local-machine-relative and is not a marketing
