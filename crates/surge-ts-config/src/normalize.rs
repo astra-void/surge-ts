@@ -22,6 +22,7 @@ pub(crate) fn normalize_compiler_options(
     };
 
     let mut explicit_no_implicit_any = None;
+    let mut explicit_resolve_json_module = None;
 
     for (key, value) in compiler_options {
         match key.as_str() {
@@ -129,6 +130,10 @@ pub(crate) fn normalize_compiler_options(
             "types" => {
                 normalized.types = Some(parse_string_list_option(value, diagnostics, config_dir));
             }
+            "resolveJsonModule" => {
+                explicit_resolve_json_module =
+                    parse_bool_option(key, value, config_dir, diagnostics);
+            }
             "resolvePackageJsonExports" => {
                 normalized.resolve_package_json_exports =
                     parse_bool_option(key, value, config_dir, diagnostics)
@@ -171,6 +176,13 @@ pub(crate) fn normalize_compiler_options(
     }
 
     normalized.no_implicit_any = explicit_no_implicit_any.unwrap_or(normalized.strict);
+    // tsc turns `.json` resolution on by default for every resolver it still
+    // accepts except `node16`, and the flag is read after the whole option map
+    // so `moduleResolution` has already landed whatever order they appear in.
+    normalized.resolve_json_module = explicit_resolve_json_module.unwrap_or(!matches!(
+        normalized.module_resolution,
+        ModuleResolutionKind::Node16
+    ));
     if normalized.es_module_interop {
         normalized.allow_synthetic_default_imports = true;
     }

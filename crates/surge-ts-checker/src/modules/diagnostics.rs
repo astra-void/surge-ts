@@ -51,6 +51,13 @@ pub(crate) fn push_duplicate_default_export_diagnostic(
 /// back to the generic TS2307. Side-effect imports never reach here — they use
 /// TS2882.
 fn unresolved_module_diagnostic(ctx: &CheckerContext, module_specifier: &str) -> Diagnostic {
+    // A `.json` specifier under `resolveJsonModule: false` is not a missing
+    // module — it is a module the option refuses to resolve, and tsc says so
+    // with its own code and hint.
+    if !ctx.options.resolve_json_module && surge_ts_syntax::is_json_file_name(module_specifier) {
+        return Diagnostic::ts2732(module_specifier, ctx.file_name.clone());
+    }
+
     cannot_resolve_module_name_error_for_specific_module(ctx, module_specifier)
         .unwrap_or_else(|| Diagnostic::ts2307(module_specifier, ctx.file_name.clone()))
 }
@@ -213,11 +220,23 @@ pub(crate) fn should_bind_unknown_for_missing_export(
     let Some(file_index) = resolved_index else {
         return false;
     };
+    let Some(file) = parsed_files.get(file_index) else {
+        return false;
+    };
 
-    matches!(
-        parsed_files.get(file_index).map(|file| file.file_kind),
-        Some(FileKind::DependencyDeclaration)
-    ) && export_table.has_incomplete_declaration_surface
+    // A `.json` file whose contents did not parse is a module whose export
+    // names are unknowable, not one that is missing the name asked for. surge
+    // reports no JSON syntax errors, so the alternative would be a TS2305 on
+    // every import of it.
+    if matches!(
+        file.json_module_type,
+        Some(surge_ts_syntax::ParsedType::Unknown)
+    ) {
+        return true;
+    }
+
+    matches!(file.file_kind, FileKind::DependencyDeclaration)
+        && export_table.has_incomplete_declaration_surface
 }
 
 pub(crate) fn module_has_incomplete_declaration_surface(parsed_file: &ParsedProgramFile) -> bool {

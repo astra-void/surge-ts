@@ -7,7 +7,7 @@ mod parser;
 pub use ast::*;
 pub use parser::{
     ParserWorker, extract_reference_path_directives, extract_reference_type_directives,
-    parse_source,
+    is_json_file_name, parse_json_module_type, parse_source,
 };
 
 #[cfg(test)]

@@ -1,0 +1,11 @@
+{
+  "name": "surge-ts",
+  "version": "1.2.3",
+  "private": true,
+  "retries": 3,
+  "keywords": ["typescript", "checker"],
+  "engines": { "node": ">=22", "features": { "watch": true } },
+  "empty": [],
+  "dash-key": 1,
+  "missing": null
+}

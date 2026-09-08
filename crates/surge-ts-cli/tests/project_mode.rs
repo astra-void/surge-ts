@@ -148,6 +148,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
         &loaded.files[0].to_string_lossy(),
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             no_lib: false,

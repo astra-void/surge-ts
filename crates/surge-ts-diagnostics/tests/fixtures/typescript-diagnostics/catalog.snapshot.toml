@@ -97,6 +97,14 @@ message = "Cannot find module '{0}' or its corresponding type declarations."
 arity = 1
 
 [[diagnostic]]
+code = "TS2732"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find module '{0}'. Consider using '--resolveJsonModule' to import module with '.json' extension."
+arity = 1
+
+[[diagnostic]]
 code = "TS2882"
 category = "Error"
 source = "typescript"

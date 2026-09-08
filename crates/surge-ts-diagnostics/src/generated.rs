@@ -125,6 +125,16 @@ pub const TS2307: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2732: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2732",
+    number: Some(2732),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot find module '{0}'. Consider using '--resolveJsonModule' to import module with '.json' extension.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2882: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2882",
     number: Some(2882),
@@ -858,6 +868,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2614,
     TS2306,
     TS2307,
+    TS2732,
     TS2882,
     TS2314,
     TS2315,
@@ -1053,6 +1064,15 @@ impl Diagnostic {
     pub fn ts2307(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2307,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2732(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2732,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

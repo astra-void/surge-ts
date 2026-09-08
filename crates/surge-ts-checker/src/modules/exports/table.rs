@@ -8,6 +8,10 @@ pub(crate) fn build_module_export_table(
     resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ctx: &mut CheckerContext,
 ) -> ModuleExportTable {
+    if let Some(json_module_type) = &parsed_file.json_module_type {
+        return build_json_module_export_table(json_module_type, ctx);
+    }
+
     let split_start = crate::program::binding::analyze_split_enabled()
         .then(std::time::Instant::now);
     let exportable_values = collect_exportable_value_symbols(
@@ -51,6 +55,43 @@ pub(crate) fn build_module_export_table(
         namespace_export_object_type: None,
         has_unresolved_star_export: false,
         has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
+    }
+}
+
+/// The export surface of a `.json` module: the value itself as the default
+/// export and as the namespace object, plus one named export per top-level
+/// property — which is what tsc gives an object-valued JSON file. A JSON module
+/// exports no types.
+///
+/// A non-object value (a top-level array or scalar) has no named exports here.
+/// tsc resolves a named import against the value's own members in that case
+/// (`import { length } from "./list.json"`), which surge does not model.
+fn build_json_module_export_table(
+    json_module_type: &ParsedType,
+    ctx: &mut CheckerContext,
+) -> ModuleExportTable {
+    let value_type = crate::infer::map_parsed_type(json_module_type.clone(), ctx);
+    let value_symbol = |ty: Type| SymbolInfo {
+        ty,
+        kind: SymbolKind::Const,
+        function_signature: None,
+    };
+
+    let mut symbols = SymbolTable::new();
+    if let Type::Object(object) = &value_type {
+        for (name, property) in object.properties.iter() {
+            let _ = symbols.insert(name.as_ref(), value_symbol(property.ty.clone()));
+        }
+    }
+
+    ModuleExportTable {
+        type_declarations: Arc::new(TypeDeclarationTable::new()),
+        symbols,
+        default_symbol: Some(Arc::new(value_symbol(value_type.clone()))),
+        export_assignment_symbol: Some(Arc::new(value_symbol(value_type.clone()))),
+        has_unresolved_star_export: false,
+        namespace_export_object_type: Some(value_type),
+        has_incomplete_declaration_surface: false,
     }
 }
 

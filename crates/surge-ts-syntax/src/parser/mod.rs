@@ -20,6 +20,7 @@ mod functions;
 mod import_calls;
 mod imports;
 mod interfaces;
+mod json;
 mod reads;
 mod reference_directives;
 mod spans;
@@ -44,6 +45,7 @@ pub use self::reference_directives::{
 use self::spans::text_span_from_oxc_span;
 use self::types::{parse_type_alias_declaration, parse_type_annotation};
 pub use entry::{ParserWorker, parse_source};
+pub use json::{is_json_file_name, parse_json_module_type};
 
 fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
     if let Some(module_declaration) = statement.as_module_declaration() {

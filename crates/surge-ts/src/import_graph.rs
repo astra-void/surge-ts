@@ -33,6 +33,7 @@ pub fn expand_project_inputs(
     root_dir: &Path,
     base_url: Option<&Path>,
     paths: &[PathMapping],
+    resolve_json_module: bool,
 ) -> usize {
     // Other scanners (package declarations, reference directives) may have
     // appended inputs since the previous call; fold them into the known set so
@@ -65,10 +66,16 @@ pub fn expand_project_inputs(
 
             for module_specifier in scanner.specifiers(index, &file_name, &source_text).iter() {
                 let candidate = if is_relative_specifier(module_specifier) {
-                    resolve_relative_candidate(&file_path, module_specifier, &mut state.probe_cache)
+                    resolve_relative_candidate(
+                        &file_path,
+                        module_specifier,
+                        &mut state.probe_cache,
+                        resolve_json_module,
+                    )
                 } else {
                     resolve_paths_alias_candidate(
                         module_specifier,
+                        resolve_json_module,
                         paths,
                         base_url,
                         root_dir,
@@ -81,7 +88,7 @@ pub fn expand_project_inputs(
                 };
 
                 if is_dependency_javascript_source_file(&candidate)
-                    || !is_loadable_graph_file(&candidate)
+                    || !is_loadable_graph_file(&candidate, resolve_json_module)
                 {
                     continue;
                 }
@@ -197,6 +204,7 @@ fn resolve_relative_candidate(
     importer_file: &Path,
     specifier: &str,
     probe_cache: &mut surge_ts_types::fx::FxHashMap<String, bool>,
+    resolve_json_module: bool,
 ) -> Option<PathBuf> {
     let importer_dir = importer_file.parent().unwrap_or_else(|| Path::new(""));
     let normalized_specifier = normalize_path_string(specifier);
@@ -210,7 +218,9 @@ fn resolve_relative_candidate(
             continue;
         }
 
-        if is_dependency_javascript_source_file(&candidate) || !is_loadable_graph_file(&candidate) {
+        if is_dependency_javascript_source_file(&candidate)
+            || !is_loadable_graph_file(&candidate, resolve_json_module)
+        {
             continue;
         }
 
@@ -222,6 +232,7 @@ fn resolve_relative_candidate(
 
 fn resolve_paths_alias_candidate(
     specifier: &str,
+    resolve_json_module: bool,
     paths: &[PathMapping],
     base_url: Option<&Path>,
     root_dir: &Path,
@@ -235,7 +246,7 @@ fn resolve_paths_alias_candidate(
     if let Some(targets) = select_path_mapping_targets(specifier, paths) {
         for target in targets {
             let joined = normalize_path_string(&mapping_base.join(&target).to_string_lossy());
-            if let Some(candidate) = probe_loadable_candidates(&joined, probe_cache) {
+            if let Some(candidate) = probe_loadable_candidates(&joined, probe_cache, resolve_json_module) {
                 return Some(candidate);
             }
         }
@@ -246,7 +257,7 @@ fn resolve_paths_alias_candidate(
     // directly against `baseUrl`.
     if let Some(base_url) = base_url {
         let joined = normalize_path_string(&base_url.join(specifier).to_string_lossy());
-        return probe_loadable_candidates(&joined, probe_cache);
+        return probe_loadable_candidates(&joined, probe_cache, resolve_json_module);
     }
 
     None
@@ -255,6 +266,7 @@ fn resolve_paths_alias_candidate(
 fn probe_loadable_candidates(
     target: &str,
     probe_cache: &mut surge_ts_types::fx::FxHashMap<String, bool>,
+    resolve_json_module: bool,
 ) -> Option<PathBuf> {
     for candidate in mapped_target_candidates(target) {
         let candidate = PathBuf::from(candidate);
@@ -262,7 +274,9 @@ fn probe_loadable_candidates(
             continue;
         }
 
-        if is_dependency_javascript_source_file(&candidate) || !is_loadable_graph_file(&candidate) {
+        if is_dependency_javascript_source_file(&candidate)
+            || !is_loadable_graph_file(&candidate, resolve_json_module)
+        {
             continue;
         }
 
@@ -307,7 +321,13 @@ fn path_contains_ignore_ascii_case(path: &Path, needle: &str) -> bool {
         .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
-fn is_loadable_graph_file(path: &Path) -> bool {
+fn is_loadable_graph_file(path: &Path, resolve_json_module: bool) -> bool {
+    // A `.json` file is not a TypeScript source; it joins the graph only so its
+    // value type can back a `resolveJsonModule` import, and never otherwise.
+    if path_ends_with_ignore_ascii_case(path, ".json") {
+        return resolve_json_module;
+    }
+
     // TypeScript sources are loadable even under `node_modules`: tsc applies the
     // same extension priority (`.ts` before `.d.ts`) to relative imports inside
     // dependencies, so a package that ships sources (or is resolved through a

@@ -20,6 +20,12 @@ pub struct ParsedSource {
     /// They belong to the module graph exactly like declaration specifiers do,
     /// but the lossy `Parsed*` tree does not model either form.
     pub import_call_specifiers: Vec<String>,
+    /// For a `.json` file: the type of the value it holds, and the marker that
+    /// this *is* a JSON module. Nothing in a JSON file is code, so it is never
+    /// parsed as TypeScript and `statements` is empty; this carries its whole
+    /// meaning. `None` for every other file. A `.json` file whose contents do
+    /// not parse is still a module, with the degradation sentinel for a value.
+    pub json_module_type: Option<ParsedType>,
 }
 
 /// A leading `/// <reference types="..." />` directive. Only the `types` form is

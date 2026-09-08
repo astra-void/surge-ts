@@ -382,6 +382,7 @@ impl Project {
                 &loaded.root_dir,
                 loaded.compiler_options.base_url.as_deref(),
                 &loaded.compiler_options.paths,
+                loaded.compiler_options.resolve_json_module,
             );
             if collect {
                 timings.import_graph_expansion += import_graph_start.elapsed();
@@ -533,6 +534,7 @@ impl Project {
             ),
             jsx_classic_react: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::React),
             allow_umd_global_access: loaded.compiler_options.allow_umd_global_access,
+            resolve_json_module: loaded.compiler_options.resolve_json_module,
             diagnostic_profile: options.diagnostic_profile,
         };
 

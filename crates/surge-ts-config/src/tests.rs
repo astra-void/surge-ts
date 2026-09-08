@@ -689,6 +689,57 @@ fn no_property_access_from_index_signature_parses_and_defaults_off() {
 }
 
 #[test]
+fn resolve_json_module_defaults_by_resolver_and_takes_an_explicit_override() {
+    // tsc 7.0.2 turns `.json` resolution on for every resolver it still accepts
+    // except `node16`, whatever order the options appear in.
+    let default_resolver = temp_dir("resolve-json-default");
+    write_file(
+        &default_resolver,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": true } }"#,
+    );
+    assert!(
+        load(default_resolver.join("tsconfig.json"))
+            .compiler_options
+            .resolve_json_module
+    );
+
+    let node16 = temp_dir("resolve-json-node16");
+    write_file(
+        &node16,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "moduleResolution": "node16", "module": "node16" } }"#,
+    );
+    assert!(
+        !load(node16.join("tsconfig.json"))
+            .compiler_options
+            .resolve_json_module
+    );
+
+    let node16_opted_in = temp_dir("resolve-json-node16-on");
+    write_file(
+        &node16_opted_in,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "resolveJsonModule": true, "moduleResolution": "node16", "module": "node16" } }"#,
+    );
+    let loaded = load(node16_opted_in.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert!(loaded.compiler_options.resolve_json_module);
+
+    let bundler_opted_out = temp_dir("resolve-json-bundler-off");
+    write_file(
+        &bundler_opted_out,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "resolveJsonModule": false, "moduleResolution": "bundler" } }"#,
+    );
+    assert!(
+        !load(bundler_opted_out.join("tsconfig.json"))
+            .compiler_options
+            .resolve_json_module
+    );
+}
+
+#[test]
 fn no_unused_locals_and_parameters_parse_and_default_off() {
     let on = temp_dir("no-unused-on");
     write_file(

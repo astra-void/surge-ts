@@ -96,6 +96,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2732",
+    "category": "Error",
+    "message": "Cannot find module '{0}'. Consider using '--resolveJsonModule' to import module with '.json' extension.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2882",
     "category": "Error",
     "message": "Cannot find module or type declarations for side-effect import of '{0}'.",

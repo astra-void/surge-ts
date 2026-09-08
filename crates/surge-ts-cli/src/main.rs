@@ -480,6 +480,7 @@ fn run_single_file_mode(
             jsx_automatic_runtime: false,
             jsx_classic_react: false,
             allow_umd_global_access: false,
+            resolve_json_module: true,
             diagnostic_profile,
         })
         .check_source(&source_text, &file_name);

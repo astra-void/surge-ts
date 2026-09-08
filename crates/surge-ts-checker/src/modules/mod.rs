@@ -148,6 +148,7 @@ mod tests {
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
                     suppressed_ranges: parsed.suppressed_ranges,
+                    json_module_type: parsed.json_module_type,
                 }
             })
             .collect()
@@ -445,7 +446,9 @@ mod tests {
         // tsc substitutes `.jsx` like `.js` (`tryAddingExtensions` default case),
         // so `./user.jsx` resolves to the loaded `user.tsx` source.
         assert!(resolve_relative_module("src/index.ts", "./user.jsx", &files).is_some());
-        assert!(resolve_relative_module("src/index.ts", "./user.json", &files).is_none());
+        // `.json` resolves to exactly the named file — no substitution, no
+        // directory index — once `resolveJsonModule` has let the loader take it.
+        assert!(resolve_relative_module("src/index.ts", "./user.json", &files).is_some());
         assert!(resolve_relative_module("src/index.ts", "./user.d.ts", &files).is_none());
     }
 

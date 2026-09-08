@@ -110,6 +110,12 @@ span_tests = [
   "crates/surge-ts-checker/tests/spans.rs",
 ]
 
+[TS2732]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/json-module-resolution-disabled-basic",
+]
+
 [TS2882]
 status = "emitted"
 fixtures = [

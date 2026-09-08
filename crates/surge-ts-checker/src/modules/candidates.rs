@@ -29,8 +29,13 @@ pub enum RelativeSpecifierShape {
     ExplicitCjs,
     /// `./x` (or `.` / `..`) — implicit extensions plus directory index.
     Extensionless,
-    /// Explicit `.tsx`/`.mts`/`.cts`/`.d.*`/`.json` specifiers (pinned
-    /// unsupported: `allowImportingTsExtensions` / `resolveJsonModule`).
+    /// `./x.json` — resolves to exactly that file, and only when
+    /// `resolveJsonModule` is on. Callers that cannot see the option must not
+    /// take the candidate: the diagnostic for an unresolved `.json` differs
+    /// (`TS2732`, not `TS2307`).
+    ExplicitJson,
+    /// Explicit `.tsx`/`.mts`/`.cts`/`.d.*` specifiers (pinned unsupported:
+    /// `allowImportingTsExtensions`).
     Unsupported,
 }
 
@@ -41,13 +46,16 @@ pub fn classify_relative_specifier(specifier: &str) -> RelativeSpecifierShape {
         return RelativeSpecifierShape::Extensionless;
     }
 
+    if last_segment.ends_with(".json") {
+        return RelativeSpecifierShape::ExplicitJson;
+    }
+
     if last_segment.ends_with(".tsx")
         || last_segment.ends_with(".mts")
         || last_segment.ends_with(".cts")
         || last_segment.ends_with(".d.ts")
         || last_segment.ends_with(".d.mts")
         || last_segment.ends_with(".d.cts")
-        || last_segment.ends_with(".json")
     {
         return RelativeSpecifierShape::Unsupported;
     }
@@ -91,6 +99,7 @@ pub fn relative_import_candidates(joined: &str, specifier: &str) -> Option<Vec<S
             let stem = strip_extension(joined);
             Some(with_exact(joined, substitution_candidates_cjs(&stem)))
         }
+        RelativeSpecifierShape::ExplicitJson => Some(vec![joined.to_string()]),
         RelativeSpecifierShape::Extensionless => Some(extensionless_candidates(joined)),
         RelativeSpecifierShape::Unsupported => None,
     }
@@ -252,13 +261,24 @@ mod tests {
             "./x.d.ts",
             "./x.d.mts",
             "./x.d.cts",
-            "./x.json",
         ] {
             assert!(
                 relative_import_candidates("src/x", specifier).is_none(),
                 "{specifier}"
             );
         }
+    }
+
+    #[test]
+    fn explicit_json_is_exact_only() {
+        assert_eq!(
+            classify_relative_specifier("./x.json"),
+            RelativeSpecifierShape::ExplicitJson
+        );
+        assert_eq!(
+            relative_import_candidates("src/x.json", "./x.json").unwrap(),
+            vec!["src/x.json"]
+        );
     }
 
     #[test]

@@ -71,6 +71,11 @@ pub struct NormalizedCompilerOptions {
     /// `compilerOptions.customConditions`. Extra export/import conditions that
     /// participate in condition matching, in configured priority order.
     pub custom_conditions: Vec<String>,
+    /// `compilerOptions.resolveJsonModule`. When true a `.json` specifier
+    /// resolves to the JSON value's type; when false the import reports
+    /// `TS2732`. Defaults on for every resolver except `node16`, which is what
+    /// tsc 7.0.2 does.
+    pub resolve_json_module: bool,
 }
 
 impl Default for NormalizedCompilerOptions {
@@ -101,6 +106,7 @@ impl Default for NormalizedCompilerOptions {
             base_url: None,
             type_roots: Vec::new(),
             types: None,
+            resolve_json_module: true,
             resolve_package_json_exports: true,
             resolve_package_json_imports: true,
             custom_conditions: Vec::new(),

@@ -2,7 +2,7 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 
-use crate::ParsedSource;
+use crate::{ParsedSource, ParsedType};
 
 /// A reusable parsing context that owns one oxc arena allocator and amortizes
 /// its chunk allocations across many `parse` calls.
@@ -50,6 +50,28 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
 /// no references, pointers, or arena-backed strings, which is what makes
 /// resetting the allocator between calls sound.
 fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) -> ParsedSource {
+    // A `.json` file holds a value, not a program. Handing it to the TypeScript
+    // parser produces nothing usable (and a pile of syntax errors), so it takes
+    // its own path and carries only the value's type.
+    if super::is_json_file_name(file_name) {
+        return ParsedSource {
+            file_name: file_name.to_string(),
+            statements: Vec::new(),
+            parser_errors: Vec::new(),
+            is_module: true,
+            reference_type_directives: Vec::new(),
+            module_reads: Vec::new(),
+            suppressed_ranges: Vec::new(),
+            import_call_specifiers: Vec::new(),
+            // A `.json` file that does not parse still *is* a JSON module —
+            // reporting its importer as unresolved would be a worse answer than
+            // an unmodelled value, and surge does not report JSON syntax errors.
+            json_module_type: Some(
+                super::parse_json_module_type(source_text).unwrap_or(ParsedType::Unknown),
+            ),
+        };
+    }
+
     let source_type = SourceType::from_path(file_name).unwrap_or_else(|_| SourceType::ts());
     let parser = Parser::new(allocator, source_text, source_type);
     let parsed = parser.parse();
@@ -106,5 +128,6 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         module_reads,
         suppressed_ranges,
         import_call_specifiers,
+        json_module_type: None,
     }
 }

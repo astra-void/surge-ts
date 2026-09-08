@@ -72,6 +72,10 @@ pub(crate) struct ParsedProgramFile {
     /// Byte ranges of the lines an `@ts-expect-error`/`@ts-ignore` directive
     /// suppresses (see [`surge_ts_syntax::ParsedSource::suppressed_ranges`]).
     pub(crate) suppressed_ranges: Vec<surge_ts_syntax::TextSpan>,
+    /// See [`surge_ts_syntax::ParsedSource::json_module_type`]. Set for every
+    /// `.json` file; its export table is built from this instead of from
+    /// `statements`, which are always empty for such a file.
+    pub(crate) json_module_type: Option<surge_ts_syntax::ParsedType>,
 }
 
 #[derive(Debug, Clone)]
@@ -1431,6 +1435,7 @@ fn parse_program_file(
         file_kind: classify_file_kind(&file_name),
         module_reads: parsed.module_reads,
         suppressed_ranges: parsed.suppressed_ranges,
+        json_module_type: parsed.json_module_type,
     }
 }
 

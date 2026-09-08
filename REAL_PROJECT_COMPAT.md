@@ -63,7 +63,7 @@ something `tsc` does not. It is a burn-down list, not a parity claim: the
 `tsc`-only side (123 at this commit) is tracked separately, and neither side is
 gated.
 
-The surge-only side was 65 at `019fb8b` and is 14 here. What closed, and the
+The surge-only side was 65 at `019fb8b` and is 13 here. What closed, and the
 oracle preset that pins each, is in the commit range `019fb8b..8905e69`:
 `this-type-predicate-narrowing-basic`, `guard-polarity-narrowing-basic`,
 `overload-merge-contextual-callback-basic`, `namespace-callback-parameter-basic`,
@@ -78,14 +78,13 @@ the fixes are not preset-pinned because their trigger is a shape surge fails to
 model and `tsc` types fine — a fixture would pin the modelling gap rather than
 the suppression; both are called out in their commits.
 
-The 14 that remain, with the root cause where it is known:
+The 13 that remain, with the root cause where it is known:
 
 | Location | Code | Root cause |
 | --- | --- | --- |
 | `examples/next-sse-chat/src/server/db/schema.ts:13`, `:61` ×2 | TS4111 | drizzle's `pgTable(...)` result degrades to a string index signature, so column access reads as index-signature access under `noPropertyAccessFromIndexSignature`. Only reproduces inside the full project — the same file checked on its own is clean. |
 | `packages/server/src/__tests__/trpcServerResource.ts:53`, `:64` | TS7006, TS2349 | `createHTTPHandler`'s options are an intersection whose `CreateContextCallback<…>` operand is a conditional over an unresolved router context. Replacing that operand with a plain object closes `:53`, so the contextual type is lost through the operand — but the object-literal path that loses it has not been isolated. |
 | `packages/server/src/unstable-core-do-not-import/router.ts:75` | TS2314 | The file declares its own one-parameter `DecorateRouterRecord` and uses it at two places; the use *inside* that alias resolves to it and the use in the sibling `RouterCaller` alias resolves to `packages/react-query`'s two-parameter declaration instead. Renaming either declaration clears it, so it is a cross-module type-name leak, not an arity bug. The two files do not import each other. |
-| `packages/upgrade/src/bin/index.ts:5` | TS2307 | `import { version } from '../../package.json'`. `.json` specifiers are pinned unsupported in the relative-specifier classifier; `resolveJsonModule` is parsed but not implemented. |
 | `packages/upgrade/src/bin/index.ts:67` | TS2339 | Module top-level statements carry no flow analysis — the parser drops `if`/`while`/`try` at module scope entirely — so the guard before this line narrows nothing. `.sort` is then looked up on the un-narrowed union. Reproduces at module scope only; the same code inside a function types correctly. |
 | `packages/server/src/observable/observable.test.ts:1` | TS2305 | `import { EventEmitter } from 'stream'`. `@types/node` writes `class Stream extends EventEmitter` with `export = Stream`, and `EventEmitter` reaches the import as a *static* member inherited from the base class, contributed there by its own namespace merge. surge models neither namespace-merged class statics nor their inheritance. |
 | `examples/nuxt/nuxt.config.ts:2` | TS2304 | `defineNuxtConfig` comes from Nuxt's generated `.nuxt` types. |

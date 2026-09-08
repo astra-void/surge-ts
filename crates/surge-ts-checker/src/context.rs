@@ -679,6 +679,9 @@ pub struct CheckerOptions {
     /// tsc downgrades the diagnostic to a suggestion, a channel surge does not
     /// emit on, so the option reads as full suppression here.
     pub allow_umd_global_access: bool,
+    /// `compilerOptions.resolveJsonModule`. Off, a `.json` specifier is not a
+    /// module and the import reports `TS2732` instead of `TS2307`.
+    pub resolve_json_module: bool,
     pub diagnostic_profile: DiagnosticProfile,
 }
 
@@ -734,6 +737,7 @@ impl Default for CheckerOptions {
             jsx_automatic_runtime: false,
             jsx_classic_react: false,
             allow_umd_global_access: false,
+            resolve_json_module: true,
             diagnostic_profile: DiagnosticProfile::default(),
         }
     }

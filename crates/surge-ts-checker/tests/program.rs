@@ -593,6 +593,58 @@ fn program_default_exported_promise_value_still_reports_a_missing_member() {
     assert_eq!(codes(&diagnostics), vec!["TS2339"], "{diagnostics:#?}");
 }
 
+// A `.json` module's exports come from the value it holds: the whole value as
+// the default export and one named export per top-level property, both widened
+// the way tsc widens them.
+#[test]
+fn json_module_exports_its_value() {
+    let files = &[
+        (
+            "data.json",
+            "{ \"version\": \"1.2.3\", \"retries\": 2, \"nested\": { \"on\": true } }",
+        ),
+        (
+            "example.ts",
+            "import info, { version, retries } from \"./data.json\";\n\
+             export const v: string = version;\n\
+             export const r: number = retries;\n\
+             export const n: boolean = info.nested.on;\n",
+        ),
+    ];
+    assert!(program(files).is_empty(), "{:?}", codes(&program(files)));
+}
+
+#[test]
+fn json_module_value_type_is_checked() {
+    let files = &[
+        ("data.json", "{ \"version\": \"1.2.3\" }"),
+        (
+            "example.ts",
+            "import { version } from \"./data.json\";\n\
+             export const v: number = version;\n",
+        ),
+    ];
+    assert_eq!(codes(&program(files)), vec!["TS2322"]);
+}
+
+// A `.json` file that does not parse is still a module. Reporting its importer
+// as unresolved would be a worse answer than an unmodelled value, and surge
+// does not report JSON syntax errors, so the value degrades and nothing
+// cascades. tsc reports the syntax error on the JSON file itself.
+#[test]
+fn malformed_json_module_degrades_without_cascading() {
+    let files = &[
+        ("data.json", "{ 'version': 1 }"),
+        (
+            "example.ts",
+            "import info, { version } from \"./data.json\";\n\
+             export const v: number = version;\n\
+             export const anything = info.whatever;\n",
+        ),
+    ];
+    assert!(program(files).is_empty(), "{:?}", codes(&program(files)));
+}
+
 #[test]
 fn program_api_no_lib_hides_generated_default_libs() {
     let diagnostics = program_with_options(
@@ -602,6 +654,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
         )],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -972,6 +1025,7 @@ fn single_file_builtins_visible() {
 
     let options = CheckerOptions {
         diagnostic_profile: Default::default(),
+            resolve_json_module: true,
         no_lib: false,
         skip_lib_check: false,
         jsx_automatic_runtime: false,
@@ -1000,6 +1054,7 @@ fn single_file_no_lib_hides_builtins() {
 
     let options = CheckerOptions {
         diagnostic_profile: Default::default(),
+            resolve_json_module: true,
         no_lib: true,
         skip_lib_check: false,
         jsx_automatic_runtime: false,
@@ -1020,6 +1075,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
         &[("example.ts", source)],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1043,6 +1099,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
         "example.ts",
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1773,6 +1830,7 @@ fn program_order_parser_before_type_prepass() {
         ],
         CheckerOptions {
             diagnostic_profile: DiagnosticProfile::Native,
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2367,6 +2425,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
         )],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2399,6 +2458,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
         )],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2428,6 +2488,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
         &[("a.ts", "const fn = ({ id: userId }) => userId;")],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -4287,6 +4348,7 @@ fn ambient_module_resolves_before_package_stub_with_stub_external_modules() {
         ],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -4322,6 +4384,7 @@ fn ambient_module_missing_export_ts2305_not_ts2307_with_stub_external_modules() 
         ],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -4370,6 +4433,7 @@ fn ambient_module_unknown_specifier_stub_external_modules_suppresses_ts2307() {
         ],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -4438,6 +4502,7 @@ fn ambient_module_default_import_missing_module_stub_external_suppresses_ts2307(
         &[("src/index.ts", "import value from \"missing-pkg\";")],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -4541,6 +4606,7 @@ fn ambient_module_namespace_import_unknown_module_stub_external_suppresses_ts230
         &[("src/index.ts", "import * as pkg from \"missing-pkg\";")],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -4726,6 +4792,7 @@ fn ambient_module_re_export_unknown_source_stub_external_modules_behavior() {
         ],
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -6568,6 +6635,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
         "function identity<T>(value): T { return value; }",
         CheckerOptions {
             diagnostic_profile: Default::default(),
+            resolve_json_module: true,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
