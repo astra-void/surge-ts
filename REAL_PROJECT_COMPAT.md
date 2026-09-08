@@ -63,7 +63,7 @@ something `tsc` does not. It is a burn-down list, not a parity claim: the
 `tsc`-only side (123 at this commit) is tracked separately, and neither side is
 gated.
 
-The surge-only side was 65 at `019fb8b` and is 13 here. What closed, and the
+The surge-only side was 65 at `019fb8b` and is 12 here. What closed, and the
 oracle preset that pins each, is in the commit range `019fb8b..5689e39`:
 `this-type-predicate-narrowing-basic`, `guard-polarity-narrowing-basic`,
 `overload-merge-contextual-callback-basic`, `namespace-callback-parameter-basic`,
@@ -73,13 +73,14 @@ oracle preset that pins each, is in the commit range `019fb8b..5689e39`:
 `void-parameter-arity-basic`, `instantiation-expression-basic`,
 `literal-equality-narrowing-basic`, `optional-chain-guard-narrowing-basic`,
 `promise-like-intersection-basic`, `namespace-merged-function-export-basic`,
-`json-module-import-basic`, `json-module-resolution-disabled-basic`, plus the
-local-shadow case added to `umd-global-module-reference-basic`. Two of
+`json-module-import-basic`, `json-module-resolution-disabled-basic`,
+`instanceof-heritage-narrowing-basic`, plus the local-shadow case added to
+`umd-global-module-reference-basic`. Two of
 the fixes are not preset-pinned because their trigger is a shape surge fails to
 model and `tsc` types fine — a fixture would pin the modelling gap rather than
 the suppression; both are called out in their commits.
 
-The 13 that remain, with the root cause where it is known:
+The 12 that remain, with the root cause where it is known:
 
 | Location | Code | Root cause |
 | --- | --- | --- |
@@ -89,7 +90,6 @@ The 13 that remain, with the root cause where it is known:
 | `packages/upgrade/src/bin/index.ts:67` | TS2339 | Module top-level statements carry no flow analysis — the parser drops `if`/`while`/`try` at module scope entirely — so the guard before this line narrows nothing. `.sort` is then looked up on the un-narrowed union. Reproduces at module scope only; the same code inside a function types correctly. |
 | `packages/server/src/observable/observable.test.ts:1` | TS2305 | `import { EventEmitter } from 'stream'`. `@types/node` writes `class Stream extends EventEmitter` with `export = Stream`, and `EventEmitter` reaches the import as a *static* member inherited from the base class, contributed there by its own namespace merge. surge models neither namespace-merged class statics nor their inheritance. |
 | `examples/nuxt/nuxt.config.ts:2` | TS2304 | `defineNuxtConfig` comes from Nuxt's generated `.nuxt` types. |
-| `packages/client/src/links/loggerLink.ts:204` | TS2339 | `props.result instanceof Error \|\| ('error' in props.result.result && …)`: the right operand of an `\|\|` needs the left's *falsity* to narrow a property path by `instanceof`, and the name-based member test cannot see that `TRPCClientError extends Error`. The union-aware fallback exists for identifiers, not for reference paths — that path has no `ctx` to resolve the constructor's instance type. |
 | the remaining 3 | TS2322 ×2, TS2345 | one-off assignability divergences inside tRPC's generic builder machinery (`next/ssrPrepass`, `next/withTRPC`, `server/resolveResponse`); not yet reduced |
 
 ## Compatibility fixture matrix
