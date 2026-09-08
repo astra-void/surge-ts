@@ -127,42 +127,52 @@ diagnostics output, is documented in [PUBLIC_API.md](PUBLIC_API.md).)
 
 ## Status at a glance
 
-Verified at commit `37dfb3a` on 2026-09-01 (Apple M1 Pro, macOS 27.0, release
+Verified at commit `5689e39` on 2026-09-07 (Apple M1 Pro, macOS 27.0, release
 build, TypeScript 7.0.2 oracle). The full snapshot, including the measurement
-caveats, is in [CURRENT_STATUS.md](CURRENT_STATUS.md).
+caveats, is in [CURRENT_STATUS.md](CURRENT_STATUS.md); the numbers below are
+carried from it rather than re-measured here.
 
 | Gate | Result |
 | --- | ---: |
-| Workspace tests (`cargo nextest run --workspace`) | 1764 / 1764 |
-| Oracle preset sweep, normal gate | 117 / 117 |
-| Oracle preset sweep, `--strictMessages` | 109 / 117 |
-| Oracle preset sweep, `--strictSpans` | 116 / 117 |
-| Real projects at exact parity | ky 0/0, unnamed 0/0, ofetch 1/1 |
+| Workspace tests (`cargo nextest run --workspace`) | 1859 / 1859 |
+| Oracle preset sweep, normal gate | 147 / 147 |
+| Oracle preset sweep, `--strictMessages` | 147 / 147 |
+| Oracle preset sweep, `--strictSpans` | 147 / 147 |
+| Real projects at exact parity | ky 0/0, unnamed 0/0, ofetch 1/1, zod 21/21 |
 
 The normal gate is diagnostic code-count and file/code/line parity against the
 upstream compiler. Message text and span/column are separate, non-gating
-dimensions — the remaining drift is inventoried in
+dimensions; both are green across the registered presets at this commit, which
+is a statement about those fixtures and not about arbitrary code. A new preset
+can record drift without failing CI, and the closed deltas are kept in
 [STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md).
 
-Projects where `tsc` reports zero diagnostics are pinned as **strict
-false-positive corpora**: any surge diagnostic on them is a regression
-(`pnpm run real:ky:test`, `pnpm run real:unnamed:test`). What this evidence
-does *not* establish is full TypeScript compatibility — projects outside the
-covered surface can and do drift, and the known gaps are tracked openly in
-[CURRENT_STATUS.md](CURRENT_STATUS.md) and
-[REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md).
+Projects where `tsc` reports zero diagnostics are pinned as **false-positive
+corpora**, with gates of different strength: `pnpm run real:ky:test` asserts
+exact 0/0, so any surge diagnostic fails it, while `pnpm run real:unnamed:test`
+asserts a count ceiling (a ratchet that only moves down) and currently sits at
+0. Both skip cleanly when the checkout or the `typescript` package is absent.
+What this evidence does *not* establish is full TypeScript compatibility —
+projects outside the covered surface can and do drift, and the known gaps are
+tracked openly in [CURRENT_STATUS.md](CURRENT_STATUS.md) and
+[REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md). tRPC is a measured workload,
+never a parity claim.
 
 ## Performance
 
-One recorded workload, measured at commit `37dfb3a` on an Apple M1 Pro: the
-tRPC monorepo checks in a **9.16 s** median at `--jobs auto` (5 runs, cold
-process, warm filesystem cache) with a ~1.86 GB peak physical footprint, and
-renders a byte-identical diagnostic hash across `--jobs 1` and `--jobs auto`.
+One recorded workload, measured at commit `5689e39` on an Apple M1 Pro: the
+tRPC monorepo (checkout `dfbafa8`) checks in roughly **5 s** at `--jobs auto`
+with a ~1.09 GB peak physical footprint. Absolute wall figures move between
+measurement rounds with machine load — only interleaved A/B pairs taken in one
+session compare, and peak RSS on this workload varies ±30–50% run to run
+without that discipline.
 
 This is one project on one machine at one commit — not a compiler comparison,
 and not transferable across projects, hardware, allocators, or build profiles.
-Numbers, caveats, and reproduction steps: [CURRENT_STATUS.md](CURRENT_STATUS.md)
-and [BENCHMARKS.md](BENCHMARKS.md).
+What *is* a property rather than a measurement: repeated runs render
+byte-identical diagnostics, and `--jobs 1` and `--jobs auto` produce identical
+output. Numbers, caveats, and reproduction steps:
+[CURRENT_STATUS.md](CURRENT_STATUS.md) and [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Architecture overview
 
@@ -196,8 +206,8 @@ In scope: `tsconfig.json` project checking with `tsc`-compatible diagnostics,
 physical `lib*.d.ts` loading from the local `typescript` package,
 declaration-side module resolution (`paths`, `baseUrl`, package `exports` /
 `imports`, `typesVersions`, self-name, `types` / `typeRoots`, `@types`
-discovery, `/// <reference types>`), and deterministic serial or parallel
-checking.
+discovery, `/// <reference types>`), JSON modules under `resolveJsonModule`,
+and deterministic serial or parallel checking.
 
 Explicitly **not** goals: emit, transforms, declaration emit, a language
 service, incremental or watch checking, project references, full runtime/JS
@@ -212,6 +222,7 @@ old notes — is in [CURRENT_STATUS.md](CURRENT_STATUS.md#known-limitations).
 | What is true right now? | **[CURRENT_STATUS.md](CURRENT_STATUS.md)** — canonical current state |
 | What API is stable, and what is held at exact parity? | [PUBLIC_API.md](PUBLIC_API.md) |
 | How does the checker work? | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| How exactly does module resolution behave? | [crates/surge-ts/MODULE_RESOLUTION.md](crates/surge-ts/MODULE_RESOLUTION.md) |
 | Detailed real-project measurements and their history | [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md) |
 | Remaining message/span drift | [STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md) |
 | Benchmark methodology and reproduction | [BENCHMARKS.md](BENCHMARKS.md) |
