@@ -127,7 +127,7 @@ diagnostics output, is documented in [PUBLIC_API.md](PUBLIC_API.md).)
 
 ## Status at a glance
 
-Verified at commit `5689e39` on 2026-09-07 (Apple M1 Pro, macOS 27.0, release
+Verified at commit `f841633` on 2026-09-08 (Apple M1 Pro, macOS 27.0, release
 build, TypeScript 7.0.2 oracle). The full snapshot, including the measurement
 caveats, is in [CURRENT_STATUS.md](CURRENT_STATUS.md); the numbers below are
 carried from it rather than re-measured here.
@@ -135,9 +135,9 @@ carried from it rather than re-measured here.
 | Gate | Result |
 | --- | ---: |
 | Workspace tests (`cargo nextest run --workspace`) | 1859 / 1859 |
-| Oracle preset sweep, normal gate | 147 / 147 |
-| Oracle preset sweep, `--strictMessages` | 147 / 147 |
-| Oracle preset sweep, `--strictSpans` | 147 / 147 |
+| Oracle preset sweep, normal gate | 148 / 148 |
+| Oracle preset sweep, `--strictMessages` | 148 / 148 |
+| Oracle preset sweep, `--strictSpans` | 148 / 148 |
 | Real projects at exact parity | ky 0/0, unnamed 0/0, ofetch 1/1, zod 21/21 |
 
 The normal gate is diagnostic code-count and file/code/line parity against the
@@ -160,7 +160,7 @@ never a parity claim.
 
 ## Performance
 
-One recorded workload, measured at commit `5689e39` on an Apple M1 Pro: the
+One recorded workload, measured at commit `f841633` on an Apple M1 Pro: the
 tRPC monorepo (checkout `dfbafa8`) checks in roughly **5 s** at `--jobs auto`
 with a ~1.09 GB peak physical footprint. Absolute wall figures move between
 measurement rounds with machine load — only interleaved A/B pairs taken in one
