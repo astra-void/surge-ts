@@ -144,7 +144,7 @@ pub(crate) fn collect_function_signature_from_statement(
             );
         }
         ParsedStatement::ClassDeclaration(class) => {
-            let symbol = super::build_class_value_symbol(class, ctx);
+            let symbol = super::build_class_value_symbol_with_scope(class, Some(symbols), ctx);
             symbols.insert(class.name.clone(), symbol);
         }
         ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
@@ -152,7 +152,7 @@ pub(crate) fn collect_function_signature_from_statement(
                 declaration: ParsedDefaultExportDeclaration::Class(class),
                 ..
             } => {
-                let symbol = super::build_class_value_symbol(class, ctx);
+                let symbol = super::build_class_value_symbol_with_scope(class, Some(symbols), ctx);
                 symbols.insert(class.name.clone(), symbol);
             }
             ParsedExportDeclaration::Statement { declaration, .. } => {

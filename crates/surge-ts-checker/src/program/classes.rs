@@ -22,7 +22,7 @@ use crate::checks::function::{
 };
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::map_parsed_type;
-use crate::symbols::{InterfaceInfo, SymbolInfo, SymbolKind, TypeDeclarationInfo};
+use crate::symbols::{InterfaceInfo, SymbolInfo, SymbolKind, SymbolTable, TypeDeclarationInfo};
 
 /// Builds the instance-side interface (fields + instance methods) for a class.
 /// Static members and the constructor are excluded; they live on the value side.
@@ -169,6 +169,17 @@ pub(crate) fn build_class_value_symbol(
     class: &ParsedClassDeclaration,
     ctx: &mut CheckerContext,
 ) -> SymbolInfo {
+    build_class_value_symbol_with_scope(class, None, ctx)
+}
+
+/// [`build_class_value_symbol`] with the in-progress value table the class is
+/// being bound into, which is where a base class declared earlier in the same
+/// scope lives — `ctx.symbols` does not have it yet at binding time.
+pub(crate) fn build_class_value_symbol_with_scope(
+    class: &ParsedClassDeclaration,
+    scope: Option<&SymbolTable>,
+    ctx: &mut CheckerContext,
+) -> SymbolInfo {
     // Generic classes are out of scope for this slice. Model their value side as
     // `any` so `new C<T>(...)` and `C.member` stay non-cascading rather than
     // resolving the self type without type arguments (which would mis-report).
@@ -183,10 +194,17 @@ pub(crate) fn build_class_value_symbol(
     let instance_type = class_instance_type(class, ctx);
     let construct_signature = class_construct_signature(class, instance_type.clone(), ctx);
 
-    let mut properties = PropertyMap::default();
+    // Statics are inherited: `class D extends B {}` makes every static of `B`
+    // reachable as `D.x`. The base's static side is a value, not part of the
+    // instance-side interface classes are bound as, so it is read from the
+    // value environment — which means an unbound base simply contributes
+    // nothing rather than being wrong.
+    let mut properties = inherited_static_properties(class, scope, ctx);
     // Every class value carries `prototype`, typed as the instance — the shape
     // `Object.setPrototypeOf(this, C.prototype)` reads. A static member named
     // `prototype` is illegal in TypeScript, so nothing below can overwrite it.
+    // It is also the one inherited entry that must not survive: `D.prototype`
+    // is a `D`, not a `B`.
     properties.insert(
         "prototype".into(),
         ObjectProperty::required(instance_type),
@@ -235,6 +253,30 @@ pub(crate) fn build_class_value_symbol(
         kind: SymbolKind::Const,
         function_signature: None,
     }
+}
+
+/// The base class's static members, as the starting point for a derived class's
+/// static side. Empty when the class has no base, when the base's value is not
+/// in scope yet, or when the base's static side is not an object (a generic
+/// class models its value as `any`).
+fn inherited_static_properties(
+    class: &ParsedClassDeclaration,
+    scope: Option<&SymbolTable>,
+    ctx: &CheckerContext,
+) -> PropertyMap {
+    let Some(base) = class.extends.first() else {
+        return PropertyMap::default();
+    };
+    let Some(base_symbol) = scope
+        .and_then(|scope| scope.get(&base.name))
+        .or_else(|| ctx.symbols.get(&base.name))
+    else {
+        return PropertyMap::default();
+    };
+    let Type::Object(base_static) = base_symbol.ty.peeled() else {
+        return PropertyMap::default();
+    };
+    base_static.properties.as_ref().clone()
 }
 
 fn static_property_type(property: &ParsedClassProperty, ctx: &mut CheckerContext) -> Type {

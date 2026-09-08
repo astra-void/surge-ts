@@ -365,6 +365,7 @@ export const fixturePresets: Record<string, string> = {
   'json-module-import-basic': path.join(workspaceRoot, 'tests/compat-projects/json-module-import-basic/tsconfig.json'),
   'json-module-resolution-disabled-basic': path.join(workspaceRoot, 'tests/compat-projects/json-module-resolution-disabled-basic/tsconfig.json'),
   'instanceof-heritage-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-heritage-narrowing-basic/tsconfig.json'),
+  'class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/class-static-inheritance-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
