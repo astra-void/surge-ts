@@ -364,6 +364,7 @@ export const fixturePresets: Record<string, string> = {
   'namespace-merged-function-export-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-merged-function-export-basic/tsconfig.json'),
   'json-module-import-basic': path.join(workspaceRoot, 'tests/compat-projects/json-module-import-basic/tsconfig.json'),
   'json-module-resolution-disabled-basic': path.join(workspaceRoot, 'tests/compat-projects/json-module-resolution-disabled-basic/tsconfig.json'),
+  'instanceof-heritage-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-heritage-narrowing-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

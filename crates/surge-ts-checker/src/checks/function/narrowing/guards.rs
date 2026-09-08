@@ -891,6 +891,39 @@ fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
     }
 }
 
+/// [`instanceof_matches`] with the constructor's own instance type as a second
+/// opinion. The name compare cannot see heritage — `TRPCClientError` guarded by
+/// `instanceof Error` reads as a different type — so a member it rejects is
+/// re-tested against the instance type when that resolved.
+///
+/// The re-test is deliberately asymmetric: the member must be assignable to the
+/// instance *and* the instance not assignable back. A type that is merely
+/// shaped like the constructor's instance (`{ name: string; message: string }`
+/// against `Error`) relates in both directions and stays undecided, so the
+/// negative branch does not drop it. A real subclass adds members, so it does
+/// not.
+fn instanceof_matches_with_heritage(
+    member: &Type,
+    ctor_name: &str,
+    instance: Option<&Type>,
+) -> Option<bool> {
+    match instanceof_matches(member, ctor_name) {
+        Some(false) => {
+            let Some(instance) = instance else {
+                return Some(false);
+            };
+            if instance.is_unknown() || member.is_unknown() {
+                return Some(false);
+            }
+            if !surge_ts_types::is_assignable_to(member, instance) {
+                return Some(false);
+            }
+            (!surge_ts_types::is_assignable_to(instance, member)).then_some(true)
+        }
+        decided => decided,
+    }
+}
+
 /// Whether a union member can never be the left operand of a *true*
 /// `instanceof` — a primitive, `undefined`/`null`, or `never`.
 fn is_definitely_not_an_object(member: &Type) -> bool {
@@ -930,6 +963,7 @@ fn is_array_like_member(member: &Type) -> bool {
 pub(super) fn narrow_union_by_instanceof(
     ty: &Type,
     ctor_name: &str,
+    instance: Option<&Type>,
     keep_matching: bool,
 ) -> Option<Type> {
     // Peel a lazy/nominal reference to its structural form first: a deferred
@@ -944,10 +978,12 @@ pub(super) fn narrow_union_by_instanceof(
     let kept: Vec<Type> = union
         .types()
         .iter()
-        .filter(|member| match instanceof_matches(member, ctor_name) {
-            Some(is_instance) => is_instance == keep_matching,
-            None => true,
-        })
+        .filter(
+            |member| match instanceof_matches_with_heritage(member, ctor_name, instance) {
+                Some(is_instance) => is_instance == keep_matching,
+                None => true,
+            },
+        )
         .cloned()
         .collect();
 
@@ -1012,7 +1048,9 @@ pub(super) fn narrow_instanceof_symbol_table(
         return None;
     };
     let symbol = symbols.get(name)?;
-    let narrowed = narrow_union_by_instanceof(&symbol.ty, ctor_name, branch_is_true)?;
+    // No checker context on this path, so the constructor's instance type is
+    // not available: the name compare decides alone, as it always has.
+    let narrowed = narrow_union_by_instanceof(&symbol.ty, ctor_name, None, branch_is_true)?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
     narrowed_symbols.insert_narrowed(
         name.clone(),

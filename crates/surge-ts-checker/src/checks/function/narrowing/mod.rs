@@ -227,10 +227,11 @@ impl ReferenceGuard<'_> {
                 keep_matching,
             } => {
                 let effective = Self::effective_leaf_type(ty, optional);
-                let narrowed = narrow_union_by_instanceof(&effective, ctor_name, *keep_matching)
-                    .or_else(|| {
-                        narrow_to_instanceof_subclass(&effective, *instance, *keep_matching)
-                    })?;
+                let narrowed =
+                    narrow_union_by_instanceof(&effective, ctor_name, *instance, *keep_matching)
+                        .or_else(|| {
+                            narrow_to_instanceof_subclass(&effective, *instance, *keep_matching)
+                        })?;
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
             Self::Arrayness { keep_arrays } => {
@@ -1157,10 +1158,12 @@ fn narrow_single_guard_for_identifier(
         parse_instanceof_condition(condition).map(|(operand, ctor)| (operand, ctor))
         && name == var_name
     {
-        if let Some(narrowed) = narrow_union_by_instanceof(ty, ctor_name, branch_is_true) {
+        let instance = resolve_constructor_instance_type(ctor_name, ctx);
+        if let Some(narrowed) =
+            narrow_union_by_instanceof(ty, ctor_name, instance.as_ref(), branch_is_true)
+        {
             return Some(narrowed);
         }
-        let instance = resolve_constructor_instance_type(ctor_name, ctx);
         return narrow_to_instanceof_subclass(ty, instance.as_ref(), branch_is_true);
     }
     if let Some((ParsedExpression::Identifier { name, .. }, tag, eq)) =
@@ -1801,6 +1804,12 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
         return Some(narrowed);
     }
 
+    if let Some(narrowed) =
+        narrow_instanceof_heritage_symbol_table(condition, symbols, branch_is_true, ctx)
+    {
+        return Some(narrowed);
+    }
+
     let guard = parse_type_predicate_condition(condition, &mut |name| {
         symbols
             .get(name)
@@ -1826,6 +1835,60 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
             function_signature,
         },
         subject_ty,
+    );
+    Some(narrowed_symbols)
+}
+
+/// `x instanceof Ctor` / `o.p instanceof Ctor` on a plain symbol table. Split
+/// from the syntactic guards in [`narrow_condition_symbol_table`] for the same
+/// reason the predicates are: deciding whether a union member *derives from*
+/// the constructor needs the constructor's instance type, and resolving that
+/// needs the checker context. The name-only test those guards run leaves
+/// `TRPCClientError | Envelope` untouched under `instanceof Error`, so the
+/// false branch of `props.result instanceof Error || …` still read the error
+/// arm.
+fn narrow_instanceof_heritage_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) -> Option<SymbolTable> {
+    let (operand, ctor_name) = parse_instanceof_condition(condition)?;
+    let (base, path) = reference_path(operand)?;
+    let symbol = symbols.get(&base)?;
+    let declared = symbol.ty.clone();
+    let kind = symbol.kind;
+    let function_signature = symbol.function_signature.clone();
+
+    let instance = resolve_constructor_instance_type(ctor_name, ctx)?;
+    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        if path.is_empty() {
+            narrow_union_by_instanceof(&declared, ctor_name, Some(&instance), branch_is_true)
+        } else {
+            narrowed_reference_type(
+                &declared,
+                &path,
+                ReferenceGuard::Instanceof {
+                    ctor_name,
+                    instance: Some(&instance),
+                    keep_matching: branch_is_true,
+                },
+            )
+        }
+    })?;
+    if narrowed == declared {
+        return None;
+    }
+
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    narrowed_symbols.insert_narrowed(
+        base,
+        SymbolInfo {
+            ty: narrowed,
+            kind,
+            function_signature,
+        },
+        declared,
     );
     Some(narrowed_symbols)
 }
