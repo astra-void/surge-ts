@@ -72,7 +72,7 @@ Declaration/source provenance is a separate concern owned by the checker:
 which interface member a signature came from, its declaration span, and its
 overload position are tracked in checker-side keys
 (`StableInterfaceMemberDeclarationId`, overload group templates in
-`surge-ts-checker/src/context.rs`), never inside `FunctionTypePayload`.
+`surge-ts-checker/src/context/interface_keys.rs`), never inside `FunctionTypePayload`.
 Keeping the two apart is what makes structural interning sound: sharing a
 payload across declarations cannot change which declaration a diagnostic
 points at, and overload order/duplicates are preserved by the checker's

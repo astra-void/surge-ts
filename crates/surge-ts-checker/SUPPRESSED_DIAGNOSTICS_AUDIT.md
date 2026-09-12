@@ -36,7 +36,7 @@ What changed in this pass:
 
 ## What the counters mean
 
-From `crates/surge-ts-checker/src/context.rs` (`should_suppress` /
+From `crates/surge-ts-checker/src/context/mod.rs` (`should_suppress` /
 `record_suppressed`) and `crates/surge-ts-cli/src/report.rs`:
 
 - **`suppressedRustOnlyDiagnosticsTotal`** — diagnostics whose code starts with

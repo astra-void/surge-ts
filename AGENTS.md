@@ -132,7 +132,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and
   recursion-in-progress results program-wide; overload order and duplicates
   must be preserved exactly.
 - REQUIRES BENCHMARK: changes to `crates/surge-ts-types/src/store.rs`,
-  `crates/surge-ts-checker/src/context.rs`, hashing (`fx.rs`, hasher choices),
+  `crates/surge-ts-checker/src/context/`, hashing (`fx.rs`, hasher choices),
   caching, or canonicalization need an interleaved before/after benchmark on a
   real project (`pnpm real:trpc` style; single runs are noise — see
   MEMORY_REGIONS.md) plus the full oracle sweep.

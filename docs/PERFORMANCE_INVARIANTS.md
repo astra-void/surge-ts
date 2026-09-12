@@ -16,7 +16,7 @@ optimization work are point-in-time records and live in
 ## Checker-context rules
 
 - **Never deep-clone `CheckerOptions`.** `CheckerContext.options` is an
-  `Arc<CheckerOptions>` (`crates/surge-ts-checker/src/context.rs`). The options
+  `Arc<CheckerOptions>` (`crates/surge-ts-checker/src/context/options.rs`). The options
   carry the project-wide module-resolution tables
   (`resolved_modules` / `resolved_modules_by_importer`), so a per-module deep
   clone copies the whole resolution map. Shadow contexts must be built through
@@ -25,7 +25,7 @@ optimization work are point-in-time records and live in
   Program-lifetime structures (caches, export tables, declaration payloads)
   must not capture a whole context. Resolution state that must survive a
   context is captured as an interned `DeclarationEnvironmentHandle`
-  (`DeclarationEnvironmentStore` in `context.rs`), which stores only the
+  (`DeclarationEnvironmentStore` in `context/declaration_environment.rs`), which stores only the
   environment-relevant fields and is torn down with the other program caches.
 - **Options are shared and immutable for the run.** Every context clone in a
   run reads the same `Arc<CheckerOptions>`; nothing mutates options after
@@ -33,7 +33,7 @@ optimization work are point-in-time records and live in
 - **Reset per-file transient state at the file boundary.** Both serial and
   parallel checking reuse one `CheckerContext` per worker (serial is a single
   worker; see `check_program_files_serial` in
-  `crates/surge-ts-checker/src/program/mod.rs`).
+  `crates/surge-ts-checker/src/program/check_files.rs`).
   `CheckerContext::begin_file_check` is the file-region reset: it swaps in a
   fresh `resolved_named_types` map (swapped, not cleared in place — retained
   snapshots may still hold the old `Arc`), clears the diagnostic dedup index,
@@ -43,7 +43,7 @@ optimization work are point-in-time records and live in
 - **Preserve lexical declaration environments.** A declaration's body resolves
   in its declaring module's scope, never the consumer's:
   `module_scope_by_file` / `module_local_values_by_file` are the authoritative
-  per-file fallbacks, and `lookup_ignores_local_table` (`context.rs`) prevents
+  per-file fallbacks, and `lookup_ignores_local_table` (`context/mod.rs`) prevents
   a consumer-local type name from shadowing a dependency's own lexical scope
   while its body is being expanded cross-file. Do not "simplify" resolution to
   consult the consumer's local table first — it is wrong per tsc and makes
@@ -84,7 +84,7 @@ optimization work are point-in-time records and live in
   on — declaration identity, resolved arguments, and environment identity
   (cf. `InterfaceInstantiationKey` carrying `InterfaceEnvironmentIdentity`,
   and the declaration-environment discriminator that participates in program
-  canonicalization; `crates/surge-ts-checker/src/context.rs`).
+  canonicalization; `crates/surge-ts-checker/src/context/interface_keys.rs`).
 - **No preliminary/final pass collision.** Preliminary module-analysis
   results are superseded by the final round; they must not install first-wins
   global state. `declare global` augmentation *values* are lowered only in the
@@ -95,7 +95,7 @@ optimization work are point-in-time records and live in
   typed final-round value.
 - **Never cache degraded or diagnostic-producing results program-wide.**
   `had_error` expansions are not interned
-  (`crates/surge-ts-checker/src/infer/types/cache.rs`); a degraded result
+  (`crates/surge-ts-checker/src/infer/types/cache/mod.rs`); a degraded result
   cached program-wide would freeze one file's failure into every consumer.
 - **Never cache fallback `Unknown`.** `Type::Unknown` is the
   graceful-degradation sentinel, not a real type: canonical-store
@@ -107,12 +107,12 @@ optimization work are point-in-time records and live in
   to break cycles; only completed resolutions are memoized, and generic
   instantiations are cached only when independent of the enclosing resolution
   context (`resolving` stack empty at the frame, no cycle re-entering below
-  the frame floor — `lowest_cycle_target_index` in `context.rs`).
+  the frame floor — `lowest_cycle_target_index` in `context/mod.rs`).
 - **Preserve exact overload order and duplicates.** Overload group templates
   keep declaration order and duplicate signatures
   (`InterfaceMethodOverloadGroupTemplate.ordered_members`; pinned by
   `physical_lib_overload_cache_preserves_declaration_order_and_duplicates` in
-  `crates/surge-ts-checker/src/infer/types/cache.rs`). Deduplicating or
+  `crates/surge-ts-checker/src/infer/types/cache/physical_interface.rs`). Deduplicating or
   reordering overloads changes call resolution.
 - Bounded program caches use per-declaration bucket caps
   (`GENERIC_INSTANTIATION_BUCKET_CAP`, currently 4096); over-cap entries are
@@ -142,7 +142,7 @@ Notes on individual patterns:
 - Environment gates are read once per process via `OnceLock`
   (`canonical_store_enabled` and friends in
   `crates/surge-ts-types/src/store.rs`; the bucket-cap override in
-  `infer/types/cache.rs`). A `std::env::var` call inside a per-type or
+  `infer/types/cache/mod.rs`). A `std::env::var` call inside a per-type or
   per-lookup path reintroduces a syscall into loops measured at millions of
   iterations per run.
 - Canonical paths are shared as `Arc<str>` through

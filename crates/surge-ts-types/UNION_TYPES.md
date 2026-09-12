@@ -58,7 +58,7 @@ same pattern as function types:
   are harmless;
 - store buckets are uncapped — bounding lives in the checker's program caches
   (`GENERIC_INSTANTIATION_BUCKET_CAP` in
-  `surge-ts-checker/src/infer/types/cache.rs`), not in the type store;
+  `surge-ts-checker/src/infer/types/cache/mod.rs`), not in the type store;
 - canonical unions are order-sensitive: `A | B` and `B | A` intern separately
   (member order is part of equality and of rendering), which is why
   normalization fixes first-seen order before interning;

@@ -110,7 +110,7 @@ consumer's:
   jobs share it read-only and results stay order-independent.
 - While a dependency `.d.ts` body is expanded from another file, name lookup
   ignores the consuming module's local declaration table
-  (`lookup_ignores_local_table` in `src/context.rs`) so a consumer-local name
+  (`lookup_ignores_local_table` in `src/context/mod.rs`) so a consumer-local name
   cannot shadow the dependency's own lexical scope.
 
 ## Global Script Model
