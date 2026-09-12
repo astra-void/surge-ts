@@ -713,6 +713,97 @@ fn release_lowered_type_bodies_from_statements(statements: &mut [ParsedStatement
 /// file order and re-analyzes any module whose observed cache hit/miss
 /// pattern serial analysis would not have produced, so the result is
 /// byte-identical to the serial pass (see `crate::speculative`).
+struct WorkerModuleOutcome {
+    file_index: usize,
+    analysis: Option<ModuleAnalysis>,
+    diagnostics: Vec<Diagnostic>,
+    /// Utility-diagnostic keys this module's analysis recorded
+    /// (`push_utility_diagnostic_once`). Serial analysis accumulates these
+    /// on the rolling context — including keys whose diagnostics were
+    /// truncated — and later phases consult them for suppression, so a
+    /// clean commit must merge them and a key another module already
+    /// published must invalidate the speculation (the worker emitted a
+    /// diagnostic serial suppression would have swallowed).
+    utility_key_additions: std::collections::HashSet<
+        crate::context::UtilityDiagnosticKey,
+        surge_ts_types::fx::FxBuildHasher,
+    >,
+    /// The module's post-analysis named-resolution memo, captured only for
+    /// the last analyzed module: serial analysis leaves the last module's
+    /// memo on the rolling context and later stages observably resolve
+    /// through it. Earlier modules' memos are never observable (every
+    /// analysis replaces the memo at entry) and retaining them would keep
+    /// speculative intermediate expansions alive in the weak canonical
+    /// store.
+    resolved_named_types: Option<
+        Arc<
+            Mutex<
+                surge_ts_types::fx::FxHashMap<
+                    crate::context::DeclarationResolutionKey,
+                    crate::context::DeclarationResolutionState,
+                >,
+            >,
+        >,
+    >,
+    resolved_named_types_identity: crate::context::EnvironmentMapIdentity,
+}
+
+/// Divergence-hunt probes read once per pass from the environment; see the
+/// comments on each field's reader for what it isolates.
+#[derive(Clone, Copy)]
+struct AnalysisProbes {
+    par_range: Option<(usize, usize)>,
+    per_module_sessions: bool,
+    declarations_serial: bool,
+    fresh_range: Option<(usize, usize)>,
+    probe_all: bool,
+    product_probe: Option<usize>,
+}
+
+impl AnalysisProbes {
+    fn from_env() -> Self {
+        // Divergence-bisection probe: `SURGE_ANALYSIS_PAR_RANGE=lo:hi` restricts
+        // worker dispatch to modules with `lo <= file_index < hi`; everything else
+        // takes the serial-only commit path (the exact serial regime).
+        let par_range: Option<(usize, usize)> = std::env::var("SURGE_ANALYSIS_PAR_RANGE")
+            .ok()
+            .and_then(|spec| {
+                let (lo, hi) = spec.split_once(':')?;
+                Some((lo.parse().ok()?, hi.parse().ok()?))
+            });
+        let per_module_sessions = std::env::var_os("SURGE_ANALYSIS_MODULE_SESSIONS").is_some();
+        let declarations_serial = std::env::var_os("SURGE_ANALYSIS_DECL_SERIAL").is_some();
+        // Divergence-bisection probe: `SURGE_ANALYSIS_FRESH_RANGE=lo:hi` analyzes
+        // serial-path modules in the range on a fresh pass-start context clone
+        // (live cache view), separating context-instance effects from
+        // snapshot-view effects during hunts.
+        let fresh_range: Option<(usize, usize)> = std::env::var("SURGE_ANALYSIS_FRESH_RANGE")
+            .ok()
+            .and_then(|spec| {
+                let (lo, hi) = spec.split_once(':')?;
+                Some((lo.parse().ok()?, hi.parse().ok()?))
+            });
+        // Divergence-hunt probe: `SURGE_ANALYSIS_PRODUCT_PROBE=<file_index>` dumps
+        // the module's committed analysis-product fingerprints and per-insert
+        // value fingerprints, for diffing regimes.
+        let product_probe_env = std::env::var("SURGE_ANALYSIS_PRODUCT_PROBE").ok();
+        let probe_all = product_probe_env.as_deref() == Some("all");
+        let product_probe: Option<usize> = product_probe_env.and_then(|value| value.parse().ok());
+        Self {
+            par_range,
+            per_module_sessions,
+            declarations_serial,
+            fresh_range,
+            probe_all,
+            product_probe,
+        }
+    }
+
+    fn probed(&self, file_index: usize) -> bool {
+        self.probe_all || self.product_probe == Some(file_index)
+    }
+}
+
 pub(crate) fn collect_module_analyses_with_bindings_parallel(
     parsed_files: &[ParsedProgramFile],
     local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
@@ -722,76 +813,13 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
     worker_count: usize,
 ) -> Vec<Option<ModuleAnalysis>> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     debug_assert!(worker_count > 1, "serial analysis uses the dedicated path");
 
     let memory_trace_threshold = module_memory_trace_threshold();
     let analysis_round = next_analysis_round();
     let live = crate::speculative::LiveCacheHandles::capture(ctx);
     let base = Arc::new(crate::speculative::CacheSnapshots::capture(&live));
-    // Divergence-bisection probe: `SURGE_ANALYSIS_PAR_RANGE=lo:hi` restricts
-    // worker dispatch to modules with `lo <= file_index < hi`; everything else
-    // takes the serial-only commit path (the exact serial regime).
-    let par_range: Option<(usize, usize)> = std::env::var("SURGE_ANALYSIS_PAR_RANGE")
-        .ok()
-        .and_then(|spec| {
-            let (lo, hi) = spec.split_once(':')?;
-            Some((lo.parse().ok()?, hi.parse().ok()?))
-        });
-    let per_module_sessions = std::env::var_os("SURGE_ANALYSIS_MODULE_SESSIONS").is_some();
-    let declarations_serial = std::env::var_os("SURGE_ANALYSIS_DECL_SERIAL").is_some();
-    // Divergence-bisection probe: `SURGE_ANALYSIS_FRESH_RANGE=lo:hi` analyzes
-    // serial-path modules in the range on a fresh pass-start context clone
-    // (live cache view), separating context-instance effects from
-    // snapshot-view effects during hunts.
-    let fresh_range: Option<(usize, usize)> = std::env::var("SURGE_ANALYSIS_FRESH_RANGE")
-        .ok()
-        .and_then(|spec| {
-            let (lo, hi) = spec.split_once(':')?;
-            Some((lo.parse().ok()?, hi.parse().ok()?))
-        });
-    // Divergence-hunt probe: `SURGE_ANALYSIS_PRODUCT_PROBE=<file_index>` dumps
-    // the module's committed analysis-product fingerprints and per-insert
-    // value fingerprints, for diffing regimes.
-    let product_probe_env = std::env::var("SURGE_ANALYSIS_PRODUCT_PROBE").ok();
-    let probe_all = product_probe_env.as_deref() == Some("all");
-    let product_probe: Option<usize> = product_probe_env.and_then(|value| value.parse().ok());
-    let probed = |file_index: usize| probe_all || product_probe == Some(file_index);
-
-    struct WorkerModuleOutcome {
-        file_index: usize,
-        analysis: Option<ModuleAnalysis>,
-        diagnostics: Vec<Diagnostic>,
-        /// Utility-diagnostic keys this module's analysis recorded
-        /// (`push_utility_diagnostic_once`). Serial analysis accumulates these
-        /// on the rolling context — including keys whose diagnostics were
-        /// truncated — and later phases consult them for suppression, so a
-        /// clean commit must merge them and a key another module already
-        /// published must invalidate the speculation (the worker emitted a
-        /// diagnostic serial suppression would have swallowed).
-        utility_key_additions: std::collections::HashSet<
-            crate::context::UtilityDiagnosticKey,
-            surge_ts_types::fx::FxBuildHasher,
-        >,
-        /// The module's post-analysis named-resolution memo, captured only for
-        /// the last analyzed module: serial analysis leaves the last module's
-        /// memo on the rolling context and later stages observably resolve
-        /// through it. Earlier modules' memos are never observable (every
-        /// analysis replaces the memo at entry) and retaining them would keep
-        /// speculative intermediate expansions alive in the weak canonical
-        /// store.
-        resolved_named_types: Option<
-            Arc<
-                Mutex<
-                    surge_ts_types::fx::FxHashMap<
-                        crate::context::DeclarationResolutionKey,
-                        crate::context::DeclarationResolutionState,
-                    >,
-                >,
-            >,
-        >,
-        resolved_named_types_identity: crate::context::EnvironmentMapIdentity,
-    }
+    let probes = AnalysisProbes::from_env();
 
     // The worker seed carries the pass-start utility keys as a shared
     // baseline: per-module clones then start with an empty overlay whose
@@ -808,6 +836,69 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
         seed.snapshot_utility_keys_into_baseline();
         seed
     };
+    let worker_phase_start = Instant::now();
+    let worker_outputs = run_analysis_workers(
+        parsed_files,
+        local_type_declarations_by_module,
+        preliminary_module_import_bindings,
+        lower_global_augmentation_values,
+        timings,
+        worker_count,
+        memory_trace_threshold,
+        analysis_round,
+        &live,
+        &base,
+        &probes,
+        &worker_seed,
+    );
+
+    let worker_phase = worker_phase_start.elapsed();
+    let commit_phase_start = Instant::now();
+    // The fan-out snapshot is only read through worker sessions; every session
+    // is gone once the scope joins, so release the six cloned maps before the
+    // commit walk instead of holding them across it.
+    drop(base);
+    let analyses = commit_module_analyses(
+        parsed_files,
+        local_type_declarations_by_module,
+        preliminary_module_import_bindings,
+        lower_global_augmentation_values,
+        ctx,
+        timings,
+        memory_trace_threshold,
+        analysis_round,
+        &live,
+        &probes,
+        &worker_seed,
+        worker_outputs,
+        worker_phase,
+        commit_phase_start,
+    );
+    crate::metrics::release_free_memory();
+    analyses
+}
+
+fn run_analysis_workers(
+    parsed_files: &[ParsedProgramFile],
+    local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
+    preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
+    lower_global_augmentation_values: bool,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+    worker_count: usize,
+    memory_trace_threshold: Option<u64>,
+    analysis_round: u64,
+    live: &crate::speculative::LiveCacheHandles,
+    base: &Arc<crate::speculative::CacheSnapshots>,
+    probes: &AnalysisProbes,
+    worker_seed: &CheckerContext,
+) -> Vec<(Vec<WorkerModuleOutcome>, Vec<crate::speculative::FileCacheLog>)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let AnalysisProbes {
+        par_range,
+        per_module_sessions,
+        declarations_serial,
+        ..
+    } = *probes;
     // Only the LAST analyzed module's named-resolution memo is observable
     // after the pass (later stages resolve through the rolling context's memo;
     // every earlier module's memo is replaced before anything reads it), so
@@ -823,10 +914,9 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
         .find(|(_, file)| file.is_module || file.file_kind == FileKind::DependencyDeclaration)
         .map(|(index, _)| index);
     let next_index = AtomicUsize::new(0);
-    let worker_phase_start = Instant::now();
-    let worker_outputs = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let next_index = &next_index;
-        let worker_seed = &worker_seed;
+        let worker_seed = worker_seed;
         let mut handles = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
             let seed_ctx = worker_seed.clone();
@@ -948,14 +1038,32 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
                     .expect("parallel module analysis worker panicked")
             })
             .collect::<Vec<_>>()
-    });
+    })
+}
 
-    let worker_phase = worker_phase_start.elapsed();
-    let commit_phase_start = Instant::now();
-    // The fan-out snapshot is only read through worker sessions; every session
-    // is gone once the scope joins, so release the six cloned maps before the
-    // commit walk instead of holding them across it.
-    drop(base);
+fn commit_module_analyses(
+    parsed_files: &[ParsedProgramFile],
+    local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
+    preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
+    lower_global_augmentation_values: bool,
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+    memory_trace_threshold: Option<u64>,
+    analysis_round: u64,
+    live: &crate::speculative::LiveCacheHandles,
+    probes: &AnalysisProbes,
+    worker_seed: &CheckerContext,
+    worker_outputs: Vec<(Vec<WorkerModuleOutcome>, Vec<crate::speculative::FileCacheLog>)>,
+    worker_phase: std::time::Duration,
+    commit_phase_start: Instant,
+) -> Vec<Option<ModuleAnalysis>> {
+    let AnalysisProbes {
+        fresh_range,
+        probe_all,
+        product_probe,
+        ..
+    } = *probes;
+    let probed = |file_index: usize| probes.probed(file_index);
     let mut analyses: Vec<Option<ModuleAnalysis>> = (0..parsed_files.len()).map(|_| None).collect();
     let mut slots: Vec<Option<WorkerModuleOutcome>> =
         (0..parsed_files.len()).map(|_| None).collect();
@@ -1243,7 +1351,6 @@ pub(crate) fn collect_module_analyses_with_bindings_parallel(
             commit_phase_start.elapsed().as_secs_f64(),
         );
     }
-    crate::metrics::release_free_memory();
     analyses
 }
 
