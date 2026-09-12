@@ -16,6 +16,37 @@ Rules:
 - Custom local tests belong in `tests/smoke`, not in this directory.
 - Do not rewrite upstream tests to fit this checker.
 
+## Eligibility for an active case
+
+The pool is `testdata/tests/cases/compiler` at the pinned upstream commit. The
+rule for making a case active is a single one: the checker's diagnostic codes
+must equal the upstream baseline exactly, in baseline order. A case that drifts
+by one code, one file, or one ordering is not added.
+
+For a fixture with an `.errors.txt` baseline, `expected_diagnostics` repeats
+that baseline's codes. A fixture with no `.errors.txt` baseline is an upstream
+no-error case: it carries an empty `expected_diagnostics` and pins the case as
+false-positive free, and its `upstream_baseline_path` points at the `.types`
+baseline, which is the reference baseline that does exist for it.
+
+Matching exactly is not the same as being run the way upstream runs it, and the
+`reason` field of each case says so where it applies:
+
+- The test-only splitter matches `// @filename:` in lower case with a space. A
+  fixture written with `@Filename:` or `//@filename:` is not split, so it is
+  checked as a single source.
+- `package.json`, `tsconfig.json`, and `node_modules` virtual files are passed
+  through as program sources. The harness performs no package resolution and
+  reads no tsconfig.
+- The fixture's compiler-option header is not applied. Options that gate what
+  is checked upstream — `strict`, `allowJs`/`checkJs`, `jsx`, `module`,
+  `moduleResolution`, `experimentalDecorators`, `isolatedDeclarations`,
+  `exactOptionalPropertyTypes` — have no effect here, and a fixture that
+  upstream runs once per setting is run once.
+
+So a green case is a pinned diagnostic-code match against that baseline, not a
+claim of upstream baseline compatibility.
+
 ## Current limitations
 
 Some upstream TypeScript compiler fixtures use `// @filename:` comments to describe virtual multi-file test cases.

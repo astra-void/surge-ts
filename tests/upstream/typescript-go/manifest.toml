@@ -21,3 +21,879 @@ local_path = "tests/upstream/typescript-go/cases/simpleTestMultiFile.ts"
 mode = "virtual_files"
 expected_diagnostics = ["TS2322", "TS2322"]
 reason = "Upstream fixture uses @filename comments and is covered by the test-only virtual file splitter."
+
+[[case]]
+name = "assertion-with-no-argument"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/assertionWithNoArgument.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/assertionWithNoArgument.types"
+local_path = "tests/upstream/typescript-go/cases/assertionWithNoArgument.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers an `asserts value` signature on an optional parameter called with and without an argument. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "binding-pattern-optional-parameter-cached"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/bindingPatternOptionalParameterCached.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/bindingPatternOptionalParameterCached.types"
+local_path = "tests/upstream/typescript-go/cases/bindingPatternOptionalParameterCached.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers an optional destructured parameter reached through a cached interface method signature (upstream issue 3276). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "blocked-scope-variable-not-unused-1"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/blockedScopeVariableNotUnused1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/blockedScopeVariableNotUnused1.types"
+local_path = "tests/upstream/typescript-go/cases/blockedScopeVariableNotUnused1.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a block-scoped const captured by a closure declared before it. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "class-expression-with-computed-property-in-loop"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/classExpressionWithComputedPropertyInLoop.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/classExpressionWithComputedPropertyInLoop.types"
+local_path = "tests/upstream/typescript-go/cases/classExpressionWithComputedPropertyInLoop.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a class expression with a computed property name and a private field inside a loop. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "class-fields-assignment-named-evaluation"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/classFieldsAssignmentNamedEvaluation.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/classFieldsAssignmentNamedEvaluation.types"
+local_path = "tests/upstream/typescript-go/cases/classFieldsAssignmentNamedEvaluation.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers an anonymous class expression with a static private field assigned to a variable. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "class-fields-private-property-access-same-name-as-class"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/classFieldsPrivatePropertyAccessSameNameAsClass.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/classFieldsPrivatePropertyAccessSameNameAsClass.types"
+local_path = "tests/upstream/typescript-go/cases/classFieldsPrivatePropertyAccessSameNameAsClass.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers enum member access sharing a class name where a private field forces a class alias. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "conditional-contextual-return-substitution-cache"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/conditionalContextualReturnSubstitutionCache.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/conditionalContextualReturnSubstitutionCache.types"
+local_path = "tests/upstream/typescript-go/cases/conditionalContextualReturnSubstitutionCache.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers nested conditional return types instantiated through a contextual arrow return (upstream issue 3488). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "const-enum-in-embedded-statements"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/constEnumInEmbeddedStatements.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/constEnumInEmbeddedStatements.types"
+local_path = "tests/upstream/typescript-go/cases/constEnumInEmbeddedStatements.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a `const enum` declared as the embedded statement of an `if`. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "construct-signature-with-infer-return-type"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/constructSignatureWithInferReturnType.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/constructSignatureWithInferReturnType.types"
+local_path = "tests/upstream/typescript-go/cases/constructSignatureWithInferReturnType.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers `infer` in the return position of a construct signature. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-as-const-satisfies-non-readonly-result"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitAsConstSatisfiesNonReadonlyResult.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitAsConstSatisfiesNonReadonlyResult.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitAsConstSatisfiesNonReadonlyResult.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers `as const satisfies` together with a `const` type parameter. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-big-int"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitBigInt.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitBigInt.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitBigInt.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers bigint literal initializers, including negated ones. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-const-object-literal-generic-method-1"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitConstObjectLiteralGenericMethod1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitConstObjectLiteralGenericMethod1.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitConstObjectLiteralGenericMethod1.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers generic methods declared inside an `as const` object literal. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-expando-arrow-function-parameter"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitExpandoArrowFunctionParameter.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitExpandoArrowFunctionParameter.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitExpandoArrowFunctionParameter.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a property assignment on an arrow function typed through a generic forwardRef-shaped cast, which panicked upstream. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-expando-function"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitExpandoFunction.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitExpandoFunction.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitExpandoFunction.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers expando property assignments carrying enum values onto function declarations. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-expando-overloads"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitExpandoOverloads.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitExpandoOverloads.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitExpandoOverloads.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers an expando property assignment on an overloaded function. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-qualified-name"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitQualifiedName.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitQualifiedName.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitQualifiedName.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a cross-file `as const` spread through `./x.js` specifiers that resolve to `.ts` files. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-map-cross-file-node-reuse"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationMapCrossFileNodeReuse.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationMapCrossFileNodeReuse.types"
+local_path = "tests/upstream/typescript-go/cases/declarationMapCrossFileNodeReuse.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers cross-file return-type node reuse where the reused positions exceed the importing file's length. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "deeply-nested-array-types"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/deeplyNestedArrayTypes.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/deeplyNestedArrayTypes.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/deeplyNestedArrayTypes.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2322"]
+reason = "Covers an assignment between two deeply nested array-of-object namespaces differing only at the leaf (upstream issue 3426)."
+
+[[case]]
+name = "deeply-nested-tuple-types"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/deeplyNestedTupleTypes.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/deeplyNestedTupleTypes.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/deeplyNestedTupleTypes.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2322"]
+reason = "Covers an assignment between two deeply nested tuple-of-object namespaces differing only at the leaf."
+
+[[case]]
+name = "es-decorator-extends-null"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/esDecoratorExtendsNull.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/esDecoratorExtendsNull.types"
+local_path = "tests/upstream/typescript-go/cases/esDecoratorExtendsNull.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a decorated class extending `null` with no explicit constructor. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "es-decorators-property-access-same-name-as-class"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/esDecoratorsPropertyAccessSameNameAsClass.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/esDecoratorsPropertyAccessSameNameAsClass.types"
+local_path = "tests/upstream/typescript-go/cases/esDecoratorsPropertyAccessSameNameAsClass.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers an ES decorator on a class whose name collides with an enum member access. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "exhaustive-switch-statements-generic-1"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exhaustiveSwitchStatementsGeneric1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exhaustiveSwitchStatementsGeneric1.types"
+local_path = "tests/upstream/typescript-go/cases/exhaustiveSwitchStatementsGeneric1.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers an exhaustive switch over a generic discriminant keyed by an index type (upstream issue 986). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "explicit-members-before-inherited"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/explicitMembersBeforeInherited.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/explicitMembersBeforeInherited.types"
+local_path = "tests/upstream/typescript-go/cases/explicitMembersBeforeInherited.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a recursive `Exclude` over a discriminated interface hierarchy (upstream issue 1968). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "import-url"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/importUrl.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/importUrl.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/importUrl.ts"
+mode = "virtual_files"
+expected_diagnostics = ["TS2882"]
+reason = "Covers a side-effect import of an `https:` specifier, which reports TS2882 rather than TS2307."
+
+[[case]]
+name = "merged-namespace-declaration-member-references"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/mergedNamespaceDeclarationMemberReferences.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/mergedNamespaceDeclarationMemberReferences.types"
+local_path = "tests/upstream/typescript-go/cases/mergedNamespaceDeclarationMemberReferences.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers unqualified member references across merged namespace declarations. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "nested-spreads-and-widening"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/nestedSpreadsAndWidening.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/nestedSpreadsAndWidening.types"
+local_path = "tests/upstream/typescript-go/cases/nestedSpreadsAndWidening.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers nested object spreads over an eleven-member discriminated union (upstream issue 2551). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "object-subtype-reduction"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/objectSubtypeReduction.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/objectSubtypeReduction.types"
+local_path = "tests/upstream/typescript-go/cases/objectSubtypeReduction.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers `Object.entries` over `object | {}` with a destructured sort callback (upstream issue 1164). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "private-name-tagged-template"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/privateNameTaggedTemplate.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/privateNameTaggedTemplate.types"
+local_path = "tests/upstream/typescript-go/cases/privateNameTaggedTemplate.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a private-name tag and a private-name substitution in a tagged template. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "remove-comments"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/removeComments.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/removeComments.types"
+local_path = "tests/upstream/typescript-go/cases/removeComments.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers `this` property access in plain function declarations under non-strict options. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "single-settings-simple-test"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/singleSettingsSimpleTest.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/singleSettingsSimpleTest.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/singleSettingsSimpleTest.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2322"]
+reason = "Covers the same primitive assignment mismatch as simple-test-single-file with the upstream fixture's own settings header."
+
+[[case]]
+name = "unicode-surrogates-in-string-literals"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/unicodeSurrogatesInStringLiterals.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/unicodeSurrogatesInStringLiterals.types"
+local_path = "tests/upstream/typescript-go/cases/unicodeSurrogatesInStringLiterals.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers lone and paired surrogates in `as const` string literals. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "variance-computation-no-crash"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/varianceComputationNoCrash.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/varianceComputationNoCrash.types"
+local_path = "tests/upstream/typescript-go/cases/varianceComputationNoCrash.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a cross-file mapped and conditional type graph that crashed upstream variance computation (upstream issue 2935). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "class-fields-named-evaluation-destructuring-assignment"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/classFieldsNamedEvaluationDestructuringAssignment.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/classFieldsNamedEvaluationDestructuringAssignment.types"
+local_path = "tests/upstream/typescript-go/cases/classFieldsNamedEvaluationDestructuringAssignment.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers anonymous class expressions used as destructuring defaults in assignment position. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "class-fields-property-access-same-name-as-class"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/classFieldsPropertyAccessSameNameAsClass.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/classFieldsPropertyAccessSameNameAsClass.types"
+local_path = "tests/upstream/typescript-go/cases/classFieldsPropertyAccessSameNameAsClass.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers enum member access sharing a class name across self-referencing class declarations. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-no-crash-on-comment-copied-from-other-file"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitNoCrashOnCommentCopiedFromOtherFile.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitNoCrashOnCommentCopiedFromOtherFile.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitNoCrashOnCommentCopiedFromOtherFile.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a predicate-returning function imported across files behind a long leading comment block. The fixture's second marker is written without a space, which the test-only splitter does not match, so both modules stay in one virtual file. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "declaration-emit-resolve-package-json-exports-false"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitResolvePackageJsonExportsFalse.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitResolvePackageJsonExportsFalse.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitResolvePackageJsonExportsFalse.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a package file referenced by package name with `resolvePackageJsonExports` disabled. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+
+[[case]]
+name = "declaration-emit-subpath-imports-reexport"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitSubpathImportsReexport.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitSubpathImportsReexport.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitSubpathImportsReexport.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a `#subpath` import re-exported through a package entry point. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+
+[[case]]
+name = "deduplicate-packages"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/deduplicatePackages.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/deduplicatePackages.types"
+local_path = "tests/upstream/typescript-go/cases/deduplicatePackages.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers two copies of one package version reached through nested `node_modules`. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+
+[[case]]
+name = "duplicate-package-peer-dependencies"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/duplicatePackage_peerDependencies.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/duplicatePackage_peerDependencies.types"
+local_path = "tests/upstream/typescript-go/cases/duplicatePackage_peerDependencies.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a duplicated package whose peer-dependency fields are ordered differently in each copy. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+
+[[case]]
+name = "emit-decorator-metadata-param-decorator-no-modifiers"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/emitDecoratorMetadataParamDecoratorNoModifiers.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/emitDecoratorMetadataParamDecoratorNoModifiers.types"
+local_path = "tests/upstream/typescript-go/cases/emitDecoratorMetadataParamDecoratorNoModifiers.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a parameter decorator on a constructor parameter that carries no modifiers. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "emit-end-of-file-js-doc-comments"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/emitEndOfFileJSDocComments.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/emitEndOfFileJSDocComments.types"
+local_path = "tests/upstream/typescript-go/cases/emitEndOfFileJSDocComments.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers `@typedef` JSDoc comments at the end of a checked JavaScript file. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "emit-end-of-file-js-doc-comments-2"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/emitEndOfFileJSDocComments2.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/emitEndOfFileJSDocComments2.types"
+local_path = "tests/upstream/typescript-go/cases/emitEndOfFileJSDocComments2.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers `@typedef` and function JSDoc comments interleaved through a checked JavaScript file. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "enum-member-interface-property-declaration-emit"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/enumMemberInterfacePropertyDeclarationEmit.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/enumMemberInterfacePropertyDeclarationEmit.types"
+local_path = "tests/upstream/typescript-go/cases/enumMemberInterfacePropertyDeclarationEmit.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a computed enum-member property key in an interface under `isolatedDeclarations`. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+
+[[case]]
+name = "export-assign-named-import"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignNamedImport.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignNamedImport.types"
+local_path = "tests/upstream/typescript-go/cases/exportAssignNamedImport.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers `export =` of a named import under CommonJS. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "export-assignment-merging-2"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging2.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging2.types"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging2.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers `export =` of a namespace merged with exported types, consumed through `import =`. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "export-assignment-merging-8"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging8.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging8.types"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging8.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers `export =` of a class alongside a named type export. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "export-destructuring"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportDestructuring.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportDestructuring.types"
+local_path = "tests/upstream/typescript-go/cases/exportDestructuring.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers an exported array destructuring declaration. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "import-url-node-modules-exist"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/importUrlNodeModulesExist.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/importUrlNodeModulesExist.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/importUrlNodeModulesExist.ts"
+mode = "virtual_files"
+expected_diagnostics = ["TS2882"]
+reason = "Covers a side-effect `https:` import in a program that also carries a resolvable package. The fixture's package and config files are passed through as program sources; the harness performs no package resolution."
+
+[[case]]
+name = "invocation-error-recovery"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/invocationErrorRecovery.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/invocationErrorRecovery.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/invocationErrorRecovery.ts"
+mode = "virtual_files"
+expected_diagnostics = ["TS2349"]
+reason = "Covers calling a namespace import whose target is `export =` of a function merged with a namespace."
+
+[[case]]
+name = "isolated-declarations-as-const-nested-objects"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/isolatedDeclarationsAsConstNestedObjects.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/isolatedDeclarationsAsConstNestedObjects.types"
+local_path = "tests/upstream/typescript-go/cases/isolatedDeclarationsAsConstNestedObjects.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers nested object literals under `as const` with `isolatedDeclarations`. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "js-declaration-emit-this-assignment"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsDeclarationEmitThisAssignment.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsDeclarationEmitThisAssignment.types"
+local_path = "tests/upstream/typescript-go/cases/jsDeclarationEmitThisAssignment.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers `this` property assignments in a static block and a constructor in a checked JavaScript file. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "js-declaration-export-default-assignment-crash"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsDeclarationExportDefaultAssignmentCrash.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsDeclarationExportDefaultAssignmentCrash.types"
+local_path = "tests/upstream/typescript-go/cases/jsDeclarationExportDefaultAssignmentCrash.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers an `exports.default` assignment in a checked JavaScript file. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "js-doc-callback-export-1"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsDocCallbackExport1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsDocCallbackExport1.types"
+local_path = "tests/upstream/typescript-go/cases/jsDocCallbackExport1.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a JSDoc `@callback` declared beside a non-exported function. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "js-doc-callback-export-2"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsDocCallbackExport2.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsDocCallbackExport2.types"
+local_path = "tests/upstream/typescript-go/cases/jsDocCallbackExport2.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a JSDoc `@callback` declared beside an exported function. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "js-speculative-parsing-error"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsSpeculativeParsingError.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsSpeculativeParsingError.types"
+local_path = "tests/upstream/typescript-go/cases/jsSpeculativeParsingError.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a parenthesized array literal that upstream reaches through speculative parsing. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "jsdoc-backslash"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsdocBackslash.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsdocBackslash.types"
+local_path = "tests/upstream/typescript-go/cases/jsdocBackslash.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a lone backslash inside a JSDoc comment. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "jsdoc-comment-default-export"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsdocCommentDefaultExport.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsdocCommentDefaultExport.types"
+local_path = "tests/upstream/typescript-go/cases/jsdocCommentDefaultExport.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers documented default exports of an object literal and of a function. Upstream runs the fixture once per `module` setting; the harness runs it once. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "jsx-nested-indentation"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsxNestedIndentation.tsx"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsxNestedIndentation.types"
+local_path = "tests/upstream/typescript-go/cases/jsxNestedIndentation.tsx"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers nested JSX children under the classic `react` factory. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "jsx-unicode-escape-sequence"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsxUnicodeEscapeSequence.tsx"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsxUnicodeEscapeSequence.types"
+local_path = "tests/upstream/typescript-go/cases/jsxUnicodeEscapeSequence.tsx"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers non-ASCII characters in JSX text and attributes. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "legacy-decorator-class-without-modifiers"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/legacyDecoratorClassWithoutModifiers.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/legacyDecoratorClassWithoutModifiers.types"
+local_path = "tests/upstream/typescript-go/cases/legacyDecoratorClassWithoutModifiers.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a legacy decorator on a class declaration with no modifiers. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "legacy-decorators-single-accessor"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/legacyDecoratorsSingleAccessor.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/legacyDecoratorsSingleAccessor.types"
+local_path = "tests/upstream/typescript-go/cases/legacyDecoratorsSingleAccessor.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers legacy decorators on a lone getter and on a lone setter. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "module-keyword-skip-lib-check"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/moduleKeywordSkipLibCheck.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/moduleKeywordSkipLibCheck.types"
+local_path = "tests/upstream/typescript-go/cases/moduleKeywordSkipLibCheck.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a `declare module Foo` namespace in a declaration file referenced from a source file. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "node-modules-package-imports-root-wildcard-node-16"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/nodeModulesPackageImportsRootWildcardNode16.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/nodeModulesPackageImportsRootWildcardNode16.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/nodeModulesPackageImportsRootWildcardNode16.ts"
+mode = "virtual_files"
+expected_diagnostics = ["TS2307"]
+reason = "Covers a `#/*` package-imports wildcard under `node16`. The fixture's package and config files are passed through as program sources; the harness performs no package resolution."
+
+[[case]]
+name = "panic-satisfies-on-export-equals-declaration"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/panicSatisfiesOnExportEqualsDeclaration.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/panicSatisfiesOnExportEqualsDeclaration.types"
+local_path = "tests/upstream/typescript-go/cases/panicSatisfiesOnExportEqualsDeclaration.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a JSDoc `@satisfies` tag on `module.exports`. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+
+[[case]]
+name = "parameter-decorator-in-js-file"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/parameterDecoratorInJsFile.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/parameterDecoratorInJsFile.types"
+local_path = "tests/upstream/typescript-go/cases/parameterDecoratorInJsFile.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a parameter decorator in a checked JavaScript file. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "parameter-property-with-default-value"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/parameterPropertyWithDefaultValue.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/parameterPropertyWithDefaultValue.types"
+local_path = "tests/upstream/typescript-go/cases/parameterPropertyWithDefaultValue.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a readonly parameter property with a default value. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "parameter-property-with-default-value-extended"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/parameterPropertyWithDefaultValueExtended.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/parameterPropertyWithDefaultValueExtended.types"
+local_path = "tests/upstream/typescript-go/cases/parameterPropertyWithDefaultValueExtended.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers parameter properties with and without default values under `exactOptionalPropertyTypes`. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "reachability-checks-ignored"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/reachabilityChecksIgnored.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/reachabilityChecksIgnored.types"
+local_path = "tests/upstream/typescript-go/cases/reachabilityChecksIgnored.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers `@ts-ignore` and `@ts-expect-error` on unreachable statements. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "subpath-import-declaration-emit"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/subpathImportDeclarationEmit.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/subpathImportDeclarationEmit.types"
+local_path = "tests/upstream/typescript-go/cases/subpathImportDeclarationEmit.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a `#subpath` import declared in the package manifest. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+
+[[case]]
+name = "subpath-imports-js"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/subpathImportsJS.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/subpathImportsJS.types"
+local_path = "tests/upstream/typescript-go/cases/subpathImportsJS.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers `#subpath` imports resolving to JavaScript files. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+
+[[case]]
+name = "tagged-template-nested-invalid-escape"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/taggedTemplateNestedInvalidEscape.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/taggedTemplateNestedInvalidEscape.types"
+local_path = "tests/upstream/typescript-go/cases/taggedTemplateNestedInvalidEscape.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers nested tagged templates where only the inner template carries an invalid escape. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "tsconfig-simple-test"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/tsconfigSimpleTest.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/tsconfigSimpleTest.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/tsconfigSimpleTest.ts"
+mode = "virtual_files"
+expected_diagnostics = ["TS2322"]
+reason = "Covers the primitive assignment mismatch with the fixture's tsconfig supplied as a virtual file. The fixture's package and config files are passed through as program sources; the harness performs no package resolution."
+
+[[case]]
+name = "widened-this-property-assignment"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/widenedThisPropertyAssignment.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/widenedThisPropertyAssignment.types"
+local_path = "tests/upstream/typescript-go/cases/widenedThisPropertyAssignment.ts"
+mode = "virtual_files"
+expected_diagnostics = []
+reason = "Covers a widened `this` property assignment in a checked JavaScript file (upstream issue 3642). Upstream emits no errors baseline, so this pins the case as false-positive free."
