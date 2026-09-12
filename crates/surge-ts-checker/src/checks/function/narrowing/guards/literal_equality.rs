@@ -1,0 +1,296 @@
+use surge_ts_syntax::ParsedExpression;
+use surge_ts_types::{Type, union_type};
+
+use crate::symbols::SymbolTable;
+
+/// Whether a union member's discriminant `property` is the given literal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DiscriminantMatch {
+    Yes,
+    No,
+    Unknown,
+}
+
+pub(crate) fn literal_expression_value(expression: &ParsedExpression) -> Option<Type> {
+    match expression {
+        ParsedExpression::StringLiteral(value) => Some(Type::StringLiteral(value.clone())),
+        ParsedExpression::BooleanLiteral(value) => Some(Type::BooleanLiteral(*value)),
+        ParsedExpression::NumberLiteral(value) => {
+            Some(Type::NumberLiteral(surge_ts_types::NumberLiteralType {
+                value: value.clone(),
+            }))
+        }
+        _ => None,
+    }
+}
+
+/// A case/comparison operand written as a member of a const-enum-like object
+/// (`ZodIssueCode.invalid_string`, `Codes.a`) still denotes a unit literal, so
+/// it must discriminate exactly like the literal spelled inline. Reads the
+/// member type out of scope instead of inferring the expression, which keeps
+/// this free of diagnostics and of re-entrant inference.
+pub(crate) fn const_member_literal_value(
+    expression: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<Type> {
+    // A bare `const CACHE_VERSION = 1` keeps its literal type, so it
+    // discriminates like the member form.
+    if let ParsedExpression::Identifier { name, .. } = expression {
+        let ty = symbols.get(name)?.ty.peeled();
+        return matches!(
+            ty,
+            Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+        )
+        .then_some(ty);
+    }
+    let ParsedExpression::PropertyAccess {
+        object,
+        property_name,
+        ..
+    } = expression
+    else {
+        return None;
+    };
+    let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+        return None;
+    };
+    let symbol_ty = symbols.get(name)?.ty.peeled();
+    let Type::Object(object_type) = &symbol_ty else {
+        return None;
+    };
+    let property = object_type.properties.get(property_name.as_str())?;
+    match &property.ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
+            Some(property.ty.clone())
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn discriminant_match(member: &Type, property: &str, literal: &Type) -> DiscriminantMatch {
+    // A discriminated-union member is often a named type (nominal reference);
+    // peel it to read its discriminant property.
+    let member = member.peeled();
+    let Type::Object(object) = &member else {
+        return DiscriminantMatch::Unknown;
+    };
+    let Some(property_type) = object.properties.get(property) else {
+        // A member without the discriminant property cannot equal the literal.
+        return DiscriminantMatch::No;
+    };
+    // The discriminant is often written as `typeof Codes.a`, which resolves to a
+    // lazy reference around the literal rather than the literal itself.
+    let property_ty = property_type.ty.peeled();
+    match &property_ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
+            if &property_ty == literal {
+                DiscriminantMatch::Yes
+            } else {
+                DiscriminantMatch::No
+            }
+        }
+        Type::Union(union) => {
+            if union.types().iter().any(|ty| ty == literal) {
+                // The literal is one of several possibilities; keep the member in
+                // both branches conservatively.
+                DiscriminantMatch::Unknown
+            } else if union.types().iter().all(|ty| {
+                matches!(
+                    ty,
+                    Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+                )
+            }) {
+                DiscriminantMatch::No
+            } else {
+                DiscriminantMatch::Unknown
+            }
+        }
+        _ => DiscriminantMatch::Unknown,
+    }
+}
+
+/// Narrows a discriminated union by `property` against `literal`. `keep_matching`
+/// selects the members that can equal the literal (the `===` true branch); its
+/// negation keeps the rest. Returns `None` when the type is not a union or the
+/// condition does not partition it.
+pub(crate) fn narrow_union_by_discriminant(
+    ty: &Type,
+    property: &str,
+    literal: &Type,
+    keep_matching: bool,
+) -> Option<Type> {
+    let Type::Union(union) = ty else {
+        return None;
+    };
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| {
+            let result = discriminant_match(member, property, literal);
+            if keep_matching {
+                result != DiscriminantMatch::No
+            } else {
+                result != DiscriminantMatch::Yes
+            }
+        })
+        .cloned()
+        .collect();
+
+    if kept.is_empty() || kept.len() == union.types().len() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
+/// Parses `value === "lit"` / `value !== 3` on a bare identifier — the
+/// whole-value form of an equality test, as opposed to the discriminant form
+/// (`value.kind === "lit"`) [`parse_discriminant_condition_with`] handles.
+/// Returns the identifier, the literal type, and whether the operator is an
+/// equality test.
+pub(crate) fn parse_identifier_literal_equality(
+    condition: &'_ ParsedExpression,
+) -> Option<(&'_ str, Type, bool)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let eq = match operator {
+        ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::Equals => true,
+        ParsedBinaryOperator::StrictNotEquals | ParsedBinaryOperator::NotEquals => false,
+        _ => return None,
+    };
+
+    if let ParsedExpression::Identifier { name, .. } = left.as_ref()
+        && let Some(literal) = literal_expression_value(right)
+    {
+        return Some((name.as_str(), literal, eq));
+    }
+    if let ParsedExpression::Identifier { name, .. } = right.as_ref()
+        && let Some(literal) = literal_expression_value(left)
+    {
+        return Some((name.as_str(), literal, eq));
+    }
+    None
+}
+
+/// Parses `o.p === "lit"` / `o?.p !== 3` — the literal-equality test on a
+/// property reference, which [`parse_identifier_literal_equality`] leaves alone.
+/// Returns the reference, the literal's expression (the guard re-reads it, so the
+/// guard stays a borrow of the condition), and whether the operator is an
+/// equality test. The discriminant narrowers read the same shape to filter the *base*
+/// union; this feeds the reference guard that narrows the property itself, so
+/// `if (filters?.refetchType === 'none') return` leaves `filters?.refetchType`
+/// without `'none'` afterwards.
+pub(crate) fn parse_reference_literal_equality(
+    condition: &'_ ParsedExpression,
+) -> Option<(&'_ ParsedExpression, &'_ ParsedExpression, bool)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let eq = match operator {
+        ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::Equals => true,
+        ParsedBinaryOperator::StrictNotEquals | ParsedBinaryOperator::NotEquals => false,
+        _ => return None,
+    };
+    let is_reference = |expression: &ParsedExpression| {
+        matches!(
+            expression,
+            ParsedExpression::PropertyAccess { .. } | ParsedExpression::OptionalPropertyAccess { .. }
+        )
+    };
+    if is_reference(left) && literal_expression_value(right).is_some() {
+        return Some((left.as_ref(), right.as_ref(), eq));
+    }
+    if is_reference(right) && literal_expression_value(left).is_some() {
+        return Some((right.as_ref(), left.as_ref(), eq));
+    }
+    None
+}
+
+/// The wide primitive a unit literal inhabits, so `raw === "query"` can narrow a
+/// plainly `string`-typed binding down to the literal the way tsc does.
+pub(super) fn literal_base_primitive(literal: &Type) -> Option<Type> {
+    match literal {
+        Type::StringLiteral(_) => Some(Type::String),
+        Type::NumberLiteral(_) => Some(Type::Number),
+        Type::BooleanLiteral(_) => Some(Type::Boolean),
+        _ => None,
+    }
+}
+
+/// Whether narrowing a subject by a literal equality test says anything at all.
+/// A degraded or `any` subject carries no members to filter, and narrowing it to
+/// the literal would invent a type the value never had.
+pub(super) fn literal_equality_applies(ty: &Type) -> bool {
+    !ty.is_unknown() && !matches!(ty, Type::Any | Type::GenuineUnknown | Type::Never)
+}
+
+/// Narrows `ty` by `=== <literal>` (`keep_matching`) or `!== <literal>`.
+///
+/// The matching branch keeps the union members the literal can inhabit, and
+/// replaces a member the literal is strictly narrower than — `string` for
+/// `"query"` — with the literal itself. The complement drops only the members
+/// that *are* the literal; a wider member survives, since a `string` that is not
+/// `"query"` is still a `string`.
+pub(crate) fn narrow_by_literal_equality(
+    ty: &Type,
+    literal: &Type,
+    keep_matching: bool,
+) -> Option<Type> {
+    if !literal_equality_applies(ty) {
+        return None;
+    }
+    let base = literal_base_primitive(literal)?;
+
+    let Type::Union(union) = ty else {
+        if !keep_matching || *ty != base {
+            return None;
+        }
+        return Some(literal.clone());
+    };
+
+    let members = union.types();
+    if keep_matching {
+        let mut kept: Vec<Type> = Vec::new();
+        for member in members {
+            let narrowed = if *member == *literal {
+                literal.clone()
+            } else if *member == base {
+                literal.clone()
+            } else {
+                continue;
+            };
+            if !kept.contains(&narrowed) {
+                kept.push(narrowed);
+            }
+        }
+        if kept.is_empty() {
+            return None;
+        }
+        let narrowed = union_type(kept);
+        (narrowed != *ty).then_some(narrowed)
+    } else {
+        let kept: Vec<Type> = members
+            .iter()
+            .filter(|member| **member != *literal)
+            .cloned()
+            .collect();
+        if kept.is_empty() || kept.len() == members.len() {
+            return None;
+        }
+        Some(union_type(kept))
+    }
+}
