@@ -2,7 +2,6 @@
 
 import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -105,7 +104,6 @@ export type ParsedArgs = {
   rustJobs: RustJobValue[];
   outDir: string | null;
   allowMissing: boolean;
-  authKitFallback: boolean;
 };
 
 export type JobOutputPaths = {
@@ -331,7 +329,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
     rustJobs: [...DEFAULT_RUST_JOBS],
     outDir: null,
     allowMissing: false,
-    authKitFallback: false,
   };
 
   const requireValue = (flag: string, value: string | undefined): string => {
@@ -371,9 +368,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case '--allowMissing':
         parsed.allowMissing = true;
         break;
-      case '--authKitFallback':
-        parsed.authKitFallback = true;
-        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -411,14 +405,6 @@ export function parseRustJobs(value: string): RustJobValue[] {
   });
 }
 
-export function authKitCandidateRoots(root: string, env: NodeJS.ProcessEnv): string[] {
-  return [
-    env.AUTH_KIT_PROJECT,
-    path.resolve(root, '../../typescript/auth-project/auth-kit'),
-    path.resolve(root, '.local-projects/auth-kit'),
-  ].filter((value): value is string => Boolean(value));
-}
-
 type PathKind = 'file' | 'dir' | 'missing';
 
 function defaultClassify(target: string): PathKind {
@@ -430,11 +416,10 @@ function defaultClassify(target: string): PathKind {
 }
 
 export function resolveProject(
-  opts: { project: string | null; authKitFallback: boolean },
+  opts: { project: string | null },
   deps: {
     workspaceRoot: string;
     cwd?: string;
-    candidateRoots?: string[];
     classify?: (target: string) => PathKind;
   },
 ): ResolvedProject | null {
@@ -457,26 +442,6 @@ export function resolveProject(
       }
     }
     return null;
-  }
-
-  if (opts.authKitFallback) {
-    const candidates =
-      deps.candidateRoots ?? authKitCandidateRoots(deps.workspaceRoot, process.env);
-    for (const candidate of candidates) {
-      const root = path.isAbsolute(candidate)
-        ? candidate
-        : path.resolve(deps.workspaceRoot, candidate);
-      attempted.push(root);
-
-      const tsconfig = path.join(root, 'tsconfig.json');
-      if (classify(tsconfig) === 'file') {
-        return { root, tsconfig, attempted };
-      }
-
-      if (path.basename(root).toLowerCase() === 'tsconfig.json' && classify(root) === 'file') {
-        return { root: path.dirname(root), tsconfig: root, attempted };
-      }
-    }
   }
 
   return null;
@@ -673,10 +638,6 @@ function main(argv = process.argv.slice(2)): void {
   });
   writeFileSync(outputs.measurementMd, markdown);
 
-  if (name === 'auth-kit') {
-    writeAuthKitCompatCopies(outputs);
-  }
-
   process.stdout.write(`Wrote measurement report to ${outputs.measurementMd}\n`);
 }
 
@@ -705,9 +666,6 @@ function handleMissingProject(args: ParsedArgs, argv: string[]): void {
 
   const measurementMd = path.join(outDir, 'measurement.md');
   writeFileSync(measurementMd, `${message}\n`);
-  if (name === 'auth-kit') {
-    writeFileSync(path.join(benchDir, 'auth-kit-measurement.md'), `${message}\n`);
-  }
   process.stdout.write(`${message}\n`);
 
   process.exitCode = args.allowMissing ? 0 : 1;
@@ -721,26 +679,7 @@ function collectAttemptedPaths(args: ParsedArgs): string[] {
         : path.resolve(process.cwd(), args.project),
     ];
   }
-  if (args.authKitFallback) {
-    return authKitCandidateRoots(workspaceRoot, process.env).map((candidate) =>
-      path.isAbsolute(candidate) ? candidate : path.resolve(workspaceRoot, candidate),
-    );
-  }
   return [];
-}
-
-function writeAuthKitCompatCopies(outputs: OutputPaths): void {
-  mkdirSync(benchDir, { recursive: true });
-  copyFileSync(outputs.measurementMd, path.join(benchDir, 'auth-kit-measurement.md'));
-  copyFileSync(outputs.oracleCompareTxt, path.join(benchDir, 'auth-kit-oracle-compare.txt'));
-  for (const job of outputs.jobs) {
-    if (job.jobs === 1 && existsSync(job.json)) {
-      copyFileSync(job.json, path.join(benchDir, 'auth-kit-jobs1.json'));
-    }
-    if (job.jobs === 4 && existsSync(job.json)) {
-      copyFileSync(job.json, path.join(benchDir, 'auth-kit-jobs4.json'));
-    }
-  }
 }
 
 function runCommand(command: string, args: string[]): string {

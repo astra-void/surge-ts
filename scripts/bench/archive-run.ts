@@ -13,7 +13,6 @@ const workspaceRoot = path.resolve(scriptDir, '../..');
 
 export type ArchiveArgs = {
   bench: boolean;
-  realAuthKit: boolean;
   label: string | null;
   out: string | null;
   dryRun: boolean;
@@ -48,12 +47,6 @@ export type BenchMedians = {
   medians: Record<string, number | null>;
 };
 
-export type AuthKitCounts = {
-  typescriptTotal: number | null;
-  surgeTsTotal: number | null;
-  codeCountMatch: boolean | null;
-};
-
 export type ArchiveSummary = {
   timestamp: string;
   label: string | null;
@@ -61,7 +54,6 @@ export type ArchiveSummary = {
   git: GitInfo;
   commands: CommandRun[];
   medians: BenchMedians[];
-  authKit: AuthKitCounts | null;
   parseWarnings: string[];
 };
 
@@ -70,7 +62,6 @@ const BENCH_TOOLS = ['tsc', 'tsgo', 'tsgo-singleThreaded', 'surge-ts'] as const;
 export function parseArgs(argv: string[]): ArchiveArgs {
   const parsed: ArchiveArgs = {
     bench: false,
-    realAuthKit: false,
     label: null,
     out: null,
     dryRun: false,
@@ -81,8 +72,6 @@ export function parseArgs(argv: string[]): ArchiveArgs {
     if (arg === '--') continue;
     if (arg === '--bench') {
       parsed.bench = true;
-    } else if (arg === '--real-auth-kit') {
-      parsed.realAuthKit = true;
     } else if (arg === '--label') {
       parsed.label = argv[++i] ?? null;
     } else if (arg === '--out') {
@@ -115,7 +104,7 @@ export function defaultOutDir(root: string, timestamp: string): string {
 }
 
 export function buildPlan(
-  modes: { bench: boolean; realAuthKit: boolean },
+  modes: { bench: boolean },
   outDir: string,
 ): PlannedStep[] {
   const steps: PlannedStep[] = [];
@@ -130,18 +119,6 @@ export function buildPlan(
       command: ['pnpm', ...argv].join(' '),
       logFile: path.join(outDir, 'bench-compilers.txt'),
       jsonFile,
-    });
-  }
-
-  if (modes.realAuthKit) {
-    const argv = ['run', 'real:auth-kit'];
-    steps.push({
-      name: 'real-auth-kit',
-      executable: 'pnpm',
-      argv,
-      command: ['pnpm', ...argv].join(' '),
-      logFile: path.join(outDir, 'real-auth-kit.txt'),
-      jsonFile: null,
     });
   }
 
@@ -177,27 +154,6 @@ export function extractBenchMedians(benchJson: unknown): BenchMedians[] {
   return out;
 }
 
-export function extractAuthKitCounts(markdown: string): AuthKitCounts | null {
-  const tsTotal = matchNumber(markdown, /TypeScript total diagnostics:\s*(\d+)/);
-  const rustTotal = matchNumber(markdown, /surge-ts total diagnostics:\s*(\d+)/);
-  const matchLine = markdown.match(/code-count match:\s*(yes|no)/i);
-
-  if (tsTotal === null && rustTotal === null && !matchLine) {
-    return null;
-  }
-
-  return {
-    typescriptTotal: tsTotal,
-    surgeTsTotal: rustTotal,
-    codeCountMatch: matchLine ? matchLine[1].toLowerCase() === 'yes' : null,
-  };
-}
-
-function matchNumber(text: string, pattern: RegExp): number | null {
-  const match = text.match(pattern);
-  return match ? Number(match[1]) : null;
-}
-
 export function buildSummary(input: {
   timestamp: string;
   label: string | null;
@@ -205,7 +161,6 @@ export function buildSummary(input: {
   git: GitInfo;
   commands: CommandRun[];
   medians: BenchMedians[];
-  authKit: AuthKitCounts | null;
   parseWarnings: string[];
 }): ArchiveSummary {
   return {
@@ -215,7 +170,6 @@ export function buildSummary(input: {
     git: input.git,
     commands: input.commands,
     medians: input.medians,
-    authKit: input.authKit,
     parseWarnings: input.parseWarnings,
   };
 }
@@ -255,18 +209,6 @@ export function renderSummaryMarkdown(summary: ArchiveSummary): string {
       });
       lines.push(`| ${entry.project} | ${cells.join(' | ')} |`);
     }
-    lines.push('');
-  }
-
-  if (summary.authKit) {
-    lines.push('## Auth-Kit Diagnostics', '');
-    lines.push(`- TypeScript total: ${summary.authKit.typescriptTotal ?? 'n/a'}`);
-    lines.push(`- surge-ts total: ${summary.authKit.surgeTsTotal ?? 'n/a'}`);
-    lines.push(
-      `- code-count match: ${
-        summary.authKit.codeCountMatch === null ? 'n/a' : summary.authKit.codeCountMatch ? 'yes' : 'no'
-      }`,
-    );
     lines.push('');
   }
 
@@ -333,10 +275,7 @@ function runStep(step: PlannedStep): CommandRun {
 function main(argv = process.argv.slice(2)): void {
   const args = parseArgs(argv);
 
-  const modes = { bench: args.bench, realAuthKit: args.realAuthKit };
-  if (!modes.bench && !modes.realAuthKit) {
-    modes.bench = true;
-  }
+  const modes = { bench: true };
 
   const timestamp = timestampSlug(new Date());
   const outDir = args.out
@@ -385,19 +324,6 @@ function main(argv = process.argv.slice(2)): void {
     }
   }
 
-  let authKit: AuthKitCounts | null = null;
-  if (modes.realAuthKit) {
-    const measurementPath = path.join(workspaceRoot, '.bench', 'auth-kit-measurement.md');
-    if (existsSync(measurementPath)) {
-      authKit = extractAuthKitCounts(readFileSync(measurementPath, 'utf8'));
-      if (!authKit) {
-        parseWarnings.push('auth-kit-measurement.md present but diagnostic counts could not be parsed.');
-      }
-    } else {
-      parseWarnings.push('auth-kit-measurement.md not found; diagnostic counts unavailable.');
-    }
-  }
-
   const summary = buildSummary({
     timestamp,
     label,
@@ -405,7 +331,6 @@ function main(argv = process.argv.slice(2)): void {
     git: getGitInfo(),
     commands,
     medians,
-    authKit,
     parseWarnings,
   });
 

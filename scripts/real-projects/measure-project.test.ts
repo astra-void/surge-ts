@@ -5,7 +5,6 @@ import test from 'node:test';
 import type { SpawnSyncReturns } from 'node:child_process';
 
 import {
-  authKitCandidateRoots,
   type MeasuredCommandResult,
   outputPathsForProject,
   parseArgs,
@@ -189,7 +188,6 @@ test('parseArgs reads all supported flags', () => {
     '1,4',
     '--outDir',
     '/tmp/out',
-    '--authKitFallback',
     '--allowMissing',
   ]);
 
@@ -198,7 +196,6 @@ test('parseArgs reads all supported flags', () => {
   assert.equal(parsed.maxDiagnostics, 1000);
   assert.deepEqual(parsed.rustJobs, [1, 4]);
   assert.equal(parsed.outDir, '/tmp/out');
-  assert.equal(parsed.authKitFallback, true);
   assert.equal(parsed.allowMissing, true);
 });
 
@@ -208,7 +205,6 @@ test('parseArgs applies defaults', () => {
   assert.deepEqual(parsed.rustJobs, [1, 'auto']);
   assert.equal(parsed.outDir, null);
   assert.equal(parsed.name, null);
-  assert.equal(parsed.authKitFallback, false);
   assert.equal(parsed.allowMissing, false);
 });
 
@@ -229,7 +225,7 @@ test('parseRustJobs parses, validates, and dedupes', () => {
 
 test('resolveProject uses an explicit tsconfig file path', () => {
   const resolved = resolveProject(
-    { project: '/abs/project/tsconfig.json', authKitFallback: false },
+    { project: '/abs/project/tsconfig.json' },
     { workspaceRoot: '/repo', classify: (p) => (p === '/abs/project/tsconfig.json' ? 'file' : 'missing') },
   );
   assert.deepEqual(resolved, {
@@ -241,7 +237,7 @@ test('resolveProject uses an explicit tsconfig file path', () => {
 
 test('resolveProject finds tsconfig.json inside a directory', () => {
   const resolved = resolveProject(
-    { project: '/abs/project', authKitFallback: false },
+    { project: '/abs/project' },
     {
       workspaceRoot: '/repo',
       classify: (p) => {
@@ -257,7 +253,7 @@ test('resolveProject finds tsconfig.json inside a directory', () => {
 
 test('resolveProject returns null when directory has no tsconfig', () => {
   const resolved = resolveProject(
-    { project: '/abs/project', authKitFallback: false },
+    { project: '/abs/project' },
     { workspaceRoot: '/repo', classify: (p) => (p === '/abs/project' ? 'dir' : 'missing') },
   );
   assert.equal(resolved, null);
@@ -265,7 +261,7 @@ test('resolveProject returns null when directory has no tsconfig', () => {
 
 test('resolveProject resolves relative project paths against cwd', () => {
   const resolved = resolveProject(
-    { project: 'sub/tsconfig.json', authKitFallback: false },
+    { project: 'sub/tsconfig.json' },
     {
       workspaceRoot: '/repo',
       cwd: '/work',
@@ -276,61 +272,15 @@ test('resolveProject resolves relative project paths against cwd', () => {
   assert.equal(resolved?.root, '/work/sub');
 });
 
-test('explicit project wins over authKitFallback', () => {
-  const candidateRoots = ['/candidate/auth-kit'];
-  const resolved = resolveProject(
-    { project: '/abs/project/tsconfig.json', authKitFallback: true },
-    {
-      workspaceRoot: '/repo',
-      candidateRoots,
-      classify: (p) =>
-        p === '/abs/project/tsconfig.json' || p === '/candidate/auth-kit/tsconfig.json'
-          ? 'file'
-          : 'missing',
-    },
-  );
-  assert.equal(resolved?.tsconfig, '/abs/project/tsconfig.json');
-});
-
-test('authKitCandidateRoots preserves env, secondary, and local candidates', () => {
-  const withEnv = authKitCandidateRoots('/repo', { AUTH_KIT_PROJECT: '/env/auth-kit' });
-  assert.deepEqual(withEnv, [
-    '/env/auth-kit',
-    path.resolve('/repo', '../../typescript/auth-project/auth-kit'),
-    path.resolve('/repo', '.local-projects/auth-kit'),
-  ]);
-
-  const withoutEnv = authKitCandidateRoots('/repo', {});
-  assert.deepEqual(withoutEnv, [
-    path.resolve('/repo', '../../typescript/auth-project/auth-kit'),
-    path.resolve('/repo', '.local-projects/auth-kit'),
-  ]);
-});
-
-test('resolveProject auth-kit fallback walks candidate roots in order', () => {
-  const candidateRoots = ['/first/auth-kit', '/second/auth-kit'];
-  const resolved = resolveProject(
-    { project: null, authKitFallback: true },
-    {
-      workspaceRoot: '/repo',
-      candidateRoots,
-      classify: (p) => (p === '/second/auth-kit/tsconfig.json' ? 'file' : 'missing'),
-    },
-  );
-  assert.equal(resolved?.root, '/second/auth-kit');
-  assert.deepEqual(resolved?.attempted, ['/first/auth-kit', '/second/auth-kit']);
-});
-
-test('resolveProject returns null without project or fallback', () => {
+test('resolveProject returns null without a project', () => {
   assert.equal(
-    resolveProject({ project: null, authKitFallback: false }, { workspaceRoot: '/repo' }),
+    resolveProject({ project: null }, { workspaceRoot: '/repo' }),
     null,
   );
 });
 
 test('projectNameFromPath and slugify derive stable slugs', () => {
   assert.equal(projectNameFromPath('/abs/My Next App'), 'my-next-app');
-  assert.equal(projectNameFromPath('/abs/auth-kit'), 'auth-kit');
   assert.equal(slugify('  trpc  '), 'trpc');
   assert.equal(slugify('@scope/pkg'), 'scope-pkg');
   assert.equal(slugify('***'), 'project');
