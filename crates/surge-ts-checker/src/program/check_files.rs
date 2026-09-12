@@ -1,0 +1,1093 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Instant;
+
+use surge_ts_types::with_program_type_store;
+
+// Instrumentation lives in `metrics`; re-export it so existing callers that
+// reference `crate::program::record_*` / `ProgramTimings` keep resolving and so
+// the bare `record_*` calls throughout this file stay in scope.
+use crate::metrics::*;
+
+use crate::context::{CheckerContext, CompatibilityStats, FileKind};
+use crate::driver::validate_direct_utility_aliases;
+use crate::driver::validate_local_type_declarations;
+use crate::symbols::{
+    TypeDeclarationScope, clone_symbol_info_handle,
+};
+use super::{
+    FileCheckResult, ParsedProgramFile, ProgramCheckSharedState, census_check_milestone,
+    check_program_file_statements, clone_type_declaration_table,
+    collect_function_signatures_from_statements, count_local_type_declarations_in_statements,
+    drop_suppressed_diagnostics, emit_unsupported_declaration_diagnostics,
+    extend_diagnostics_dedup, module_scope_declared_names, unused_locals,
+};
+
+pub(super) fn check_program_files_serial(
+    parsed_files: &mut [ParsedProgramFile],
+    shared_state: &mut ProgramCheckSharedState,
+    ctx: &CheckerContext,
+    timings: Option<Arc<Mutex<ProgramTimings>>>,
+) -> Vec<FileCheckResult> {
+    let mut results = Vec::with_capacity(parsed_files.len());
+
+    // One reused context for the whole pass, exactly like a single parallel
+    // worker: `check_program_file` already isolates per-file state (see
+    // `begin_file_check`), and serial/parallel diagnostic equality is an
+    // asserted invariant. Cloning the (large) context per file was a measured
+    // ~3% of check-phase time on tRPC.
+    let mut local_ctx = ctx.clone();
+    local_ctx.diagnostics.clear();
+    local_ctx.stats = CompatibilityStats::default();
+
+    // SURGE_CHECK_CACHE_ISOLATION=1: restore the program-wide resolution caches
+    // to their pre-file state after every file, so each file observes exactly
+    // the analysis-end cache contents. Measures whether any diagnostic depends
+    // on cache entries seeded by earlier files' checking (the blocker for
+    // deterministic parallel checking). Experiment probe — not a production
+    // mode.
+    let cache_isolation = std::env::var_os("SURGE_CHECK_CACHE_ISOLATION").is_some();
+
+    let file_count = parsed_files.len();
+    for file_index in 0..file_count {
+        let cache_snapshot = (cache_isolation && !parsed_files[file_index].statements.is_empty())
+            .then(|| {
+                (
+                    local_ctx
+                        .program_resolved_generic_types
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .program_instantiations
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .physical_interface_instantiations
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .physical_interface_declaration_templates
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .physical_interface_method_instantiations
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                    local_ctx
+                        .physical_interface_overload_instantiations
+                        .lock()
+                        .ok()
+                        .map(|m| m.clone()),
+                )
+            });
+        let result = check_program_file(
+            file_index,
+            &parsed_files[file_index],
+            shared_state,
+            &mut local_ctx,
+            timings.as_ref(),
+        );
+        if let Some(snapshot) = cache_snapshot {
+            if let (Some(saved), Ok(mut live)) =
+                (snapshot.0, local_ctx.program_resolved_generic_types.lock())
+            {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) =
+                (snapshot.1, local_ctx.program_instantiations.lock())
+            {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) = (
+                snapshot.2,
+                local_ctx.physical_interface_instantiations.lock(),
+            ) {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) = (
+                snapshot.3,
+                local_ctx.physical_interface_declaration_templates.lock(),
+            ) {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) = (
+                snapshot.4,
+                local_ctx.physical_interface_method_instantiations.lock(),
+            ) {
+                *live = saved;
+            }
+            if let (Some(saved), Ok(mut live)) = (
+                snapshot.5,
+                local_ctx.physical_interface_overload_instantiations.lock(),
+            ) {
+                *live = saved;
+            }
+        }
+        results.push(result);
+        // The file is fully checked, and per-file program state is only ever
+        // read under the file's own index (checking never consults another
+        // file's parse tree, analysis, or bindings — cross-file resolution
+        // goes through the scope/value maps on the context). Everything
+        // index-scoped can therefore free before the next file's checking
+        // allocates. Cross-file `Arc`-shared pieces (scope layers, exported
+        // symbol handles held by importers' bindings) survive through their
+        // remaining owners; only the genuinely-dead remainder frees.
+        parsed_files[file_index].statements = Vec::new();
+        shared_state.module_analyses[file_index] = None;
+        shared_state.module_import_bindings[file_index] = None;
+        // Per-file inference churn leaves freed-but-dirty pages that otherwise
+        // accumulate against the footprint across the whole phase.
+        if (file_index + 1) % 256 == 0 {
+            crate::metrics::release_free_memory();
+        }
+        if let Some(label) = census_check_milestone(file_index + 1, file_count) {
+            emit_type_graph_census(
+                label,
+                Some(&local_ctx),
+                &local_ctx.program_type_store,
+                CensusExternalRetention::default(),
+            );
+        }
+    }
+
+    results
+}
+
+/// Sentinel passed as `jobs` to request automatic worker-count selection.
+pub(super) const AUTO_JOBS: usize = 0;
+
+/// Minimum parsed top-level statements assigned to a worker before `AUTO_JOBS`
+/// spins up another thread. Per-worker `CheckerContext` clones and thread spawn
+/// are not free, so tiny programs stay serial. Statement count is measured after
+/// the `skipLibCheck` trim above, so cleared declaration files correctly count as
+/// near-zero work. This is a calibration threshold — tune with `bench:test`.
+pub(super) const MIN_STATEMENTS_PER_WORKER: usize = 500;
+
+pub(super) fn resolve_worker_count(jobs: usize, parsed_files: &[ParsedProgramFile]) -> usize {
+    let file_count = parsed_files.len();
+    if file_count <= 1 {
+        return 1;
+    }
+
+    // Checking is coupled to the shared resolution caches in an order-visible
+    // way (whether a file hits an entry seeded by an earlier-checked file can
+    // flip a rendered display form), so naive concurrency changes bytes. The
+    // parallel path is serial-equivalent regardless: workers speculate against
+    // a frozen cache snapshot and a single-threaded commit publishes their
+    // insertions in serial file order, re-checking conflicted files (see
+    // `crate::speculative`), so an explicit `--jobs N` is byte-identical to
+    // `--jobs 1` at any N. AUTO stays serial for now on measured grounds, not
+    // correctness ones: the ~4% of files that conflict re-check serially in
+    // the ordered commit, holding wall time at parity with serial while
+    // spending more CPU and ~+0.27GB peak footprint (tRPC, 10 workers).
+    // Flipping AUTO to the parallel path needs the recheck tail pipelined and
+    // per-file release wired into the parallel loop first;
+    // `SURGE_PARALLEL_CHECK_AUTO=1` opts in for measurement meanwhile.
+    let requested = if jobs == AUTO_JOBS {
+        if std::env::var_os("SURGE_PARALLEL_CHECK_AUTO").is_some() {
+            let total_statements: usize =
+                parsed_files.iter().map(|file| file.statements.len()).sum();
+            let by_work = total_statements / MIN_STATEMENTS_PER_WORKER;
+            let cores = thread::available_parallelism()
+                .map(|cores| cores.get())
+                .unwrap_or(1);
+            cores.min(by_work)
+        } else {
+            1
+        }
+    } else {
+        jobs
+    };
+
+    requested.max(1).min(file_count)
+}
+
+pub(super) fn check_program_files_parallel(
+    parsed_files: &[ParsedProgramFile],
+    shared_state: &ProgramCheckSharedState,
+    ctx: &CheckerContext,
+    worker_count: usize,
+    timings: Option<Arc<Mutex<ProgramTimings>>>,
+) -> Vec<FileCheckResult> {
+    debug_assert!(worker_count > 1, "serial checking uses the dedicated path");
+
+    // Serial-equivalent speculative checking: workers never write the six
+    // order-visible program caches. Each speculates against an immutable
+    // snapshot taken here plus a private overlay, recording per file which
+    // cache keys it observed missing; the single-threaded commit pass below
+    // publishes insertions in serial file order and re-checks any file whose
+    // hit/miss pattern a serial run would not have produced, making the final
+    // diagnostics and cache contents byte-identical to `--jobs 1`. See
+    // `crate::speculative` for the model and its induction argument.
+    let live = crate::speculative::LiveCacheHandles::capture(ctx);
+    let base = Arc::new(crate::speculative::CacheSnapshots::capture(&live));
+    let stc_phase_start = Instant::now();
+
+    let next_index = AtomicUsize::new(0);
+    let completed = AtomicUsize::new(0);
+
+    let results = thread::scope(|scope| {
+        let next_index = &next_index;
+        let completed = &completed;
+        let mut handles = Vec::with_capacity(worker_count);
+
+        for _ in 0..worker_count {
+            let shared_state = shared_state;
+            let timings = timings.clone();
+            let mut local_ctx = ctx.clone();
+            local_ctx.diagnostics.clear();
+            local_ctx.stats = CompatibilityStats::default();
+            let session = Arc::new(crate::speculative::CheckSession::new(
+                live.clone(),
+                base.clone(),
+            ));
+
+            handles.push(scope.spawn(move || {
+                let type_store = local_ctx.program_type_store.clone();
+                let worker_results = with_program_type_store(type_store, || {
+                    crate::speculative::with_check_session(session.clone(), || {
+                        let mut worker_results = Vec::new();
+                        loop {
+                            // `fetch_add` hands each worker an ascending file
+                            // sequence, so a worker's overlay only ever holds
+                            // entries from files earlier in serial order than
+                            // the one it is checking.
+                            let file_index = next_index.fetch_add(1, Ordering::Relaxed);
+                            if file_index >= parsed_files.len() {
+                                break;
+                            }
+                            session.begin_file(file_index);
+                            worker_results.push(check_program_file(
+                                file_index,
+                                &parsed_files[file_index],
+                                shared_state,
+                                &mut local_ctx,
+                                timings.as_ref(),
+                            ));
+                            let completed_count = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            if let Some(label) =
+                                census_check_milestone(completed_count, parsed_files.len())
+                            {
+                                emit_type_graph_census(
+                                    label,
+                                    Some(&local_ctx),
+                                    &local_ctx.program_type_store,
+                                    CensusExternalRetention::default(),
+                                );
+                            }
+                        }
+                        worker_results
+                    })
+                });
+                (worker_results, session.take_file_logs())
+            }));
+        }
+
+        let mut outputs = Vec::with_capacity(handles.len());
+        for handle in handles {
+            outputs.push(
+                handle
+                    .join()
+                    .expect("parallel project checking worker panicked"),
+            );
+        }
+        outputs
+    });
+
+    let worker_phase = stc_phase_start.elapsed();
+    let commit_phase_start = Instant::now();
+    // The fan-out snapshot is only read through worker sessions, all gone once
+    // the scope joins; release the six cloned maps before the commit walk.
+    drop(base);
+    let n = parsed_files.len();
+    let mut slots: Vec<Option<FileCheckResult>> = (0..n).map(|_| None).collect();
+    let mut worker_logs: Vec<Option<crate::speculative::FileCacheLog>> =
+        (0..n).map(|_| None).collect();
+    for (worker_results, logs) in results {
+        for result in worker_results {
+            let file_index = result.file_index;
+            slots[file_index] = Some(result);
+        }
+        for log in logs {
+            let file_index = log.file_index;
+            worker_logs[file_index] = Some(log);
+        }
+    }
+    let total_misses: usize = worker_logs
+        .iter()
+        .flatten()
+        .map(crate::speculative::FileCacheLog::miss_count)
+        .sum();
+    crate::speculative::report_conflict_dag(&worker_logs);
+
+    // `SURGE_DEFER=1` (opt-in): honor deferred resolution. Seed a reservation
+    // table from the worker logs (each position reserves the keys it publishes),
+    // submit conflicts eagerly, and let a replay that reads a key an earlier
+    // not-yet-committed publisher owns *defer* — the pipeline requeues it once
+    // that publisher commits (bounded by the inline recheck at the frontier),
+    // so it re-runs against a committed view instead of over-recursing into a
+    // committed conflict. Byte-identical: a deferred attempt is discarded like a
+    // stale replay. `SURGE_REPLAY_OFF` (serial recheck) takes precedence for A/B.
+    let defer_enabled =
+        std::env::var_os("SURGE_DEFER").is_some() && std::env::var_os("SURGE_REPLAY_OFF").is_none();
+    let (reservations, defer_stats) = if defer_enabled {
+        let mut table = crate::speculative::ReservationTable::new();
+        for (position, log) in worker_logs.iter().enumerate() {
+            if let Some(log) = log {
+                log.reserve_into(&mut table, position, 0);
+            }
+        }
+        (
+            Some(Arc::new(std::sync::RwLock::new(table))),
+            Some(Arc::new(crate::speculative::DeferralStats::default())),
+        )
+    } else {
+        (None, None)
+    };
+
+    // `SURGE_DEFER_DIFF=1` (opt-in, measurement only): classify why replays go
+    // stale. For each stale replay's offending miss digest (a miss an earlier
+    // position later published), attribute the actual publisher and its commit
+    // kind, and test the digest against the worker-log reservation universe —
+    // separating worker-log prediction gaps (fixable by reserving on real
+    // insert sets) from reservation-mechanism failures. Also diffs each
+    // replay/inline-committed position's real insert set against its worker-log
+    // prediction. Counters only; resolution is untouched.
+    struct DeferDiff {
+        reserved_by: surge_ts_types::fx::FxHashMap<u64, usize>,
+        predicted: Vec<surge_ts_types::fx::FxHashSet<u64>>,
+        published_by: surge_ts_types::fx::FxHashMap<u64, usize>,
+        commit_kind: Vec<u8>,
+        stale_replays: u64,
+        offenders: u64,
+        unreserved: u64,
+        reserved_by_publisher: u64,
+        reserved_by_other: u64,
+        reserved_later_or_self: u64,
+        publisher_kind: [u64; 4],
+        diffed_positions: u64,
+        unpredicted_inserts: u64,
+        unrealized_predictions: u64,
+    }
+    impl DeferDiff {
+        const KIND_CLEAN: u8 = 1;
+        const KIND_REPLAY: u8 = 2;
+        const KIND_INLINE: u8 = 3;
+
+        fn record_commit(
+            &mut self,
+            position: usize,
+            kind: u8,
+            digests: impl Iterator<Item = u64>,
+            published: &surge_ts_types::fx::FxHashSet<u64>,
+        ) {
+            self.commit_kind[position] = kind;
+            let mut actual = surge_ts_types::fx::FxHashSet::default();
+            for digest in digests {
+                if published.contains(&digest) {
+                    self.published_by.entry(digest).or_insert(position);
+                }
+                actual.insert(digest);
+            }
+            if kind != Self::KIND_CLEAN {
+                self.diffed_positions += 1;
+                let predicted = &self.predicted[position];
+                self.unpredicted_inserts +=
+                    actual.iter().filter(|d| !predicted.contains(d)).count() as u64;
+                self.unrealized_predictions +=
+                    predicted.iter().filter(|d| !actual.contains(d)).count() as u64;
+            }
+        }
+
+        fn record_stale(
+            &mut self,
+            position: usize,
+            log: &crate::speculative::FileCacheLog,
+            published: &surge_ts_types::fx::FxHashSet<u64>,
+        ) {
+            self.stale_replays += 1;
+            for digest in log.miss_digests() {
+                if !published.contains(&digest) {
+                    continue;
+                }
+                self.offenders += 1;
+                let publisher = self.published_by.get(&digest).copied();
+                if let Some(publisher) = publisher {
+                    let kind = self.commit_kind.get(publisher).copied().unwrap_or(0);
+                    self.publisher_kind[usize::from(kind.min(3))] += 1;
+                }
+                match self.reserved_by.get(&digest) {
+                    None => self.unreserved += 1,
+                    Some(&reserver) if reserver >= position => self.reserved_later_or_self += 1,
+                    Some(&reserver) if Some(reserver) == publisher => {
+                        self.reserved_by_publisher += 1;
+                    }
+                    Some(_) => self.reserved_by_other += 1,
+                }
+            }
+        }
+    }
+    let mut defer_diff = if std::env::var_os("SURGE_DEFER_DIFF").is_some() {
+        let mut reserved_by = surge_ts_types::fx::FxHashMap::default();
+        let mut predicted = vec![surge_ts_types::fx::FxHashSet::default(); n];
+        for (position, log) in worker_logs.iter().enumerate() {
+            if let Some(log) = log {
+                for digest in log.insert_digests() {
+                    reserved_by.entry(digest).or_insert(position);
+                    predicted[position].insert(digest);
+                }
+            }
+        }
+        Some(DeferDiff {
+            reserved_by,
+            predicted,
+            published_by: surge_ts_types::fx::FxHashMap::default(),
+            commit_kind: vec![0u8; n],
+            stale_replays: 0,
+            offenders: 0,
+            unreserved: 0,
+            reserved_by_publisher: 0,
+            reserved_by_other: 0,
+            reserved_later_or_self: 0,
+            publisher_kind: [0; 4],
+            diffed_positions: 0,
+            unpredicted_inserts: 0,
+            unrealized_predictions: 0,
+        })
+    } else {
+        None
+    };
+
+    // `SURGE_REPLAY_OFF=1` disables pre-replay (every conflict resolves inline —
+    // the serial recheck), for interleaved A/B measurement of the pipeline.
+    let submit_at = if std::env::var_os("SURGE_REPLAY_OFF").is_some() {
+        vec![usize::MAX; n]
+    } else if defer_enabled {
+        // Eager: submit every predicted conflict at frontier 0. Deferral +
+        // requeue handles the imprecision (a conflict-dependent replay defers on
+        // its pending dep and is re-run when it commits), so the clean-dependent
+        // restriction of `compute_submit_schedule` is not needed.
+        let predicted = crate::speculative::predict_conflicts(&worker_logs);
+        (0..n)
+            .map(|p| if predicted[p] { 0 } else { usize::MAX })
+            .collect()
+    } else {
+        crate::speculative::compute_submit_schedule(&worker_logs)
+    };
+
+    // Pipelined ordered-delta replay: publish in strict serial order (the
+    // frontier) while a background pool recomputes predicted-conflict files
+    // against the live committed store, each launched exactly when its last
+    // dependency commits (dependency-driven schedule). A replay that is still
+    // stale, or absent, falls back to the inline recheck — the exact old serial
+    // behavior, guaranteed valid. See `crate::replay` for the soundness
+    // argument (in-order publication makes hit-validation structural).
+    let cap = crate::infer::types::cache::generic_instantiation_bucket_cap();
+    let mut published = surge_ts_types::fx::FxHashSet::default();
+    let mut dirty = surge_ts_types::fx::FxHashSet::default();
+    let mut stats = crate::speculative::StcCommitStats::default();
+    let mut recheck_ctx: Option<CheckerContext> = None;
+    let mut replay_committed = 0u64;
+    let mut replay_stale = 0u64;
+    let mut inline_only = 0u64;
+
+    struct CheckReplayShared<'a> {
+        parsed_files: &'a [ParsedProgramFile],
+        shared_state: &'a ProgramCheckSharedState,
+        live: crate::speculative::LiveCacheHandles,
+        ctx: &'a CheckerContext,
+        timings: Option<Arc<Mutex<ProgramTimings>>>,
+        reservations: Option<Arc<std::sync::RwLock<crate::speculative::ReservationTable>>>,
+        defer_stats: Option<Arc<crate::speculative::DeferralStats>>,
+    }
+    struct CheckThreadState {
+        ctx: CheckerContext,
+        store: Arc<surge_ts_types::ProgramTypeStore>,
+    }
+    struct CheckReplay {
+        result: FileCheckResult,
+        log: crate::speculative::FileCacheLog,
+    }
+
+    let shared = CheckReplayShared {
+        parsed_files,
+        shared_state,
+        live: live.clone(),
+        ctx,
+        timings: timings.clone(),
+        reservations: reservations.clone(),
+        defer_stats: defer_stats.clone(),
+    };
+    let mut finalized_upto = 0usize;
+    // `SURGE_CRITPATH=1`: measure the out-of-order-commit ceiling. Capture the
+    // conflict DAG before the walk consumes the logs, and time each inline
+    // recompute; the critical path is reported after the walk. Run with
+    // `SURGE_REPLAY_OFF=1` for clean, uncontended per-conflict weights.
+    let critpath_deps = if std::env::var_os("SURGE_CRITPATH").is_some() {
+        Some(crate::speculative::compute_conflict_deps(&worker_logs))
+    } else {
+        None
+    };
+    let mut conflict_micros: surge_ts_types::fx::FxHashMap<usize, u128> =
+        surge_ts_types::fx::FxHashMap::default();
+
+    let replay_stats = crate::replay::run_frontier_pipeline(
+        crate::replay::PipelineConfig { n, worker_count },
+        &submit_at,
+        &shared,
+        || {
+            let mut ctx = shared.ctx.clone();
+            ctx.diagnostics.clear();
+            ctx.stats = CompatibilityStats::default();
+            let store = ctx.program_type_store.clone();
+            CheckThreadState { ctx, store }
+        },
+        |shared, thread_state, file_index| {
+            // A fresh live-reading session and a unique attempt stamp so the
+            // replay recomputes correct values instead of dedup-hitting the
+            // discarded worker attempt's environments in the weak store.
+            let session = match (&shared.reservations, &shared.defer_stats) {
+                (Some(table), Some(stats)) => Arc::new(
+                    crate::speculative::CheckSession::new_live_reading_deferring(
+                        shared.live.clone(),
+                        table.clone(),
+                        file_index,
+                        stats.clone(),
+                    ),
+                ),
+                _ => Arc::new(crate::speculative::CheckSession::new_live_reading(
+                    shared.live.clone(),
+                )),
+            };
+            thread_state.ctx.environment_attempt = crate::replay::next_replay_attempt();
+            let result = with_program_type_store(thread_state.store.clone(), || {
+                crate::speculative::with_check_session(session.clone(), || {
+                    session.begin_file(file_index);
+                    check_program_file(
+                        file_index,
+                        &shared.parsed_files[file_index],
+                        shared.shared_state,
+                        &mut thread_state.ctx,
+                        shared.timings.as_ref(),
+                    )
+                })
+            });
+            let deferred_until = session.deferred_until();
+            let log = session.take_file_logs().pop().unwrap_or_default();
+            (CheckReplay { result, log }, deferred_until)
+        },
+        |_file_index| true,
+        |file_index, replay: Option<CheckReplay>, is_final| {
+            // Measurement: everything strictly below the frontier is committed,
+            // so finalize those reservations to Ready before this position runs.
+            if let Some(table) = &reservations
+                && let Ok(mut table) = table.write()
+            {
+                while finalized_upto < file_index {
+                    table.finalize(finalized_upto, 1);
+                    finalized_upto += 1;
+                }
+            }
+            if let Some(log) = worker_logs[file_index].take() {
+                if matches!(
+                    crate::speculative::commit_file_log(
+                        &live,
+                        &log,
+                        &mut published,
+                        &dirty,
+                        cap,
+                        &mut stats,
+                    ),
+                    crate::speculative::CommitVerdict::Clean
+                ) {
+                    if let Some(diff) = &mut defer_diff {
+                        diff.record_commit(
+                            file_index,
+                            DeferDiff::KIND_CLEAN,
+                            log.insert_digests(),
+                            &published,
+                        );
+                    }
+                    // The worker's speculative result stands (slots already holds it).
+                    return crate::replay::CommitOutcome::Committed;
+                }
+                // The worker log conflicted and is now consumed; a retry uses the
+                // freshly re-submitted replay rather than re-validating it.
+            }
+            dirty.insert(file_index);
+            let had_replay = replay.is_some();
+            let mut stale_log = None;
+            if let Some(replay) = replay {
+                if crate::speculative::commit_replay_log(
+                    &live,
+                    &replay.log,
+                    &mut published,
+                    cap,
+                    &mut stats,
+                ) {
+                    if let Some(diff) = &mut defer_diff {
+                        diff.record_commit(
+                            file_index,
+                            DeferDiff::KIND_REPLAY,
+                            replay.log.insert_digests(),
+                            &published,
+                        );
+                    }
+                    worker_logs[file_index] = None;
+                    replay_committed += 1;
+                    slots[file_index] = Some(replay.result);
+                    return crate::replay::CommitOutcome::Committed;
+                }
+                stale_log = Some(replay.log);
+            }
+            // Stale or absent replay: recompute inline against the exact
+            // committed<file_index. Moving this recompute onto the pool (return
+            // NeedsReplay) was measured *worse* — the coordinator blocks on the
+            // pool round-trip behind a queue of (mostly wasted) look-ahead work,
+            // ~2x slower than inline. Reaching the parallel critical-path ceiling
+            // (SURGE_CRITPATH: ~0.46 s vs ~1.7 s serial) needs the stale replays
+            // eliminated (complete reservations), not the recompute relocated.
+            let _ = is_final;
+            if had_replay {
+                replay_stale += 1;
+                if let (Some(diff), Some(stale)) = (&mut defer_diff, &stale_log) {
+                    diff.record_stale(file_index, stale, &published);
+                }
+            } else {
+                inline_only += 1;
+            }
+            worker_logs[file_index] = None;
+            let local_ctx = recheck_ctx.get_or_insert_with(|| {
+                let mut local_ctx = ctx.clone();
+                local_ctx.diagnostics.clear();
+                local_ctx.stats = CompatibilityStats::default();
+                local_ctx.environment_attempt = 1;
+                local_ctx
+            });
+            let session = Arc::new(crate::speculative::CheckSession::new_live_reading(
+                live.clone(),
+            ));
+            let recompute_start = critpath_deps.as_ref().map(|_| Instant::now());
+            let result = crate::speculative::with_check_session(session.clone(), || {
+                session.begin_file(file_index);
+                check_program_file(
+                    file_index,
+                    &parsed_files[file_index],
+                    shared_state,
+                    local_ctx,
+                    timings.as_ref(),
+                )
+            });
+            if let Some(start) = recompute_start {
+                conflict_micros.insert(file_index, start.elapsed().as_micros());
+            }
+            slots[file_index] = Some(result);
+            for recheck_log in session.take_file_logs() {
+                crate::speculative::apply_file_log(
+                    &live,
+                    &recheck_log,
+                    &mut published,
+                    cap,
+                    &mut stats,
+                );
+                if let Some(diff) = &mut defer_diff {
+                    diff.record_commit(
+                        file_index,
+                        DeferDiff::KIND_INLINE,
+                        recheck_log.insert_digests(),
+                        &published,
+                    );
+                }
+            }
+            crate::replay::CommitOutcome::Committed
+        },
+    );
+
+    if std::env::var_os("SURGE_STC_STATS").is_some() {
+        eprintln!(
+            "[stc] files={} clean={} miss_conflicts={} dep_conflicts={} published={} \
+             skipped_existing={} cap_blocked={} total_misses={} worker_phase={:.2}s \
+             commit_phase={:.2}s",
+            stats.files,
+            stats.clean_commits,
+            stats.miss_conflicts,
+            stats.dependency_conflicts,
+            stats.published_entries,
+            stats.merge_skipped_existing,
+            stats.merge_cap_blocked,
+            total_misses,
+            worker_phase.as_secs_f64(),
+            commit_phase_start.elapsed().as_secs_f64(),
+        );
+        eprintln!(
+            "[stc-replay] submitted={} replay_committed={replay_committed} stale={replay_stale} \
+             inline_only={inline_only} wasted={} peak_in_flight={}",
+            replay_stats.submitted, replay_stats.wasted, replay_stats.peak_in_flight,
+        );
+    }
+
+    if let Some(deps) = &critpath_deps {
+        crate::speculative::report_critical_path(deps, &conflict_micros);
+    }
+    crate::context::report_local_values_consults(ctx.module_local_values_by_file.len());
+
+    if let Some(diff) = &defer_diff {
+        eprintln!(
+            "[stc-defer-diff] stale={} offenders={} unreserved={} reserved_by_other={} \
+             reserved_by_publisher={} reserved_later_or_self={} \
+             publisher_kind(unknown/clean/replay/inline)={}/{}/{}/{}",
+            diff.stale_replays,
+            diff.offenders,
+            diff.unreserved,
+            diff.reserved_by_other,
+            diff.reserved_by_publisher,
+            diff.reserved_later_or_self,
+            diff.publisher_kind[0],
+            diff.publisher_kind[1],
+            diff.publisher_kind[2],
+            diff.publisher_kind[3],
+        );
+        eprintln!(
+            "[stc-defer-diff] diffed_positions={} unpredicted_inserts={} unrealized_predictions={}",
+            diff.diffed_positions, diff.unpredicted_inserts, diff.unrealized_predictions,
+        );
+    }
+
+    if let (Some(table), Some(stats)) = (&reservations, &defer_stats)
+        && let Ok(mut table) = table.write()
+    {
+        for position in finalized_upto..n {
+            table.finalize(position, 1);
+        }
+        use std::sync::atomic::Ordering::Relaxed;
+        eprintln!(
+            "[stc-defer] replay_misses={} would_defer={} pending_leak={} peak_pending={}",
+            stats.queried.load(Relaxed),
+            stats.deferred.load(Relaxed),
+            table.pending_count(),
+            table.peak_pending(),
+        );
+    }
+
+    slots.into_iter().flatten().collect()
+}
+
+pub(super) fn module_scope_by_file_map(
+    parsed_files: &[ParsedProgramFile],
+    module_resolution_scopes: &[Option<Arc<crate::symbols::TypeDeclarationScope>>],
+    ctx: &CheckerContext,
+) -> surge_ts_types::fx::FxHashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>> {
+    let mut map: surge_ts_types::fx::FxHashMap<
+        Arc<str>,
+        Arc<crate::symbols::TypeDeclarationScope>,
+    > = parsed_files
+        .iter()
+        .zip(module_resolution_scopes.iter())
+        .filter_map(|(parsed_file, scope)| {
+            scope
+                .as_ref()
+                .map(|scope| (Arc::from(parsed_file.file_name.as_str()), scope.clone()))
+        })
+        .collect();
+    // A file whose declarations live in ambient `declare module` blocks has an
+    // empty (or absent) per-file scope of its own; the ambient scope carries
+    // the blocks' declarations and their block-internal import bindings. A
+    // file with both top-level declarations and blocks keeps its own layers
+    // first.
+    for (file_name, ambient_scope) in ctx.ambient_file_type_scopes.iter() {
+        match map.get_mut(file_name) {
+            Some(existing) => {
+                if existing.is_empty() {
+                    *existing = ambient_scope.clone();
+                } else {
+                    let mut layers = existing.layers().to_vec();
+                    layers.extend(ambient_scope.layers().iter().cloned());
+                    *existing = Arc::new(crate::symbols::TypeDeclarationScope::new(layers));
+                }
+            }
+            None => {
+                map.insert(file_name.clone(), ambient_scope.clone());
+            }
+        }
+    }
+    map
+}
+
+pub(super) fn check_program_file(
+    file_index: usize,
+    parsed_file: &ParsedProgramFile,
+    shared_state: &ProgramCheckSharedState,
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) -> FileCheckResult {
+    ctx.begin_file_check(parsed_file.file_name.clone());
+
+    if ctx.options.skip_lib_check && parsed_file.file_kind.is_declaration() {
+        return FileCheckResult {
+            file_index,
+            diagnostics: Vec::new(),
+            stats: CompatibilityStats::default(),
+        };
+    }
+
+    if parsed_file.file_kind.is_declaration() {
+        emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
+        let diagnostics = std::mem::take(&mut ctx.diagnostics);
+        let stats = std::mem::take(&mut ctx.stats);
+        return FileCheckResult {
+            file_index,
+            diagnostics,
+            stats,
+        };
+    }
+
+    if parsed_file.is_module {
+        let Some(module_analysis) = shared_state.module_analyses[file_index].as_ref() else {
+            return FileCheckResult {
+                file_index,
+                diagnostics: Vec::new(),
+                stats: CompatibilityStats::default(),
+            };
+        };
+
+        let imported_bindings = shared_state.module_import_bindings[file_index].as_ref();
+
+        let module_resolution_scope = shared_state.module_resolution_scopes[file_index]
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| {
+                let mut layers = vec![module_analysis.local_type_declarations.clone()];
+                if let Some(imported_bindings) = imported_bindings {
+                    layers.extend(imported_bindings.scope_layers());
+                }
+                record_module_scope_cache_miss();
+                Arc::new(TypeDeclarationScope::new(layers))
+            });
+        if shared_state.module_resolution_scopes[file_index].is_some() {
+            record_module_scope_cache_hit();
+        }
+
+        // The ambient globals (~4k entries on @types/node projects) are a
+        // read-only lookup backdrop for the file check; holding them as a
+        // `parent` fallback keeps the per-file working set O(imports + locals)
+        // where a clone-then-insert deep-copied every global per file.
+        let globals_parent = Arc::new(
+            ctx.ambient_global_symbols
+                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+        );
+        let mut merged_symbols = crate::symbols::SymbolTable::file_check_root(globals_parent.clone());
+        if let Some(imported_bindings) = imported_bindings {
+            for (name, symbol) in imported_bindings.symbols.iter_shared() {
+                let _ = merged_symbols.insert_shared(name.clone(), symbol.clone());
+            }
+        }
+        for (name, symbol) in module_analysis.local_symbols.iter_shared() {
+            let _ = merged_symbols.insert_shared(name.clone(), symbol.clone());
+        }
+
+        ctx.type_declarations = module_analysis.local_type_declarations.as_ref().clone();
+        ctx.type_declaration_scope = Some(module_resolution_scope);
+        ctx.set_symbols(
+            merged_symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+        );
+
+        // A module-scope declaration of the same name shadows the import (and is
+        // its own duplicate-identifier error), so it is excluded rather than
+        // reported as a type-only value use.
+        let module_declared =
+            crate::program::ambient::module_scope_own_declared_names(&parsed_file.statements);
+        ctx.set_file_type_only_import_names(
+            crate::program::ambient::type_only_import_bound_names(&parsed_file.statements)
+                .into_iter()
+                .filter(|name| !module_declared.contains(name)),
+        );
+
+        if !ctx.umd_global_names.is_empty() {
+            let declared = module_scope_declared_names(&parsed_file.statements);
+            ctx.set_file_umd_global_names(true, |name| {
+                declared.contains(name)
+                    || module_analysis.local_symbols.get_handle(name).is_some()
+                    || module_analysis.local_type_declarations.get(name).is_some()
+                    || imported_bindings.is_some_and(|bindings| bindings.binds_name(name))
+            });
+        }
+
+        let current_type_declarations = ctx.type_declarations.clone();
+        let current_symbols = ctx
+            .symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        let validation_symbols = crate::modules::collect_exportable_value_symbols(
+            &parsed_file.statements,
+            &current_type_declarations,
+            &current_symbols,
+            None,
+            ctx,
+        );
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);
+
+        let validation_start = Instant::now();
+        validate_local_type_declarations(&parsed_file.statements, &parsed_file.file_name, ctx);
+        let validation_duration = validation_start.elapsed();
+        record_program_timing(timings, |timings| {
+            timings.declaration_validation += validation_duration
+        });
+        record_program_file_timing(timings, &parsed_file.file_name, |metrics| {
+            metrics.validate_local_type_declarations_passes += 1;
+            metrics.validate_local_type_declarations_items +=
+                count_local_type_declarations_in_statements(&parsed_file.statements) as u64;
+            metrics.validate_local_type_declarations_duration += validation_duration;
+        });
+
+        let utility_validation_start = Instant::now();
+        validate_direct_utility_aliases(&parsed_file.statements, ctx);
+        record_program_timing(timings, |timings| {
+            timings.utility_alias_validation += utility_validation_start.elapsed()
+        });
+
+        let validation_symbols = std::mem::replace(&mut ctx.symbols, saved_symbols);
+
+        let mut signature_ctx = ctx.clone_without_diagnostics();
+        signature_ctx.reset_utility_diagnostic_keys();
+        signature_ctx.resolved_named_types =
+            std::sync::Arc::new(std::sync::Mutex::new(Default::default()));
+        // Seed from `validation_symbols` rather than `merged_symbols`: it carries
+        // the local `const`/`let`/`var` value symbols inferred during declaration
+        // validation, so `typeof <localConst>` resolves inside parameter type
+        // annotations (function signatures see them, not just type aliases).
+        //
+        // Only the file's own top-level function declarations are skipped (they
+        // are re-registered below, and re-seeding them would trip the duplicate
+        // signature check). Imported and global functions are kept so that
+        // `typeof <importedFn>` in a parameter annotation still resolves.
+        let mut signature_local_symbols = crate::symbols::SymbolTable::new();
+        for (name, symbol) in validation_symbols.iter_shared() {
+            let is_local_function_declaration =
+                matches!(symbol.kind, crate::symbols::SymbolKind::Function)
+                    && module_analysis.local_symbols.get(name).is_some();
+            if !is_local_function_declaration {
+                signature_local_symbols.insert_shared(name.clone(), symbol.clone());
+            }
+        }
+        // `validation_symbols` reaches globals through its parent fallback, so
+        // the loop above seeds only file-level names; re-attach the globals so
+        // `typeof <globalFn>` in a parameter annotation still resolves. Local
+        // function declarations stay invisible (globals do not contain them),
+        // preserving the duplicate-signature exclusion.
+        let mut signature_local_symbols =
+            signature_local_symbols.with_parent_fallback(globals_parent.clone());
+        let mut final_function_signatures = HashMap::new();
+        collect_function_signatures_from_statements(
+            &parsed_file.statements,
+            file_index,
+            &mut signature_local_symbols,
+            &mut final_function_signatures,
+            &mut signature_ctx,
+        );
+        extend_diagnostics_dedup(&mut ctx.diagnostics, signature_ctx.diagnostics);
+
+        ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
+
+        let statement_check_start = Instant::now();
+        check_program_file_statements(
+            &parsed_file.statements,
+            file_index,
+            &final_function_signatures,
+            ctx,
+        );
+        ctx.module_value_fallback = None;
+
+        if ctx.options.no_unused_locals && ctx.current_file_kind == FileKind::RootSource {
+            unused_locals::emit_unused_module_bindings(
+                &parsed_file.statements,
+                &parsed_file.module_reads,
+                ctx,
+            );
+        }
+        record_program_timing(timings, |timings| {
+            timings.per_file_statement_checking += statement_check_start.elapsed()
+        });
+    } else {
+        // Clone the prebuilt global+ambient table (index copy only). Inserting
+        // here would allocate into the shared global arena from a worker thread,
+        // which the arena's freeze assertion forbids.
+        ctx.type_declarations = clone_type_declaration_table(
+            &shared_state.script_type_declarations,
+            timings,
+            TableCloneKind::General,
+        );
+        ctx.type_declaration_scope = None;
+
+        let mut script_sym = shared_state
+            .global_symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        for (name, symbol) in ctx.ambient_global_symbols.iter_handles() {
+            let _ = script_sym.insert_handle(name.clone(), clone_symbol_info_handle(symbol));
+        }
+        ctx.set_symbols(script_sym);
+
+        let current_type_declarations = ctx.type_declarations.clone();
+        let current_symbols = ctx
+            .symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        let validation_symbols = crate::modules::collect_exportable_value_symbols(
+            &parsed_file.statements,
+            &current_type_declarations,
+            &current_symbols,
+            None,
+            ctx,
+        );
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);
+
+        let validation_start = Instant::now();
+        validate_local_type_declarations(&parsed_file.statements, &parsed_file.file_name, ctx);
+        let validation_duration = validation_start.elapsed();
+        record_program_timing(timings, |timings| {
+            timings.declaration_validation += validation_duration
+        });
+        record_program_file_timing(timings, &parsed_file.file_name, |metrics| {
+            metrics.validate_local_type_declarations_passes += 1;
+            metrics.validate_local_type_declarations_items +=
+                count_local_type_declarations_in_statements(&parsed_file.statements) as u64;
+            metrics.validate_local_type_declarations_duration += validation_duration;
+        });
+
+        let utility_validation_start = Instant::now();
+        validate_direct_utility_aliases(&parsed_file.statements, ctx);
+        record_program_timing(timings, |timings| {
+            timings.utility_alias_validation += utility_validation_start.elapsed()
+        });
+
+        let validation_symbols = std::mem::replace(&mut ctx.symbols, saved_symbols);
+
+        ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
+
+        let statement_check_start = Instant::now();
+        check_program_file_statements(
+            &parsed_file.statements,
+            file_index,
+            &shared_state.function_signatures,
+            ctx,
+        );
+        ctx.module_value_fallback = None;
+        record_program_timing(timings, |timings| {
+            timings.per_file_statement_checking += statement_check_start.elapsed()
+        });
+    }
+
+    let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
+    drop_suppressed_diagnostics(&mut diagnostics, &parsed_file.suppressed_ranges);
+    let stats = std::mem::take(&mut ctx.stats);
+
+    FileCheckResult {
+        file_index,
+        diagnostics,
+        stats,
+    }
+}
