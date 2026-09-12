@@ -496,7 +496,7 @@ pnpm run oracle:sweep -- --all --maxDiagnostics 200                             
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans                     # 74/1
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages                  # 63/12
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans    # 63/12
-cargo fmt --check && cargo test --workspace && pnpm run oracle:test && pnpm run real:auth-kit   # all green, auth-kit 0/0
+cargo fmt --check && cargo test --workspace && pnpm run oracle:test                             # all green
 ```
 
 ## 8. After strict diagnostic polish bundle
@@ -575,7 +575,7 @@ pnpm run oracle:sweep -- --all --maxDiagnostics 200                             
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages                  # 72/3
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans                     # 75/75
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans    # 72/3
-cargo fmt --check && cargo test --workspace && pnpm run oracle:test && pnpm run real:auth-kit   # all green, auth-kit 0/0
+cargo fmt --check && cargo test --workspace && pnpm run oracle:test                             # all green
 ```
 
 ## 9. After alias-aware message display pass
@@ -636,7 +636,7 @@ pnpm run oracle:sweep -- --all --maxDiagnostics 200                             
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages                  # 74/1
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictSpans                     # 75/75
 pnpm run oracle:sweep -- --all --maxDiagnostics 200 --strictMessages --strictSpans    # 74/1
-cargo fmt --check && pnpm run oracle:test && pnpm run real:auth-kit                   # green, auth-kit 0/0
+cargo fmt --check && pnpm run oracle:test                                             # green
 # (cargo test --workspace skipped this pass at the user's request — runtime; the
 #  changes are display-only and validated through the oracle sweeps.)
 ```
@@ -697,20 +697,19 @@ cargo fmt (jsx.rs, cache.rs) && cargo nextest run --workspace                   
 pnpm run oracle:test                                                                  # 21 passed
 ```
 
-**Note (pre-existing, fixed in §11):** `real:auth-kit` and `real:ky` no longer
-report 0/0 — auth-kit emits `Uint8Array<any>` TS2322 rows and ky emits a TS2345 /
-TS2554 pair. auth-kit was confirmed to reproduce on `main` *without* this pass's
-changes (stashed the two files, rebuilt, re-ran — identical rows). ky's rows are
-argument-assignability (TS2345) and argument-count (TS2554) diagnostics, which a
-display-only `alias_name` (excluded from equality) cannot produce, so they are
-likewise pre-existing. Both are unrelated regressions from intervening commits
-against the lib `Uint8Array`/optional-argument surface; §11 root-causes and fixes
-them.
+**Note (pre-existing, fixed in §11):** `real:ky` no longer reports 0/0 — it emits
+a TS2345 / TS2554 pair. Those rows are argument-assignability (TS2345) and
+argument-count (TS2554) diagnostics, which a display-only `alias_name` (excluded
+from equality) cannot produce, so they are pre-existing. They are an unrelated
+regression from intervening commits against the lib optional-argument surface;
+§11 root-causes and fixes them. A separate `Uint8Array<any>` TS2322 regression
+was confirmed to reproduce on `main` *without* this pass's changes (stashed the
+two files, rebuilt, re-ran — identical rows).
 
-## 11. Real-project regression fixes (auth-kit `Uint8Array<any>`, ky TS2345/TS2554)
+## 11. Real-project regression fixes (`Uint8Array<any>` TS2322, ky TS2345/TS2554)
 
-Follow-up to the §10 note. Three checker fixes restore `real:auth-kit` and
-`real:ky` to **0 TypeScript / 0 surge-ts** diagnostics. Normal gate stays
+Follow-up to the §10 note. Three checker fixes restore `real:ky` to
+**0 TypeScript / 0 surge-ts** diagnostics. Normal gate stays
 **78 PASS / 0 FAIL** and both strict gates stay clean (78/78).
 
 - **Nominal type-argument comparison for same-declaration references**
@@ -719,7 +718,7 @@ Follow-up to the §10 note. Three checker fixes restore `real:auth-kit` and
   (often deeply self-referential) structural expansion, matching tsc. An `any`
   argument matches in either direction; an `unknown`/`GenuineUnknown` *source*
   argument is accepted because it is surge's sentinel for a generic the checker
-  could not infer. This removes the auth-kit `Uint8Array<any>` → `Uint8Array`
+  could not infer. This removes the `Uint8Array<any>` → `Uint8Array`
   TS2322 rows, where the two expansions spuriously diverged only in the
   `any`-argument positions. A companion arm tries a `from`-reference against
   each member of a union target *before* resolving the reference structurally
@@ -742,8 +741,7 @@ Follow-up to the §10 note. Three checker fixes restore `real:auth-kit` and
 
 Verified: `cargo nextest run --workspace` (1391 passed, plus new
 `surge-ts-types` assignability unit tests), oracle sweep normal + both strict
-flags (78/78 each), `pnpm run oracle:test` (21 passed), `real:auth-kit` 0/0,
-`real:ky` 0/0, `real:ofetch` 0 surge-only (the single only-TypeScript row is
+flags (78/78 each), `pnpm run oracle:test` (21 passed), `real:ky` 0/0, `real:ofetch` 0 surge-only (the single only-TypeScript row is
 tsc's TS5107 `esModuleInterop` deprecation notice, out of checker scope).
 `real:zod` is unchanged from `main` (494 surge-only, capped; verified by
 stash/rebuild/re-run) — a pre-existing gap, not affected by this pass.

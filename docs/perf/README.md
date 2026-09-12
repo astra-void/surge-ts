@@ -28,6 +28,8 @@ optimization does not work.
 
 | Document | Date | Subject |
 | --- | --- | --- |
+| [TANSTACK-QUERY-PROGRAM-MEMO-2026-09-12.md](TANSTACK-QUERY-PROGRAM-MEMO-2026-09-12.md) | 2026-09-12 | Program-lifetime interface memo on by default: the three soundness conditions it needed, tanstack-query 40G → 6G instructions and 1.03 GB → 189 MB; where the time goes now |
+| [LOADER-PARSE-HANDOFF.md](LOADER-PARSE-HANDOFF.md) | 2026-09-11 | Handing the module-graph scan's parses to the checker instead of re-parsing; the per-file text sweeps around it. ofetch profile by phase |
 | [NAMESPACE-INTERFACE-MERGE.md](NAMESPACE-INTERFACE-MERGE.md) | 2026-08-20 | Reopened-namespace interface merging. **Note:** the merge described there as gated off is now **on by default** (opt-out `SURGE_NS_IFACE_MERGE=0`). |
 | [CLEAN-GENERIC-BASE-EXPANSION.md](CLEAN-GENERIC-BASE-EXPANSION.md) | 2026-07-29 | Distributive-conditional member guards; degradation provenance |
 | [SIGNATURE-CONTEXT-GENERIC-CACHE.md](SIGNATURE-CONTEXT-GENERIC-CACHE.md) | 2026-07-29 | Signature-context generic-instantiation cache |

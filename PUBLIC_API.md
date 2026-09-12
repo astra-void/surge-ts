@@ -245,7 +245,6 @@ cargo fixtures, so a regression fails CI.
 | --- | --- | --- |
 | **ky** | [sindresorhus/ky](https://github.com/sindresorhus/ky) 2.0.2 Fetch-API/DOM (`exactOptionalPropertyTypes`, ~29 files) | `pnpm run real:ky:test` — strict false-positive corpus (`tsc = 0`) |
 | **unnamed** | local Next.js App Router app (`moduleResolution: bundler`, `jsx: react-jsx`, `strict`, `paths`) | `pnpm run real:unnamed:test` — strict false-positive corpus (`tsc = 0`) |
-| **auth-kit** | TypeScript backend (`class`/`declare class` heritage, `NextRequest` shape, 65 files) | `pnpm run real:auth-kit` — strict false-positive corpus (`tsc = 0`), private project |
 
 A strict false-positive corpus is one where `tsc` reports zero diagnostics, so
 *any* surge diagnostic is a regression rather than a judgement call. The gates

@@ -74,7 +74,6 @@ files are suppressed so unsupported lib syntax cannot flood user diagnostics.
 
 - **Overload resolution** — only one signature is used per symbol, so valid
   calls against overloaded lib APIs can produce spurious `TS2554` arity errors.
-  (auth-kit now compares exactly 0/0 under physical-default libs.)
 - **`Awaited<T>`** and `Promise.resolve`/`Promise.all` precise typing — the
   `Promise<T>` -> `T` collapse covers `await`, but utility-conditional awaited
   inference is not modelled, so some awaited values resolve to `unknown`.

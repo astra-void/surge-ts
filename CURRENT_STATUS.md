@@ -46,18 +46,18 @@ level at this commit; the bisect and the before/after are in
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1859 / 1859 passed** |
+| Workspace tests | `cargo nextest run --workspace` | **1868 / 1868 passed** |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **148 / 148 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **148 / 148 passed** |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **148 / 148 passed** |
-| Oracle preset sweep — both strict flags | same + both | **148 / 148 passed** |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **162 / 162 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **162 / 162 passed** |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **162 / 162 passed** |
+| Oracle preset sweep — both strict flags | same + both | **162 / 162 passed** |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
 | Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 148 presets the
-sweep saw 242 `tsc` diagnostics and 242 `surge-ts` diagnostics, with
+parity against the upstream TypeScript compiler. Across all 162 presets the
+sweep saw 288 `tsc` diagnostics and 288 `surge-ts` diagnostics, with
 `onlyTsc = 0` and `onlyRust = 0`.
 
 **Message text and span/column match on every registered preset.** Both strict
@@ -126,7 +126,7 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 148 oracle presets under `tests/compat-projects/`, all green at the normal
+- 162 oracle presets under `tests/compat-projects/`, all green at the normal
   gate **and at both strict gates** (see the table above).
 - 372 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
@@ -149,8 +149,9 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **ofetch** (unjs/ofetch) | `1dbc37f` | 1 | 1 | **exact** — same file/code/line and message text (TS5108) |
 | **zod** | `912f0f5` | 21 | 21 | **exact** — every diagnostic matched, message text included |
 | **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
-| **trpc** | `dfbafa8` | 1244 | 1133 | measured baseline, **not** a parity target |
-| **auth-kit** | — | — | — | **not measured** — the project is absent on this machine |
+| **trpc** | `dfbafa8` | 1244 | 1128 | surge-only **0**, `tsc`-only 116 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-11) |
+| **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 25 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
+| **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **newly provisioned, provisional** — 446 when first measured; the 1 that remains is surge-only and the 2 `tsc` reports are unmatched; dirty-tree measurement, not a gate (see note) |
 
 Notes that matter:
 
@@ -161,6 +162,61 @@ Notes that matter:
   (a ratchet that only moves down) plus a precondition that `tsc` still reports
   0. Both *skip* cleanly when the project or the `typescript` package is absent
   (no third-party source is vendored).
+- **ts-pattern is newly provisioned and is not a gate.** The aggregate target
+  `tsconfig.surge.json` (18 `src/` files plus the 48-file type-level test suite,
+  installed by `pnpm run real:ts-pattern:provision`) is the corpus. It is
+  deliberately *not* a clean-oracle corpus: the pinned TypeScript 7.0.2 oracle
+  reports 2 diagnostics of its own, both `TS2344` where a
+  `Expect<Equal<…>>` assertion the library wrote against TypeScript 5.9 now
+  evaluates to `false`. Neither is matched by surge. surge reported **446** when
+  the corpus was first measured, and **431 of those were one root cause**:
+  overloaded members of a *type literal* were not grouped — the last declaration
+  won and every earlier overload was dropped — so every
+  `match(input).with(pattern, handler)` was checked against a three-parameter
+  overload and reported `TS2554`. A type literal now folds a repeated function
+  member the way an interface body already did, pinned by the
+  `type-literal-method-overloads-basic` preset. A second pass closed twelve more
+  — a symbol-keyed indexed access, five `infer` captures inside type predicates,
+  `typeof` narrowing of an element access, and five array literals picking their
+  member out of a union target — taking the corpus to **7**, and a third closed
+  six of those: an object literal now picks its union member by the discriminant
+  it writes, and `as const` is finally applied on the inference path, where it
+  had been ignored entirely. The corpus stands at **1**. No new diagnostic
+  appeared anywhere across any of the three passes: ky, ofetch, zod, unnamed and
+  trpc are byte-identical throughout and the tanstack-query aggregate improved.
+  Typing an object literal against each union member speculatively was
+  implemented, measured, and **rejected** (5 false positives on trpc, and
+  tanstack-query did not finish in ten minutes); the member-picking that landed
+  reads the discriminant for free instead, under a measured cost bound of 20 own
+  properties per candidate. A fourth pass fixed two of the three layers behind
+  the last one — a type predicate declared on a *later* overload was invisible to
+  guard narrowing, and a generic predicate's type arguments were inferred from
+  the tested argument alone, so anything stated in terms of another argument fell
+  back to `any` and narrowed to the wrong member. Both are pinned
+  (`overload-group-type-predicate-basic`,
+  `predicate-type-argument-from-arguments-basic`) and both leave every corpus
+  byte-identical, because the third layer is the blocked overload program:
+  ts-pattern's pattern argument comes back as `any` from its own overload group.
+  The one that remains is inventoried in
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#ts-pattern-surge-only-inventory-2026-09-11).
+  Measured on a **dirty working tree** on top of `6e034fd`; re-measure from a
+  clean worktree before treating any of it as a baseline.
+- **tanstack-query is newly provisioned; its count is provisional.** The
+  aggregate target `tsconfig.surge.json` (10 TS/React packages, installed by
+  `pnpm run real:tanstack-query:provision`) is clean under the oracle, so it is
+  a false-positive corpus like ky and unnamed. Until 2026-09-10 `surge` could
+  not finish it: `Window & typeof globalThis` names itself through `window` and
+  `self`, and the eager intersection merge unfolded it without bound (a stack
+  overflow unbounded, 55 GB of RSS under a depth bound). The merge now detects
+  the cycle by operand identity, flattens nested deferred intersections, and
+  shares one deferred merge per operand set, and `typeof globalThis` is a
+  nominal reference. With that the aggregate completes in about 5 s at about
+  1.1 GB peak RSS. The over-report has been burned down since — **25** at the
+  2026-09-11 measurement, from 133 when it first completed — and every one of
+  them is a false positive. That number was measured on a **dirty working tree**
+  on top of `6e034fd`; re-measure from a clean worktree before recording it as a
+  gate. The distribution lives in
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md).
 - **zod is exact at this commit.** All 21 `tsc` diagnostics are matched at
   file/code/line *and* message text (21/21). The one long-standing over-report
   (`packages/zod/src/v3/types.ts:92:42 TS2339`) was a generic type-predicate
@@ -168,18 +224,21 @@ Notes that matter:
   benchmark in the corpus.
 - **trpc** is a *measured baseline*, never a parity claim. `tsc` itself reports
   over a thousand diagnostics there (many from examples with unresolved
-  workspace imports), and the divergence is two-sided. At this commit the
-  file/code/line drift is **135**: 123 diagnostics `tsc` reports and surge does
-  not (led by TS7006 ×38, TS2339 ×29, TS2883 ×10, TS18048 ×8) and 12 surge-only
-  (TS4111 ×3, TS2322 ×2, and seven single codes). On the 1,121
-  locations both compilers agree on, message text matches **1121 / 1121**.
+  workspace imports). The divergence is now one-sided: **0** surge-only, and
+  **116** diagnostics `tsc` reports and surge does not, across 106 distinct
+  file/code/line locations (led by TS7006 ×37, TS2339 ×29, TS2883 ×10,
+  TS18048 ×8). On the 1,128 locations both compilers agree on, message text
+  matches **1128 / 1128**. The false-negative side is inventoried by root cause
+  in [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#trpc-tsc-only-inventory-2026-09-11).
   The surge-only side came down from 65 at `019fb8b` over the 2026-09-07/08
-  session; what remains is listed in
+  session; what remained at that commit is listed in
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#trpc-surge-only-inventory-2026-09-07).
-- `auth-kit` is a private project that is not present on this machine. Its
-  last recorded result was 0/0 (see
-  [STRICT_DRIFT_INVENTORY.md § 11](STRICT_DRIFT_INVENTORY.md)); that figure is
-  **not** carried forward as current, and this snapshot did not run it.
+  On 2026-09-10 a **dirty working tree** on top of `6e034fd` measured 1,131
+  surge diagnostics, **3** surge-only and 116 `tsc`-only, after closing a
+  ten-item TS7006 regression the same tree had introduced and three of the
+  twelve inventory items; that figure is provisional and is not carried into
+  the table above. The 2026-09-10 inventory is in
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#trpc-surge-only-inventory-2026-09-10).
 
 ---
 
@@ -192,6 +251,18 @@ snapshot without re-verification and are labelled as such.
 
 ### Confirmed current gaps
 
+- **An arrow argument's body is inferred by the expression sketch, which
+  cannot call a global or instantiate a member generic.** *(reproduced
+  2026-09-11 on the dirty tree over `6e034fd`.)* `declare function fn<T
+  extends Procedure = Procedure>(impl?: T): Mock<T>` called as
+  `fn((value: Date) => value.toISOString())` now binds `T` to the arrow's
+  signature on both paths (see
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#closed-t-from-an-arrow-argument-2026-09-11)),
+  but `fn((n: number) => String(n))` and `fn(() => p.then(() => "x"))` still
+  yield a permissive result: the sketch resolves callees from the local table
+  only (`String` is an object with a call signature, not a function symbol)
+  and does not instantiate a member's type parameters. `const bad: number =
+  fn((n: number) => String(n))` is not reported.
 - **Overload resolution uses the first overload only.** *(re-probed
   2026-09-03.)* A call that should select a later overload resolves against the
   first signature. Today this surfaces as an *under-report*:
@@ -204,6 +275,16 @@ snapshot without re-verification and are labelled as such.
   `export * from "core"` in `wrapper`, importing the augmented interface from
   `wrapper` yields the unaugmented shape (a surge-only excess/unknown-property
   error), while importing from `core` directly is correct.
+- **An augmented *base* interface is not seen through a derived one.**
+  *(reproduced 2026-09-11 on the dirty tree over `6e034fd`.)* With
+  `declare module "./generated" { interface BaseNode { parent: Node } }` and
+  `interface Identifier extends BaseNode`, `id.parent` is a surge-only TS2339.
+  Augmenting `Identifier` itself works — an augmentation merges into the
+  per-import export table, while heritage resolves the base in the declaring
+  file's own scope, which carries no augmentation. This is what hides `parent`
+  on every `@typescript-eslint` AST node. The *relative specifier* half of the
+  same gap is fixed — see
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#half-closed-a-relative-declare-module-sibling-augmentation-2026-09-11).
 - **`typeof import("pkg")` in a type alias does not resolve.** *(re-probed
   2026-09-03.)* `type T = typeof import("./dep")` leaves `T` unbound: TS2304 at
   the alias use site. Dynamic `import()` and `import("m").T` are parser gaps as
@@ -308,6 +389,7 @@ settled.
 | Gate | Effect |
 | --- | --- |
 | `SURGE_AMBIENT_BLOCK_IMPORTS=1` | Bind imports inside ambient `declare module` blocks. Diagnostics set-identical on the corpus, but costly (~+36% user time on trpc) until member-level lazy expansion lands. |
+| `SURGE_UPGRADE_ANALYSIS_SCOPES=1` | Give a module's exported declarations the real resolution scope (own declarations + import layers) during analysis instead of the import-less preliminary one. Makes the published type of an export honest where its body names an imported type; on trpc that closes 12 `TS2339` and opens 13, because an honest export lets a conditional decide from a router key set surge never had. See [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#trpc-tsc-only-inventory-2026-09-11). |
 | `SURGE_LAZY_IFACE_MEMBERS=1` | Stage 1 of member-level lazy interface expansion (property annotations only; methods stay eager). Design: [docs/perf/MEMBER-LAZY-EXPANSION.md](docs/perf/MEMBER-LAZY-EXPANSION.md). |
 | `SURGE_LIB_MEMBER_CACHE=1` | Extended per-member instantiation cache. Measured at roughly +2% and left off. |
 | `SURGE_IFACE_CACHE_ALL=1` | Extended interface-instantiation cache. Measured at +1.7% and left off. |
@@ -408,7 +490,7 @@ Performance history, methodology, and the reproduction recipe live in
 - **No full TypeScript compatibility claim.** The oracle gate establishes
   parity on the covered fixtures and projects only.
 - **No general message-text or span/column parity claim.** Both strict sweeps
-  are green across the 148 registered presets at this commit, which is a
+  are green across the 162 registered presets at this commit, which is a
   statement about those fixtures — not about arbitrary code. The strict flags
   stay non-gating so a new preset can record a drift without failing CI.
 - **No claim that trpc matches `tsc`.** It is a workload and a measured
@@ -417,8 +499,6 @@ Performance history, methodology, and the reproduction recipe live in
 - **No cross-tool performance claim.** `pnpm bench:compilers` exists as a
   developer aid; its output is local-machine-relative and is not a marketing
   comparison.
-- **No claim about `auth-kit` at this commit** — the project is absent here and
-  the 0/0 figure is a prior recorded result.
 - **No suppression-transparency claim yet.** ky's source-level parity is 0/0,
   but three non-zero suppression counters (`suppressedRustOnly`,
   `suppressedDeclaration`, `externalModuleStubs`) remain pending an audit

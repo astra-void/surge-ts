@@ -72,6 +72,7 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
 | Structure | Owner / storage | Class | Actual lifetime notes |
 | --- | --- | --- | --- |
 | `SourceFileInput.source_text` | checker `files` vec | phase | dropped when `parse_program_files` returns; the CLI keeps its own copy in `ProjectCheckResult.sources` for code frames (see "Remaining retention") |
+| Prescanned `ParsedSource` (loader) | `ModuleSpecifierScanner.scanned` | phase | the loader's module-graph scan parses each source and dependency declaration; the parse is now held to the end of loading and moved into `parse_program_files` instead of being dropped and re-made there. It does not raise the peak: the same ASTs used to exist twice, once per parse. `SURGE_PRESCANNED_PARSE_REUSE=0` restores the drop-and-re-parse arm |
 | `ParsedProgramFile.statements` | `parsed_files` | program | needed by binding and the check phase; declaration-file ASTs are freed before checking under `skipLibCheck` (`declaration_ast_release` stage) |
 | Declaration payloads (`InterfaceInfo`/`TypeAliasInfo` bodies) | `CheckerArena` + `Arc` bodies | program | write-once; shared by handle |
 | `ambient_global_*`, `ambient_modules` | `CheckerContext`, `Arc` | program | built during ambient collection, read-only afterwards |
@@ -218,8 +219,8 @@ comparisons, not production modes.
 
 ## Measured results (2026-07-15, macOS, system allocator, jobs=1)
 
-Diagnostics were byte-identical before/after on all six reference projects
-(auth-kit, ky, ofetch, trpc, unnamed, zod) at `--jobs 1`; `SURGE_TIMINGS`
+Diagnostics were byte-identical before/after on all five reference projects
+(ky, ofetch, trpc, unnamed, zod) at `--jobs 1`; `SURGE_TIMINGS`
 counter diffs on trpc showed every shared work counter within 2%, i.e. the
 region changes are work-neutral. Peak RSS (`/usr/bin/time -l`):
 
@@ -227,7 +228,6 @@ region changes are work-neutral. Peak RSS (`/usr/bin/time -l`):
 | --- | --- | --- | --- |
 | zod | 823MB | 775MB | stable profile; pre-check steady state −43MB |
 | trpc | 1.94GB | 1.83GB | high run-to-run variance, see below |
-| auth-kit | 166MB | 155MB | |
 | ofetch | 88MB | 84MB | |
 | ky | 66MB | 65MB | |
 | unnamed | 3.6GB | 3.6–5.1GB | inside its measured noise band |

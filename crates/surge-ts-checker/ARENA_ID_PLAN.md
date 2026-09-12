@@ -27,7 +27,6 @@ Reviewers should inspect these files together:
 - `crates/surge-ts-checker/src/symbols/type_declarations.rs`
 - `crates/surge-ts-checker/src/program/` (split into `mod.rs`, `binding.rs`, `statements.rs`, `globals.rs`, `ambient.rs`)
 - `REAL_PROJECT_COMPAT.md`
-- `.bench/auth-kit-measurement.md`
 
 ## v0.96 Evidence
 
@@ -162,8 +161,6 @@ Evidence:
 - `symbol_table_clone_count=9143` (unchanged; clones are now `Arc` bumps)
 - `symbol_table_entry_handle_copy_count=27698` (was `86782`)
 - `symbol_info_handle_copy_count=32988` (was `92072`)
-- `ts-rust` auth-kit median: `~0.20s` at `jobs=1`, `~0.19s` at `jobs=4`
-  (stable floor near `0.18s`), down from v1.2.4's `0.80s`/`0.78s`
 - exact diagnostics `0`, raw oracle match: yes
 - `TypeDeclarationTable` arena-backed: yes
 - `ObjectType`/`FunctionType`/`UnionType` handle-backed: yes
@@ -198,7 +195,6 @@ of rebuilding the flat visible map.
 - `symbol_table_entry_handle_copy_count=86782`
 - `scope_stack_visible_rebuild_count=0`
 - `scope_stack_visible_symbol_handle_copy_count=513`
-- `ts-rust` auth-kit median: `0.80s` at `jobs=1`, `0.78s` at `jobs=4`
 - wall-clock improved versus v1.2.3 but remains above v1.2.2
 - `TypeDeclarationTable` arena-backed: yes
 - `ObjectType` handle-backed: yes

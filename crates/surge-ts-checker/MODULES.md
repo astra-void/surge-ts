@@ -43,7 +43,7 @@ v1.2.5 memoizes relative module resolution per run: `resolve_relative_module` ca
 - Missing side-effect imports emit TS2882, matching TypeScript's priority for
   `import "pkg";` / `import "./missing";`.
 - Missing exported members emit TS2305.
-- Named missing exports from the `package-declarations` auth-kit fixture use TS2614 when TypeScript does.
+- Named missing exports from the `package-declarations` fixture use TS2614 when TypeScript does.
 - Unsupported module syntax stays parser-safe and is pinned with `surge::unsupported-module-syntax`.
 - `export * from` follows a pinned conflict policy: local explicit exports win, and the first star export wins when multiple star exports provide the same name.
 - Unresolved star re-exports are intentionally kept from cascading extra consumer diagnostics.
