@@ -74,8 +74,11 @@ tsc 4.68s / 680 MB.
 
 ## Follow-ups landed the same day
 
-Measured on the loaded machine only (load 60–100), so by instructions
-retired on tanstack-query, six corpora byte-identical throughout:
+Measured against the `003895f` binary (which carries items 1–4 and the
+annotated-body skip) on a loaded machine, so by instructions retired, six
+corpora byte-identical throughout. Items 6–9 together: tanstack-query
+5.81G → 5.21G (−10%), ofetch −8%, ky −7%, ts-pattern −6%, zod −4%,
+trpc −3%.
 
 5. **Export-collection shadow skips annotated arrow bodies.** An
    initializer's arrow with a written return type has its signature fixed by
@@ -89,7 +92,18 @@ retired on tanstack-query, six corpora byte-identical throughout:
    (`typescript.d.ts` for every `import * as ts` consumer).
 8. **`fast_process_exit`**: the CLI exits right after rendering, and the
    checker skips the end-of-run teardown when nothing observes it (off under
-   any RSS/timing/census instrumentation and for library callers).
+   any RSS/timing/census instrumentation and for library callers;
+   `surge_ts_checker::set_fast_process_exit`).
+9. **The per-file signature context no longer copies the run's accumulated
+   diagnostics** (`CheckerContext::clone_without_diagnostics`): the clone
+   cleared them right away, and copying then discarding them was
+   O(diagnostics so far) per file — a thousand files times a thousand
+   diagnostics on trpc.
+
+`pnpm run bench:tanstack-query` after items 5–9, load average 9, 5 runs:
+surge-ts 0.56s median / 191 MB against tsgo 0.60s / 494 MB, tsgo
+single-threaded 1.15s / 376 MB and tsc 4.84s / 683 MB. `--jobs 4` is slower
+(0.57–0.60s) than serial checking at this per-file cost; `auto` stays serial.
 
 ## Method notes
 
