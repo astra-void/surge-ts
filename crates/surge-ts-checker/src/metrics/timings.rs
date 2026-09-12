@@ -9,7 +9,7 @@ use surge_ts_types::{
     snapshot_union_type_counters,
 };
 
-use super::counters::snapshot_program_counters;
+use super::counters::{ProgramCounters, snapshot_program_counters};
 use super::rss::{
     current_footprint_bytes, current_rss_bytes, peak_footprint_bytes, peak_rss_bytes,
 };
@@ -195,6 +195,23 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         return;
     };
 
+    render_phase_durations(&timings);
+    render_io_counters();
+    render_file_metrics(&timings);
+    let counters = snapshot_program_counters();
+    render_file_and_arena_counters(&counters);
+    render_module_and_declaration_counters(&counters);
+    render_check_counters(&counters);
+    render_flow_counters(&counters);
+    render_symbol_and_export_counters(&counters);
+    render_cache_counters(&counters);
+    render_named_counters(&counters);
+    render_signature_counters(&counters);
+    render_function_type_counters();
+    render_union_type_counters();
+}
+
+fn render_phase_durations(timings: &ProgramTimings) {
     eprintln!("Timings:");
     eprintln!("  parsing: {}", format_duration(timings.parsing));
     eprintln!(
@@ -361,7 +378,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    flow_narrowing: {}",
         format_duration(timings.flow_narrowing)
     );
+}
 
+fn render_io_counters() {
     let io_counters = snapshot_program_counters();
     eprintln!("  io:");
     eprintln!(
@@ -398,7 +417,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    canonicalize_avg_syscall_time: {}",
         format_duration(canonicalize_avg_syscall)
     );
+}
 
+fn render_file_metrics(timings: &ProgramTimings) {
     if !timings.file_metrics.is_empty() {
         let mut file_metrics = timings.file_metrics.iter().collect::<Vec<_>>();
         file_metrics.sort_by(|(file_a, metrics_a), (file_b, metrics_b)| {
@@ -421,8 +442,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
             );
         }
     }
+}
 
-    let counters = snapshot_program_counters();
+fn render_file_and_arena_counters(counters: &ProgramCounters) {
     eprintln!("  counters:");
     eprintln!("    files_total: {}", counters.files_total);
     eprintln!("    root_source_files: {}", counters.root_source_files);
@@ -486,6 +508,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    function_type_alloc_count: {}",
         counters.function_type_alloc_count
     );
+}
+
+fn render_module_and_declaration_counters(counters: &ProgramCounters) {
     eprintln!(
         "    module_analysis_total_calls: {}",
         counters.module_analysis_total_calls
@@ -568,6 +593,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    declaration_lookup_layer_count_avg: {:.2}",
         declaration_lookup_avg
     );
+}
+
+fn render_check_counters(counters: &ProgramCounters) {
     eprintln!(
         "    expression_check_count: {}",
         counters.expression_check_count
@@ -689,6 +717,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    canonical_file_id_lookup_count: {}",
         counters.canonical_file_id_lookup_count
     );
+}
+
+fn render_flow_counters(counters: &ProgramCounters) {
     eprintln!("    flow_function_count: {}", counters.flow_function_count);
     eprintln!(
         "    flow_function_skipped_count: {}",
@@ -774,6 +805,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    flow_truthiness_check_count: {}",
         counters.flow_truthiness_check_count
     );
+}
+
+fn render_symbol_and_export_counters(counters: &ProgramCounters) {
     eprintln!(
         "    type_name_lookup_string_count: {}",
         counters.type_name_lookup_string_count
@@ -826,6 +860,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    module_export_namespace_export_object_property_count: {}",
         counters.module_export_namespace_export_object_property_count
     );
+}
+
+fn render_cache_counters(counters: &ProgramCounters) {
     eprintln!(
         "    generic_type_cache_hit_count: {}",
         counters.generic_type_cache_hit_count
@@ -922,6 +959,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    generic_instantiation_count: {}",
         counters.generic_instantiation_count
     );
+}
+
+fn render_named_counters(counters: &ProgramCounters) {
     for (name, count) in [
         (
             "interface_resolution_attempt_count",
@@ -1238,6 +1278,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     ] {
         eprintln!("    {name}: {count}");
     }
+}
+
+fn render_signature_counters(counters: &ProgramCounters) {
     eprintln!(
         "    lazy_intersection_create_count: {}",
         counters.lazy_intersection_create_count
@@ -1384,7 +1427,7 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     ];
     for (reason, count) in PEEL_REASONS
         .iter()
-        .zip(counters.lazy_reference_peel_reason_counts)
+        .zip(counters.lazy_reference_peel_reason_counts.iter().copied())
     {
         eprintln!("    lazy_reference_peel_reason_{reason}_count: {count}");
     }
@@ -1412,7 +1455,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    union_type_copy_from_expression_optional_call_return_count: {}",
         counters.union_type_copy_from_expression_optional_call_return_count
     );
+}
 
+fn render_function_type_counters() {
     let function_type_counters = snapshot_function_type_counters();
     eprintln!(
         "    function_type_payload_alloc_count: {}",
@@ -1512,7 +1557,9 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         "    function_type_copy_unattributed_count: {}",
         function_type_counters.function_type_copy_unattributed_count
     );
+}
 
+fn render_union_type_counters() {
     let union_type_counters = snapshot_union_type_counters();
     eprintln!(
         "    union_type_payload_alloc_count: {}",
