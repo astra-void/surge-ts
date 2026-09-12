@@ -1,0 +1,517 @@
+use std::sync::Arc;
+use surge_ts_syntax::{ParsedExpression, ParsedLogicalOperator, ParsedUnaryOperator};
+use surge_ts_types::{Type, TypeCopyReason, union_type, with_type_copy_reason};
+
+use crate::checks::expr::evaluate_expression;
+use crate::checks::ops;
+use crate::context::CheckerContext;
+use crate::infer::InferredExpression;
+use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
+use super::{
+    ReferenceGuard, collect_guard_operand_identifiers, collect_holding_guard_identifiers,
+    narrow_condition_symbol_table, narrow_reference_in_scope, reference_path,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TruthyGuardTarget {
+    Identifier(String),
+    Property { base: String, property: String },
+}
+
+pub(crate) fn narrow_truthy_guarded_identifiers(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+) {
+    let mut targets = Vec::new();
+    collect_truthy_guarded_identifiers(condition, &mut targets);
+
+    for target in targets {
+        let base_name = match &target {
+            TruthyGuardTarget::Identifier(name) => name,
+            TruthyGuardTarget::Property { base, .. } => base,
+        };
+
+        let Some(symbol) = scopes.resolve(base_name) else {
+            continue;
+        };
+
+        let narrowed = match &target {
+            TruthyGuardTarget::Identifier(_) => {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    surge_ts_types::remove_undefined(&symbol.ty)
+                })
+            }
+            TruthyGuardTarget::Property { property, .. } => {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    narrow_truthy_guarded_property(&symbol.ty, property)
+                })
+            }
+        };
+
+        if narrowed == symbol.ty {
+            continue;
+        }
+
+        let _ = scopes.update_visible(
+            base_name,
+            SymbolInfo {
+                ty: narrowed,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+        );
+    }
+}
+
+pub(crate) fn collect_truthy_guarded_identifiers(
+    condition: &ParsedExpression,
+    targets: &mut Vec<TruthyGuardTarget>,
+) {
+    match condition {
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::Or,
+            right,
+            ..
+        } => {
+            collect_truthy_guarded_identifiers(left, targets);
+            collect_truthy_guarded_identifiers(right, targets);
+        }
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => {
+            if let Some(target) = truthy_guard_target(operand) {
+                if !targets.contains(&target) {
+                    targets.push(target);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn truthy_guard_target(expression: &ParsedExpression) -> Option<TruthyGuardTarget> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => {
+            Some(TruthyGuardTarget::Identifier(name.clone()))
+        }
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        }
+        | ParsedExpression::OptionalPropertyAccess {
+            object,
+            property_name,
+            ..
+        } => truthy_guard_base_identifier(object).map(|base| TruthyGuardTarget::Property {
+            base,
+            property: property_name.clone(),
+        }),
+        ParsedExpression::NonNullAssertion { expression, .. } => truthy_guard_target(expression),
+        // `!!x` is `x`'s truthiness spelled out; as an `&&` operand it proves
+        // the same thing (`!!q && q.isFetched()`).
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => match operand.as_ref() {
+            ParsedExpression::Unary {
+                operator: ParsedUnaryOperator::Not,
+                operand: inner,
+                ..
+            } => truthy_guard_target(inner),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub(crate) fn truthy_guard_base_identifier(expression: &ParsedExpression) -> Option<String> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => Some(name.clone()),
+        ParsedExpression::NonNullAssertion { expression, .. } => {
+            truthy_guard_base_identifier(expression)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type {
+    let narrowed_base = surge_ts_types::remove_undefined(&ty.peeled());
+
+    match narrowed_base {
+        Type::Object(mut object_type) => {
+            if let Some(existing) = object_type.properties.get(property).cloned() {
+                let properties = Arc::make_mut(&mut object_type.properties);
+                properties.insert(
+                    property.into(),
+                    surge_ts_types::ObjectProperty {
+                        ty: surge_ts_types::remove_undefined(&existing.ty),
+                        optional: false,
+                        method: existing.method,
+                    },
+                );
+            }
+
+            Type::Object(object_type)
+        }
+        Type::Union(union) => union_type(
+            union
+                .types()
+                .iter()
+                .map(|member| narrow_truthy_guarded_property(member, property))
+                .collect(),
+        ),
+        _ => narrowed_base,
+    }
+}
+
+/// The `||` counterpart of [`narrow_truthy_operand_symbol_table`]: `a || b` only
+/// evaluates `b` when `a` is falsy, so `b` sees every guard `a`'s falsity proves.
+pub(crate) fn narrow_falsy_operand_symbol_table(
+    operand: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<SymbolTable> {
+    let structured = narrow_condition_symbol_table(operand, symbols, false);
+
+    let mut guarded_identifiers = Vec::new();
+    collect_holding_guard_identifiers(operand, false, &mut guarded_identifiers);
+    if guarded_identifiers.is_empty() {
+        return structured;
+    }
+
+    let base = structured.as_ref().unwrap_or(symbols);
+    let mut narrowed = base.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    let mut changed = structured.is_some();
+    for name in &guarded_identifiers {
+        let downgraded = narrowed.get(name).and_then(|symbol| {
+            matches!(symbol.ty, Type::GenuineUnknown).then(|| SymbolInfo {
+                ty: Type::Unknown,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            })
+        });
+        if let Some(downgraded) = downgraded {
+            narrowed.insert(name.clone(), downgraded);
+            changed = true;
+        }
+    }
+    changed.then_some(narrowed)
+}
+
+/// Collects the identifiers/properties an `&&` chain proves truthy, so the right
+/// side of `a.b && a.b > c` (and the then-branch) sees them non-nullish.
+pub(super) fn collect_and_chain_truthy_targets(
+    condition: &ParsedExpression,
+    targets: &mut Vec<TruthyGuardTarget>,
+) {
+    if let ParsedExpression::Logical {
+        left,
+        operator: ParsedLogicalOperator::And,
+        right,
+        ..
+    } = condition
+    {
+        collect_and_chain_truthy_targets(left, targets);
+        collect_and_chain_truthy_targets(right, targets);
+    } else if let Some(target) = truthy_guard_target(condition) {
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+}
+
+pub(crate) fn narrow_truthy_operand_symbol_table(
+    operand: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<SymbolTable> {
+    let structured = narrow_condition_symbol_table(operand, symbols, true);
+
+    let mut targets = Vec::new();
+    collect_and_chain_truthy_targets(operand, &mut targets);
+
+    // Identifiers the left side guards as a whole value — `typeof x === "object"`,
+    // `"p" in x`, `x instanceof C`, `Array.isArray(x)`, and a bare truthy `x`.
+    // A guard on a genuinely-`unknown` value (`x: unknown`) makes tsc narrow it,
+    // so a later access (`typeof x === "object" && "p" in x && x.p`) is not a
+    // `TS18046`. surge does not compute the narrowed shape for `unknown`, but it
+    // must at least stop treating the value as a genuine-unknown receiver — drop
+    // it to the degradation sentinel so the property-access check stays silent,
+    // matching tsc's no-cascade behavior.
+    let mut guarded_identifiers = Vec::new();
+    collect_guard_operand_identifiers(operand, &mut guarded_identifiers);
+    for target in &targets {
+        if let TruthyGuardTarget::Identifier(name) = target {
+            if !guarded_identifiers.iter().any(|existing| existing == name) {
+                guarded_identifiers.push(name.clone());
+            }
+        }
+    }
+
+    if targets.is_empty() && guarded_identifiers.is_empty() {
+        return structured;
+    }
+
+    let base = structured.as_ref().unwrap_or(symbols);
+    let mut narrowed = base.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    let mut changed = structured.is_some();
+
+    for name in &guarded_identifiers {
+        let downgraded = narrowed.get(name).and_then(|symbol| {
+            matches!(symbol.ty, Type::GenuineUnknown).then(|| SymbolInfo {
+                ty: Type::Unknown,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            })
+        });
+        if let Some(downgraded) = downgraded {
+            narrowed.insert(name.clone(), downgraded);
+            changed = true;
+        }
+    }
+    for target in targets {
+        let base_name = match &target {
+            TruthyGuardTarget::Identifier(name) => name,
+            TruthyGuardTarget::Property { base, .. } => base,
+        };
+        let Some(symbol) = narrowed.get(base_name) else {
+            continue;
+        };
+        let new_ty = match &target {
+            TruthyGuardTarget::Identifier(_) => {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    surge_ts_types::remove_nullish(&symbol.ty)
+                })
+            }
+            TruthyGuardTarget::Property { property, .. } => {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    narrow_truthy_guarded_property(&symbol.ty, property)
+                })
+            }
+        };
+        if new_ty == symbol.ty {
+            continue;
+        }
+        changed = true;
+        let declared = symbol.ty.clone();
+        let narrowed_symbol = SymbolInfo {
+            ty: new_ty,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        narrowed.insert_narrowed(base_name.clone(), narrowed_symbol, declared);
+    }
+
+    changed.then_some(narrowed)
+}
+
+/// Positive truthy narrowing of a reference guard (`if (x) { … }`,
+/// `if (o.p) { … }`, `if (this.p) { … }`): the true branch drops the nullish
+/// members (`undefined`/`void`) the truthy test excludes, so a `T | undefined`
+/// callee/value/property resolves to `T` inside the block. Only the true branch
+/// narrows; the falsy complement (`""`, `0`, `false`, …) is not modelled, so the
+/// false branch keeps the original type. The `!guard` unwrap in
+/// [`narrow_discriminant_in_scope`] routes `if (!x)` else/fall-through here with
+/// `branch_is_true` already flipped. Returns whether the condition was such a
+/// reference (always handled, so equality-discriminant parsing is skipped).
+pub(super) fn narrow_truthy_reference_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    // `if (a?.b())` proves `a` non-nullish in the true branch: had it been
+    // nullish the whole chain would short-circuit to `undefined` and the test
+    // would be false. `reference_path` stops at the call, so unwrap to its
+    // receiver first.
+    let condition = match condition {
+        ParsedExpression::OptionalPropertyCall { object, .. }
+        | ParsedExpression::OptionalCall { callee: object, .. } => object.as_ref(),
+        other => other,
+    };
+    let Some((base, path)) = reference_path(condition) else {
+        return false;
+    };
+    // `if (!merged.valid) throw` discriminates a union by a boolean *literal*
+    // member, which the leaf-level truthy guard cannot express: it narrows the
+    // property in place instead of dropping the members the test rules out.
+    narrow_union_by_property_truthiness_in_scope(&base, &path, branch_is_true, scopes);
+    if branch_is_true {
+        narrow_reference_in_scope(&base, &path, ReferenceGuard::Truthy, scopes);
+    }
+    true
+}
+
+/// Whether the type at `path` inside `member` is always truthy (`Some(true)`),
+/// always falsy (`Some(false)`), or undecidable (`None`). An optional segment
+/// may be absent, so below it only a leaf that is itself falsy decides.
+pub(super) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
+    let mut current = member.peeled();
+    let mut optional = false;
+    for segment in path {
+        let Type::Object(object) = &current else {
+            return None;
+        };
+        let property = object.properties.get(segment.as_str())?;
+        optional |= property.is_optional();
+        current = property.ty.peeled();
+    }
+    let leaf = type_truthiness(&current)?;
+    (!optional || !leaf).then_some(leaf)
+}
+
+/// tsc's truthiness facts for a type: every unit type decides, a callable or a
+/// shape with at least one member is always truthy, and a union decides only
+/// when all of its members agree. `{}` admits `""` and `0`, so a memberless
+/// object stays undecided.
+pub(super) fn type_truthiness(ty: &Type) -> Option<bool> {
+    match ty {
+        Type::BooleanLiteral(value) => Some(*value),
+        Type::StringLiteral(value) => Some(!value.is_empty()),
+        Type::NumberLiteral(literal) => Some(literal.value.parse::<f64>().ok()? != 0.0),
+        Type::Undefined | Type::Void | Type::Never => Some(false),
+        Type::Function(_) | Type::Array(_) | Type::Tuple(_) => Some(true),
+        Type::Object(object) => (!object.properties.is_empty()
+            || object.call_signature().is_some()
+            || object.construct_signature().is_some())
+        .then_some(true),
+        Type::Union(union) => {
+            let mut members = union.types().iter().map(|member| type_truthiness(&member.peeled()));
+            let first = members.next()??;
+            members.all(|member| member == Some(first)).then_some(first)
+        }
+        Type::Reference(_) => type_truthiness(&ty.peeled()),
+        _ => None,
+    }
+}
+
+/// Drops the union members a truthiness test on `path` rules out. Leaves a
+/// non-union base, and any member whose leaf is not a unit type, untouched.
+pub(super) fn narrow_union_by_property_truthiness_in_scope(
+    base: &str,
+    path: &[String],
+    branch_is_true: bool,
+    scopes: &mut ScopeStack,
+) {
+    if path.is_empty() {
+        return;
+    }
+    let Some(symbol) = scopes.resolve(base) else {
+        return;
+    };
+    let peeled = symbol.ty.peeled();
+    let Type::Union(union) = &peeled else {
+        return;
+    };
+    // Decide before cloning: the overwhelmingly common case is a union the test
+    // does not partition at all, and building the kept vector first paid a full
+    // member clone for every one of them.
+    let dropped = union
+        .types()
+        .iter()
+        .filter(|member| path_truthiness(member, path) == Some(!branch_is_true))
+        .count();
+    if dropped == 0 || dropped == union.types().len() {
+        return;
+    }
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| path_truthiness(member, path) != Some(!branch_is_true))
+        .cloned()
+        .collect();
+    let declared = symbol.ty.clone();
+    let narrowed_symbol = SymbolInfo {
+        ty: union_type(kept),
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let _ = scopes.insert_current_narrowed(base.to_string(), narrowed_symbol, declared);
+}
+
+pub(crate) fn evaluate_condition_expression_with_truthy_guards(
+    expression: &ParsedExpression,
+    fallback_span: Option<surge_ts_syntax::TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    match expression {
+        ParsedExpression::Logical {
+            left,
+            left_span,
+            operator: ParsedLogicalOperator::Or,
+            right,
+            right_span,
+            ..
+        } => {
+            let left_result = evaluate_condition_expression_with_truthy_guards(
+                left,
+                left_span.or(fallback_span),
+                symbols,
+                ctx,
+            );
+            // `b` in `a || b` runs only when `a` is falsy, so it also sees the
+            // guards that falsity proves.
+            let falsy = narrow_falsy_operand_symbol_table(left, symbols);
+            let narrowed_symbols =
+                narrow_truthy_guarded_symbol_table(left, falsy.as_ref().unwrap_or(symbols));
+            let right_result = evaluate_condition_expression_with_truthy_guards(
+                right,
+                right_span.or(fallback_span),
+                &narrowed_symbols,
+                ctx,
+            );
+            ops::evaluate_logical_expression(ParsedLogicalOperator::Or, left_result, right_result)
+        }
+        _ => evaluate_expression(expression, fallback_span, symbols, ctx),
+    }
+}
+
+pub(crate) fn narrow_truthy_guarded_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> SymbolTable {
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    let mut targets = Vec::new();
+    collect_truthy_guarded_identifiers(condition, &mut targets);
+
+    for target in targets {
+        let base_name = match &target {
+            TruthyGuardTarget::Identifier(name) => name,
+            TruthyGuardTarget::Property { base, .. } => base,
+        };
+
+        let Some(symbol) = narrowed_symbols.get(base_name) else {
+            continue;
+        };
+
+        let narrowed = match &target {
+            TruthyGuardTarget::Identifier(_) => {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    surge_ts_types::remove_undefined(&symbol.ty)
+                })
+            }
+            TruthyGuardTarget::Property { property, .. } => {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    narrow_truthy_guarded_property(&symbol.ty, property)
+                })
+            }
+        };
+
+        if narrowed == symbol.ty {
+            continue;
+        }
+
+        let declared = symbol.ty.clone();
+        let narrowed_symbol = SymbolInfo {
+            ty: narrowed,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        narrowed_symbols.insert_narrowed(base_name.clone(), narrowed_symbol, declared);
+    }
+
+    narrowed_symbols
+}
