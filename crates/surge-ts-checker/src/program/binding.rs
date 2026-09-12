@@ -439,18 +439,29 @@ fn analyze_module(
                 let _ = import_seed.insert_shared(name.clone(), symbol.clone());
             }
         }
-        let split_start = analyze_split_enabled().then(Instant::now);
-        ctx.thin_superseded_value_collection = !lower_global_augmentation_values;
-        crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "seed");
-        let value_env = crate::modules::collect_exportable_value_symbols(
-            &parsed_file.statements,
-            local_type_declarations.as_ref(),
-            &import_seed,
-            None,
-            ctx,
-        );
-        ctx.thin_superseded_value_collection = false;
-        analyze_split_record(0, split_start);
+        // Signature collection reads a value symbol in exactly two places: a
+        // `typeof x` annotation and a class whose heritage names a value
+        // (`class D extends mixin()`). A file with neither gets the imports
+        // alone; inferring every initializer for it would only be redone by
+        // `build_module_export_table` a moment later.
+        let seed_needed = parsed_file.contains_typeof
+            || statements_declare_class_with_heritage(&parsed_file.statements);
+        let value_env = if seed_needed {
+            let split_start = analyze_split_enabled().then(Instant::now);
+            ctx.thin_superseded_value_collection = !lower_global_augmentation_values;
+            let value_env = crate::modules::collect_exportable_value_symbols(
+                &parsed_file.statements,
+                local_type_declarations.as_ref(),
+                &import_seed,
+                None,
+                ctx,
+            );
+            ctx.thin_superseded_value_collection = false;
+            analyze_split_record(0, split_start);
+            value_env
+        } else {
+            import_seed
+        };
         for (name, symbol) in value_env.iter_shared() {
             let _ = signature_env.insert_shared(name.clone(), symbol.clone());
             seeded_names.insert(name.clone());
@@ -1898,4 +1909,21 @@ pub(crate) fn merge_module_import_bindings(
             Some(merged_bindings)
         })
         .collect()
+}
+
+fn statements_declare_class_with_heritage(statements: &[ParsedStatement]) -> bool {
+    statements.iter().any(|statement| match statement {
+        ParsedStatement::ClassDeclaration(class) => !class.extends.is_empty(),
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                statements_declare_class_with_heritage(std::slice::from_ref(declaration))
+            }
+            ParsedExportDeclaration::Default {
+                declaration: surge_ts_syntax::ParsedDefaultExportDeclaration::Class(class),
+                ..
+            } => !class.extends.is_empty(),
+            _ => false,
+        },
+        _ => false,
+    })
 }

@@ -369,16 +369,6 @@ fn object_with_namespace_members(
     merged
 }
 
-thread_local! {
-    pub(crate) static VC_TRACE_PASS: std::cell::RefCell<&'static str> = const { std::cell::RefCell::new("none") };
-    pub(crate) static VC_TRACE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-pub(crate) fn vc_trace_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("SURGE_VC_TRACE_TMP").is_some())
-}
-
 pub(crate) fn collect_exportable_value_symbols(
     statements: &[ParsedStatement],
     local_type_declarations: &TypeDeclarationTable,
@@ -389,23 +379,6 @@ pub(crate) fn collect_exportable_value_symbols(
     if thin_prelim_enabled() && ctx.thin_superseded_value_collection {
         return collect_exportable_value_symbols_thin(statements, local_symbols, ctx);
     }
-    let vc_start = std::time::Instant::now();
-    VC_TRACE_DEPTH.with(|d| d.set(d.get() + 1));
-    let result = collect_exportable_value_symbols_inner(statements, local_type_declarations, local_symbols, imported_symbols, ctx);
-    VC_TRACE_DEPTH.with(|d| d.set(d.get() - 1));
-    if vc_trace_enabled() {
-        eprintln!("[vc-call] pass={} us={} file={}", VC_TRACE_PASS.with(|p| *p.borrow()), vc_start.elapsed().as_micros(), ctx.file_name.rsplit('/').next().unwrap_or(""));
-    }
-    result
-}
-
-fn collect_exportable_value_symbols_inner(
-    statements: &[ParsedStatement],
-    local_type_declarations: &TypeDeclarationTable,
-    local_symbols: &SymbolTable,
-    imported_symbols: Option<&SymbolTable>,
-    ctx: &CheckerContext,
-) -> SymbolTable {
     let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(ctx.file_name.clone(), FileKind::RootSource);
     let mut shadow_ctx = CheckerContext::new_with_shared_options(

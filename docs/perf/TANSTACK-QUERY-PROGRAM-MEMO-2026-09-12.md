@@ -72,6 +72,25 @@ tsc 4.68s / 680 MB.
    open. A spread of surge's own degradation sentinel keeps the literal open.
    Fixture: `object-spread-any-source-basic`.
 
+## Follow-ups landed the same day
+
+Measured on the loaded machine only (load 60–100), so by instructions
+retired on tanstack-query, six corpora byte-identical throughout:
+
+5. **Export-collection shadow skips annotated arrow bodies.** An
+   initializer's arrow with a written return type has its signature fixed by
+   annotations, and the shadow context discards diagnostics, so its body
+   check there was pure cost (`skip_annotated_function_bodies`). −5.5%.
+6. **The analysis-round value seed runs only where signature collection can
+   read a value**: a file containing `typeof`, or a class whose heritage
+   names a value. 177 → 57 seeded files. −8%.
+7. **`export =` alias adoption shares declaration handles** instead of
+   deep-cloning every entry of the target namespace into a first-wins insert
+   (`typescript.d.ts` for every `import * as ts` consumer).
+8. **`fast_process_exit`**: the CLI exits right after rendering, and the
+   checker skips the end-of-run teardown when nothing observes it (off under
+   any RSS/timing/census instrumentation and for library callers).
+
 ## Method notes
 
 - Every A/B was two arms of one binary (env gates) or two snapshot binaries

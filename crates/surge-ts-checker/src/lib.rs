@@ -35,6 +35,7 @@ mod symbols;
 
 pub use api::{CheckResult, Checker};
 pub use context::{CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind};
+pub use program::set_fast_process_exit;
 pub use program::{ProgramCheckResult, SourceFileInput};
 
 /// Diagnostic types are re-exported so embedders can read [`Checker`] output
@@ -55,9 +56,10 @@ pub use program::{
 /// surface — these shapes can change without a major-version bump.
 pub mod lowlevel {
     pub use crate::default_lib::{
-        DefaultLibIoStats, DefaultLibLoad, DefaultLibRequest, PhysicalLibResolution,
-        default_full_lib_seed_for_target, load_default_lib_inputs,
-        load_generated_default_lib_inputs, resolve_physical_default_libs,
+        DefaultLibIoStats, DefaultLibLoad, DefaultLibRequest, DirectoryLibSource, EMBEDDED_LIB_DIR,
+        EmbeddedLib, EmbeddedLibSource, LibSource, LibSourceChoice, PhysicalLibResolution,
+        bundled_typescript_version, default_full_lib_seed_for_target, find_typescript_lib_dir,
+        load_default_lib_inputs, load_generated_default_lib_inputs,
     };
     pub use crate::metrics::record_loader_rss_stage;
     pub use crate::program::check_program_with_prescanned_sources;

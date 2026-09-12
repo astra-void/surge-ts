@@ -1583,6 +1583,20 @@ impl CheckerContext {
         self.lowest_cycle_target_index = self.lowest_cycle_target_index.min(target_index);
     }
 
+    /// A per-file scratch clone that does not copy the run's accumulated
+    /// diagnostics or their dedup index — the caller clears both right away,
+    /// and copying then discarding them was O(diagnostics so far) per file.
+    pub(crate) fn clone_without_diagnostics(&mut self) -> Self {
+        let diagnostics = std::mem::take(&mut self.diagnostics);
+        let diagnostic_keys = std::mem::take(&mut self.diagnostic_keys);
+        let diagnostic_keys_len = std::mem::replace(&mut self.diagnostic_keys_len, 0);
+        let clone = self.clone();
+        self.diagnostics = diagnostics;
+        self.diagnostic_keys = diagnostic_keys;
+        self.diagnostic_keys_len = diagnostic_keys_len;
+        clone
+    }
+
     pub(crate) fn declaration_environment(&self) -> DeclarationEnvironmentHandle {
         self.declaration_environment_store.intern(self)
     }

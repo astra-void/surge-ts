@@ -38,6 +38,8 @@ pub use surge_ts_checker::{
 pub use surge_ts_config::{ConfigDiagnostic, LoadedTsConfig, ScriptTarget, TsConfigLoadOptions};
 
 use surge_ts_checker::lowlevel::{DefaultLibRequest, load_default_lib_inputs};
+
+pub use surge_ts_checker::lowlevel::LibSourceChoice;
 use surge_ts_config::{canonicalize_if_exists_string, load_tsconfig};
 
 /// A resolved project source file: `(path, canonical file name, source text)`.
@@ -56,10 +58,10 @@ pub struct ProjectOptions {
     pub stub_external_modules: bool,
     /// `Tsc` (default) or `Native` diagnostic output.
     pub diagnostic_profile: DiagnosticProfile,
-    /// Whether physical `lib*.d.ts` loading was explicitly requested. Physical
-    /// loading is the default; this only controls whether a fallback warning is
-    /// surfaced when the TypeScript package is missing.
-    pub physical_libs_requested: bool,
+    /// Where the standard library is loaded from. Defaults to the bundled,
+    /// version-pinned snapshot compiled into the binary; an installed
+    /// `typescript` package is used only when explicitly selected.
+    pub lib_source: LibSourceChoice,
     /// Populate [`ProjectCheckResult::timings`]. Off by default to avoid the
     /// per-step `Instant` and global counter overhead.
     pub collect_timings: bool,
@@ -70,6 +72,10 @@ pub struct ProjectOptions {
     /// diagnostics are re-read from disk afterwards. Consumers that re-parse
     /// every source (`--compatReport`) must opt in.
     pub retain_all_sources: bool,
+    /// The caller will `std::process::exit` right after consuming the result,
+    /// so the checker may skip its end-of-run teardown. See
+    /// [`surge_ts_checker::set_fast_process_exit`].
+    pub fast_process_exit: bool,
 }
 
 impl Default for ProjectOptions {
@@ -78,8 +84,9 @@ impl Default for ProjectOptions {
             jobs: 0,
             stub_external_modules: false,
             diagnostic_profile: DiagnosticProfile::default(),
-            physical_libs_requested: false,
+            lib_source: LibSourceChoice::default(),
             collect_timings: false,
+            fast_process_exit: false,
             retain_all_sources: false,
         }
     }
@@ -263,19 +270,17 @@ impl Project {
             lib_entries: loaded.compiler_options.lib.as_slice(),
             root_dir: &loaded.root_dir,
             target_basename: target_lib_basename(loaded.compiler_options.target),
+            source: options.lib_source.clone(),
         });
         for unknown in &default_lib_load.unknown_libs {
             warnings.push(format!(
                 "unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
             ));
         }
-        if options.physical_libs_requested
-            && !default_lib_load.used_physical
+        if let Some(error) = &default_lib_load.override_error
             && !loaded.compiler_options.no_lib
         {
-            warnings.push(
-                "--physicalLibs requested but no TypeScript package was found under node_modules; falling back to the generated default-lib subset".to_string(),
-            );
+            warnings.push(error.clone());
         }
         let default_lib_io = default_lib_load.io_stats;
         let default_lib_inputs = default_lib_load.inputs;
@@ -517,6 +522,7 @@ impl Project {
             );
         }
 
+        surge_ts_checker::set_fast_process_exit(options.fast_process_exit);
         let checker_options = CheckerOptions {
             no_implicit_any: loaded.compiler_options.no_implicit_any,
             no_implicit_returns: loaded.compiler_options.no_implicit_returns,

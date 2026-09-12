@@ -13,7 +13,7 @@ use report::{
     render_project_diagnostics_preview,
 };
 use serde_json::{Map, Value};
-use surge_ts::{Checker, CheckerOptions, Project, ProjectOptions, ProjectTimings};
+use surge_ts::{Checker, CheckerOptions, LibSourceChoice, Project, ProjectOptions, ProjectTimings};
 use surge_ts_config::canonicalize_if_exists_string;
 use surge_ts_diagnostics::{
     Diagnostic, DiagnosticCode, TscRenderItem, TscRenderOptions, render_diagnostics,
@@ -224,12 +224,19 @@ struct Cli {
     #[arg(long = "noLib")]
     no_lib: bool,
 
-    /// Debug aid: physical TypeScript `lib*.d.ts` loading is the default, so this
-    /// flag is no longer required. When set (or via a `.physicalLibs` marker or
-    /// the `SURGE_PHYSICAL_LIBS` env var), a warning is emitted if the
-    /// TypeScript package cannot be found and the generated subset is used.
+    /// Load the standard library from the project's installed TypeScript
+    /// instead of the bundled snapshot, discovered by walking up from the
+    /// project root to a `node_modules/typescript/lib`. Also settable via a
+    /// `.physicalLibs` marker file beside the resolved `tsconfig.json` or the
+    /// `SURGE_PHYSICAL_LIBS` env var. A warning is emitted if no such package
+    /// is found; the bundled snapshot is used in that case.
     #[arg(long = "physicalLibs")]
     physical_libs: bool,
+
+    /// Load the standard library from this directory of `lib.*.d.ts` files
+    /// instead of the bundled snapshot. Takes precedence over `--physicalLibs`.
+    #[arg(long = "typescript-lib-path", value_name = "DIR")]
+    typescript_lib_path: Option<PathBuf>,
 
     #[arg(long, hide = true)]
     timings: bool,
@@ -325,6 +332,7 @@ fn main() -> ExitCode {
                 .unwrap_or(CliDiagnosticProfile::Tsc)
                 .into(),
             cli.physical_libs,
+            cli.typescript_lib_path,
             cli.timings,
             report_request,
         );
@@ -570,11 +578,26 @@ fn render_single_file_diagnostics_tsc(
     out
 }
 
-/// Whether physical TypeScript `lib*.d.ts` loading was explicitly requested via
-/// the `--physicalLibs` flag, a `.physicalLibs` marker file beside the resolved
-/// `tsconfig.json`, or the `SURGE_PHYSICAL_LIBS` env var. Physical
-/// loading is now the default; this only controls whether a fallback warning is
-/// surfaced when the TypeScript package is missing.
+/// Pick the standard-library source. An explicit directory wins over
+/// `--physicalLibs` discovery, which in turn wins over the bundled snapshot, so
+/// the selected source never depends on what happens to be installed unless the
+/// user asked for it.
+fn resolve_lib_source(
+    typescript_lib_path: Option<PathBuf>,
+    installed_typescript_requested: bool,
+) -> LibSourceChoice {
+    if let Some(dir) = typescript_lib_path {
+        return LibSourceChoice::Directory(dir);
+    }
+    if installed_typescript_requested {
+        return LibSourceChoice::InstalledTypeScript;
+    }
+    LibSourceChoice::Bundled
+}
+
+/// Whether the project's installed TypeScript was explicitly requested via the
+/// `--physicalLibs` flag, a `.physicalLibs` marker file beside the resolved
+/// `tsconfig.json`, or the `SURGE_PHYSICAL_LIBS` env var.
 fn physical_libs_explicitly_requested(cli_flag: bool, config_path: &std::path::Path) -> bool {
     if cli_flag {
         return true;
@@ -602,6 +625,7 @@ fn run_project_mode(
     stub_external_modules: bool,
     diagnostic_profile: surge_ts_checker::DiagnosticProfile,
     physical_libs_flag: bool,
+    typescript_lib_path: Option<PathBuf>,
     timings_enabled: bool,
     report_request: run_report::ReportRequest,
 ) -> ExitCode {
@@ -671,13 +695,14 @@ fn run_project_mode(
         jobs,
         stub_external_modules,
         diagnostic_profile,
-        physical_libs_requested: physical_libs_explicitly_requested(
-            physical_libs_flag,
-            &loaded.config_path,
+        lib_source: resolve_lib_source(
+            typescript_lib_path,
+            physical_libs_explicitly_requested(physical_libs_flag, &loaded.config_path),
         ),
         collect_timings,
         // The compatibility report re-parses every source text.
         retain_all_sources: compat_report,
+        fast_process_exit: !collect_timings,
     };
 
     let result = match project.check(&options) {
@@ -730,6 +755,11 @@ fn run_project_mode(
     }
     if timings_enabled {
         render_cli_timings(&timings);
+    }
+    if options.fast_process_exit {
+        // Everything the run produced has been written; dropping the parsed
+        // program, the sources and the diagnostics only delays the exit.
+        std::process::exit(if exit_code == ExitCode::SUCCESS { 0 } else { 2 });
     }
     exit_code
 }

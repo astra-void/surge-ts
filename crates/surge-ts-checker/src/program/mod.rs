@@ -1155,7 +1155,6 @@ fn check_program_with_stats_and_jobs_inner(
             }
             ctx.file_name = parsed_file.file_name.clone();
             ctx.type_declarations = analysis.local_type_declarations.as_ref().clone();
-            crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "lv");
         let table = crate::modules::collect_exportable_value_symbols(
                 &parsed_file.statements,
                 &analysis.local_type_declarations,
@@ -1266,8 +1265,18 @@ fn check_program_with_stats_and_jobs_inner(
     // program state and every remaining parse tree are dead. Dropping them here
     // (rather than at function exit, after the finish measurements) makes the
     // finish footprint reflect what a long-lived host would actually retain.
-    drop(shared_state);
-    drop(parsed_files);
+    let skip_teardown = fast_process_exit()
+        && timings.is_none()
+        && !crate::metrics::rss_stages_enabled()
+        && !crate::metrics::retention_census_enabled()
+        && !type_graph_census_enabled();
+    if skip_teardown {
+        std::mem::forget(shared_state);
+        std::mem::forget(parsed_files);
+    } else {
+        drop(shared_state);
+        drop(parsed_files);
+    }
 
     if timings.is_some() {
         let cache_stats = ctx.program_cache_stats();
@@ -1279,17 +1288,19 @@ fn check_program_with_stats_and_jobs_inner(
     let substitution_store_stats = ctx.substitution_store.stats();
     emit_type_graph_census("before_cache_cleanup", Some(&ctx), &store, census_external);
     set_check_phase(false);
-    ctx.clear_program_type_caches();
-    store.clear();
-    // The run-scoped thread-local caches are otherwise cleared only at the
-    // START of the next run, so in a one-shot process they survive to exit —
-    // the namespace-alias tables in particular retain whole per-module
-    // declaration tables.
-    crate::paths::clear_canonicalize_cache();
-    crate::modules::clear_relative_module_cache();
-    crate::modules::clear_star_export_unresolved_cache();
-    crate::modules::clear_namespace_alias_table_cache();
-    crate::metrics::release_free_memory();
+    if !skip_teardown {
+        ctx.clear_program_type_caches();
+        store.clear();
+        // The run-scoped thread-local caches are otherwise cleared only at the
+        // START of the next run, so in a one-shot process they survive to exit —
+        // the namespace-alias tables in particular retain whole per-module
+        // declaration tables.
+        crate::paths::clear_canonicalize_cache();
+        crate::modules::clear_relative_module_cache();
+        crate::modules::clear_star_export_unresolved_cache();
+        crate::modules::clear_namespace_alias_table_cache();
+        crate::metrics::release_free_memory();
+    }
     emit_type_graph_census("after_cache_cleanup", Some(&ctx), &store, census_external);
     emit_type_graph_census("before_process_exit", Some(&ctx), &store, census_external);
     crate::context::report_local_values_consults(ctx.module_local_values_by_file.len());
@@ -2829,7 +2840,6 @@ fn check_program_file(
         let current_symbols = ctx
             .symbols
             .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-        crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "cv");
         let validation_symbols = crate::modules::collect_exportable_value_symbols(
             &parsed_file.statements,
             &current_type_declarations,
@@ -2860,8 +2870,7 @@ fn check_program_file(
 
         let validation_symbols = std::mem::replace(&mut ctx.symbols, saved_symbols);
 
-        let mut signature_ctx = ctx.clone();
-        signature_ctx.diagnostics.clear();
+        let mut signature_ctx = ctx.clone_without_diagnostics();
         signature_ctx.reset_utility_diagnostic_keys();
         signature_ctx.resolved_named_types =
             std::sync::Arc::new(std::sync::Mutex::new(Default::default()));
@@ -2944,7 +2953,6 @@ fn check_program_file(
         let current_symbols = ctx
             .symbols
             .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-        crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "cv");
         let validation_symbols = crate::modules::collect_exportable_value_symbols(
             &parsed_file.statements,
             &current_type_declarations,
@@ -3028,4 +3036,20 @@ fn clone_type_declaration_table(
 ) -> TypeDeclarationTable {
     record_type_declaration_table_clone(timings, table.len(), kind);
     table.clone()
+}
+
+static FAST_PROCESS_EXIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The caller exits the process as soon as the result is rendered, so the
+/// end-of-run teardown — dropping the parsed program and clearing every
+/// program-lifetime cache — is work nothing will observe. Library callers that
+/// keep the process alive must leave this off: the teardown is what bounds a
+/// second run's memory. Ignored while any RSS, timing, or census
+/// instrumentation is on, since those report the teardown itself.
+pub fn set_fast_process_exit(enabled: bool) {
+    FAST_PROCESS_EXIT.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn fast_process_exit() -> bool {
+    FAST_PROCESS_EXIT.load(std::sync::atomic::Ordering::Relaxed)
 }

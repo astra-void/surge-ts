@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use super::provider::LibSource;
 use crate::SourceFileInput;
 
 /// Filesystem I/O incurred while discovering and loading the physical lib graph.
@@ -19,12 +19,14 @@ pub struct DefaultLibIoStats {
     pub canonicalize_syscalls: u64,
 }
 
-/// Marks a file path as a physical TypeScript default-lib declaration file.
+/// Marks a file as a full-fidelity TypeScript default-lib declaration file.
 ///
-/// Physical lib inputs always live under `.../node_modules/typescript/lib/` and
-/// are named `lib.<name>.d.ts`. Classifying them by path keeps the routing
-/// self-describing: when physical mode is off these files are simply never
-/// injected, so this predicate cannot misfire on ordinary projects.
+/// Two identities qualify: the embedded snapshot under `<surge-lib>/`, and an
+/// on-disk `.../typescript/lib/lib.<name>.d.ts` from an explicit override. Both
+/// are real upstream lib text, so they take the same resolution path; the
+/// separate `is_generated_default_lib_file_name` routing is the older degraded
+/// subset and stays distinct. Neither shape can name a file in an ordinary
+/// project, so this predicate cannot misfire on user sources.
 pub fn is_physical_default_lib_file_name(file_name: &str) -> bool {
     crate::default_lib::source::default_lib_name_flags(file_name).1
 }
@@ -54,6 +56,9 @@ pub(crate) fn is_physical_default_lib_file_name_uncached(file_name: &str) -> boo
                 .zip(prefix)
                 .all(|(&h, &s)| norm(h) == s)
     }
+    if crate::default_lib::embedded::is_embedded_default_lib_file_name_uncached(file_name) {
+        return true;
+    }
     let bytes = file_name.as_bytes();
     let Some(idx) = bytes.iter().rposition(|&b| b == b'/' || b == b'\\') else {
         return false;
@@ -78,37 +83,24 @@ pub struct PhysicalLibResolution {
     pub io_stats: DefaultLibIoStats,
 }
 
-/// Resolve and load the physical default libs for a project rooted at
-/// `root_dir`.
+/// Locate an on-disk TypeScript `lib/` directory by walking up from `root_dir`.
 ///
-/// * `no_lib` short-circuits to an empty resolution (still `Some`, so callers
-///   do not fall back to the generated subset).
+/// Only the explicit override path uses this; the default source is the
+/// embedded snapshot, so an installed `typescript` package never silently
+/// changes which declarations a project is checked against.
+pub fn find_typescript_lib_dir(root_dir: &Path) -> Option<PathBuf> {
+    let mut io_stats = DefaultLibIoStats::default();
+    find_typescript_lib_dir_from(root_dir, &mut io_stats)
+}
+
+/// Resolve and load the default libs for a project from `source`.
+///
+/// * `no_lib` short-circuits to an empty resolution.
 /// * `lib_entries` mirrors `compilerOptions.lib`. When empty, `default_seed`
 ///   (typically the target's `.full` aggregate, e.g. `"es2024.full"`) is used,
 ///   matching how `tsc` derives the default lib from `target`.
-///
-/// Returns `None` only when the TypeScript package cannot be located, signalling
-/// callers to fall back to the generated subset.
-pub fn resolve_physical_default_libs(
-    root_dir: &Path,
-    no_lib: bool,
-    lib_entries: &[String],
-    default_seed: &str,
-) -> Option<PhysicalLibResolution> {
-    let mut io_stats = DefaultLibIoStats::default();
-    let lib_dir = find_typescript_lib_dir(root_dir, &mut io_stats)?;
-
-    Some(resolve_default_libs_from_lib_dir(
-        lib_dir,
-        no_lib,
-        lib_entries,
-        default_seed,
-        io_stats,
-    ))
-}
-
-pub(crate) fn resolve_default_libs_from_lib_dir(
-    lib_dir: PathBuf,
+pub(crate) fn resolve_default_libs_from_source(
+    source: &dyn LibSource,
     no_lib: bool,
     lib_entries: &[String],
     default_seed: &str,
@@ -132,7 +124,7 @@ pub(crate) fn resolve_default_libs_from_lib_dir(
         }
     }
 
-    let mut loader = ReferenceGraphLoader::new(lib_dir, io_stats);
+    let mut loader = ReferenceGraphLoader::new(source, io_stats);
     for seed in &seeds {
         if !loader.enqueue_lib_name(seed) {
             unknown_libs.push(seed.clone());
@@ -167,15 +159,6 @@ pub fn default_full_lib_seed_for_target(target: &str) -> String {
     format!("{base}.full")
 }
 
-/// Walk up from `root_dir` looking for `node_modules/typescript/lib`, then fall
-/// back to the checker crate/workspace location used to build this binary.
-fn find_typescript_lib_dir(root_dir: &Path, io_stats: &mut DefaultLibIoStats) -> Option<PathBuf> {
-    find_typescript_lib_dir_from(root_dir, io_stats).or_else(|| {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        find_typescript_lib_dir_from(manifest_dir, io_stats)
-    })
-}
-
 fn find_typescript_lib_dir_from(
     start_dir: &Path,
     io_stats: &mut DefaultLibIoStats,
@@ -192,14 +175,14 @@ fn find_typescript_lib_dir_from(
     None
 }
 
-/// Loads a lib reference graph depth-first, deduping by canonical path while
+/// Loads a lib reference graph depth-first, deduping by source identity while
 /// preserving deterministic first-seen order.
-struct ReferenceGraphLoader {
-    lib_dir: PathBuf,
+struct ReferenceGraphLoader<'a> {
+    source: &'a dyn LibSource,
     /// Pending lib names to expand, in order.
     queue: Vec<String>,
-    /// Canonical paths already loaded (dedupe).
-    visited_paths: BTreeSet<PathBuf>,
+    /// Source identities already loaded (dedupe).
+    visited_files: BTreeSet<String>,
     /// Normalized lib names already enqueued (dedupe + cycle guard).
     seen_names: BTreeSet<String>,
     inputs: Vec<SourceFileInput>,
@@ -207,12 +190,12 @@ struct ReferenceGraphLoader {
     io_stats: DefaultLibIoStats,
 }
 
-impl ReferenceGraphLoader {
-    fn new(lib_dir: PathBuf, io_stats: DefaultLibIoStats) -> Self {
+impl<'a> ReferenceGraphLoader<'a> {
+    fn new(source: &'a dyn LibSource, io_stats: DefaultLibIoStats) -> Self {
         Self {
-            lib_dir,
+            source,
             queue: Vec::new(),
-            visited_paths: BTreeSet::new(),
+            visited_files: BTreeSet::new(),
             seen_names: BTreeSet::new(),
             inputs: Vec::new(),
             loaded_files: Vec::new(),
@@ -221,21 +204,16 @@ impl ReferenceGraphLoader {
     }
 
     /// Enqueue a lib name (e.g. `"es2022"`, `"dom.iterable"`). Returns `false`
-    /// if the name does not map to an existing `lib*.d.ts` file.
+    /// if the source has no such lib.
     fn enqueue_lib_name(&mut self, name: &str) -> bool {
         let normalized = normalize_lib_name(name);
-        self.io_stats.existence_probes += 1;
-        if !self.lib_file_path(&normalized).is_file() {
+        if !self.source.contains(&normalized, &mut self.io_stats) {
             return false;
         }
         if self.seen_names.insert(normalized.clone()) {
             self.queue.push(normalized);
         }
         true
-    }
-
-    fn lib_file_path(&self, normalized_name: &str) -> PathBuf {
-        self.lib_dir.join(format!("lib.{normalized_name}.d.ts"))
     }
 
     /// Process the queue depth-first: each file is loaded, then its referenced
@@ -253,37 +231,30 @@ impl ReferenceGraphLoader {
     }
 
     fn load_recursive(&mut self, normalized_name: &str) {
-        let path = self.lib_file_path(normalized_name);
-        self.io_stats.canonicalize_syscalls += 1;
-        let canonical = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        if !self.visited_paths.insert(canonical.clone()) {
-            return;
-        }
-
-        let read_start = Instant::now();
-        let Ok(source_text) = fs::read_to_string(&path) else {
+        let Some((file_name, source_text)) =
+            self.source.load(normalized_name, &mut self.io_stats)
+        else {
             return;
         };
-        self.io_stats.read_io += read_start.elapsed();
-        self.io_stats.files_read += 1;
-        self.io_stats.bytes_read += source_text.len() as u64;
+        if !self.visited_files.insert(file_name.clone()) {
+            return;
+        }
 
         // Expand referenced libs first so dependencies are emitted before the
         // file that requires them.
         for referenced in scan_reference_libs(&source_text) {
             let referenced_normalized = normalize_lib_name(&referenced);
-            self.io_stats.existence_probes += 1;
-            if !self.lib_file_path(&referenced_normalized).is_file() {
+            if !self
+                .source
+                .contains(&referenced_normalized, &mut self.io_stats)
+            {
                 continue;
             }
             if self.seen_names.insert(referenced_normalized.clone()) {
                 self.load_recursive(&referenced_normalized);
-            } else {
-                // Already enqueued/visited elsewhere; cycle-safe no-op.
             }
         }
 
-        let file_name = canonical.to_string_lossy().into_owned();
         self.loaded_files.push(file_name.clone());
         self.inputs.push(SourceFileInput {
             file_name,

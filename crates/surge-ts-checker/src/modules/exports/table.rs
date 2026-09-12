@@ -14,7 +14,6 @@ pub(crate) fn build_module_export_table(
 
     let split_start = crate::program::binding::analyze_split_enabled()
         .then(std::time::Instant::now);
-    crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "et");
         let exportable_values = collect_exportable_value_symbols(
         &parsed_file.statements,
         local_type_declarations,
@@ -162,11 +161,16 @@ fn adopt_export_assignment_alias(
         resolved_export_table.default_symbol = target_export_table.default_symbol.clone();
     }
 
+    // Shares the target's payload handles: an `export =` namespace the size of
+    // `typescript.d.ts` is adopted by every importer, and deep-cloning each
+    // declaration into a first-wins insert was a clone-and-drop per entry.
     let type_declarations = Arc::make_mut(&mut resolved_export_table.type_declarations);
-    for (name, declaration) in target_export_table.type_declarations.iter() {
-        if type_declarations.get(name.as_ref()).is_none() {
-            let _ = type_declarations.insert(name.clone(), declaration.clone());
-        }
+    for (name, _) in target_export_table.type_declarations.iter() {
+        let _ = type_declarations.insert_shared_from(
+            name.as_ref(),
+            &target_export_table.type_declarations,
+            name.as_ref(),
+        );
     }
 
     for (name, symbol) in target_export_table.symbols.iter_shared() {

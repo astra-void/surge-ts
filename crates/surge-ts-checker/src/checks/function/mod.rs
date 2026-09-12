@@ -402,10 +402,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
     let expanded_contextual_parameter_types = expected_type
         .map(|expected_type| contextual_parameter_types(expected_type, parameters.len()));
     let contextual_parameter_types = expanded_contextual_parameter_types.as_deref();
-    let vc_arrow_start = std::time::Instant::now();
-    let vc_ret_annot = return_type.is_some();
-    let vc_block = matches!(body, ParsedArrowFunctionBody::Block(_));
-    let vc_result = with_type_parameter_scope(&type_parameters, ctx, |ctx| {
+    with_type_parameter_scope(&type_parameters, ctx, |ctx| {
         // Resolve the arrow's annotations against the value symbols visible at
         // the arrow site, mirroring `check_variable_declaration_against_symbols`:
         // `(x: typeof localConst) => …` must see the enclosing function body's
@@ -584,11 +581,5 @@ pub(crate) fn check_arrow_function_expression_anchored(
             function_type.required_parameter_count(),
         )
         .with_parameter_names(signature::written_binding_names(&parameters))
-    });
-    if crate::modules::exports::values::VC_TRACE_DEPTH.with(std::cell::Cell::get) > 0
-        && crate::modules::exports::values::vc_trace_enabled()
-    {
-        eprintln!("[vc-arrow] pass={} ret_annot={} block={} us={}", crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow()), vc_ret_annot, vc_block, vc_arrow_start.elapsed().as_micros());
-    }
-    vc_result
+    })
 }
