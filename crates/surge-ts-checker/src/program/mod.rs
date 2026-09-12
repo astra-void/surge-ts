@@ -203,6 +203,44 @@ pub fn check_program_with_prescanned_sources(
     })
 }
 
+
+struct ProgramRun {
+    timings: Option<Arc<Mutex<ProgramTimings>>>,
+    timings_enabled: bool,
+    program_start: Instant,
+    census_external: CensusExternalRetention,
+    parsed_files: Vec<ParsedProgramFile>,
+    ctx: CheckerContext,
+}
+
+struct GlobalCollection {
+    global_symbols: SymbolTable,
+    function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
+    global_type_declarations: TypeDeclarationTable,
+    type_declaration_collection_start: Instant,
+}
+
+struct PreliminaryPass {
+    local_type_declarations_by_module: Vec<Option<Arc<TypeDeclarationTable>>>,
+    preliminary_module_import_bindings: Vec<Option<ModuleImportBindings>>,
+    preliminary_module_resolution_scopes: Vec<Option<Arc<TypeDeclarationScope>>>,
+    analysis_worker_count: usize,
+    preliminary_module_analyses: Vec<Option<ModuleAnalysis>>,
+}
+
+/// State that outlives the final module-analysis round: the last binding
+/// generation plus the preliminary structures the final import binding still
+/// falls back to.
+struct ModuleBinding {
+    module_binding_start: Instant,
+    module_export_tables: Vec<Option<ModuleExportTable>>,
+    module_import_bindings: Vec<Option<ModuleImportBindings>>,
+    module_resolution_scopes: Vec<Option<Arc<TypeDeclarationScope>>>,
+    module_analyses: Vec<Option<ModuleAnalysis>>,
+    local_type_declarations_by_module: Vec<Option<Arc<TypeDeclarationTable>>>,
+    preliminary_module_import_bindings: Vec<Option<ModuleImportBindings>>,
+}
+
 fn check_program_with_stats_and_jobs_inner(
     files: Vec<SourceFileInput>,
     prescanned: Vec<ParsedSource>,
@@ -217,6 +255,82 @@ fn check_program_with_stats_and_jobs_inner(
         };
     }
 
+    let ProgramRun {
+        timings,
+        timings_enabled,
+        program_start,
+        mut census_external,
+        mut parsed_files,
+        mut ctx,
+    } = start_program_run(files, prescanned, options, jobs, &store);
+    let globals = collect_program_globals(&parsed_files, &mut ctx, &timings, program_start);
+    let preliminary = run_preliminary_pass(
+        &mut parsed_files,
+        &mut ctx,
+        &timings,
+        program_start,
+        jobs,
+        &store,
+        &mut census_external,
+        &globals.global_symbols,
+    );
+    let binding = bind_and_analyze_modules(
+        &mut parsed_files,
+        &mut ctx,
+        &timings,
+        program_start,
+        &store,
+        &mut census_external,
+        &globals.global_symbols,
+        globals.type_declaration_collection_start,
+        preliminary,
+    );
+    let mut shared_state =
+        finalize_module_bindings(&mut parsed_files, &mut ctx, &timings, program_start, binding, globals);
+    build_module_local_values(&parsed_files, &shared_state, &mut ctx);
+    record_rss_stage(
+        timings.as_ref(),
+        "module_local_values",
+        program_start.elapsed(),
+    );
+    emit_check_phase_retention_census("before_check_phase", &ctx, &store, &shared_state, &parsed_files);
+    release_declaration_asts(&mut parsed_files, &ctx, &timings, program_start);
+    run_check_phase(&mut parsed_files, &mut shared_state, &mut ctx, &timings, program_start, jobs);
+    emit_check_phase_retention_census("after_check_phase", &ctx, &store, &shared_state, &parsed_files);
+    // Checking is complete and the diagnostics are extracted: the cross-file
+    // program state and every remaining parse tree are dead. Dropping them here
+    // (rather than at function exit, after the finish measurements) makes the
+    // finish footprint reflect what a long-lived host would actually retain.
+    let skip_teardown = fast_process_exit()
+        && timings.is_none()
+        && !crate::metrics::rss_stages_enabled()
+        && !crate::metrics::retention_census_enabled()
+        && !type_graph_census_enabled();
+    if skip_teardown {
+        std::mem::forget(shared_state);
+        std::mem::forget(parsed_files);
+    } else {
+        drop(shared_state);
+        drop(parsed_files);
+    }
+    finish_program_run(
+        ctx,
+        &store,
+        &timings,
+        timings_enabled,
+        program_start,
+        census_external,
+        skip_teardown,
+    )
+}
+
+fn start_program_run(
+    files: Vec<SourceFileInput>,
+    prescanned: Vec<ParsedSource>,
+    options: CheckerOptions,
+    jobs: usize,
+    store: &Arc<ProgramTypeStore>,
+) -> ProgramRun {
     let mut files = files;
     inject_generated_default_lib_inputs(&mut files, options.no_lib);
     let source_text_bytes = files
@@ -240,12 +354,12 @@ fn check_program_with_stats_and_jobs_inner(
     crate::modules::clear_namespace_alias_table_cache();
 
     let parse_start = Instant::now();
-    let mut parsed_files = parse_program_files(files, prescanned, jobs, timings.as_ref());
+    let parsed_files = parse_program_files(files, prescanned, jobs, timings.as_ref());
     let ast_nodes = parsed_files
         .iter()
         .map(|file| file.statements.len() as u64)
         .sum::<u64>();
-    let mut census_external = CensusExternalRetention {
+    let census_external = CensusExternalRetention {
         ast_nodes,
         ast_estimated_bytes: ast_nodes * std::mem::size_of::<ParsedStatement>() as u64,
         source_text_bytes,
@@ -290,12 +404,27 @@ fn check_program_with_stats_and_jobs_inner(
     ctx.timings = timings.clone();
     ctx.set_module_file_index_by_identity(module_file_index_by_identity);
     emit_type_graph_census("after_loading_parsing", Some(&ctx), &store, census_external);
+    ProgramRun {
+        timings,
+        timings_enabled,
+        program_start,
+        census_external,
+        parsed_files,
+        ctx,
+    }
+}
 
+fn collect_program_globals(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+    timings: &Option<Arc<Mutex<ProgramTimings>>>,
+    program_start: Instant,
+) -> GlobalCollection {
     let mut global_symbols = SymbolTable::new();
     let mut function_signatures = HashMap::new();
 
     let ambient_collection_start = Instant::now();
-    emit_parser_diagnostics(&parsed_files, &mut ctx);
+    emit_parser_diagnostics(&parsed_files, ctx);
     ctx.begin_resolution_stage();
     // Three ordered steps, and the order is load-bearing in both directions.
     //
@@ -311,11 +440,11 @@ fn check_program_with_stats_and_jobs_inner(
     // froze `process` against whatever partial `NodeJS.Process` existed.
     //
     // Ambient *values* lower last, against the fully merged table.
-    collect_ambient_global_types(&parsed_files, &mut ctx, timings.as_ref());
-    crate::driver::collect_global_augmentations(&parsed_files, &mut ctx);
-    lower_ambient_global_values(&parsed_files, &mut ctx);
-    collect_umd_global_names(&parsed_files, &mut ctx);
-    collect_ambient_modules(&parsed_files, &mut ctx, timings.as_ref());
+    collect_ambient_global_types(&parsed_files, ctx, timings.as_ref());
+    crate::driver::collect_global_augmentations(&parsed_files, ctx);
+    lower_ambient_global_values(&parsed_files, ctx);
+    collect_umd_global_names(&parsed_files, ctx);
+    collect_ambient_modules(&parsed_files, ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
         timings.ambient_collection += ambient_collection_start.elapsed()
     });
@@ -326,7 +455,7 @@ fn check_program_with_stats_and_jobs_inner(
     );
 
     let type_declaration_collection_start = Instant::now();
-    collect_global_type_declarations(&parsed_files, &mut ctx, timings.as_ref());
+    collect_global_type_declarations(&parsed_files, ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
         timings.root_source_global_collection += type_declaration_collection_start.elapsed()
     });
@@ -346,15 +475,32 @@ fn check_program_with_stats_and_jobs_inner(
         &parsed_files,
         &mut global_symbols,
         &mut function_signatures,
-        &mut ctx,
+        ctx,
     );
-    collect_global_variables(&parsed_files, &mut global_symbols, &mut ctx);
+    collect_global_variables(&parsed_files, &mut global_symbols, ctx);
     record_rss_stage(
         timings.as_ref(),
         "global_collection",
         program_start.elapsed(),
     );
+    GlobalCollection {
+        global_symbols,
+        function_signatures,
+        global_type_declarations,
+        type_declaration_collection_start,
+    }
+}
 
+fn run_preliminary_pass(
+    parsed_files: &mut Vec<ParsedProgramFile>,
+    ctx: &mut CheckerContext,
+    timings: &Option<Arc<Mutex<ProgramTimings>>>,
+    program_start: Instant,
+    jobs: usize,
+    store: &Arc<ProgramTypeStore>,
+    census_external: &mut CensusExternalRetention,
+    global_symbols: &SymbolTable,
+) -> PreliminaryPass {
     // PRELIMINARY PASS: collect types and resolve imports/exports to make them available for function signature collection
     let type_collection_start = Instant::now();
     ctx.begin_resolution_stage();
@@ -362,7 +508,7 @@ fn check_program_with_stats_and_jobs_inner(
         local_type_declarations_by_module,
         preliminary_module_import_bindings,
         preliminary_type_diagnostics,
-    ) = collect_preliminary_module_type_bindings(&parsed_files, &mut ctx, timings.as_ref());
+    ) = collect_preliminary_module_type_bindings(&parsed_files, ctx, timings.as_ref());
     for diagnostic in preliminary_type_diagnostics {
         ctx.push(diagnostic);
     }
@@ -409,17 +555,17 @@ fn check_program_with_stats_and_jobs_inner(
             &local_type_declarations_by_module,
             &preliminary_module_import_bindings,
             false,
-            &mut ctx,
+            ctx,
             timings.as_ref(),
             analysis_worker_count,
         )
     } else {
         collect_module_analyses_with_bindings(
-            &mut parsed_files,
+            parsed_files,
             &local_type_declarations_by_module,
             &preliminary_module_import_bindings,
             false,
-            &mut ctx,
+            ctx,
             timings.as_ref(),
         )
     };
@@ -441,7 +587,7 @@ fn check_program_with_stats_and_jobs_inner(
         "after_preliminary_analysis",
         Some(&ctx),
         &store,
-        census_external,
+        *census_external,
     );
     crate::metrics::emit_retention_census(
         "after_preliminary_analysis",
@@ -455,7 +601,33 @@ fn check_program_with_stats_and_jobs_inner(
             ..Default::default()
         },
     );
+    PreliminaryPass {
+        local_type_declarations_by_module,
+        preliminary_module_import_bindings,
+        preliminary_module_resolution_scopes,
+        analysis_worker_count,
+        preliminary_module_analyses,
+    }
+}
 
+fn bind_and_analyze_modules(
+    parsed_files: &mut Vec<ParsedProgramFile>,
+    ctx: &mut CheckerContext,
+    timings: &Option<Arc<Mutex<ProgramTimings>>>,
+    program_start: Instant,
+    store: &Arc<ProgramTypeStore>,
+    census_external: &mut CensusExternalRetention,
+    global_symbols: &SymbolTable,
+    type_declaration_collection_start: Instant,
+    preliminary: PreliminaryPass,
+) -> ModuleBinding {
+    let PreliminaryPass {
+        local_type_declarations_by_module,
+        preliminary_module_import_bindings,
+        preliminary_module_resolution_scopes,
+        analysis_worker_count,
+        preliminary_module_analyses,
+    } = preliminary;
     let module_binding_start = Instant::now();
     let export_resolution_start = Instant::now();
     // Superseded binding rounds are reassigned (not shadowed) so each round's
@@ -472,7 +644,7 @@ fn check_program_with_stats_and_jobs_inner(
             })
             .collect::<Vec<_>>();
         ctx.begin_resolution_stage();
-        resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx)
+        resolve_module_export_tables(&parsed_files, &local_module_export_tables, ctx)
     };
     record_program_timing(timings.as_ref(), |timings| {
         timings.preliminary_export_table_resolution += export_resolution_start.elapsed()
@@ -486,7 +658,7 @@ fn check_program_with_stats_and_jobs_inner(
         &preliminary_module_analyses,
         &module_export_tables,
         &preliminary_module_resolution_scopes,
-        &mut ctx,
+        ctx,
     );
     drop(preliminary_module_resolution_scopes);
     record_program_timing(timings.as_ref(), |timings| {
@@ -512,7 +684,7 @@ fn check_program_with_stats_and_jobs_inner(
         &preliminary_module_analyses,
         &module_export_tables,
         &module_resolution_scopes,
-        &mut ctx,
+        ctx,
     );
     record_program_timing(timings.as_ref(), |timings| {
         timings.import_binding_resolution += import_binding_start.elapsed()
@@ -575,17 +747,17 @@ fn check_program_with_stats_and_jobs_inner(
             &local_type_declarations_by_module,
             &module_import_bindings,
             true,
-            &mut ctx,
+            ctx,
             timings.as_ref(),
             analysis_worker_count,
         )
     } else {
         collect_module_analyses_with_bindings(
-            &mut parsed_files,
+            parsed_files,
             &local_type_declarations_by_module,
             &module_import_bindings,
             true,
-            &mut ctx,
+            ctx,
             timings.as_ref(),
         )
     };
@@ -614,7 +786,7 @@ fn check_program_with_stats_and_jobs_inner(
         "after_final_module_analysis",
         Some(&ctx),
         &store,
-        census_external,
+        *census_external,
     );
     report_eq_probe(
         &parsed_files,
@@ -625,6 +797,40 @@ fn check_program_with_stats_and_jobs_inner(
         augmentation_insertions_before_final,
     );
     drop(preliminary_module_analyses);
+    ModuleBinding {
+        module_binding_start,
+        module_export_tables,
+        module_import_bindings,
+        module_resolution_scopes,
+        module_analyses,
+        local_type_declarations_by_module,
+        preliminary_module_import_bindings,
+    }
+}
+
+fn finalize_module_bindings(
+    parsed_files: &mut Vec<ParsedProgramFile>,
+    ctx: &mut CheckerContext,
+    timings: &Option<Arc<Mutex<ProgramTimings>>>,
+    program_start: Instant,
+    binding: ModuleBinding,
+    globals: GlobalCollection,
+) -> ProgramCheckSharedState {
+    let ModuleBinding {
+        module_binding_start,
+        module_export_tables: superseded_module_export_tables,
+        mut module_import_bindings,
+        mut module_resolution_scopes,
+        module_analyses,
+        local_type_declarations_by_module,
+        preliminary_module_import_bindings,
+    } = binding;
+    let GlobalCollection {
+        global_symbols,
+        function_signatures,
+        global_type_declarations,
+        ..
+    } = globals;
     // The final analyses are built; the remaining pipeline reads declaration
     // files' statements only for their import/export binding surface
     // (`resolve_module_imports` matches `ImportDeclaration`,
@@ -641,7 +847,8 @@ fn check_program_with_stats_and_jobs_inner(
         crate::metrics::release_free_memory();
     }
     let export_resolution_start = Instant::now();
-    module_export_tables = {
+    drop(superseded_module_export_tables);
+    let mut module_export_tables = {
         let local_module_export_tables = module_analyses
             .iter()
             .map(|analysis| {
@@ -651,7 +858,7 @@ fn check_program_with_stats_and_jobs_inner(
             })
             .collect::<Vec<_>>();
         ctx.begin_resolution_stage();
-        resolve_module_export_tables(&parsed_files, &local_module_export_tables, &mut ctx)
+        resolve_module_export_tables(&parsed_files, &local_module_export_tables, ctx)
     };
     record_program_timing(timings.as_ref(), |timings| {
         timings.final_export_table_resolution += export_resolution_start.elapsed()
@@ -664,7 +871,7 @@ fn check_program_with_stats_and_jobs_inner(
         &module_analyses,
         &module_export_tables,
         &module_resolution_scopes,
-        &mut ctx,
+        ctx,
     );
     record_program_timing(timings.as_ref(), |timings| {
         timings.import_binding_resolution += import_binding_start.elapsed()
@@ -689,7 +896,7 @@ fn check_program_with_stats_and_jobs_inner(
     // import binding and the JSX locator; the check phase reads the analyses'
     // local export tables through `shared_state`.
     drop(module_export_tables);
-    sync_global_this_symbol(&mut ctx);
+    sync_global_this_symbol(ctx);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
     });
@@ -715,7 +922,7 @@ fn check_program_with_stats_and_jobs_inner(
     drop(module_import_bindings);
     drop(preliminary_module_import_bindings);
     crate::metrics::release_free_memory();
-    let mut shared_state = ProgramCheckSharedState {
+    let shared_state = ProgramCheckSharedState {
         global_type_declarations,
         script_type_declarations,
         global_symbols,
@@ -729,6 +936,8 @@ fn check_program_with_stats_and_jobs_inner(
         "preliminary_release",
         program_start.elapsed(),
     );
+    shared_state
+}
 
     // Per-file value tables for cross-module `typeof`. When a consumer resolves an
     // imported type alias whose body contains `typeof <localValue>`, the value is
@@ -742,90 +951,97 @@ fn check_program_with_stats_and_jobs_inner(
     // value declarations. The seed table omits the ambient globals (they are added
     // as a parent fallback inside the collector); the result is consulted via `get`
     // only, so the parent fallback covers them.
-    {
-        let saved_file_name = ctx.file_name.clone();
-        let saved_type_declarations = std::mem::take(&mut ctx.type_declarations);
-        let mut module_local_values: surge_ts_types::fx::FxHashMap<Arc<str>, Arc<SymbolTable>> =
-            surge_ts_types::fx::FxHashMap::default();
-        // Declaration modules are included: a library annotation chain routinely
-        // crosses `typeof <importedValue>` (radix's
-        // `ComponentPropsWithoutRef<typeof Primitive.button>`), which resolves
-        // through this map under the declaring file's name.
-        for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-            if !parsed_file.is_module {
-                continue;
-            }
-            let Some(analysis) = shared_state.module_analyses[file_index].as_ref() else {
-                continue;
-            };
-            // The table is only ever consulted to resolve a `typeof <value>`
-            // appearing in THIS file's own declarations/annotations (resolution
-            // runs under the declaring file's name), so a file whose parse tree
-            // contains no `typeof` type node can never be consulted and its
-            // entry is skipped outright. This covers declaration files too:
-            // their seed of Arc-shared handles is cheap to build, but the entry
-            // is what pins each `.d.ts` module's symbol graph past the per-file
-            // release after its check. Containment comes from the parse-time
-            // `contains_typeof` source-text scan (a typeof type node can only
-            // come from the keyword; an identifier substring only costs the
-            // old eager build). `SURGE_LV_FILTER=0` restores unconditional
-            // building; the `SURGE_LV_PROBE` accessor probe warns on any
-            // consult miss.
-            if local_values_typeof_filter_enabled() && !parsed_file.contains_typeof {
-                continue;
-            }
-            let mut seed = SymbolTable::new();
-            if let Some(bindings) = shared_state.module_import_bindings[file_index].as_ref() {
-                for (name, symbol) in bindings.symbols.iter_shared() {
-                    let _ = seed.insert_shared(name.clone(), symbol.clone());
-                }
-            }
-            for (name, symbol) in analysis.local_symbols.iter_shared() {
+fn build_module_local_values(
+    parsed_files: &[ParsedProgramFile],
+    shared_state: &ProgramCheckSharedState,
+    ctx: &mut CheckerContext,
+) {
+    let saved_file_name = ctx.file_name.clone();
+    let saved_type_declarations = std::mem::take(&mut ctx.type_declarations);
+    let mut module_local_values: surge_ts_types::fx::FxHashMap<Arc<str>, Arc<SymbolTable>> =
+        surge_ts_types::fx::FxHashMap::default();
+    // Declaration modules are included: a library annotation chain routinely
+    // crosses `typeof <importedValue>` (radix's
+    // `ComponentPropsWithoutRef<typeof Primitive.button>`), which resolves
+    // through this map under the declaring file's name.
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        if !parsed_file.is_module {
+            continue;
+        }
+        let Some(analysis) = shared_state.module_analyses[file_index].as_ref() else {
+            continue;
+        };
+        // The table is only ever consulted to resolve a `typeof <value>`
+        // appearing in THIS file's own declarations/annotations (resolution
+        // runs under the declaring file's name), so a file whose parse tree
+        // contains no `typeof` type node can never be consulted and its
+        // entry is skipped outright. This covers declaration files too:
+        // their seed of Arc-shared handles is cheap to build, but the entry
+        // is what pins each `.d.ts` module's symbol graph past the per-file
+        // release after its check. Containment comes from the parse-time
+        // `contains_typeof` source-text scan (a typeof type node can only
+        // come from the keyword; an identifier substring only costs the
+        // old eager build). `SURGE_LV_FILTER=0` restores unconditional
+        // building; the `SURGE_LV_PROBE` accessor probe warns on any
+        // consult miss.
+        if local_values_typeof_filter_enabled() && !parsed_file.contains_typeof {
+            continue;
+        }
+        let mut seed = SymbolTable::new();
+        if let Some(bindings) = shared_state.module_import_bindings[file_index].as_ref() {
+            for (name, symbol) in bindings.symbols.iter_shared() {
                 let _ = seed.insert_shared(name.clone(), symbol.clone());
             }
-            if parsed_file.file_kind.is_declaration() {
-                // A `typeof X` inside a declaration module targets either an
-                // imported value (the binding symbol already carries its
-                // export-table type) or an exported declaration (its typed
-                // symbol sits in the local export table, computed during
-                // binding). Reusing those Arc-shared handles covers both;
-                // running the full exportable-value collection here instead
-                // re-resolves every annotation of every dependency `.d.ts`
-                // (unnamed: 27GB peak RSS, >6min).
-                for (name, symbol) in analysis.local_export_table.symbols.iter_shared() {
-                    let _ = seed.insert_shared(name.clone(), symbol.clone());
-                }
-                module_local_values
-                    .insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
-                continue;
-            }
-            ctx.file_name = parsed_file.file_name.clone();
-            ctx.type_declarations = analysis.local_type_declarations.as_ref().clone();
-            let table = crate::modules::collect_exportable_value_symbols(
-                &parsed_file.statements,
-                &analysis.local_type_declarations,
-                &seed,
-                None,
-                &ctx,
-            );
-            module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(table));
         }
-        ctx.file_name = saved_file_name;
-        ctx.type_declarations = saved_type_declarations;
-        ctx.set_module_local_values_by_file(module_local_values);
+        for (name, symbol) in analysis.local_symbols.iter_shared() {
+            let _ = seed.insert_shared(name.clone(), symbol.clone());
+        }
+        if parsed_file.file_kind.is_declaration() {
+            // A `typeof X` inside a declaration module targets either an
+            // imported value (the binding symbol already carries its
+            // export-table type) or an exported declaration (its typed
+            // symbol sits in the local export table, computed during
+            // binding). Reusing those Arc-shared handles covers both;
+            // running the full exportable-value collection here instead
+            // re-resolves every annotation of every dependency `.d.ts`
+            // (unnamed: 27GB peak RSS, >6min).
+            for (name, symbol) in analysis.local_export_table.symbols.iter_shared() {
+                let _ = seed.insert_shared(name.clone(), symbol.clone());
+            }
+            module_local_values
+                .insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
+            continue;
+        }
+        ctx.file_name = parsed_file.file_name.clone();
+        ctx.type_declarations = analysis.local_type_declarations.as_ref().clone();
+        let table = crate::modules::collect_exportable_value_symbols(
+            &parsed_file.statements,
+            &analysis.local_type_declarations,
+            &seed,
+            None,
+            &ctx,
+        );
+        module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(table));
     }
-    record_rss_stage(
-        timings.as_ref(),
-        "module_local_values",
-        program_start.elapsed(),
-    );
+    ctx.file_name = saved_file_name;
+    ctx.type_declarations = saved_type_declarations;
+    ctx.set_module_local_values_by_file(module_local_values);
+}
+
+fn emit_check_phase_retention_census(
+    label: &str,
+    ctx: &CheckerContext,
+    store: &Arc<ProgramTypeStore>,
+    shared_state: &ProgramCheckSharedState,
+    parsed_files: &[ParsedProgramFile],
+) {
     if crate::metrics::retention_census_enabled() {
         let signature_refs = shared_state
             .function_signatures
             .values()
             .collect::<Vec<_>>();
         crate::metrics::emit_retention_census(
-            "before_check_phase",
+            label,
             Some(&ctx),
             &store,
             crate::metrics::RetentionCensusView {
@@ -839,6 +1055,7 @@ fn check_program_with_stats_and_jobs_inner(
             },
         );
     }
+}
 
     // All cross-file program state now lives in `shared_state`; the per-file check
     // phase receives only the current file plus `shared_state`, never the file
@@ -847,6 +1064,12 @@ fn check_program_with_stats_and_jobs_inner(
     // checking phase removes the dependency `.d.ts` / default-lib ASTs that
     // dominate peak RSS on dependency-heavy projects. Without `skipLibCheck` the
     // check phase still walks declaration statements, so they are kept.
+fn release_declaration_asts(
+    parsed_files: &mut Vec<ParsedProgramFile>,
+    ctx: &CheckerContext,
+    timings: &Option<Arc<Mutex<ProgramTimings>>>,
+    program_start: Instant,
+) {
     if ctx.options.skip_lib_check {
         for parsed_file in parsed_files.iter_mut() {
             if parsed_file.file_kind.is_declaration() {
@@ -860,12 +1083,21 @@ fn check_program_with_stats_and_jobs_inner(
             program_start.elapsed(),
         );
     }
+}
 
+fn run_check_phase(
+    parsed_files: &mut Vec<ParsedProgramFile>,
+    shared_state: &mut ProgramCheckSharedState,
+    ctx: &mut CheckerContext,
+    timings: &Option<Arc<Mutex<ProgramTimings>>>,
+    program_start: Instant,
+    jobs: usize,
+) {
     let worker_count = resolve_worker_count(jobs, &parsed_files);
     crate::metrics::release_free_memory();
     set_check_phase(true);
     let file_results = if worker_count <= 1 {
-        check_program_files_serial(&mut parsed_files, &mut shared_state, &ctx, timings.clone())
+        check_program_files_serial(parsed_files, shared_state, &ctx, timings.clone())
     } else {
         check_program_files_parallel(
             &parsed_files,
@@ -887,43 +1119,17 @@ fn check_program_with_stats_and_jobs_inner(
         ctx.stats.suppressed_rust_only_diagnostics_total +=
             result.stats.suppressed_rust_only_diagnostics_total;
     }
-    if crate::metrics::retention_census_enabled() {
-        let signature_refs = shared_state
-            .function_signatures
-            .values()
-            .collect::<Vec<_>>();
-        crate::metrics::emit_retention_census(
-            "after_check_phase",
-            Some(&ctx),
-            &store,
-            crate::metrics::RetentionCensusView {
-                module_analyses: Some(&shared_state.module_analyses),
-                module_import_bindings: Some(&shared_state.module_import_bindings),
-                module_resolution_scopes: Some(&shared_state.module_resolution_scopes),
-                parsed_files: Some(&parsed_files),
-                global_symbols: Some(&shared_state.global_symbols),
-                function_signatures: Some(&signature_refs),
-                ..Default::default()
-            },
-        );
-    }
-    // Checking is complete and the diagnostics are extracted: the cross-file
-    // program state and every remaining parse tree are dead. Dropping them here
-    // (rather than at function exit, after the finish measurements) makes the
-    // finish footprint reflect what a long-lived host would actually retain.
-    let skip_teardown = fast_process_exit()
-        && timings.is_none()
-        && !crate::metrics::rss_stages_enabled()
-        && !crate::metrics::retention_census_enabled()
-        && !type_graph_census_enabled();
-    if skip_teardown {
-        std::mem::forget(shared_state);
-        std::mem::forget(parsed_files);
-    } else {
-        drop(shared_state);
-        drop(parsed_files);
-    }
+}
 
+fn finish_program_run(
+    ctx: CheckerContext,
+    store: &Arc<ProgramTypeStore>,
+    timings: &Option<Arc<Mutex<ProgramTimings>>>,
+    timings_enabled: bool,
+    program_start: Instant,
+    census_external: CensusExternalRetention,
+    skip_teardown: bool,
+) -> ProgramCheckResult {
     if timings.is_some() {
         let cache_stats = ctx.program_cache_stats();
         record_program_timing(timings.as_ref(), |timings| {
