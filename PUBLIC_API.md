@@ -157,7 +157,8 @@ surge --project ./tsconfig.json
 | `--no_implicit_any` | Enable `noImplicitAny` |
 | `--noLib` | Disable default libs (no standard/DOM globals) |
 | `--showSpans` | Debug: force the custom span renderer |
-| `--physicalLibs` | Debug aid; physical `lib*.d.ts` loading is already the default |
+| `--physicalLibs` | Load the standard library from the project's installed TypeScript instead of the bundled snapshot |
+| `--typescript-lib-path <DIR>` | Load the standard library from an explicit `lib*.d.ts` directory; wins over `--physicalLibs` |
 
 The three reporting flags never change the diagnostics output: stdout stays
 byte-identical to a run without them. `--extendedDiagnostics` and

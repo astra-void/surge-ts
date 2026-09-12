@@ -291,34 +291,15 @@ fn project_mode_lib_option_es_only_skips_dom_generated_libs() {
     assert_eq!(json_diagnostic_codes(&parsed), vec!["TS2304"]);
 }
 
-/// Physical lib loading requires the `typescript` package to be installed
-/// (`pnpm install`). `cargo test` must not depend on that, so physical-lib
-/// tests skip when the package is absent.
-fn typescript_lib_available() -> bool {
-    workspace_root()
-        .join("node_modules/typescript/lib/lib.es5.d.ts")
-        .is_file()
-}
-
+/// These fixtures exercise the real `lib*.d.ts` graph. The bundled snapshot
+/// ships with the binary, so they run unconditionally: no `pnpm install`, and
+/// no silent skip that would let the gate rot.
 fn run_physical_fixture_codes(fixture: &str) -> Vec<String> {
-    let project = compat_project_root(fixture).join("tsconfig.json");
-    let project = project.to_string_lossy().into_owned();
-    let parsed = run_cli_json(&[
-        "--project",
-        project.as_str(),
-        "--format",
-        "json",
-        "--physicalLibs",
-    ]);
-    json_diagnostic_codes(&parsed)
+    run_default_fixture_codes(fixture)
 }
 
 #[test]
 fn project_mode_physical_libs_resolve_array_callback_return() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // `values.map(v => v.toString())` must infer `string[]`, so assigning it to
     // `number[]` is the only error, mirroring tsc against the real lib.es5.
     assert_eq!(
@@ -329,10 +310,6 @@ fn project_mode_physical_libs_resolve_array_callback_return() {
 
 #[test]
 fn project_mode_physical_libs_resolve_map_generic_methods() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     assert_eq!(
         run_physical_fixture_codes("physical-lib-es-map-set-basic"),
         vec!["TS2322"]
@@ -341,10 +318,6 @@ fn project_mode_physical_libs_resolve_map_generic_methods() {
 
 #[test]
 fn project_mode_physical_libs_resolve_index_signature() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     assert_eq!(
         run_physical_fixture_codes("physical-lib-index-signature-basic"),
         vec!["TS2322"]
@@ -353,10 +326,6 @@ fn project_mode_physical_libs_resolve_index_signature() {
 
 #[test]
 fn project_mode_physical_libs_new_promise_void_executor() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // A `Promise<void>` executor (contextual or explicit `<void>`) may call
     // `resolve()` with no argument: the constructor infers `T = void` from the
     // expected type, so the executor's `resolve: (value: void | PromiseLike<void>)`
@@ -370,10 +339,6 @@ fn project_mode_physical_libs_new_promise_void_executor() {
 
 #[test]
 fn project_mode_physical_libs_required_omit_pick() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // `Required<Omit<T, K>> & Pick<T, K>` (ky's `InternalRetryOptions`) must
     // resolve: `Required` makes each property required while keeping an explicit
     // `| undefined` member, so the object literal is assignable. tsc reports
@@ -386,10 +351,6 @@ fn project_mode_physical_libs_required_omit_pick() {
 
 #[test]
 fn project_mode_nested_namespace_member_resolves_siblings_on_lazy_peel() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // A generic alias indexing a nested-namespace interface
     // (`T extends keyof Inner.Table ? Inner.Table[T] : never`, React's
     // `ComponentProps<"button">` shape) finds the interface through its bare
@@ -406,10 +367,6 @@ fn project_mode_nested_namespace_member_resolves_siblings_on_lazy_peel() {
 
 #[test]
 fn project_mode_function_type_binding_pattern_parameter() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // A function-type parameter written as a destructuring pattern
     // (`render: ({ field }: { field: T }) => string`, react-hook-form's
     // `ControllerProps.render` shape) must parse: failing it degrades the whole
@@ -424,10 +381,6 @@ fn project_mode_function_type_binding_pattern_parameter() {
 
 #[test]
 fn project_mode_interface_extends_inherits_call_signature() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // A call signature declared on a base interface (React's
     // `ForwardRefExoticComponent extends ExoticComponent` shape) must survive
     // the extends merge, or `T extends (props: infer P) => unknown` cannot
@@ -441,10 +394,6 @@ fn project_mode_interface_extends_inherits_call_signature() {
 
 #[test]
 fn project_mode_physical_libs_no_lib_disables_globals() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // `noLib: true` disables physical default libs too, so `Promise`/`Date` are
     // missing (matching tsc's low-cascade missing-global behaviour).
     let codes = run_physical_fixture_codes("physical-lib-no-lib-basic");
@@ -465,10 +414,6 @@ fn run_default_fixture_codes(fixture: &str) -> Vec<String> {
 
 #[test]
 fn project_mode_physical_libs_are_the_default_es_dom() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // No `--physicalLibs`, no `compilerOptions.lib`: the target's `.full` lib
     // graph (ES + DOM) loads by default, so `Map`, `Promise`, `JSON`, `Number`
     // and `Array.from` all resolve.
@@ -477,10 +422,6 @@ fn project_mode_physical_libs_are_the_default_es_dom() {
 
 #[test]
 fn project_mode_physical_libs_target_selects_graph() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // `target: es2017` (no explicit lib) seeds `lib.es2017.full`, so the es2017
     // additions `Object.entries`/`Object.values`/`String.padStart` resolve.
     assert!(run_default_fixture_codes("default-lib-physical-target-graph-basic").is_empty());
@@ -488,19 +429,11 @@ fn project_mode_physical_libs_target_selects_graph() {
 
 #[test]
 fn project_mode_physical_libs_lib_option_dom() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     assert!(run_default_fixture_codes("default-lib-physical-lib-option-dom-basic").is_empty());
 }
 
 #[test]
 fn project_mode_physical_libs_default_no_lib_disables_globals() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // `noLib: true` is honored even though physical loading is the default.
     let codes = run_default_fixture_codes("default-lib-physical-no-lib-basic");
     assert!(!codes.is_empty());
@@ -509,39 +442,23 @@ fn project_mode_physical_libs_default_no_lib_disables_globals() {
 
 #[test]
 fn project_mode_physical_libs_dom_globals() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // `navigator`, `document`, `window` come from the real DOM lib.
     assert!(run_default_fixture_codes("default-lib-physical-dom-globals-basic").is_empty());
 }
 
 #[test]
 fn project_mode_physical_libs_timers() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // `setInterval`/`clearInterval`/`setTimeout`/`clearTimeout` come from the lib.
     assert!(run_default_fixture_codes("default-lib-physical-timers-basic").is_empty());
 }
 
 #[test]
 fn project_mode_physical_libs_formdata() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     assert!(run_default_fixture_codes("default-lib-physical-formdata-basic").is_empty());
 }
 
 #[test]
 fn project_mode_physical_libs_html_element() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     // `HTMLDivElement` and `HTMLElement` come from the real DOM lib, not a
     // hardcoded global.
     assert!(run_default_fixture_codes("default-lib-physical-html-element-basic").is_empty());
@@ -4744,10 +4661,6 @@ fn project_mode_declare_global_interface_merging() {
 
 #[test]
 fn project_mode_declare_global_window_physical_lib() {
-    if !typescript_lib_available() {
-        eprintln!("skipping: node_modules/typescript not installed");
-        return;
-    }
     assert_eq!(
         run_physical_fixture_codes("declare-global-window-physical-lib-basic"),
         vec!["TS2322"]

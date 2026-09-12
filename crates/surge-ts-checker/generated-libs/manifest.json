@@ -1,5 +1,5 @@
 {
-  "generatorVersion": "v0.87-copy-native-typescript-libs",
+  "generatorVersion": "v0.88-vendor-native-typescript-libs",
   "generatedFrom": {
     "typescriptPackageVersion": "7.0.2",
     "sourceLibDir": "node_modules/@typescript/typescript-darwin-arm64/lib"
@@ -113,5 +113,9 @@
     "lib.webworker.importscripts.d.ts",
     "lib.webworker.iterable.d.ts"
   ],
-  "stableHash": "62c21d3dc2f7b6c5bf3f23b38610b2f373e58ae7478c945202b21a30aacb99ad"
+  "licenseFiles": [
+    "LICENSE.txt",
+    "NOTICE.txt"
+  ],
+  "stableHash": "f1ac09b48e39dd3b483b0c56a95425e589bd77f6b9f3b90e8c41c93459f1bab5"
 }

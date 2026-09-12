@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const GENERATOR_VERSION = "v0.87-copy-native-typescript-libs";
+const GENERATOR_VERSION = "v0.88-vendor-native-typescript-libs";
 const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const TYPESCRIPT_PACKAGE_JSON = path.join(WORKSPACE_ROOT, "node_modules/typescript/package.json");
 const OUTPUT_DIR = path.join(
@@ -58,6 +58,8 @@ type Manifest = {
     sourceLibDir: string;
   };
   generatedFiles: string[];
+  /// Upstream license/notice files copied alongside the declarations.
+  licenseFiles: string[];
   stableHash: string;
 };
 
@@ -87,6 +89,8 @@ export function generateDefaultLibs(): Manifest {
     fs.writeFileSync(path.join(OUTPUT_DIR, lib.fileName), lib.contents);
   }
 
+  const licenseFiles = copyUpstreamLicenses();
+
   const manifest: Manifest = {
     generatorVersion: GENERATOR_VERSION,
     generatedFrom: {
@@ -94,6 +98,7 @@ export function generateDefaultLibs(): Manifest {
       sourceLibDir: `node_modules/${platformLibPackage}/lib`,
     },
     generatedFiles: libs.map((lib) => lib.fileName),
+    licenseFiles,
     stableHash: stableHash(
       GENERATOR_VERSION,
       typescriptPackageVersion,
@@ -107,6 +112,32 @@ export function generateDefaultLibs(): Manifest {
   );
 
   return manifest;
+}
+
+/// Copy the upstream license and notice files next to the declarations.
+///
+/// The vendored `.d.ts` files are redistributed Apache-2.0 material, so the
+/// notices have to travel with them; refreshing the snapshot without refreshing
+/// these would leave the repository claiming a license the files no longer
+/// carry.
+export function copyUpstreamLicenses(): string[] {
+  const packageDir = path.join(WORKSPACE_ROOT, "node_modules/typescript");
+  const sources = [
+    { from: path.join(packageDir, "LICENSE"), to: "LICENSE.txt" },
+    { from: path.join(packageDir, "NOTICE.txt"), to: "NOTICE.txt" },
+  ];
+
+  const copied: string[] = [];
+  for (const source of sources) {
+    if (!fs.existsSync(source.from)) {
+      throw new Error(
+        `missing upstream license file ${source.from}; refusing to vendor TypeScript declarations without it`,
+      );
+    }
+    fs.writeFileSync(path.join(OUTPUT_DIR, source.to), fs.readFileSync(source.from, "utf8"));
+    copied.push(source.to);
+  }
+  return copied;
 }
 
 function readTypeScriptLibs(): CopiedLib[] {
@@ -154,6 +185,7 @@ function main(): void {
   console.log(
     [
       `copied ${manifest.generatedFiles.length} TypeScript lib files`,
+      `copied ${manifest.licenseFiles.length} upstream license files`,
       `typescript ${manifest.generatedFrom.typescriptPackageVersion}`,
       `hash ${manifest.stableHash}`,
     ].join("\n"),

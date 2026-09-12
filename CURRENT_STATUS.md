@@ -92,10 +92,12 @@ The workspace ships an embeddable library (`surge-ts`, with the lower-level
 
 - Project mode driven by `tsconfig.json` (`extends` chains, `include`/`exclude`,
   compiler-option normalization), plus a narrow single-file mode.
-- Physical `lib*.d.ts` loading from the local `typescript` package **by
-  default**; the generated default-lib subset is only the fallback when that
-  package is absent (and the single-file support path). `noLib: true` disables
-  both.
+- A **bundled, version-pinned TypeScript standard library** embedded in the
+  binary, so no `typescript` package, `node_modules`, `node`, or `npm` is
+  needed at runtime. An on-disk lib directory is used only when explicitly
+  selected (`--typescript-lib-path`, or `--physicalLibs` to discover the
+  project's own install). `noLib: true` disables loading from any source. See
+  [crates/surge-ts-checker/STANDARD_LIBS.md](crates/surge-ts-checker/STANDARD_LIBS.md).
 - Declaration-side module resolution: relative imports, `paths`, `baseUrl`,
   package `exports` (conditional/pattern/subpath), package `imports`,
   `typesVersions`, package self-name, `types` / `typeRoots`, `@types`
@@ -115,6 +117,42 @@ The workspace ships an embeddable library (`surge-ts`, with the lower-level
 - Being a drop-in replacement for `tsc` on arbitrary projects.
 
 ---
+
+## Bundled standard library
+
+surge embeds its own copy of TypeScript's `lib.*.d.ts` declarations, so a
+release binary checks standard built-ins with no `typescript` package, `node`,
+`npm`, or `node_modules` present. Architecture and lib-selection rules are in
+[crates/surge-ts-checker/STANDARD_LIBS.md](crates/surge-ts-checker/STANDARD_LIBS.md).
+
+| Field | Value |
+| --- | --- |
+| Bundled TypeScript | 7.0.2 (`crates/surge-ts-checker/generated-libs/manifest.json`) |
+| Files vendored | 107 `lib.*.d.ts`, plus upstream `LICENSE.txt` and `NOTICE.txt` |
+| Refresh command | `pnpm run lib:generate` |
+
+Measured 2026-09-12 against the parent commit of this change, both built
+`release` in detached worktrees and compared interleaved. The host was heavily
+loaded by concurrent work, so CPU time and peak RSS are reported instead of wall
+clock; wall-clock numbers taken that day are not trustworthy and are not
+recorded.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Binary size | 6,540,640 B | 10,356,384 B |
+| Tiny project, CPU | 0.030 s | 0.030 s |
+| Tiny project, peak RSS | 34.4 MB | 43.8 MB |
+| zod, CPU | 3.41 s | 3.39 s |
+| zod, peak RSS | 381.5 MB | 390.1 MB |
+
+The binary carries the 3.9 MB snapshot in read-only data. Peak RSS rises because
+each loaded lib is copied out of that data into an owned `String`; keeping the
+text borrowed would remove the copy and is unexplored.
+
+Diagnostics did not move. All six real-project corpora (`trpc`, `zod`, `ky`,
+`ofetch`, `tanstack-query`, `ts-pattern`) emit byte-identical output before and
+after, even though each previously resolved its own installed TypeScript
+(5.5.4, 5.9.2, 5.9.3, or 6.0.3) and now resolves the bundled 7.0.2 snapshot.
 
 ## Verified exact parity
 
@@ -304,7 +342,7 @@ snapshot without re-verification and are labelled as such.
   intentional `paths`-match-authority divergence, is in
   [crates/surge-ts/MODULE_RESOLUTION.md](crates/surge-ts/MODULE_RESOLUTION.md).
 - **Full `lib.d.ts` / DOM / Node / React parity** remains out of scope even
-  though the physical lib graph loads by default.
+  though the complete, unmodified lib graph is bundled and loaded.
 
 ### Refuted on 2026-09-03
 
@@ -589,15 +627,12 @@ Real-project targets are gated on the checkout being present locally
 a project is absent, record it as *not measured* rather than carrying forward
 an older number as current.
 
-**Do not delete the build worktree until every measurement is finished.** The
-generated default-lib subset resolves through `env!("CARGO_MANIFEST_DIR")`
-(`crates/surge-ts-checker/src/default_lib/loader.rs`), so a binary built in a
-throwaway worktree loses `generated-libs/` as soon as that worktree goes away —
-copying the binary out first does not help. The pinned oracle
-(`typescript@7.0.2`) ships no `lib*.d.ts` of its own, so fixtures that do not
-pin `lib` depend on that fallback and collapse into `TS2304 Cannot find name
-'Promise'` with only a `unknown lib 'es2024.full'` warning on stderr to say
-why.
+**Binaries no longer depend on their build tree.** The standard library is
+embedded at build time (`crates/surge-ts-checker/build.rs`), so a binary copied
+out of a throwaway worktree keeps working after that worktree is deleted. This
+replaced an `env!("CARGO_MANIFEST_DIR")` lookup that made a moved or deleted
+source tree collapse into `TS2304 Cannot find name 'Promise'`, with only an
+`unknown lib 'es2024.full'` warning on stderr to say why.
 
 **Rule of thumb when updating this file:** do not change a number here unless
 you ran the command that produces it. If you are recording someone else's

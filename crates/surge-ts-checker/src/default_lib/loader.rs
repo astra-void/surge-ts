@@ -61,6 +61,16 @@ pub struct DefaultLibLoad {
 pub fn load_default_lib_inputs(request: DefaultLibRequest<'_>) -> DefaultLibLoad {
     let seed = default_full_lib_seed_for_target(request.target_basename);
 
+    if request.no_lib {
+        // Nothing is loaded, so resolving a source would only cost a
+        // filesystem walk and produce a warning the caller must suppress.
+        return DefaultLibLoad {
+            used_bundled: true,
+            source_description: "none (noLib)".to_string(),
+            ..Default::default()
+        };
+    }
+
     let (source, override_error): (Option<DirectoryLibSource>, Option<String>) = match &request
         .source
     {

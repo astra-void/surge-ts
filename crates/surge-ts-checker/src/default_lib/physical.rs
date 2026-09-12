@@ -145,18 +145,14 @@ pub(crate) fn resolve_default_libs_from_source(
 pub fn default_full_lib_seed_for_target(target: &str) -> String {
     // Normalize "ES2022", "es2022", "ESNext" -> "es2022"/"esnext".
     let normalized = target.trim().to_ascii_lowercase();
-    let base = match normalized.as_str() {
-        // Older targets share the es5/es6 base libs which have no `.full`
-        // aggregate; fall through to es2015 behaviour is uncommon for noEmit
-        // projects, so default to a broad recent aggregate.
-        "es3" | "es5" => "es5",
-        other => other,
-    };
-    if base == "es5" {
-        // es5 has no `.full`; seed the es5 + dom set explicitly.
-        return "es5".to_string();
+    match normalized.as_str() {
+        // Neither pre-ES2016 target has a `.full` aggregate: upstream names the
+        // ES2015 one `lib.es6.d.ts`, and ES5's default set is `lib.es5.d.ts`
+        // itself (which already pulls in DOM by reference).
+        "es3" | "es5" => "es5".to_string(),
+        "es6" | "es2015" => "es6".to_string(),
+        other => format!("{other}.full"),
     }
-    format!("{base}.full")
 }
 
 fn find_typescript_lib_dir_from(
@@ -448,5 +444,22 @@ Licensed under the Apache License, Version 2.0 (the \"License\");\n\
         assert_eq!(default_full_lib_seed_for_target("ES2024"), "es2024.full");
         assert_eq!(default_full_lib_seed_for_target("esnext"), "esnext.full");
         assert_eq!(default_full_lib_seed_for_target("ES5"), "es5");
+    }
+
+    /// Every seed the target mapping can produce must exist in the bundled
+    /// snapshot, or the target silently resolves to no standard library.
+    #[test]
+    fn every_target_seed_exists_in_the_bundled_snapshot() {
+        let targets = [
+            "ES5", "ES2015", "ES6", "ES2016", "ES2017", "ES2018", "ES2019", "ES2020", "ES2021",
+            "ES2022", "ES2023", "ES2024", "ESNext",
+        ];
+        for target in targets {
+            let seed = default_full_lib_seed_for_target(target);
+            assert!(
+                crate::default_lib::embedded::embedded_lib_source(&seed).is_some(),
+                "target {target} seeds {seed:?}, which the bundled snapshot does not contain"
+            );
+        }
     }
 }

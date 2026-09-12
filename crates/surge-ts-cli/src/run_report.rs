@@ -112,12 +112,12 @@ fn is_declaration_file_name(file_name: &str) -> bool {
     lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
 }
 
-// Mirrors the checker's name-based default-lib routing: physical TypeScript
-// libs live at `.../typescript/lib/lib.*.d.ts`, and the generated fallback
-// subset is loaded from the checker crate's `generated-libs/` directory.
+// Mirrors the checker's name-based default-lib routing: the bundled snapshot is
+// addressed under `<surge-lib>/`, and an explicitly selected on-disk directory
+// supplies `.../typescript/lib/lib.*.d.ts`.
 fn is_default_lib_file_name(file_name: &str) -> bool {
     let normalized = normalize(file_name);
-    if normalized.contains("/generated-libs/") {
+    if normalized.starts_with("<surge-lib>/") || normalized.contains("/generated-libs/") {
         return true;
     }
     let Some(split) = normalized.rfind('/') else {
@@ -499,16 +499,17 @@ mod tests {
             "/repo/node_modules/pkg/index.d.ts",
             "/repo/node_modules/typescript/lib/lib.es2024.d.ts",
             "/checker/generated-libs/lib.es2024.full.d.ts",
+            "<surge-lib>/lib.es2024.full.d.ts",
         ]
         .into_iter()
         .map(|name| (PathBuf::from(name), name.to_string(), String::new()))
         .collect();
 
         let counts = count_files(&sources);
-        assert_eq!(counts.total, 5);
+        assert_eq!(counts.total, 6);
         assert_eq!(counts.source, 2);
         assert_eq!(counts.dependency_declaration, 1);
-        assert_eq!(counts.default_lib, 2);
+        assert_eq!(counts.default_lib, 3);
     }
 
     #[test]
