@@ -33,9 +33,9 @@ const sampleResult: BenchReportResult = {
     'surge-ts': { medianBytes: 512 * MB, minBytes: 500 * MB, maxBytes: 550 * MB, runs: 5, source: 'phys_footprint' },
   },
   drift: {
-    'tsc': 'baseline',
-    'tsgo': 'known delta',
-    'surge-ts': 'exact vs tsc',
+    'tsc': 'known delta vs tsgo',
+    'tsgo': 'baseline',
+    'surge-ts': 'exact vs tsgo',
   },
 };
 
@@ -43,7 +43,7 @@ const timeOnlyResult: BenchReportResult = {
   project: 'time-only',
   rustJobs: 1,
   stats: { 'tsc': { median: 1, min: 1, max: 1, runs: 1 } },
-  drift: { 'tsc': 'baseline' },
+  drift: { 'tsc': 'known delta vs tsgo' },
 };
 
 const sampleDoc: BenchReportDocument = {
@@ -119,7 +119,7 @@ test('SVG report includes bars, speedups, drift, and metadata', () => {
   assert.ok(svg.includes('tsc@6.0.3'), 'includes the tsc version in the header');
   assert.ok(svg.includes('tsgo@7.0.2'), 'includes the tsgo version in the header');
   assert.ok(svg.includes('5.00× vs tsc'), 'includes the speedup vs tsc');
-  assert.ok(svg.includes('exact vs tsc'), 'includes the drift status');
+  assert.ok(svg.includes('exact vs tsgo'), 'includes the drift status');
   assert.ok(svg.includes('abc1234'), 'includes the git commit');
   assert.ok(svg.includes('Test CPU'), 'includes the CPU model');
   assert.ok(svg.includes('Local-machine-relative'), 'includes the footer disclaimer');
@@ -150,8 +150,8 @@ test('HTML report embeds the SVG plus a stats table and metadata', () => {
   assert.ok(html.includes('abc1234'), 'includes the git commit');
   assert.ok(html.includes('v22.0.0'), 'includes the node version');
   assert.ok(html.includes('5 (+1 warmup)'), 'includes iteration counts');
-  assert.ok(html.includes('tsc 6.0.3 (TS 6 baseline)'), 'names the tsc baseline version');
-  assert.ok(html.includes('tsgo 7.0.2 (TS 7 native)'), 'names the tsgo version');
+  assert.ok(html.includes('tsc 6.0.3 (TS 6 speed reference)'), 'names the tsc speed reference version');
+  assert.ok(html.includes('tsgo 7.0.2 (TS 7 diagnostic baseline)'), 'names the tsgo baseline version');
 });
 
 test('memoryRatioVsTsc computes ratio against the tsc peak RSS', () => {

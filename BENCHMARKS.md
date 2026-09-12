@@ -166,7 +166,8 @@ comparable.
 
 - `pnpm bench:compilers` — wall-clock comparison of `tsc` (TS 6), `tsgo`
   (native TS 7), and the release `surge` binary over the same tsconfig, with
-  diagnostic-drift reporting.
+  diagnostic-drift reporting against `tsgo` (TS 7); `tsc` (TS 6) is kept only
+  as the speed and memory reference.
 - `pnpm bench:allocators` — builds the `surge` binary with each supported
   global allocator (system, mimalloc, jemalloc, snmalloc) and runs a
   wall-time/peak-RSS scenario matrix.

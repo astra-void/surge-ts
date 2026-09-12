@@ -36,8 +36,9 @@ const scriptDir = path.dirname(scriptPath);
 const workspaceRoot = path.resolve(scriptDir, '../..');
 
 // `tsc` is the legacy JS compiler (TypeScript 6.x, the `typescript-6` alias),
-// kept as the slow baseline; `tsgo` is the native compiler (TypeScript 7.0, the
-// canonical `typescript` package). Both packages expose a `tsc` bin and only one
+// kept as the slow speed/memory reference; `tsgo` is the native compiler
+// (TypeScript 7.0, the canonical `typescript` package) and is the diagnostic
+// baseline, matching the oracle. Both packages expose a `tsc` bin and only one
 // can own `.bin/tsc`, so each is invoked through its resolved package bin path.
 const tsc6BinPath = path.join(workspaceRoot, 'node_modules', 'typescript-6', 'bin', 'tsc');
 const tsc7BinPath = path.join(workspaceRoot, 'node_modules', 'typescript', 'bin', 'tsc');
@@ -164,35 +165,34 @@ function main(argv = process.argv.slice(2)): void {
       rustJobs: args.rustJobs,
       stats: { tsc: null, tsgo: null, 'tsgo-singleThreaded': null, 'surge-ts': null },
       memory: { tsc: null, tsgo: null, 'tsgo-singleThreaded': null, 'surge-ts': null },
-      drift: { tsc: 'baseline', tsgo: 'skipped', 'tsgo-singleThreaded': 'skipped', 'surge-ts': 'not compared' },
+      drift: { tsc: 'not compared', tsgo: 'skipped', 'tsgo-singleThreaded': 'skipped', 'surge-ts': 'not compared' },
     };
 
     console.log(`Benchmarking ${projectDisplay}...`);
 
-    // 1. Get TSC baseline and diagnostics
-    console.log(`  Running tsc baseline...`);
+    // 1. tsc (TS 6) — speed/memory reference, not the diagnostic baseline.
+    console.log(`  Running tsc...`);
     const tscOutput = runTool('tsc', resolvedTsconfig, 1, 0, args.rustJobs); // single run for diagnostics
     const tscDiagnostics = parseTypeScriptDiagnostics(`${tscOutput.stdout}${tscOutput.stderr}`, path.dirname(resolvedTsconfig));
-    
-    // Benchmark TSC
+
     ({ stats: benchRes.stats.tsc, memory: benchRes.memory.tsc } =
       runBenchmark('tsc', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs));
 
-    // 2. tsgo (if available)
+    // 2. tsgo (TS 7) — the diagnostic baseline when available, so drift is
+    // measured against the same compiler the oracle compares against.
+    let tsgoDiagnostics: NormalizedDiagnostic[] | null = null;
+    let tsgoStDiagnostics: NormalizedDiagnostic[] | null = null;
     if (args.includeTsgo && tsgoAvailable) {
       console.log(`  Running tsgo baseline...`);
       const tsgoOutput = runTool('tsgo', resolvedTsconfig, 1, 0, args.rustJobs);
-      const tsgoDiagnostics = parseTypeScriptDiagnostics(`${tsgoOutput.stdout}${tsgoOutput.stderr}`, path.dirname(resolvedTsconfig));
-      const tsgoDrift = compareDrift(tscDiagnostics, tsgoDiagnostics, 'tsgo');
-      benchRes.drift.tsgo = tsgoDrift;
+      tsgoDiagnostics = parseTypeScriptDiagnostics(`${tsgoOutput.stdout}${tsgoOutput.stderr}`, path.dirname(resolvedTsconfig));
       ({ stats: benchRes.stats.tsgo, memory: benchRes.memory.tsgo } =
         runBenchmark('tsgo', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs));
 
       // singleThreaded tsgo (optional)
       const tsgoStOutput = runTool('tsgo-singleThreaded', resolvedTsconfig, 1, 0, args.rustJobs);
       if (tsgoStOutput.exitCode !== null && !tsgoStOutput.stderr.includes('Unknown option')) {
-        const tsgoStDiagnostics = parseTypeScriptDiagnostics(`${tsgoStOutput.stdout}${tsgoStOutput.stderr}`, path.dirname(resolvedTsconfig));
-        benchRes.drift['tsgo-singleThreaded'] = compareDrift(tscDiagnostics, tsgoStDiagnostics, 'tsgo-singleThreaded');
+        tsgoStDiagnostics = parseTypeScriptDiagnostics(`${tsgoStOutput.stdout}${tsgoStOutput.stderr}`, path.dirname(resolvedTsconfig));
         ({ stats: benchRes.stats['tsgo-singleThreaded'], memory: benchRes.memory['tsgo-singleThreaded'] } =
           runBenchmark('tsgo-singleThreaded', resolvedTsconfig, args.iterations, args.warmup, args.rustJobs));
       } else {
@@ -202,18 +202,30 @@ function main(argv = process.argv.slice(2)): void {
        console.log(`  tsgo skipped (native TypeScript 7.0 not resolvable). Run pnpm install to restore the typescript package.`);
     }
 
+    const baselineTool: Tool = tsgoDiagnostics === null ? 'tsc' : 'tsgo';
+    const baselineDiagnostics = tsgoDiagnostics ?? tscDiagnostics;
+    if (baselineTool === 'tsc') {
+      console.log(`  Diagnostic baseline: tsc (TS 6) — tsgo unavailable.`);
+    }
+    benchRes.drift[baselineTool] = 'baseline';
+    if (baselineTool !== 'tsc') {
+      benchRes.drift.tsc = compareDrift(baselineDiagnostics, tscDiagnostics, baselineTool);
+    }
+    if (tsgoStDiagnostics !== null) {
+      benchRes.drift['tsgo-singleThreaded'] = compareDrift(baselineDiagnostics, tsgoStDiagnostics, baselineTool);
+    }
+
     // 3. surge-ts
-    console.log(`  Running surge-ts baseline...`);
+    console.log(`  Running surge-ts...`);
     const rustOutput = runTool('surge-ts', resolvedTsconfig, 1, 0, args.rustJobs);
     const rustDiagnosticsOutput = rustOutput.stdout.trim() ? rustOutput.stdout : rustOutput.stderr;
     try {
       const rustDiagnostics = parseSurgeTsDiagnostics(rustDiagnosticsOutput, path.dirname(resolvedTsconfig));
-      const rustCompare = compareDiagnostics('project', projectDisplay, tscDiagnostics, rustDiagnostics);
-      if (rustCompare.summary.byCodeMatch && rustCompare.summary.byFileCodeMatch) {
-         benchRes.drift['surge-ts'] = 'exact vs tsc';
-      } else {
-         benchRes.drift['surge-ts'] = 'known delta';
-      }
+      const rustCompare = compareDiagnostics('project', projectDisplay, baselineDiagnostics, rustDiagnostics);
+      benchRes.drift['surge-ts'] =
+        rustCompare.summary.byCodeMatch && rustCompare.summary.byFileCodeMatch
+          ? `exact vs ${baselineTool}`
+          : `known delta vs ${baselineTool}`;
     } catch (e) {
       benchRes.drift['surge-ts'] = 'parse failed';
     }
@@ -396,14 +408,13 @@ function runBenchmark(
   return { stats: { median, min, max, runs: iterations }, memory };
 }
 
-function compareDrift(base: NormalizedDiagnostic[], curr: NormalizedDiagnostic[], tool: string): string {
+function compareDrift(base: NormalizedDiagnostic[], curr: NormalizedDiagnostic[], baselineTool: string): string {
   const baseCodes = base.map(d => d.code).sort().join(',');
   const currCodes = curr.map(d => d.code).sort().join(',');
-  if (baseCodes === currCodes) {
-    if (base.length === curr.length) return 'exact vs tsc';
-    return 'known delta'; // simplified
+  if (baseCodes === currCodes && base.length === curr.length) {
+    return `exact vs ${baselineTool}`;
   }
-  return 'known delta';
+  return `known delta vs ${baselineTool}`;
 }
 
 function generateScaleFixture(name: string, numFiles: number, numSymbols: number): string {

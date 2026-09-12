@@ -52,9 +52,10 @@ export function normalizeBenchReport(data: unknown): BenchReportDocument {
   throw new Error('Unrecognized benchmark report shape: expected an array or { meta, results }');
 }
 
-/// `tsc` is the legacy JS compiler (TypeScript 6.x baseline) and `tsgo` is
-/// the native TypeScript 7 compiler; label them so readers don't mistake the
-/// slow baseline for current TypeScript.
+/// `tsc` is the legacy JS compiler (TypeScript 6.x, the speed reference) and
+/// `tsgo` is the native TypeScript 7 compiler and the diagnostic baseline;
+/// label them so readers don't mistake the slow reference for current
+/// TypeScript.
 const TOOL_LABELS: Record<string, string> = {
   'tsc': 'tsc (TS 6)',
   'tsgo': 'tsgo (TS 7)',
@@ -78,14 +79,18 @@ type DriftStyle = { bg: string; fg: string };
 
 const DRIFT_STYLES: Record<string, DriftStyle> = {
   'baseline': { bg: '#eceff1', fg: '#546e7a' },
-  'exact vs tsc': { bg: '#e6f4ea', fg: '#137333' },
+  'exact': { bg: '#e6f4ea', fg: '#137333' },
   'known delta': { bg: '#fef7e0', fg: '#b06000' },
   'parse failed': { bg: '#fce8e6', fg: '#c5221f' },
 };
 
 const DRIFT_FALLBACK: DriftStyle = { bg: '#eceff1', fg: '#546e7a' };
 
+/// Drift labels name the baseline compiler they were measured against
+/// (`exact vs tsgo`, `known delta vs tsgo`), so match on the leading verdict.
 function driftStyle(drift: string): DriftStyle {
+  if (drift.startsWith('exact')) return DRIFT_STYLES['exact'];
+  if (drift.startsWith('known delta')) return DRIFT_STYLES['known delta'];
   return DRIFT_STYLES[drift] ?? DRIFT_FALLBACK;
 }
 
@@ -241,7 +246,7 @@ function buildTimePanel(results: BenchReportResult[]): Panel | null {
         valueText: formatSecondsShort(stats.median),
         ratioText: speedup === null ? null : formatSpeedup(speedup),
         ratioGood: speedup !== null && speedup >= 1,
-        drift: drift && drift !== 'skipped' && tool !== 'tsc' ? drift : null,
+        drift: drift && drift !== 'skipped' && drift !== 'baseline' ? drift : null,
         tooltip: `${label}: median ${stats.median.toFixed(2)}s, min ${stats.min.toFixed(2)}s, max ${stats.max.toFixed(2)}s, runs ${stats.runs}`,
       });
     }
@@ -422,8 +427,8 @@ function metaTableHtml(meta: BenchReportMeta | undefined): string {
   if (meta.nodeVersion) rows.push(['Node', meta.nodeVersion]);
   if (meta.tscVersion || meta.tsgoVersion) {
     const compilers = [
-      meta.tscVersion ? `tsc ${meta.tscVersion} (TS 6 baseline)` : null,
-      meta.tsgoVersion ? `tsgo ${meta.tsgoVersion} (TS 7 native)` : null,
+      meta.tscVersion ? `tsc ${meta.tscVersion} (TS 6 speed reference)` : null,
+      meta.tsgoVersion ? `tsgo ${meta.tsgoVersion} (TS 7 diagnostic baseline)` : null,
     ].filter(Boolean).join(' · ');
     rows.push(['Compilers', compilers]);
   }
@@ -441,7 +446,7 @@ function timeTableHtml(results: BenchReportResult[]): string {
   const sections = results.map((r) => {
     const rows = TOOLS_ORDER.filter((tool) => r.stats[tool]).map((tool) => {
       const stats = r.stats[tool]!;
-      const drift = tool === 'tsc' ? 'baseline' : (r.drift[tool] ?? '');
+      const drift = r.drift[tool] ?? '';
       const style = driftStyle(drift);
       const speedup = speedupVsTsc(r, tool);
       const speedCell = speedup === null
@@ -573,7 +578,7 @@ export function renderBenchmarkHtml(input: BenchReportInput): string {
     ${metaTableHtml(doc.meta)}
     ${body}
     <div class="disclaimer">
-      <strong>Disclaimer:</strong> This is a local-machine-relative regression benchmark. Results are highly dependent on the hardware it was run on. These are not cross-machine or marketing performance claims. Non-exact diagnostic drift means the tool's diagnostics differ from the baseline tsc output; speed is only meaningful alongside a correct diagnostic surface.
+      <strong>Disclaimer:</strong> This is a local-machine-relative regression benchmark. Results are highly dependent on the hardware it was run on. These are not cross-machine or marketing performance claims. Non-exact diagnostic drift means the tool's diagnostics differ from the baseline compiler named in the drift label (tsgo, the TypeScript 7 reference, unless it was unavailable); speed is only meaningful alongside a correct diagnostic surface.
     </div>
   </div>
 </body>

@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "declaration": false,
+    "declarationMap": false,
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": [
+    "packages/query-core/src",
+    "packages/query-persist-client-core/src",
+    "packages/query-async-storage-persister/src",
+    "packages/query-sync-storage-persister/src",
+    "packages/query-broadcast-client-experimental/src",
+    "packages/query-broadcast-client-experimental/test-setup.ts",
+    "packages/query-test-utils/src",
+    "packages/react-query/src",
+    "packages/react-query/test-setup.ts",
+    "packages/react-query-persist-client/src",
+    "packages/react-query-persist-client/test-setup.ts",
+    "packages/react-query-next-experimental/src",
+    "packages/eslint-plugin-query/src"
+  ],
+  "exclude": ["packages/eslint-plugin-query/src/__tests__/ts-fixture"]
+}
