@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Instant;
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement, ParserWorker};
+use surge_ts_syntax::{ParsedExportDeclaration, ParsedSource, ParsedStatement, ParserWorker};
 use surge_ts_types::{FunctionType, ProgramTypeStore, with_program_type_store};
 
 // Instrumentation lives in `metrics`; re-export it so existing callers that
@@ -536,14 +536,30 @@ pub fn check_program_with_stats_and_jobs(
     options: CheckerOptions,
     jobs: usize,
 ) -> ProgramCheckResult {
+    check_program_with_prescanned_sources(files, Vec::new(), options, jobs)
+}
+
+/// Check a program whose files a loader has already parsed while building the
+/// module graph. A prescanned entry replaces the program's own parse of the
+/// file it names; anything unmatched is parsed here as usual. The parse is a
+/// pure function of `(source text, file name)`, so reuse is only sound when
+/// the caller parsed the same text this program is handed — which is why the
+/// side channel is keyed by file name rather than trusting input order.
+pub fn check_program_with_prescanned_sources(
+    files: Vec<SourceFileInput>,
+    prescanned: Vec<ParsedSource>,
+    options: CheckerOptions,
+    jobs: usize,
+) -> ProgramCheckResult {
     let store = ProgramTypeStore::new();
     with_program_type_store(store.clone(), || {
-        check_program_with_stats_and_jobs_inner(files, options, jobs, store)
+        check_program_with_stats_and_jobs_inner(files, prescanned, options, jobs, store)
     })
 }
 
 fn check_program_with_stats_and_jobs_inner(
     files: Vec<SourceFileInput>,
+    prescanned: Vec<ParsedSource>,
     options: CheckerOptions,
     jobs: usize,
     store: Arc<ProgramTypeStore>,
@@ -578,7 +594,7 @@ fn check_program_with_stats_and_jobs_inner(
     crate::modules::clear_namespace_alias_table_cache();
 
     let parse_start = Instant::now();
-    let mut parsed_files = parse_program_files(files, jobs, timings.as_ref());
+    let mut parsed_files = parse_program_files(files, prescanned, jobs, timings.as_ref());
     let ast_nodes = parsed_files
         .iter()
         .map(|file| file.statements.len() as u64)
@@ -624,6 +640,7 @@ fn check_program_with_stats_and_jobs_inner(
         .map(|file| file.file_name.clone())
         .unwrap_or_default();
     let mut ctx = CheckerContext::new(first_file_name, options, file_kinds);
+    ctx.declaration_environment_store.mark_program_lifetime();
     ctx.timings = timings.clone();
     ctx.set_module_file_index_by_identity(module_file_index_by_identity);
     emit_type_graph_census("after_loading_parsing", Some(&ctx), &store, census_external);
@@ -993,6 +1010,7 @@ fn check_program_with_stats_and_jobs_inner(
     record_program_timing(timings.as_ref(), |timings| {
         timings.final_export_table_resolution += export_resolution_start.elapsed()
     });
+    refresh_reexported_namespace_objects(&parsed_files, &mut module_export_tables);
     let import_binding_start = Instant::now();
     drop(std::mem::take(&mut module_import_bindings));
     module_import_bindings = collect_module_import_bindings(
@@ -1137,7 +1155,8 @@ fn check_program_with_stats_and_jobs_inner(
             }
             ctx.file_name = parsed_file.file_name.clone();
             ctx.type_declarations = analysis.local_type_declarations.as_ref().clone();
-            let table = crate::modules::collect_exportable_value_symbols(
+            crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "lv");
+        let table = crate::modules::collect_exportable_value_symbols(
                 &parsed_file.statements,
                 &analysis.local_type_declarations,
                 &seed,
@@ -1331,15 +1350,25 @@ fn resolve_parse_worker_count(jobs: usize, files: &[SourceFileInput]) -> usize {
 
 fn parse_program_files(
     files: Vec<SourceFileInput>,
+    prescanned: Vec<ParsedSource>,
     jobs: usize,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<ParsedProgramFile> {
+    let prescanned = prescanned_by_file(prescanned, &files);
     let worker_count = resolve_parse_worker_count(jobs, &files);
     if worker_count <= 1 {
         let mut parser = ParserWorker::new();
         return files
             .iter()
-            .map(|input| parse_program_file(&mut parser, input, timings))
+            .zip(prescanned)
+            .map(|(input, reused)| {
+                parse_program_file(
+                    &mut parser,
+                    input,
+                    reused.into_inner().ok().flatten(),
+                    timings,
+                )
+            })
             .collect();
     }
 
@@ -1349,6 +1378,7 @@ fn parse_program_files(
     let mut indexed = thread::scope(|scope| {
         let next_index = &next_index;
         let files = &files;
+        let prescanned = &prescanned;
         let mut handles = Vec::with_capacity(worker_count);
 
         for _ in 0..worker_count {
@@ -1362,9 +1392,21 @@ fn parse_program_files(
                     if file_index >= files.len() {
                         break;
                     }
+                    // Each index is claimed by exactly one worker, so the lock
+                    // never contends; it is what lets a worker take ownership
+                    // of its own slot out of the shared slice.
+                    let reused = prescanned[file_index]
+                        .lock()
+                        .ok()
+                        .and_then(|mut slot| slot.take());
                     worker_results.push((
                         file_index,
-                        parse_program_file(&mut parser, &files[file_index], timings.as_ref()),
+                        parse_program_file(
+                            &mut parser,
+                            &files[file_index],
+                            reused,
+                            timings.as_ref(),
+                        ),
                     ));
                 }
                 worker_results
@@ -1381,21 +1423,70 @@ fn parse_program_files(
     indexed.into_iter().map(|(_, parsed)| parsed).collect()
 }
 
+/// Both flags are deliberately *textual*, not AST facts: `contains_typeof`
+/// gates releasing a declaration module's local symbols, so a `typeof` in a
+/// comment or a string must keep the symbols alive. Every file's full text is
+/// swept for them, which on a project whose dependency declarations dwarf its
+/// sources is megabytes per run, and `str::contains` builds a fresh two-way
+/// searcher on each call. The needle-only finders are built once instead.
+fn source_text_has_export_default(source_text: &str) -> bool {
+    static FINDER: std::sync::OnceLock<memchr::memmem::Finder<'static>> =
+        std::sync::OnceLock::new();
+    FINDER
+        .get_or_init(|| memchr::memmem::Finder::new("export default"))
+        .find(source_text.as_bytes())
+        .is_some()
+}
+
+fn source_text_has_typeof(source_text: &str) -> bool {
+    static FINDER: std::sync::OnceLock<memchr::memmem::Finder<'static>> =
+        std::sync::OnceLock::new();
+    FINDER
+        .get_or_init(|| memchr::memmem::Finder::new("typeof"))
+        .find(source_text.as_bytes())
+        .is_some()
+}
+
+/// Line up the loader's parses with the program's file order. Matching is by
+/// file name because the program splices in generated default libs of its own,
+/// and a loader is free to hand over fewer files than the program checks.
+fn prescanned_by_file(
+    prescanned: Vec<ParsedSource>,
+    files: &[SourceFileInput],
+) -> Vec<Mutex<Option<ParsedSource>>> {
+    if prescanned.is_empty() {
+        return files.iter().map(|_| Mutex::new(None)).collect();
+    }
+
+    let mut by_name = prescanned
+        .into_iter()
+        .map(|parsed| (parsed.file_name.clone(), parsed))
+        .collect::<HashMap<_, _>>();
+    files
+        .iter()
+        .map(|file| Mutex::new(by_name.remove(&file.file_name)))
+        .collect()
+}
+
 fn parse_program_file(
     parser: &mut ParserWorker,
     input: &SourceFileInput,
+    prescanned: Option<ParsedSource>,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> ParsedProgramFile {
     record_program_counter(|c| c.files_total += 1);
-    if classify_file_kind(&input.file_name) == FileKind::GeneratedDeclaration {
+    let file_kind = classify_file_kind(&input.file_name);
+    if file_kind == FileKind::GeneratedDeclaration {
         record_program_counter(|c| c.generated_default_lib_files += 1);
     }
 
     let parse_start = Instant::now();
-    let parsed = parser.parse(&input.source_text, &input.file_name);
+    let parsed = match prescanned {
+        Some(parsed) => parsed,
+        None => parser.parse(&input.source_text, &input.file_name),
+    };
     let parse_duration = parse_start.elapsed();
     let file_name = parsed.file_name;
-    let file_kind = classify_file_kind(&file_name);
     record_program_timing(timings, |timings| match file_kind {
         FileKind::DependencyDeclaration => {
             timings.dependency_declaration_parse_time += parse_duration
@@ -1427,12 +1518,12 @@ fn parse_program_file(
     });
     ParsedProgramFile {
         file_name: file_name.clone(),
-        has_export_default: input.source_text.contains("export default"),
-        contains_typeof: input.source_text.contains("typeof"),
+        has_export_default: source_text_has_export_default(&input.source_text),
+        contains_typeof: source_text_has_typeof(&input.source_text),
         statements: parsed.statements,
         parser_errors: parsed.parser_errors,
         is_module: parsed.is_module,
-        file_kind: classify_file_kind(&file_name),
+        file_kind,
         module_reads: parsed.module_reads,
         suppressed_ranges: parsed.suppressed_ranges,
         json_module_type: parsed.json_module_type,
@@ -1453,6 +1544,11 @@ pub(crate) fn is_library_classified_file_name(file_name: &str) -> bool {
     )
 }
 
+/// `is_library_classified_file_name` asks for this on per-type-resolution
+/// paths, so the predicates below stay allocation-free: lowercasing the path
+/// and normalizing its separators into fresh `String`s per call showed up in
+/// CPU profiles. Memoizing the result per thread was tried and is a measured
+/// loss — hashing a long path costs more than the scans do (tRPC +1.6% CPU).
 fn classify_file_kind(file_name: &str) -> FileKind {
     if is_declaration_file_name(file_name) {
         if is_generated_declaration_file_name(file_name) {
@@ -1473,8 +1569,7 @@ fn classify_file_kind(file_name: &str) -> FileKind {
         // aggressive declaration-backed policy; path-mapped declarations and
         // project-reference outputs outside dependency roots stay
         // `RootDeclaration` and retain user-authored checking semantics.
-        let normalized = file_name.replace('\\', "/");
-        if normalized.contains("/node_modules/") {
+        if contains_path_segment(file_name, "node_modules") {
             return FileKind::DependencyDeclaration;
         }
 
@@ -1484,20 +1579,48 @@ fn classify_file_kind(file_name: &str) -> FileKind {
     FileKind::RootSource
 }
 
+/// `"/<segment>/"` with `\` accepted as a separator, without normalizing the
+/// path into a fresh `String` first.
+fn contains_path_segment(file_name: &str, segment: &str) -> bool {
+    let is_separator = |byte: u8| byte == b'/' || byte == b'\\';
+    let bytes = file_name.as_bytes();
+    let segment = segment.as_bytes();
+    let window = segment.len() + 2;
+    bytes.len() >= window
+        && bytes.windows(window).any(|candidate| {
+            is_separator(candidate[0])
+                && is_separator(candidate[window - 1])
+                && &candidate[1..window - 1] == segment
+        })
+}
+
+fn ends_with_ignore_ascii_case(file_name: &str, suffix: &str) -> bool {
+    let (bytes, suffix) = (file_name.as_bytes(), suffix.as_bytes());
+    bytes.len() >= suffix.len() && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
+fn contains_ignore_ascii_case(file_name: &str, needle: &str) -> bool {
+    let (bytes, needle) = (file_name.as_bytes(), needle.as_bytes());
+    bytes.len() >= needle.len()
+        && bytes
+            .windows(needle.len())
+            .any(|candidate| candidate.eq_ignore_ascii_case(needle))
+}
+
 fn is_declaration_file_name(file_name: &str) -> bool {
-    let lower = file_name.to_ascii_lowercase();
-    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+    ends_with_ignore_ascii_case(file_name, ".d.ts")
+        || ends_with_ignore_ascii_case(file_name, ".d.mts")
+        || ends_with_ignore_ascii_case(file_name, ".d.cts")
 }
 
 fn is_generated_declaration_file_name(file_name: &str) -> bool {
-    let lower = file_name.to_ascii_lowercase();
-    lower.contains("/.nuxt/")
-        || lower.contains("/.generated/")
-        || lower.contains("/generated-libs/")
-        || lower.contains("/generated/")
-        || lower.ends_with(".generated.d.ts")
-        || lower.ends_with(".generated.d.mts")
-        || lower.ends_with(".generated.d.cts")
+    contains_ignore_ascii_case(file_name, "/.nuxt/")
+        || contains_ignore_ascii_case(file_name, "/.generated/")
+        || contains_ignore_ascii_case(file_name, "/generated-libs/")
+        || contains_ignore_ascii_case(file_name, "/generated/")
+        || ends_with_ignore_ascii_case(file_name, ".generated.d.ts")
+        || ends_with_ignore_ascii_case(file_name, ".generated.d.mts")
+        || ends_with_ignore_ascii_case(file_name, ".generated.d.cts")
 }
 
 #[cfg(test)]
@@ -2459,6 +2582,89 @@ fn extend_diagnostics_dedup(
 /// `import * as React` would re-qualify as `React.JSX.IntrinsicElements`).
 /// Only dependency/root declaration files are considered so a user module
 /// re-declaring the name cannot hijack the program-wide fallback.
+/// Rebuilds a module-namespace object that one module re-exports from another
+/// (`import * as inner from "./inner"; export { inner }`) against the *final*
+/// export tables.
+///
+/// The object an importer binds is materialized at import-binding time, and the
+/// bindings the final analysis round runs under were built from the
+/// preliminary analyses — where `SURGE_THIN_PRELIM` degrades every variable to
+/// `unknown`. A module that only *uses* the import re-resolves later, but one
+/// that re-exports it bakes that thin object into its own export table, and
+/// nothing refreshes it: `typeof recast.types.builders` (tRPC's jscodeshift
+/// surface, through `ast-types`) stayed open for the rest of the run.
+///
+/// Only the top level is rebuilt, from the tag `tag_namespace_type_with_module_path`
+/// leaves on the object, so a module namespace that (transitively) contains
+/// itself cannot recurse.
+fn refresh_reexported_namespace_objects(
+    parsed_files: &[ParsedProgramFile],
+    module_export_tables: &mut [Option<ModuleExportTable>],
+) {
+    let mut index_by_module_path: surge_ts_types::fx::FxHashMap<&str, usize> =
+        surge_ts_types::fx::FxHashMap::default();
+    for (index, parsed_file) in parsed_files.iter().enumerate() {
+        index_by_module_path.insert(
+            crate::modules::imports::strip_typescript_extension(&parsed_file.file_name),
+            index,
+        );
+    }
+
+    let mut replacements: Vec<(usize, Arc<str>, surge_ts_types::Type)> = Vec::new();
+    for (index, export_table) in module_export_tables.iter().enumerate() {
+        let Some(export_table) = export_table else {
+            continue;
+        };
+        for (name, symbol) in export_table.symbols.iter_shared() {
+            let Some(module_path) = namespace_object_module_path(&symbol.ty) else {
+                continue;
+            };
+            let Some(&source_index) = index_by_module_path.get(module_path) else {
+                continue;
+            };
+            if source_index == index {
+                continue;
+            }
+            let Some(source_table) = module_export_tables[source_index].as_ref() else {
+                continue;
+            };
+            let refreshed = crate::modules::imports::tag_namespace_type_with_module_path(
+                crate::modules::namespace_export_object_type(source_table),
+                &parsed_files[source_index].file_name,
+            );
+            if refreshed != symbol.ty {
+                replacements.push((index, name.clone(), refreshed));
+            }
+        }
+    }
+
+    for (index, name, refreshed) in replacements {
+        let Some(export_table) = module_export_tables[index].as_mut() else {
+            continue;
+        };
+        let Some(symbol) = export_table.symbols.get(name.as_ref()) else {
+            continue;
+        };
+        let mut symbol = symbol.clone();
+        symbol.ty = refreshed;
+        export_table.symbols.insert_shared(name.to_string(), Arc::new(symbol));
+        export_table.namespace_export_object_type = None;
+    }
+}
+
+/// The module path a namespace-import object was tagged with, if the type is
+/// one (`typeof import("<path>")`).
+fn namespace_object_module_path(ty: &surge_ts_types::Type) -> Option<&str> {
+    let surge_ts_types::Type::Object(object) = ty else {
+        return None;
+    };
+    object
+        .alias_name
+        .as_deref()?
+        .strip_prefix("typeof import(\"")?
+        .strip_suffix("\")")
+}
+
 fn locate_jsx_intrinsic_elements_declarer(
     parsed_files: &[ParsedProgramFile],
     module_export_tables: &[Option<crate::modules::ModuleExportTable>],
@@ -2623,6 +2829,7 @@ fn check_program_file(
         let current_symbols = ctx
             .symbols
             .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "cv");
         let validation_symbols = crate::modules::collect_exportable_value_symbols(
             &parsed_file.statements,
             &current_type_declarations,
@@ -2737,6 +2944,7 @@ fn check_program_file(
         let current_symbols = ctx
             .symbols
             .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "cv");
         let validation_symbols = crate::modules::collect_exportable_value_symbols(
             &parsed_file.statements,
             &current_type_declarations,

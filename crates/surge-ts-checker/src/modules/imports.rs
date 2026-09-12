@@ -7,10 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use surge_ts_syntax::{ParsedImportDeclaration, ParsedImportKind, ParsedStatement, ParsedType};
+use surge_ts_diagnostics::Diagnostic;
+use surge_ts_syntax::{
+    ParsedExportDeclaration, ParsedImportDeclaration, ParsedImportKind, ParsedStatement, ParsedType,
+};
 use surge_ts_types::{Type, TypeCopyReason};
 
-use crate::context::CheckerContext;
+use crate::context::{CheckerContext, convert_span};
 use crate::program::{ParsedProgramFile, record_program_timing};
 use crate::symbols::{
     SymbolInfo, SymbolKind, SymbolTable, TypeAliasInfo, TypeDeclarationInfo, TypeDeclarationScope,
@@ -187,6 +190,13 @@ pub(crate) fn try_resolve_module(
                 if let Some(augmentation) = ctx.module_augmentations.get(module_specifier) {
                     crate::program::apply_module_augmentation(&mut export_table, augmentation);
                 }
+                // A relative `declare module "./sibling"` files under the target's
+                // identity, not under any string a consumer writes.
+                crate::program::apply_file_keyed_module_augmentation(
+                    &mut export_table,
+                    resolved_file_name.as_str(),
+                    ctx,
+                );
                 return Some((export_table, scope, Some(*resolved_index)));
             }
         }
@@ -224,11 +234,13 @@ pub(crate) fn try_resolve_module(
                 timings.export_table_lookup += resolution_start.elapsed();
                 timings.import_specifier_resolution += resolution_start.elapsed();
             });
-            return Some((
-                export_table.clone_with_reason(TypeCopyReason::ModuleExport),
-                scope,
-                Some(resolved.resolved_file_index),
-            ));
+            let mut export_table = export_table.clone_with_reason(TypeCopyReason::ModuleExport);
+            crate::program::apply_file_keyed_module_augmentation(
+                &mut export_table,
+                &canonical_file_identity(&resolved.resolved_file_name),
+                ctx,
+            );
+            return Some((export_table, scope, Some(resolved.resolved_file_index)));
         }
     }
 
@@ -249,6 +261,7 @@ pub(crate) fn resolve_import_declaration(
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
+    report_ts_extension_import(import, program_files, ctx);
     match &import.kind {
         ParsedImportKind::Unsupported | ParsedImportKind::TypeOnlyDefault { .. } => {
             if !is_declaration_file_name(&ctx.file_name) {
@@ -264,6 +277,7 @@ pub(crate) fn resolve_import_declaration(
             local_symbol_exists,
             type_declarations,
             symbols,
+            namespace_alias_layers,
             ctx,
         ),
         ParsedImportKind::Default { .. } => resolve_default_import(
@@ -274,6 +288,7 @@ pub(crate) fn resolve_import_declaration(
             local_symbol_exists,
             type_declarations,
             symbols,
+            namespace_alias_layers,
             ctx,
         ),
         ParsedImportKind::Namespace { .. } => resolve_namespace_import(
@@ -294,6 +309,7 @@ pub(crate) fn resolve_import_declaration(
             module_resolution_scopes,
             local_symbol_exists,
             symbols,
+            namespace_alias_layers,
             ctx,
         ),
         ParsedImportKind::SideEffect => {
@@ -339,6 +355,7 @@ fn resolve_default_and_named_import(
     local_symbol_exists: &dyn Fn(&str) -> bool,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
+    namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
     let ParsedImportKind::DefaultAndNamed {
@@ -450,6 +467,12 @@ fn resolve_default_and_named_import(
         None => {
             if allows_synthetic_default_import(ctx, resolved_index, program_files) && !*is_type_only
             {
+                namespace_alias_layers.push(namespace_alias_table(
+                    &export_table,
+                    local_name,
+                    default_scope.as_ref(),
+                    resolved_index,
+                ));
                 bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
             } else if !should_bind_unknown_for_missing_export(
                 &export_table,
@@ -625,6 +648,7 @@ fn resolve_default_import(
     local_symbol_exists: &dyn Fn(&str) -> bool,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
+    namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
     let ParsedImportKind::Default {
@@ -667,6 +691,16 @@ fn resolve_default_import(
         bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
 
         if allows_synthetic_default_import(ctx, resolved_index, program_files) {
+            // The synthetic default *is* the module object, so its exported
+            // types are reachable as `local.Member` exactly as through
+            // `import * as local` (`import http from "http"` then
+            // `http.RequestListener`).
+            namespace_alias_layers.push(namespace_alias_table(
+                &export_table,
+                local_name,
+                scope.as_ref(),
+                resolved_index,
+            ));
             bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
             return;
         }
@@ -714,13 +748,14 @@ fn resolve_import_equals(
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
     local_symbol_exists: &dyn Fn(&str) -> bool,
     symbols: &mut SymbolTable,
+    namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
     let ParsedImportKind::Equals { local_name, .. } = &import.kind else {
         return;
     };
 
-    let Some((export_table, _, _resolved_index)) = try_resolve_module(
+    let Some((export_table, scope, resolved_index)) = try_resolve_module(
         &import.module_specifier,
         ctx,
         program_files,
@@ -742,16 +777,72 @@ fn resolve_import_equals(
     };
 
     // A resolved module that exposes a supported `export = identifier` binds the
-    // local name to that value. Otherwise bind an unknown placeholder without a
-    // diagnostic so an unsupported/unresolved export target does not cascade.
-    match export_table.export_assignment_symbol.clone() {
-        Some(symbol) => {
-            if !local_symbol_exists(local_name) {
-                symbols.insert_shared(local_name.clone(), symbol);
-            }
+    // local name to that value.
+    if let Some(symbol) = export_table.export_assignment_symbol.clone() {
+        if !local_symbol_exists(local_name) {
+            symbols.insert_shared(local_name.clone(), symbol);
         }
-        None => insert_unknown_value_import(local_name, symbols),
+        return;
     }
+
+    // A module that *writes* `export = target` but whose target surge could not
+    // resolve keeps the unknown placeholder: its real shape is that value, not
+    // the module namespace, and standing the (empty) namespace in its place
+    // turns every use into a cascade.
+    let writes_export_assignment = resolved_index
+        .and_then(|index| program_files.get(index))
+        .is_some_and(|resolved_file| {
+            resolved_file.statements.iter().any(|statement| {
+                matches!(
+                    statement,
+                    ParsedStatement::ExportDeclaration(export)
+                        if matches!(export.as_ref(), ParsedExportDeclaration::Equals { .. })
+                )
+            })
+        });
+    if writes_export_assignment || resolved_index.is_none() {
+        insert_unknown_value_import(local_name, symbols);
+        return;
+    }
+
+    // Without an export assignment the target is an ordinary module, and
+    // `import x = require("m")` binds its namespace — the same object
+    // `import * as x` binds. Binding an unknown placeholder instead left every
+    // `x.member` and every `typeof x.member` silent, which is what opened the
+    // whole jscodeshift surface in tRPC's `upgrade` transforms: its `JSCodeshift`
+    // is an intersection over `typeof recast.types.namedTypes`, reached through
+    // `import recast = require("recast")`.
+    namespace_alias_layers.push(namespace_alias_table(
+        &export_table,
+        local_name,
+        scope.as_ref(),
+        resolved_index,
+    ));
+    crate::modules::exports::copy_namespace_alias_value_exports(
+        &export_table,
+        local_name,
+        symbols,
+    );
+
+    if local_symbol_exists(local_name) {
+        return;
+    }
+
+    let namespace_type = namespace_export_object_type(&export_table);
+    let namespace_type = match resolved_index.and_then(|index| program_files.get(index)) {
+        Some(resolved_file) => {
+            tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
+        }
+        None => namespace_type,
+    };
+    symbols.insert(
+        local_name.clone(),
+        SymbolInfo {
+            ty: namespace_type,
+            kind: SymbolKind::Const,
+            function_signature: None,
+        },
+    );
 }
 
 fn bind_synthetic_default_import(
@@ -1299,7 +1390,10 @@ fn resolve_named_import(
 /// Tags a namespace import object with tsc's `typeof import("<path>")` display
 /// form. The path is the resolved module file made absolute and stripped of its
 /// TypeScript extension (e.g. `…/pkg/index.d.ts` -> `…/pkg/index`).
-fn tag_namespace_type_with_module_path(namespace_type: Type, resolved_file_name: &str) -> Type {
+pub(crate) fn tag_namespace_type_with_module_path(
+    namespace_type: Type,
+    resolved_file_name: &str,
+) -> Type {
     match namespace_type {
         Type::Object(object) => {
             let path = strip_typescript_extension(resolved_file_name);
@@ -1312,7 +1406,7 @@ fn tag_namespace_type_with_module_path(namespace_type: Type, resolved_file_name:
 /// Strips a TypeScript source/declaration extension, matching the module name
 /// tsc prints inside `typeof import(...)`. Declaration extensions are checked
 /// first so `index.d.ts` becomes `index`, not `index.d`.
-fn strip_typescript_extension(file_name: &str) -> &str {
+pub(crate) fn strip_typescript_extension(file_name: &str) -> &str {
     for extension in [".d.ts", ".d.mts", ".d.cts", ".ts", ".tsx", ".mts", ".cts"] {
         if let Some(stripped) = file_name.strip_suffix(extension) {
             return stripped;
@@ -1320,4 +1414,58 @@ fn strip_typescript_extension(file_name: &str) -> &str {
     }
 
     file_name
+}
+
+/// tsc's TS5097: an import path that resolves *by* its written TypeScript
+/// extension needs `allowImportingTsExtensions`. A type-only import and an
+/// import written in a declaration file are exempt, and a `.d.*` path is a
+/// different error, so it is not one of these extensions.
+fn report_ts_extension_import(
+    import: &ParsedImportDeclaration,
+    program_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) {
+    if ctx.options.allow_importing_ts_extensions
+        || is_declaration_file_name(&ctx.file_name)
+        || import_is_type_only(&import.kind)
+    {
+        return;
+    }
+    let Some(extension) = written_ts_extension(&import.module_specifier) else {
+        return;
+    };
+    if resolve_relative_module(
+        &ctx.file_name,
+        &import.module_specifier,
+        program_files,
+        &ctx.module_file_index_by_identity,
+    )
+    .is_none()
+    {
+        return;
+    }
+    let mut diagnostic = Diagnostic::ts5097(extension, ctx.file_name.clone());
+    if let Some(span) = import.module_specifier_span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+    ctx.push(diagnostic);
+}
+
+fn written_ts_extension(specifier: &str) -> Option<&'static str> {
+    if is_declaration_file_name(specifier) {
+        return None;
+    }
+    [".ts", ".tsx", ".mts", ".cts"]
+        .into_iter()
+        .find(|extension| specifier.ends_with(extension))
+}
+
+fn import_is_type_only(kind: &ParsedImportKind) -> bool {
+    match kind {
+        ParsedImportKind::Named { is_type_only, .. }
+        | ParsedImportKind::DefaultAndNamed { is_type_only, .. }
+        | ParsedImportKind::Namespace { is_type_only, .. } => *is_type_only,
+        ParsedImportKind::TypeOnlyDefault { .. } => true,
+        _ => false,
+    }
 }

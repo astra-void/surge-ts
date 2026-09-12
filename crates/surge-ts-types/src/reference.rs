@@ -86,6 +86,12 @@ pub struct TypeReference {
     /// branch's own type. Display-only and a pure function of the declaration,
     /// so it stays out of `nominal_eq` and out of canonical identity.
     pub render_structurally: bool,
+    /// This reference is a *numeric* `enum` type (the enum itself or one of its
+    /// member types). tsc lets any `number` flow into one — `Flags.A | Flags.B`
+    /// is typed `number`, and passing it where `Flags` is expected is legal — so
+    /// assignability needs to recognise the target. Display-only provenance, like
+    /// `render_structurally`: it stays out of `nominal_eq` and canonical identity.
+    pub numeric_enum: bool,
     resolver: Arc<dyn ResolveReference>,
 }
 
@@ -101,6 +107,7 @@ impl TypeReference {
             display: display.into(),
             arguments: arguments.into(),
             render_structurally: false,
+            numeric_enum: false,
             resolver,
         }
     }
@@ -109,6 +116,12 @@ impl TypeReference {
     /// Marks this reference as rendering its resolved type structurally.
     pub fn rendered_structurally(mut self) -> Self {
         self.render_structurally = true;
+        self
+    }
+
+    /// Marks this reference as a numeric `enum` type.
+    pub fn numeric_enum(mut self) -> Self {
+        self.numeric_enum = true;
         self
     }
 

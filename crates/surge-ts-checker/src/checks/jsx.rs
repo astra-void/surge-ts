@@ -659,6 +659,6 @@ fn present_attribute_object_name(
 }
 
 fn type_contains_unknown_or_any(ty: &Type) -> bool {
-    matches!(ty, Type::Unknown | Type::GenuineUnknown | Type::Any)
+    matches!(ty, Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Any)
         || matches!(ty, Type::Union(union) if union.types().iter().any(type_contains_unknown_or_any))
 }

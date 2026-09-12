@@ -255,8 +255,14 @@ fn lookup_export_assignment_member(
         // `export = <any>` surface means.
         Type::Any => Type::Any,
         // Declared properties only — `Object.prototype` members are not module
-        // exports, so `import { toString } from "path"` must stay TS2305.
-        Type::Object(object) => object.properties.get(local_name)?.ty.clone(),
+        // exports, so `import { toString } from "path"` must stay TS2305. A
+        // static side left open (its base was modelled as `any`) answers like
+        // `any` does.
+        Type::Object(object) => match object.properties.get(local_name) {
+            Some(property) => property.ty.clone(),
+            None if object.synthetic_open_index => Type::Any,
+            None => return None,
+        },
         _ => return None,
     };
 

@@ -134,8 +134,11 @@ fn expectation_lost_an_operand(expected_type: &Type) -> bool {
 /// lands here.
 fn expectation_is_degraded(expected_type: &Type) -> bool {
     match expected_type {
-        Type::Unknown => true,
-        Type::Union(union) => union.types().iter().any(|member| *member == Type::Unknown),
+        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| matches!(member, Type::Unknown | Type::TypeParameter(_))),
         _ => false,
     }
 }
@@ -437,6 +440,25 @@ fn evaluate_expression_with_expected_type_inner(
                 ctx,
             );
         }
+        // Several array/tuple members: the literal itself says which one it is,
+        // the way a discriminated object literal does. `match<['+', number,
+        // number] | ['-', number]>(['-', 2])` has to reach the `'-'` member, and
+        // `[{ type: 'b', s: '2' }]` against `A[] | B[]` has to reach `B[]`, or
+        // the literal is evaluated context-free and widens.
+        if let ParsedExpression::ArrayLiteral { elements, .. } = expression
+            && let Some(member) =
+                sole_matching_sequence_member(union.types(), elements, symbols, ctx)
+        {
+            return evaluate_expression_with_expected_type_anchored(
+                expression,
+                fallback_span,
+                target_span,
+                Some(&member),
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            );
+        }
     }
 
     if let (Type::Union(union), ParsedExpression::ObjectLiteral { properties, .. }) =
@@ -479,6 +501,36 @@ fn evaluate_expression_with_expected_type_inner(
                 fallback_span,
                 target_span,
                 Some(member),
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            );
+        }
+
+        // Several members declare the written properties, and the one the literal
+        // belongs to may only be visible *below* the top level:
+        // `{ value: A[] } | { value: B[] }` ties on names, and what decides it is
+        // a literal inside the nested array. Typing the literal once against the
+        // per-property union — which is the contextual type tsc uses here — gives
+        // each nested literal the context it needs, and the result then picks its
+        // member. Two passes, not one per candidate.
+        if union_members_are_all_objects(union)
+            && let Some(member) = union_member_for_object_literal(
+                union.types(),
+                expression,
+                &written,
+                fallback_span,
+                target_span,
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            )
+        {
+            return evaluate_expression_with_expected_type_anchored(
+                expression,
+                fallback_span,
+                target_span,
+                Some(&member),
                 _expected_diagnostic,
                 symbols,
                 ctx,
@@ -534,6 +586,174 @@ fn evaluate_expression_with_expected_type_inner(
 /// `ReadableStream | ... | Record<string, any>` was reported as missing
 /// `ReadableStream`'s members once a `.d.ts` merge gave that interface a
 /// degraded index signature.
+/// The union member an object literal belongs to, when several members declare
+/// everything it writes. Without it the literal is evaluated context-free, its
+/// *nested* literals widen, and every member then rejects it.
+///
+/// Two signals, cheapest first. A property written as a primitive literal has its
+/// type without any evaluation, and in a discriminated union it alone decides.
+/// Only a literal with no such property — `{ value: [ … ] }`, whose discriminator
+/// lives inside the array — pays for one real evaluation of that one property
+/// against the union of what the candidates declare for it.
+///
+/// Trying each candidate instead was measured and rejected: 5 false positives on
+/// tRPC and tanstack-query never finishing.
+fn union_member_for_object_literal(
+    members: &[Type],
+    expression: &ParsedExpression,
+    written: &[&str],
+    fallback_span: Option<SyntaxTextSpan>,
+    target_span: Option<SyntaxTextSpan>,
+    expected_diagnostic: ExpectedTypeDiagnostic,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if written.is_empty() {
+        return None;
+    }
+    let candidates: Vec<&Type> = members
+        .iter()
+        .filter(|member| written.iter().all(|name| member_declares_property(member, name)))
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    // Typing a literal against a *wide* member is the expensive half of this, not
+    // the probe: with no cap at all, and even with every probe removed, the
+    // tanstack-query aggregate goes from 4 s to not finishing in five minutes on
+    // its query-option unions. At 20 own properties it is 4 s again, and 40 is
+    // already too high. The cap is a cost bound, so it is deliberately about the
+    // candidate's size rather than the union's arity.
+    const MAX_CANDIDATE_PROPERTIES: usize = 20;
+    if candidates.iter().any(|member| {
+        matches!(member.peeled(), Type::Object(object) if object.properties.len() > MAX_CANDIDATE_PROPERTIES)
+    }) {
+        return None;
+    }
+
+    let mut narrowed: Vec<&Type> = candidates.clone();
+    // One member declaring *every* written property, where several declare some,
+    // is already the decision — that is the same evidence the single-match check
+    // above uses, read the strict way round.
+    let mut decided = candidates.len() == 1 && members.len() > 1;
+
+    // Discriminants first, and for free: a property written as a primitive
+    // literal has its type without any evaluation, and in a discriminated union
+    // it alone decides. Only if that leaves the set ambiguous is anything typed.
+    for property in properties_of(expression) {
+        if property.is_spread {
+            continue;
+        }
+        let Some(value) = written_literal_value(&property.value) else {
+            continue;
+        };
+        narrowed = match narrow_by_property(&narrowed, property.name.as_str(), &value) {
+            Some(next) => {
+                decided = true;
+                next
+            }
+            None => narrowed,
+        };
+        if narrowed.len() == 1 {
+            return Some(narrowed[0].clone());
+        }
+    }
+
+    // No discriminant settled it. One property may still, but typing it costs a
+    // real evaluation, so this is bounded to the single-property literal — the
+    // `{ value: [ … ] }` shape whose discriminator lives inside a nested array —
+    // and cannot nest.
+    const MAX_PROBE_CANDIDATES: usize = 4;
+    if !decided
+        && written.len() == 1
+        && narrowed.len() <= MAX_PROBE_CANDIDATES
+        && ctx.union_member_probe_depth == 0
+        && let Some(property) = properties_of(expression)
+            .iter()
+            .find(|property| property.name.as_str() == written[0])
+    {
+        let per_property: Vec<Type> = narrowed
+            .iter()
+            .filter_map(|member| member.get_property_access_type(written[0]))
+            .collect();
+        if per_property.len() == narrowed.len() {
+            let diagnostics_before = ctx.diagnostics().len();
+            ctx.union_member_probe_depth += 1;
+            let evaluated = evaluate_expression_with_expected_type_anchored(
+                &property.value,
+                property.value_span.or(fallback_span),
+                target_span,
+                Some(&surge_ts_types::union_type(per_property)),
+                expected_diagnostic,
+                symbols,
+                ctx,
+            );
+            ctx.union_member_probe_depth -= 1;
+            ctx.truncate_diagnostics(diagnostics_before);
+            if let crate::infer::InferredExpression::Known(ty) = evaluated
+                && !ty.is_unknown()
+                && let Some(next) = narrow_by_property(&narrowed, written[0], &ty)
+            {
+                decided = true;
+                narrowed = next;
+            }
+        }
+    }
+
+    if !decided {
+        return None;
+    }
+
+    let mut accepting = narrowed.into_iter();
+    match (accepting.next(), accepting.next()) {
+        (Some(member), None) => Some(member.clone()),
+        _ => None,
+    }
+}
+
+/// A property written as a primitive literal, as the type that literal has. The
+/// discriminant of a discriminated union is always one of these, and reading it
+/// costs no evaluation.
+fn written_literal_value(expression: &ParsedExpression) -> Option<Type> {
+    match expression {
+        ParsedExpression::StringLiteral(value) => Some(Type::StringLiteral(value.clone())),
+        ParsedExpression::BooleanLiteral(value) => Some(Type::BooleanLiteral(*value)),
+        ParsedExpression::NumberLiteral(value) => {
+            Some(Type::NumberLiteral(surge_ts_types::NumberLiteralType {
+                value: value.clone(),
+            }))
+        }
+        _ => None,
+    }
+}
+
+/// The candidates whose declared `name` accepts `value`, or `None` when that
+/// rules out everything or nothing — neither is evidence.
+fn narrow_by_property<'a>(
+    candidates: &[&'a Type],
+    name: &str,
+    value: &Type,
+) -> Option<Vec<&'a Type>> {
+    let accepting: Vec<&Type> = candidates
+        .iter()
+        .copied()
+        .filter(|member| {
+            member
+                .get_property_access_type(name)
+                .is_some_and(|declared| surge_ts_types::is_assignable_to(value, &declared))
+        })
+        .collect();
+    (!accepting.is_empty() && accepting.len() < candidates.len()).then_some(accepting)
+}
+
+/// An object literal's own properties, or an empty slice for anything else.
+fn properties_of(expression: &ParsedExpression) -> &[ParsedObjectProperty] {
+    match expression {
+        ParsedExpression::ObjectLiteral { properties, .. } => properties,
+        _ => &[],
+    }
+}
+
 fn member_declares_property(member: &Type, name: &str) -> bool {
     matches!(member.peeled(), Type::Object(object) if object.properties.contains_key(name))
 }
@@ -677,6 +897,90 @@ fn evaluate_array_literal_with_expected_type(
     ))))
 }
 
+/// The one array-or-tuple member of a union target an array literal can be: a
+/// tuple of the same arity whose slots all accept the written elements, or an
+/// array whose element type does. Element types are read *unwidened* — the
+/// literal `'b'` is what tells `B[]` from `A[]`, and `['-', 2]` from
+/// `['++', number]`. `None` when the literal is ambiguous or fits nothing, so
+/// the caller keeps its context-free behavior.
+fn sole_matching_sequence_member(
+    members: &[Type],
+    elements: &[surge_ts_syntax::ParsedArrayElement],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if elements.is_empty() {
+        return None;
+    }
+    let candidates: Vec<&Type> = members
+        .iter()
+        .filter(|member| match member {
+            Type::Tuple(slots) => slots.len() == elements.len(),
+            Type::Array(_) => true,
+            _ => false,
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut written = Vec::with_capacity(elements.len());
+    for element in elements {
+        match crate::infer::infer_expression(&element.expression, symbols, ctx) {
+            crate::infer::InferredExpression::Known(ty) if !ty.is_unknown() => written.push(ty),
+            _ => {
+                ctx.truncate_diagnostics(diagnostics_before);
+                return None;
+            }
+        }
+    }
+    ctx.truncate_diagnostics(diagnostics_before);
+
+    let mut fitting = candidates.iter().filter(|member| match member {
+        Type::Tuple(slots) => slots
+            .iter()
+            .zip(written.iter())
+            .all(|(slot, value)| surge_ts_types::is_assignable_to(value, slot)),
+        Type::Array(element) => written
+            .iter()
+            .all(|value| surge_ts_types::is_assignable_to(value, element)),
+        _ => false,
+    });
+    match (fitting.next(), fitting.next()) {
+        (Some(member), None) => return Some((*member).clone()),
+        (Some(_), Some(_)) => return None,
+        (None, _) => {}
+    }
+
+    // Nothing fit, which does not mean nothing belongs: an element that is
+    // itself an object literal was inferred context-free above, so its own
+    // nested literals widened and it matched no slot. Fall back to the test the
+    // object-literal path uses one level up — the candidate whose slot *declares*
+    // every property the element writes. That is what separates a datadog-shaped
+    // `{ response_format, queries }` request from a `{ q }` one.
+    let mut declaring = candidates.iter().filter(|member| {
+        elements.iter().enumerate().all(|(index, element)| {
+            let slot = match member {
+                Type::Tuple(slots) => slots.get(index),
+                Type::Array(element_type) => Some(element_type.as_ref()),
+                _ => None,
+            };
+            match (slot, &element.expression) {
+                (Some(slot), ParsedExpression::ObjectLiteral { properties, .. }) => properties
+                    .iter()
+                    .filter(|property| !property.is_spread)
+                    .all(|property| member_declares_property(slot, property.name.as_str())),
+                _ => false,
+            }
+        })
+    });
+    match (declaring.next(), declaring.next()) {
+        (Some(member), None) => Some((*member).clone()),
+        _ => None,
+    }
+}
+
 /// Every element's own widened type, with an element that does not resolve
 /// standing in as `any` — tsc's error type, which it renders the same way
 /// (`Type '[string, number, any]' is not assignable to type '[string, number]'`).
@@ -767,7 +1071,12 @@ fn evaluate_tuple_literal_with_expected_type(
         }
     }
 
-    if elements.len() != expected_elements.len() {
+    // A literal may stop short of trailing slots that accept `undefined` —
+    // how an optional element (`[string[], Opts?]`) is represented.
+    let trailing_optional = expected_elements[elements.len().min(expected_elements.len())..]
+        .iter()
+        .all(|slot| is_assignable_to(&Type::Undefined, slot));
+    if elements.len() != expected_elements.len() && !trailing_optional {
         let source_type_name = Type::Array(Box::new(Type::Unknown)).name();
         let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
         let diagnostic =
@@ -1096,6 +1405,22 @@ fn evaluate_conditional_expression_with_expected_type(
         condition,
         false_symbols.as_ref().unwrap_or(symbols),
         false,
+        ctx,
+    )
+    .or(false_symbols);
+    // A guard on an element access (`typeof xs[0] === 'string' ? xs[0] : …`)
+    // narrows the access itself, which no binding's type can carry.
+    let true_symbols = crate::checks::function::narrow_element_reference_guards_symbol_table(
+        condition,
+        true,
+        true_symbols.as_ref().unwrap_or(symbols),
+        ctx,
+    )
+    .or(true_symbols);
+    let false_symbols = crate::checks::function::narrow_element_reference_guards_symbol_table(
+        condition,
+        false,
+        false_symbols.as_ref().unwrap_or(symbols),
         ctx,
     )
     .or(false_symbols);

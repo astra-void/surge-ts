@@ -284,6 +284,18 @@ pub(crate) fn evaluate_expression(
                     )
                 })
                 .or(narrowed);
+            // A guard on an element access (`xs[i] && xs[i].x`) narrows the
+            // access itself rather than any binding.
+            let narrowed = predicate_branch
+                .and_then(|branch_is_true| {
+                    crate::checks::function::narrow_element_reference_guards_symbol_table(
+                        left,
+                        branch_is_true,
+                        narrowed.as_ref().unwrap_or(symbols),
+                        ctx,
+                    )
+                })
+                .or(narrowed);
             let right_symbols = narrowed.as_ref().unwrap_or(symbols);
             // `a || b` hands `b` the same contextual type `a ?? b` does.
             let right_contextual = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::Or)
@@ -376,6 +388,13 @@ pub(crate) fn evaluate_expression(
                 ctx,
             )
             .or(true_symbols);
+            let true_symbols = crate::checks::function::narrow_element_reference_guards_symbol_table(
+                condition,
+                true,
+                true_symbols.as_ref().unwrap_or(symbols),
+                ctx,
+            )
+            .or(true_symbols);
             let false_symbols =
                 crate::checks::function::narrow_condition_symbol_table(condition, symbols, false);
             let false_symbols = downgrade_guarded_genuine_unknown(
@@ -388,6 +407,13 @@ pub(crate) fn evaluate_expression(
                 condition,
                 false_symbols.as_ref().unwrap_or(symbols),
                 false,
+                ctx,
+            )
+            .or(false_symbols);
+            let false_symbols = crate::checks::function::narrow_element_reference_guards_symbol_table(
+                condition,
+                false,
+                false_symbols.as_ref().unwrap_or(symbols),
                 ctx,
             )
             .or(false_symbols);
@@ -749,7 +775,11 @@ pub(crate) fn evaluate_expression(
             is_bracketed,
             ..
         } => {
-            maybe_emit_unknown_property_receiver(object, *object_span, fallback_span, symbols, ctx);
+            // The receiver is code too: a call's bad argument, a missing member
+            // deeper in the chain, a possibly-`undefined` link — inferring it
+            // types the access but reports none of that.
+            let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
+            check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
             let inferred_expression = infer_expression(expression, symbols, ctx);
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
@@ -769,6 +799,22 @@ pub(crate) fn evaluate_expression(
                     ctx,
                 );
             }
+            inferred_expression
+        }
+        ParsedExpression::ElementAccess {
+            object, object_span, ..
+        } => {
+            let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
+            check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
+            let inferred_expression = infer_expression(expression, symbols, ctx);
+            report_inferred_expression(
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                    inferred_expression.clone()
+                }),
+                fallback_span,
+                symbols,
+                ctx,
+            );
             inferred_expression
         }
         _ => {

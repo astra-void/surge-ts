@@ -266,7 +266,7 @@ fn merging_namespace_value_members(
     merged
 }
 
-fn peel_exported_statement(statement: &ParsedStatement) -> &ParsedStatement {
+pub(crate) fn peel_exported_statement(statement: &ParsedStatement) -> &ParsedStatement {
     match statement {
         ParsedStatement::ExportDeclaration(export) => {
             if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
@@ -328,7 +328,9 @@ fn apply_merging_namespace_value_members(
                 crate::arena::alloc_object_type(members.clone(), None)
                     .with_call_signature(function.clone()),
             ),
-            Type::Unknown => Type::Object(crate::arena::alloc_object_type(members.clone(), None)),
+            Type::Unknown | Type::TypeParameter(_) => {
+                Type::Object(crate::arena::alloc_object_type(members.clone(), None))
+            }
             _ => continue,
         };
 
@@ -367,6 +369,16 @@ fn object_with_namespace_members(
     merged
 }
 
+thread_local! {
+    pub(crate) static VC_TRACE_PASS: std::cell::RefCell<&'static str> = const { std::cell::RefCell::new("none") };
+    pub(crate) static VC_TRACE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn vc_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_VC_TRACE_TMP").is_some())
+}
+
 pub(crate) fn collect_exportable_value_symbols(
     statements: &[ParsedStatement],
     local_type_declarations: &TypeDeclarationTable,
@@ -377,6 +389,23 @@ pub(crate) fn collect_exportable_value_symbols(
     if thin_prelim_enabled() && ctx.thin_superseded_value_collection {
         return collect_exportable_value_symbols_thin(statements, local_symbols, ctx);
     }
+    let vc_start = std::time::Instant::now();
+    VC_TRACE_DEPTH.with(|d| d.set(d.get() + 1));
+    let result = collect_exportable_value_symbols_inner(statements, local_type_declarations, local_symbols, imported_symbols, ctx);
+    VC_TRACE_DEPTH.with(|d| d.set(d.get() - 1));
+    if vc_trace_enabled() {
+        eprintln!("[vc-call] pass={} us={} file={}", VC_TRACE_PASS.with(|p| *p.borrow()), vc_start.elapsed().as_micros(), ctx.file_name.rsplit('/').next().unwrap_or(""));
+    }
+    result
+}
+
+fn collect_exportable_value_symbols_inner(
+    statements: &[ParsedStatement],
+    local_type_declarations: &TypeDeclarationTable,
+    local_symbols: &SymbolTable,
+    imported_symbols: Option<&SymbolTable>,
+    ctx: &CheckerContext,
+) -> SymbolTable {
     let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(ctx.file_name.clone(), FileKind::RootSource);
     let mut shadow_ctx = CheckerContext::new_with_shared_options(
@@ -415,6 +444,7 @@ pub(crate) fn collect_exportable_value_symbols(
     // the last silently degrades every `ComponentProps<typeof Primitive.X>`).
     let library_file = ctx.is_library_scoped_file(&ctx.file_name);
     shadow_ctx.lazy_library_value_annotations = library_file && lazy_dts_values_enabled();
+    shadow_ctx.skip_annotated_function_bodies = true;
     if shadow_ctx.lazy_library_value_annotations {
         // Lazy value-annotation references capture their declaration
         // environment; the shadow's own store dies with the shadow, so the
@@ -471,8 +501,120 @@ pub(crate) fn collect_exportable_value_symbols(
         );
     }
     apply_merging_namespace_value_members(&merging_namespaces, &mut exportable_values);
+    inherit_base_statics(statements, &mut exportable_values, imported_symbols);
 
     exportable_values
+}
+
+/// A derived class's static side starts from its base's, which the binding
+/// pass could only read from the table as it stood *then*: a base's
+/// namespace-merged members (`namespace EE { export const X }`) are applied
+/// above, after both classes were bound, and a base bound by an import
+/// (`class Stream extends EventEmitter` inside `declare module "stream"`) is
+/// not in the table at all. Re-merge the base's statics now, from the merged
+/// table or the import bindings. `prototype` stays the derived class's own.
+pub(crate) fn inherit_base_statics(
+    statements: &[ParsedStatement],
+    exportable_values: &mut SymbolTable,
+    imported_symbols: Option<&SymbolTable>,
+) {
+    for statement in statements {
+        let ParsedStatement::ClassDeclaration(class) = peel_exported_statement(statement) else {
+            continue;
+        };
+        let Some(base) = class.extends.first() else {
+            continue;
+        };
+        let Some(base_type) = exportable_values
+            .get(&base.name)
+            .or_else(|| imported_symbols.and_then(|imported| imported.get(&base.name)))
+            .map(|symbol| symbol.ty.peeled())
+        else {
+            continue;
+        };
+        let Some(merged) = statics_merged_into(&class.name, &base_type, exportable_values) else {
+            continue;
+        };
+        let _ = exportable_values.insert(class.name.clone(), merged);
+    }
+}
+
+/// `derived`'s value symbol with every static of `base_static` it does not
+/// declare itself, or `None` when either side is not a static object or
+/// nothing is missing. `prototype` is never inherited.
+pub(crate) fn statics_merged_into(
+    derived_name: &str,
+    base_type: &Type,
+    table: &SymbolTable,
+) -> Option<SymbolInfo> {
+    // Own-table only. A parent-traversing lookup finds an ambient global of the
+    // same name when the module's own class has no value symbol — a generic
+    // class models its value side as `Any` and contributes none — and then
+    // merges the base's statics into *that*, publishing the DOM's
+    // `MutationObserver` as the module's export (51 false `TS2554` across the
+    // tanstack-query aggregate, where `new MutationObserver(client, options)`
+    // met the DOM's one-parameter constructor).
+    let derived = table.get_own(derived_name)?;
+    statics_merged_into_symbol(derived, base_type)
+}
+
+/// `derived` with `base_type`'s statics merged in. A base surge models as
+/// `any` (`@types/node`'s `namespace EventEmitter { export { internal as
+/// EventEmitter } }` re-exports the module's own class as a member, which the
+/// namespace lowering keeps permissive) contributes every name: the derived
+/// static side is left open instead, so a consumer reading a static through it
+/// gets `any` rather than a missing-export error.
+pub(crate) fn statics_merged_into_symbol(derived: &SymbolInfo, base_type: &Type) -> Option<SymbolInfo> {
+    let base_static = match base_type {
+        Type::Object(object) => object,
+        Type::Any => {
+            let derived_peeled = derived.ty.peeled();
+            let Type::Object(derived_static) = &derived_peeled else {
+                return None;
+            };
+            if derived_static.synthetic_open_index {
+                return None;
+            }
+            let mut opened = derived_static.clone().with_open_index_marker();
+            opened.string_index_type = Some(std::sync::Arc::new(Type::Any));
+            return Some(SymbolInfo {
+                ty: Type::Object(opened),
+                kind: derived.kind,
+                function_signature: derived.function_signature.clone(),
+            });
+        }
+        _ => return None,
+    };
+    {
+        // A `.d.ts` value may be a lazy reference; the merged static side is
+        // materialised, which is what every consumer reads anyway.
+        let derived_peeled = derived.ty.peeled();
+        let derived_static = match &derived_peeled {
+            Type::Object(object) => object,
+            _ => return None,
+        };
+        let missing: Vec<_> = base_static
+            .properties
+            .iter()
+            .filter(|(name, _)| {
+                name.as_ref() != "prototype" && !derived_static.properties.contains_key(name.as_ref())
+            })
+            .map(|(name, property)| (name.clone(), property.clone()))
+            .collect();
+        if missing.is_empty() {
+            return None;
+        }
+        let mut merged = derived_static.clone();
+        let properties = std::sync::Arc::make_mut(&mut merged.properties);
+        for (name, property) in missing {
+            properties.insert(name, property);
+        }
+        Some(SymbolInfo {
+            ty: Type::Object(merged),
+            kind: derived.kind,
+            function_signature: derived.function_signature.clone(),
+        })
+    }
 }
 
 /// Library `.d.ts` value annotations become lazy references (mapped on first
@@ -666,10 +808,11 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
         }
         ParsedStatement::NamespaceDeclaration(namespace) => {
             if exportable_values.get_own(&namespace.name).is_none() {
+                let ty = namespace_value_object_type_resolved(namespace, ctx);
                 let _ = exportable_values.insert(
                     namespace.name.clone(),
                     SymbolInfo {
-                        ty: namespace_value_object_type(namespace),
+                        ty,
                         kind: SymbolKind::Const,
                         function_signature: None,
                     },
@@ -902,9 +1045,6 @@ pub(crate) fn collect_namespace_member_value_symbols(
                     continue;
                 }
                 let key = format!("{prefix}.{}", function.name);
-                if exportable_values.get_own(&key).is_some() {
-                    continue;
-                }
                 let function_type = map_member_signature_in_namespace_scope(
                     &function.parameters,
                     function.return_type.as_ref(),
@@ -919,12 +1059,37 @@ pub(crate) fn collect_namespace_member_value_symbols(
                     &ctx.file_name,
                     prefix,
                 );
+                // Overloads fold into one permissive signature, as file-level
+                // declarations do (`React.useState<S>(initial)` next to
+                // `useState<S = undefined>()`); the first declaration's parsed
+                // signature stays the instantiation template.
+                let (ty, function_signature) = match exportable_values.get_own(&key) {
+                    Some(existing) => match &existing.ty {
+                        Type::Function(existing_function)
+                            if matches!(existing.kind, SymbolKind::Function) =>
+                        {
+                            (
+                                Type::Function(
+                                    crate::checks::function::merge_overload_group_signatures(
+                                        existing_function,
+                                        &function_type,
+                                    ),
+                                ),
+                                crate::checks::function::mark_overloaded(
+                                    existing.function_signature.clone(),
+                                ),
+                            )
+                        }
+                        _ => continue,
+                    },
+                    None => (Type::Function(function_type), Some(function_signature)),
+                };
                 let _ = exportable_values.insert(
                     key,
                     SymbolInfo {
-                        ty: Type::Function(function_type),
+                        ty,
                         kind: SymbolKind::Function,
-                        function_signature: Some(function_signature),
+                        function_signature,
                     },
                 );
             }
@@ -1003,6 +1168,77 @@ pub(crate) fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration
     let mut properties = surge_ts_types::PropertyMap::default();
     fill_namespace_value_properties(namespace, &mut properties);
     Type::Object(crate::arena::alloc_object_type(properties, None))
+}
+
+/// [`namespace_value_object_type`] with the members' written annotations
+/// resolved instead of left permissive.
+///
+/// A `declare namespace N { let X: Type<X> }` member is read through the
+/// namespace *object* (`N.X`, and through an intersection that includes
+/// `typeof N`), and a permissive `any` there is a false negative for every use
+/// of it — `ast-types` declares its whole builder/named-type surface this way,
+/// which is how `j.VariableDeclaration` reached tRPC's `upgrade` transforms as
+/// `any`. Sibling names resolve under the namespace prefix, the same way a
+/// member *signature* already does.
+pub(crate) fn namespace_value_object_type_resolved(
+    namespace: &ParsedNamespaceDeclaration,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let mut properties = surge_ts_types::PropertyMap::default();
+    fill_namespace_value_properties(namespace, &mut properties);
+    resolve_namespace_value_annotations(namespace, &namespace.name, &mut properties, ctx);
+    Type::Object(crate::arena::alloc_object_type(properties, None))
+}
+
+/// Replaces the permissive member types [`fill_namespace_value_properties`]
+/// leaves for annotated `let`/`const`/`var` members with the resolved
+/// annotation. Members without an annotation, and every other member kind, keep
+/// what the permissive pass produced.
+fn resolve_namespace_value_annotations(
+    namespace: &ParsedNamespaceDeclaration,
+    prefix: &str,
+    properties: &mut surge_ts_types::PropertyMap,
+    ctx: &mut CheckerContext,
+) {
+    for statement in &namespace.statements {
+        match peel_exported_statement(statement) {
+            ParsedStatement::VariableDeclaration(variable) => {
+                let Some(annotation) = variable.declared_type.clone() else {
+                    continue;
+                };
+                ctx.namespace_member_resolution_depth += 1;
+                ctx.namespace_member_prefix_stack.push(prefix.to_string());
+                let resolved = crate::infer::map_parsed_type(annotation, ctx);
+                ctx.namespace_member_prefix_stack.pop();
+                ctx.namespace_member_resolution_depth -= 1;
+                if resolved.is_unknown() {
+                    continue;
+                }
+                properties.insert(
+                    variable.name.as_str().into(),
+                    surge_ts_types::ObjectProperty::required(resolved),
+                );
+            }
+            ParsedStatement::NamespaceDeclaration(inner) => {
+                let inner_prefix = format!("{prefix}.{}", inner.name);
+                let mut inner_properties = surge_ts_types::PropertyMap::default();
+                fill_namespace_value_properties(inner, &mut inner_properties);
+                resolve_namespace_value_annotations(
+                    inner,
+                    &inner_prefix,
+                    &mut inner_properties,
+                    ctx,
+                );
+                properties.insert(
+                    inner.name.as_str().into(),
+                    surge_ts_types::ObjectProperty::required(Type::Object(
+                        crate::arena::alloc_object_type(inner_properties, None),
+                    )),
+                );
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Accumulate a `declare namespace`'s value members into `properties`. Split into

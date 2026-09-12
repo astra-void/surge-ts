@@ -37,6 +37,7 @@ pub(crate) fn infer_unary_expression(
             }
             InferredExpression::Known(Type::Unknown)
             | InferredExpression::Known(Type::GenuineUnknown)
+            | InferredExpression::Known(Type::TypeParameter(_))
             | InferredExpression::UnresolvedIdentifier { .. }
             | InferredExpression::MissingProperty { .. }
             | InferredExpression::Unknown
@@ -81,7 +82,12 @@ pub(crate) fn infer_logical_expression(
                 surge_ts_syntax::ParsedLogicalOperator::Or => {
                     union_type(vec![surge_ts_types::remove_nullish(&left_ty), right_ty])
                 }
-                surge_ts_syntax::ParsedLogicalOperator::And => union_type(vec![left_ty, right_ty]),
+                // `a && b` is `b` when `a` is truthy and `a` otherwise, so
+                // only `a`'s falsy part survives (`Box | undefined` contributes
+                // `undefined`, `string` contributes `""`).
+                surge_ts_syntax::ParsedLogicalOperator::And => {
+                    union_type(vec![falsy_part(&left_ty), right_ty])
+                }
             };
             InferredExpression::Known(result)
         }
@@ -119,6 +125,23 @@ pub(crate) fn infer_conditional_expression(
         condition,
         false_symbols.as_ref().unwrap_or(symbols),
         false,
+        ctx,
+    )
+    .or(false_symbols);
+    // `typeof xs[0] === 'string' ? xs[0] : …` — an element access has no binding
+    // to narrow, so its guarded read is recorded per access the way the
+    // statement-level evaluator already does it.
+    let true_symbols = crate::checks::function::narrow_element_reference_guards_symbol_table(
+        condition,
+        true,
+        true_symbols.as_ref().unwrap_or(symbols),
+        ctx,
+    )
+    .or(true_symbols);
+    let false_symbols = crate::checks::function::narrow_element_reference_guards_symbol_table(
+        condition,
+        false,
+        false_symbols.as_ref().unwrap_or(symbols),
         ctx,
     )
     .or(false_symbols);
@@ -167,21 +190,19 @@ pub(crate) fn infer_binary_expression(
             match (left_type, right_type) {
                 (InferredExpression::Known(Type::Any), _)
                 | (_, InferredExpression::Known(Type::Any)) => InferredExpression::Known(Type::Any),
-                (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
-                    if matches!(left_ty.base_primitive(), Some(Type::String))
-                        && matches!(right_ty.base_primitive(), Some(Type::String)) =>
+                // One string operand makes `+` a concatenation whatever the
+                // other side is, which is what keeps `'data' + String(x)` a
+                // string when the other operand is one this pass cannot type.
+                // Falling through to the numeric default instead disagreed with
+                // the checking pass, and a generic call inferring from such an
+                // arrow bound its return to `number`.
+                (InferredExpression::Known(left_ty), _)
+                    if matches!(left_ty.base_primitive(), Some(Type::String)) =>
                 {
                     InferredExpression::Known(Type::String)
                 }
-                (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
-                    if matches!(left_ty.base_primitive(), Some(Type::String))
-                        && matches!(right_ty.base_primitive(), Some(Type::Number)) =>
-                {
-                    InferredExpression::Known(Type::String)
-                }
-                (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
-                    if matches!(left_ty.base_primitive(), Some(Type::Number))
-                        && matches!(right_ty.base_primitive(), Some(Type::String)) =>
+                (_, InferredExpression::Known(right_ty))
+                    if matches!(right_ty.base_primitive(), Some(Type::String)) =>
                 {
                     InferredExpression::Known(Type::String)
                 }
@@ -205,5 +226,26 @@ pub(crate) fn infer_binary_expression(
         | ParsedBinaryOperator::BitwiseAnd
         | ParsedBinaryOperator::BitwiseOR
         | ParsedBinaryOperator::BitwiseXOR => InferredExpression::Known(Type::Number),
+    }
+}
+
+/// The part of `ty` that is falsy, per tsc's `TypeFacts.Falsy`: a nullish or
+/// `false`-able member survives, a primitive contributes its falsy literal, and
+/// an object never is. `any` and the sentinels are left whole.
+pub(crate) fn falsy_part(ty: &Type) -> Type {
+    match ty {
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => ty.clone(),
+        Type::Undefined | Type::Void => Type::Undefined,
+        Type::Boolean => Type::BooleanLiteral(false),
+        Type::BooleanLiteral(false) => ty.clone(),
+        Type::String => Type::StringLiteral(String::new()),
+        Type::StringLiteral(value) if value.is_empty() => ty.clone(),
+        Type::Number => Type::NumberLiteral(surge_ts_types::NumberLiteralType {
+            value: "0".to_string(),
+        }),
+        Type::NumberLiteral(literal) if literal.value == "0" => ty.clone(),
+        Type::Union(union) => union_type(union.types().iter().map(falsy_part).collect()),
+        Type::Reference(reference) => falsy_part(&reference.resolve()),
+        _ => Type::Never,
     }
 }

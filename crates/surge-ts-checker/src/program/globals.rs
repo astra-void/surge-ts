@@ -297,7 +297,11 @@ pub(crate) fn collect_local_value_symbols_from_statement(
 
                 match inferred {
                     crate::infer::InferredExpression::Known(inferred_ty)
-                        if inferred_ty != surge_ts_types::Type::Unknown =>
+                        if !matches!(
+                            inferred_ty,
+                            surge_ts_types::Type::Unknown
+                                | surge_ts_types::Type::TypeParameter(_)
+                        ) =>
                     {
                         var::widen_implicit_variable_initializer_type(symbol_kind, &inferred_ty)
                     }

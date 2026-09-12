@@ -60,6 +60,7 @@ pub mod lowlevel {
         load_generated_default_lib_inputs, resolve_physical_default_libs,
     };
     pub use crate::metrics::record_loader_rss_stage;
+    pub use crate::program::check_program_with_prescanned_sources;
 
     /// Centralized relative-path candidate generation shared by the loader's
     /// import-graph/`paths` resolution and the checker's module binding, so the

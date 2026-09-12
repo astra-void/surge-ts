@@ -663,6 +663,8 @@ fn program_api_no_lib_hides_generated_default_libs() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib: true,
@@ -1084,6 +1086,8 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib: false,
@@ -1108,6 +1112,8 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib: false,
@@ -1425,6 +1431,25 @@ fn no_property_access_from_index_signature_silent_for_synthetic_intersection_ope
     // operand's members are not reported as excess properties. That synthetic
     // index is not a declared index signature, so TS4111 must not fire on it.
     let source = "function use<T extends { path?: string }>(o: T & { url: string }) { return o.path; }";
+    let diagnostics =
+        check_source_with_options(source, "a.ts", no_property_access_index_options(true));
+    assert!(
+        !codes(&diagnostics).iter().any(|code| code == "TS4111"),
+        "got {:?}",
+        codes(&diagnostics)
+    );
+}
+
+#[test]
+fn no_property_access_from_index_signature_silent_for_degraded_heritage_base() {
+    // A base that degrades (`T & { url: string }` drops the bare type parameter)
+    // carries a synthetic open index. A derived interface inherits that
+    // openness, not a declared index signature, so an undeclared member on the
+    // derived type is still silent rather than a false TS4111.
+    let source = "\
+type Loose<T> = T & { url: string };
+interface Derived<T extends { path?: string }> extends Loose<T> { own: number }
+function use<T extends { path?: string }>(o: Derived<T>) { return [o.own, o.path, o.missing]; }";
     let diagnostics =
         check_source_with_options(source, "a.ts", no_property_access_index_options(true));
     assert!(
@@ -1839,6 +1864,8 @@ fn program_order_parser_before_type_prepass() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib: false,
@@ -2434,6 +2461,8 @@ fn program_module_export_function_parameter_no_implicit_any() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib: false,
@@ -2467,6 +2496,8 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib: false,
@@ -2497,6 +2528,8 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib: false,
@@ -6644,6 +6677,8 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib: false,
@@ -8047,4 +8082,91 @@ fn ambient_module_namespace_class_export_assignment_is_importable() {
     ]);
 
     assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+fn unused_parameters_options() -> CheckerOptions {
+    CheckerOptions {
+        no_unused_parameters: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn possibly_undefined_named_receiver_reports_ts18048() {
+    let source = "declare const box: { value: number } | undefined; const v = box.value;";
+    let diagnostics = check_source(source, "a.ts");
+    assert_eq!(codes(&diagnostics), vec!["TS18048"]);
+    assert!(
+        diagnostics[0].message.contains("'box' is possibly 'undefined'"),
+        "got {}",
+        diagnostics[0].message
+    );
+}
+
+#[test]
+fn possibly_undefined_call_receiver_reports_ts2532() {
+    let source = "declare function lookup(): { value: number } | undefined; const v = lookup().value;";
+    let diagnostics = check_source(source, "a.ts");
+    assert_eq!(codes(&diagnostics), vec!["TS2532"]);
+}
+
+#[test]
+fn possibly_undefined_receiver_silent_after_guard_and_in_optional_chain() {
+    let source = "declare const box: { value: number; inner?: { deep: string } } | undefined; \
+        const a = box ? box.value : 0; const b = box?.value; const c = box!.value; \
+        const d = box?.inner?.deep;";
+    let diagnostics = check_source(source, "a.ts");
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn possibly_undefined_receiver_reports_optional_link_inside_chain() {
+    let source =
+        "declare const box: { inner?: { deep: string } } | undefined; const d = box?.inner.deep;";
+    let diagnostics = check_source(source, "a.ts");
+    assert_eq!(codes(&diagnostics), vec!["TS18048"]);
+    assert!(
+        diagnostics[0].message.contains("'box.inner' is possibly 'undefined'"),
+        "got {}",
+        diagnostics[0].message
+    );
+}
+
+#[test]
+fn all_unused_destructured_parameters_collapse_to_ts6198() {
+    let source = "export const f = ({ a, b }: { a: number; b: number }) => 1;";
+    let diagnostics = check_source_with_options(source, "a.ts", unused_parameters_options());
+    assert_eq!(codes(&diagnostics), vec!["TS6198"]);
+}
+
+#[test]
+fn partially_unused_destructured_parameters_report_each_ts6133() {
+    let source = "export const f = ({ a, b }: { a: number; b: number }) => a;";
+    let diagnostics = check_source_with_options(source, "a.ts", unused_parameters_options());
+    assert_eq!(codes(&diagnostics), vec!["TS6133"]);
+    assert!(diagnostics[0].message.contains("'b'"), "got {}", diagnostics[0].message);
+}
+
+#[test]
+fn renamed_underscore_destructured_parameter_is_exempt() {
+    let source = "export const f = ({ a: _a, b }: { a: number; b: number }) => b; \
+        export const g = ([_x, y]: number[]) => y;";
+    let diagnostics = check_source_with_options(source, "a.ts", unused_parameters_options());
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
+}
+
+#[test]
+fn unchecked_indexed_access_widens_array_reads() {
+    let source = "declare const posts: { title: string }[]; const t = posts[0].title;";
+    let diagnostics = check_source_with_options(
+        source,
+        "a.ts",
+        CheckerOptions {
+            no_unchecked_indexed_access: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2532"]);
+    let diagnostics = check_source(source, "a.ts");
+    assert_eq!(codes(&diagnostics), Vec::<String>::new());
 }

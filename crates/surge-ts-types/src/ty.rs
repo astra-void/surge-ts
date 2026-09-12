@@ -5,6 +5,20 @@ pub struct NumberLiteralType {
     pub value: String,
 }
 
+/// The payload of [`Type::TypeParameter`]: the parameter's declared name.
+///
+/// Deliberately only the name. A substitution binds a declaration's **own**
+/// parameter names, so two references to `QueryBehavior<TQueryFnData, …>` from
+/// different consumers produce the same argument tuple — which is why the whole
+/// project has 2,343 distinct tuples rather than one per reference site. Adding
+/// a per-declaration identity here would make those tuples stop colliding and
+/// the cache hit *less*. Any consumer that keys on this must therefore establish
+/// that two declarations' same-named parameters cannot meet inside one key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeParameterType {
+    pub name: std::sync::Arc<str>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     String,
@@ -27,6 +41,20 @@ pub enum Type {
     /// 'unknown') on a genuine-unknown receiver while staying silent on a
     /// degraded one, matching tsc's no-cascade behavior.
     GenuineUnknown,
+    /// An unsubstituted type parameter standing in for itself, as bound by a
+    /// signature or declaration pre-pass (`substitution.insert_placeholder`).
+    ///
+    /// Behaves identically to [`Type::Unknown`] in every type operation —
+    /// assignability, display, narrowing, interning — and is matched together
+    /// with it via [`Type::is_unknown`]. Like [`Type::GenuineUnknown`] the sole
+    /// distinction is provenance, and it exists for one reason: `Type::Unknown`
+    /// doubles as surge's graceful-degradation sentinel, so a cache that sees it
+    /// as a type argument cannot tell "this resolution failed" (which the
+    /// memory-lifetime rules forbid caching) from "this argument is the
+    /// declaration's own parameter" (which is perfectly cacheable). Carrying the
+    /// distinction in the type is what lets the interface instantiation key
+    /// admit a placeholder argument instead of refusing it.
+    TypeParameter(TypeParameterType),
     Never,
     StringLiteral(String),
     NumberLiteral(NumberLiteralType),
@@ -108,8 +136,19 @@ impl Type {
     /// degradation sentinel [`Type::Unknown`] and the genuine
     /// [`Type::GenuineUnknown`]. Use this in place of `== Type::Unknown` at every
     /// site that cares about unknown-ness rather than provenance.
+    /// The placeholder a pre-pass binds an unsubstituted type parameter to.
+    /// See [`Type::TypeParameter`] for why this is not just [`Type::Unknown`].
+    pub fn type_parameter(name: &str) -> Type {
+        Type::TypeParameter(TypeParameterType {
+            name: std::sync::Arc::from(name),
+        })
+    }
+
     pub fn is_unknown(&self) -> bool {
-        matches!(self, Type::Unknown | Type::GenuineUnknown)
+        matches!(
+            self,
+            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)
+        )
     }
 
     pub fn base_primitive(&self) -> Option<Type> {
@@ -170,6 +209,21 @@ impl Type {
                     && !object.synthetic_open_index
             }
             Type::Reference(reference) => reference.resolve().property_only_from_string_index(name),
+            // tsc looks the name up on the union's synthetic property set and
+            // then for an index signature every member carries; an `a?.b`
+            // receiver still carries the chain's `undefined`, which is not a
+            // member of the lookup.
+            Type::Union(union) => {
+                let members: Vec<&Type> = union
+                    .types()
+                    .iter()
+                    .filter(|member| !matches!(member, Type::Undefined | Type::Void))
+                    .collect();
+                !members.is_empty()
+                    && members
+                        .iter()
+                        .all(|member| member.property_only_from_string_index(name))
+            }
             _ => false,
         }
     }
@@ -293,7 +347,9 @@ impl Type {
             Type::Undefined => "undefined".to_string(),
             Type::Void => "void".to_string(),
             Type::Any => "any".to_string(),
-            Type::Unknown | Type::GenuineUnknown => "unknown".to_string(),
+            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+                "unknown".to_string()
+            }
             Type::Never => "never".to_string(),
             Type::StringLiteral(value) => format!("{value:?}"),
             Type::NumberLiteral(value) => value.value.clone(),
@@ -753,7 +809,7 @@ fn array_element_name(element: &Type) -> String {
 /// already includes it needs no addition.
 fn optional_property_display(ty: &Type) -> String {
     match ty {
-        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Undefined => ty.name(),
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Undefined => ty.name(),
         Type::Union(union) if union.types().iter().any(|m| matches!(m, Type::Undefined)) => {
             ty.name()
         }

@@ -795,11 +795,36 @@ pub(crate) fn collect_ambient_modules(
             temp_file.statements = module.statements.clone();
             let current_type_declarations = std::mem::take(&mut ctx.type_declarations);
             let current_symbols = std::mem::take(&mut ctx.symbols);
+            // A block's own imports (`import { EventEmitter } from "node:events"`
+            // inside `declare module "stream"`) are the values its classes
+            // extend; without them a derived class lost every inherited static
+            // (`import { EventEmitter } from "stream"` was a false TS2305).
+            // Only the ambient modules registered so far answer, and an
+            // unresolvable one keeps missing silently as it always has.
+            let imported_symbols = if temp_file
+                .statements
+                .iter()
+                .any(|statement| matches!(statement, ParsedStatement::ImportDeclaration(_)))
+            {
+                let diagnostics_before = ctx.diagnostics().len();
+                let bindings = crate::modules::resolve_module_imports(
+                    &temp_file,
+                    &[],
+                    &[],
+                    &[],
+                    &|_| false,
+                    ctx,
+                );
+                ctx.truncate_diagnostics(diagnostics_before);
+                bindings.symbols
+            } else {
+                SymbolTable::new()
+            };
             let raw_export_table = build_module_export_table(
                 &temp_file,
                 &current_type_declarations,
                 &current_symbols,
-                &SymbolTable::new(),
+                &imported_symbols,
                 Some(current_type_declarations_scope.clone()),
                 ctx,
             );
@@ -811,12 +836,17 @@ pub(crate) fn collect_ambient_modules(
                 // `declare module "x"` inside a module file augments an existing
                 // module rather than declaring a new ambient one. It is merged
                 // into the resolved target on import, never made resolvable here.
-                match Arc::make_mut(&mut ctx.module_augmentations).get_mut(&module.module_specifier)
-                {
+                let key = module_augmentation_key(
+                    &parsed_file.file_name,
+                    &module.module_specifier,
+                    parsed_files,
+                    ctx,
+                );
+                match Arc::make_mut(&mut ctx.module_augmentations).get_mut(&key) {
                     Some(existing) => merge_module_export_tables(existing, &raw_export_table),
                     None => {
                         Arc::make_mut(&mut ctx.module_augmentations)
-                            .insert(module.module_specifier.clone(), raw_export_table);
+                            .insert(key, raw_export_table);
                     }
                 }
             } else if let Some(existing_index) = ambient_module_indexes
@@ -889,6 +919,79 @@ pub(crate) fn collect_ambient_modules(
         }
     }
 
+    // A class in one block that extends a class imported from another
+    // (`class Stream extends EventEmitter` in `declare module "stream"`) took
+    // its statics from the raw table the import resolved to while the blocks
+    // were being registered — before `export *` chains (`node:events` →
+    // `events`) were resolved, so a base reached that way contributed nothing
+    // and `import { EventEmitter } from "stream"` was a false TS2305. With
+    // every table resolved, bind the block's imports once more and re-merge.
+    for entry in &ambient_module_entries {
+        let has_imports = entry
+            .file
+            .statements
+            .iter()
+            .any(|statement| matches!(statement, ParsedStatement::ImportDeclaration(_)));
+        let has_derived_class = entry.file.statements.iter().any(|statement| {
+            matches!(
+                crate::modules::peel_exported_statement(statement),
+                ParsedStatement::ClassDeclaration(class) if !class.extends.is_empty()
+            )
+        });
+        if !has_imports || !has_derived_class {
+            continue;
+        }
+        ctx.set_file_name(entry.file.file_name.clone());
+        let diagnostics_before = ctx.diagnostics().len();
+        let bindings =
+            crate::modules::resolve_module_imports(&entry.file, &[], &[], &[], &|_| false, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
+        let export_assigned = entry.file.statements.iter().find_map(|statement| match statement {
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                surge_ts_syntax::ParsedExportDeclaration::Equals { exported_name, .. } => {
+                    Some(exported_name.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        });
+        let Some(table) = Arc::make_mut(&mut ctx.ambient_modules).get_mut(&entry.module_specifier)
+        else {
+            continue;
+        };
+        for statement in &entry.file.statements {
+            let ParsedStatement::ClassDeclaration(class) =
+                crate::modules::peel_exported_statement(statement)
+            else {
+                continue;
+            };
+            let Some(base) = class.extends.first() else {
+                continue;
+            };
+            let base_type = bindings
+                .symbols
+                .get(&base.name)
+                .map(|symbol| symbol.ty.peeled());
+            let Some(base_type) = base_type else {
+                continue;
+            };
+            if let Some(merged) = crate::modules::statics_merged_into(
+                &class.name,
+                &base_type,
+                &table.symbols,
+            ) {
+                let _ = table.symbols.insert(class.name.clone(), merged);
+            }
+            if export_assigned.as_deref() == Some(class.name.as_str())
+                && let Some(assigned) = table.export_assignment_symbol.as_deref()
+                && let Some(merged) = crate::modules::statics_merged_into_symbol(assigned, &base_type)
+            {
+                table.export_assignment_symbol = Some(Arc::new(merged));
+                table.namespace_export_object_type = None;
+            }
+        }
+    }
+
     // Bind each block's own imports (`import { Socket } from "node:net"`
     // inside `declare module "http"`) now that every ambient specifier is
     // registered, and publish a per-file scope of block declarations + import
@@ -950,6 +1053,99 @@ pub(crate) fn collect_ambient_modules(
 /// Augmented interfaces merge their members into the target's existing exports
 /// (declaration merging); new exported values and types are added. The target's
 /// namespace export shape is preserved, since the augmentation only extends it.
+/// Augmentation keys are the specifier a *consumer* would write, so a bare
+/// specifier files under itself. A relative one (`declare module
+/// "./generated"`, the shape `@typescript-eslint/types` uses to hang `parent`
+/// on every AST node) names a file relative to the augmenting file, and no
+/// consumer outside that directory writes the same string — it files under the
+/// target's canonical identity instead, which is what the import path already
+/// has in hand. The prefix keeps the two key spaces apart.
+pub(crate) const MODULE_AUGMENTATION_FILE_KEY_PREFIX: &str = "\0augmented-file\0";
+
+pub(crate) fn module_augmentation_file_key(resolved_file_identity: &str) -> String {
+    format!("{MODULE_AUGMENTATION_FILE_KEY_PREFIX}{resolved_file_identity}")
+}
+
+fn module_augmentation_key(
+    augmenting_file: &str,
+    module_specifier: &str,
+    parsed_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> String {
+    // Only importer-scoped *package* resolutions reach `resolved_module_for`, so
+    // a relative target is resolved the way an import of it is.
+    match crate::modules::resolve_relative_module(
+        augmenting_file,
+        module_specifier,
+        parsed_files,
+        &ctx.module_file_index_by_identity,
+    ) {
+        Some(resolution) => module_augmentation_file_key(
+            &crate::modules::canonical_file_identity(&resolution.resolved_file_name),
+        ),
+        None => module_specifier.to_string(),
+    }
+}
+
+/// Merges in the augmentation filed under a resolved target file, if any. The
+/// specifier-keyed lookup stays alongside it: a bare specifier files under
+/// itself.
+pub(crate) fn apply_file_keyed_module_augmentation(
+    export_table: &mut ModuleExportTable,
+    resolved_file_identity: &str,
+    ctx: &CheckerContext,
+) {
+    if let Some(augmentation) = ctx
+        .module_augmentations
+        .get(&module_augmentation_file_key(resolved_file_identity))
+    {
+        // The target's own declaration table already carries the merged
+        // interfaces (`merge_file_keyed_module_augmentation_into_declarations`
+        // runs before its export table is built), so only the augmentation's
+        // values and brand-new types are still missing here. Merging the
+        // interface bodies a second time would duplicate methods and heritage.
+        for (name, declaration) in augmentation.type_declarations.iter() {
+            if export_table.type_declarations.get(name.as_ref()).is_none() {
+                let _ = Arc::make_mut(&mut export_table.type_declarations)
+                    .insert(name.as_ref(), declaration.clone());
+            }
+        }
+        for (name, symbol) in augmentation.symbols.iter_shared() {
+            if export_table.symbols.get(name).is_none() {
+                let _ = export_table.symbols.insert_shared(name.clone(), symbol.clone());
+            }
+        }
+    }
+}
+
+pub(crate) fn has_file_keyed_module_augmentations(ctx: &CheckerContext) -> bool {
+    ctx.module_augmentations
+        .keys()
+        .any(|key| key.starts_with(MODULE_AUGMENTATION_FILE_KEY_PREFIX))
+}
+
+/// Merges a relative `declare module "./target"` augmentation into the target
+/// file's own declaration table, where the file's declarations resolve their
+/// heritage. Applying it only to the export-table copy each importer receives
+/// left `interface Identifier extends BaseNode` — resolved under the target's
+/// own scope — blind to a `parent` hung on `BaseNode` by a sibling file, so the
+/// member existed on `BaseNode` but not on anything extending it, and which
+/// consumer triggered the expansion decided what an importer saw.
+pub(crate) fn merge_file_keyed_module_augmentation_into_declarations(
+    table: &mut crate::symbols::TypeDeclarationTable,
+    file_identity: &str,
+    ctx: &CheckerContext,
+) {
+    if let Some(augmentation) = ctx
+        .module_augmentations
+        .get(&module_augmentation_file_key(file_identity))
+    {
+        for (name, declaration) in augmentation.type_declarations.iter() {
+            crate::symbols::merge_type_declaration_into_table(table, name.as_ref(), declaration);
+        }
+    }
+}
+
 pub(crate) fn apply_module_augmentation(
     base: &mut ModuleExportTable,
     augmentation: &ModuleExportTable,

@@ -81,8 +81,131 @@ const MAX_DISTRIBUTED_UNION_ARITY: usize = 8;
 /// before distribution reached them at all.
 const MAX_DISTRIBUTION_DEPTH: u32 = 2;
 
+/// Backstop nesting bound for the property-level merge. A property declared by
+/// more than one operand is merged as its own intersection, so a shape that
+/// grows a *fresh* operand at every level (a generic re-instantiated through its
+/// own property) would otherwise walk until the stack gave out. A cycle whose
+/// operands repeat is caught exactly by [`MergeStack`] before this bound
+/// matters; real intersections nest a handful of levels.
+const MAX_MERGE_DEPTH: u32 = 24;
+
 thread_local! {
     static DISTRIBUTION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static MERGE_STACK: std::cell::RefCell<Vec<Vec<MergeOperandKey>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Identity of a merge operand: the shared payload pointers for a structural
+/// object, the declaration id plus argument list for a reference. Two operands
+/// with the same key merge to the same surface, so a merge that meets its own
+/// key while still in progress is a cycle, not a deeper shape.
+#[derive(Clone, PartialEq, Eq)]
+enum MergeOperandKey {
+    Object {
+        properties: usize,
+        string_index: usize,
+        call_signature: usize,
+        construct_signature: usize,
+    },
+    Reference {
+        id: std::sync::Arc<str>,
+        arguments: std::sync::Arc<[Type]>,
+    },
+    Other(std::mem::Discriminant<Type>),
+}
+
+impl MergeOperandKey {
+    fn of(ty: &Type) -> Self {
+        fn arc_addr<T: ?Sized>(arc: &std::sync::Arc<T>) -> usize {
+            std::sync::Arc::as_ptr(arc) as *const u8 as usize
+        }
+        match ty {
+            Type::Object(object) => Self::Object {
+                properties: arc_addr(&object.properties),
+                string_index: object.string_index_type.as_ref().map_or(0, arc_addr),
+                call_signature: object.call_signature.as_ref().map_or(0, arc_addr),
+                construct_signature: object.construct_signature.as_ref().map_or(0, arc_addr),
+            },
+            Type::Reference(reference) => Self::Reference {
+                id: reference.id.clone(),
+                arguments: reference.arguments.clone(),
+            },
+            other => Self::Other(std::mem::discriminant(other)),
+        }
+    }
+
+    fn is_structural(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
+}
+
+/// The merges currently in progress on this thread, outermost first. The
+/// operands of every frame stay alive for the frame's duration (the caller owns
+/// them), so the payload addresses in the keys cannot be reused underneath it.
+struct MergeStack;
+
+enum MergeEntry {
+    Frame(MergeStack),
+    /// The same operands are already being merged further up the stack.
+    Cycle,
+    DepthExceeded,
+}
+
+impl MergeStack {
+    fn enter(members: &[Type]) -> MergeEntry {
+        let key: Vec<MergeOperandKey> = members.iter().map(MergeOperandKey::of).collect();
+        MERGE_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.len() as u32 >= MAX_MERGE_DEPTH {
+                return MergeEntry::DepthExceeded;
+            }
+            if key.iter().any(MergeOperandKey::is_structural) && stack.contains(&key) {
+                return MergeEntry::Cycle;
+            }
+            stack.push(key);
+            MergeEntry::Frame(Self)
+        })
+    }
+}
+
+impl Drop for MergeStack {
+    fn drop(&mut self) {
+        MERGE_STACK.with(|stack| {
+            stack.borrow_mut().pop();
+        });
+    }
+}
+
+/// The surface handed back when a merge re-enters itself. `Window & typeof
+/// globalThis` is the canonical shape: `Window.window` is that very
+/// intersection, already merged once, so the property is the enclosing surface
+/// and tsc renders it as the same type. An operand that is itself a merged
+/// intersection is that surface; otherwise fall back to the open first operand.
+fn cyclic_merge_result(members: Vec<Type>) -> Type {
+    if let Some(merged) = members
+        .iter()
+        .find(|ty| matches!(ty, Type::Object(object) if object.is_intersection))
+    {
+        return merged.clone();
+    }
+    open_merge_fallback(members)
+}
+
+/// The surface returned when the merge bound is hit: the first operand, forced
+/// OPEN so the members contributed by the operands that were not merged do not
+/// read as excess properties. Same policy as an undistributable union operand.
+fn open_merge_fallback(members: Vec<Type>) -> Type {
+    let Some(first) = members.into_iter().next() else {
+        return Type::Unknown;
+    };
+    match first.peeled() {
+        Type::Object(object) if object.string_index_type.is_none() => {
+            let mut object = object.with_open_index_marker();
+            object.string_index_type = Some(std::sync::Arc::new(Type::Any));
+            Type::Object(object)
+        }
+        other => other,
+    }
 }
 
 struct DistributionDepth;
@@ -105,7 +228,72 @@ impl Drop for DistributionDepth {
     }
 }
 
+/// Reference-id prefixes of the two deferred intersection forms below. Both
+/// carry their operands as the reference arguments, which is what lets a
+/// nested deferred intersection be flattened instead of merged as an opaque
+/// operand.
+const DEFERRED_INTERSECTION_ID_PREFIX: &str = "\u{0}intersection\u{0}";
+const OPEN_DEFERRED_INTERSECTION_ID_PREFIX: &str = "\u{0}intersection-open\u{0}";
+
+/// `A & (B & C) ⇒ A & B & C`. Without this a property both operands declare as
+/// a deferred intersection nested one level deeper at every merge: `window` on
+/// `Window & typeof globalThis` became `(Window & typeof globalThis) & Window`,
+/// then `((Window & typeof globalThis) & Window) & Window`, … — every level a
+/// new nominal identity, so no cycle guard downstream ever saw the same type
+/// twice and assignability unfolded it to its depth cap with an exponential
+/// fan-out. Flattened and deduplicated, every level is the same reference.
+/// Also reports whether an open wrapper was unwrapped, so the merged result
+/// stays open.
+fn flatten_deferred_intersections(members: Vec<Type>) -> (Vec<Type>, bool) {
+    let mut flat = Vec::with_capacity(members.len());
+    let mut unwrapped_open = false;
+    let mut pending: Vec<Type> = members.into_iter().rev().collect();
+    while let Some(member) = pending.pop() {
+        match &member {
+            Type::Reference(reference)
+                if reference.id.starts_with(DEFERRED_INTERSECTION_ID_PREFIX) =>
+            {
+                pending.extend(reference.arguments.iter().rev().cloned());
+            }
+            Type::Reference(reference)
+                if reference.id.starts_with(OPEN_DEFERRED_INTERSECTION_ID_PREFIX) =>
+            {
+                unwrapped_open = true;
+                pending.extend(reference.arguments.iter().rev().cloned());
+            }
+            _ => flat.push(member),
+        }
+    }
+    (flat, unwrapped_open)
+}
+
+/// `T & T ⇒ T` for operands with the same identity. A property both operands
+/// declare with one type (`Window.document` and the global `document`, both
+/// `Document`) would otherwise become a fresh `Document & Document` reference
+/// at every merge, and each fresh reference is a new identity for every cycle
+/// guard downstream. Only identity-bearing operands (objects, references) are
+/// deduplicated; two functions or unions are compared by nothing here.
+fn dedup_identical_operands(members: Vec<Type>) -> Vec<Type> {
+    if members.len() < 2 {
+        return members;
+    }
+    let mut seen: Vec<MergeOperandKey> = Vec::with_capacity(members.len());
+    members
+        .into_iter()
+        .filter(|ty| {
+            let key = MergeOperandKey::of(ty);
+            if !key.is_structural() || !seen.contains(&key) {
+                seen.push(key);
+                true
+            } else {
+                false
+            }
+        })
+        .collect()
+}
+
 fn merge_intersection_members(members: Vec<Type>) -> Type {
+    let (members, unwrapped_open) = flatten_deferred_intersections(members);
     if members.iter().any(|ty| matches!(ty, Type::Any)) {
         return Type::Any;
     }
@@ -122,9 +310,10 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     // `void & {…}` with the promise's own `then` gone. Leaving the object
     // surface closed reported `then` as an excess property on every value
     // written against such a type.
-    let dropped_unmodelled_operand = members
-        .iter()
-        .any(|ty| matches!(ty, Type::Unknown | Type::Void));
+    let dropped_unmodelled_operand = unwrapped_open
+        || members
+            .iter()
+            .any(|ty| matches!(ty, Type::Unknown | Type::TypeParameter(_) | Type::Void));
     let open_if_unmodelled = |ty: Type| -> Type {
         match ty {
             Type::Object(object)
@@ -139,6 +328,7 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
     };
 
     let members: Vec<Type> = members.into_iter().filter(|ty| !ty.is_unknown()).collect();
+    let members = dedup_identical_operands(members);
 
     // `T & unknown ⇒ T`: with the `unknown` operands dropped, a lone survivor is
     // returned unchanged. Peeling and re-merging it (below) would force a lazy
@@ -159,17 +349,13 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         {
             crate::program::record_program_counter(|c| c.lazy_intersection_create_count += 1);
             let display = survivor.name();
-            let id = format!("\u{0}intersection-open\u{0}{}", reference.id.as_ref());
+            let id = format!("{OPEN_DEFERRED_INTERSECTION_ID_PREFIX}{}", reference.id.as_ref());
             let members = vec![survivor.clone()];
             return Type::Reference(surge_ts_types::TypeReference::new(
                 id,
                 display,
                 members.clone(),
-                std::sync::Arc::new(LazyIntersectionMerge {
-                    members,
-                    dropped_unmodelled_operand: true,
-                    memo: std::sync::OnceLock::new(),
-                }),
+                deferred_merge(members, true),
             ));
         }
         return open_if_unmodelled(survivor);
@@ -266,14 +452,10 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         // (`same_reference`: id + arguments) distinguishes `A & Ref<X>` from
         // `A & Ref<Y>` — the operand ids alone erase the instantiation.
         return Type::Reference(surge_ts_types::TypeReference::new(
-            format!("\u{0}intersection\u{0}{id}"),
+            format!("{DEFERRED_INTERSECTION_ID_PREFIX}{id}"),
             display,
             members.clone(),
-            std::sync::Arc::new(LazyIntersectionMerge {
-                members,
-                dropped_unmodelled_operand,
-                memo: std::sync::OnceLock::new(),
-            }),
+            deferred_merge(members, dropped_unmodelled_operand),
         ));
     }
 
@@ -282,6 +464,70 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         display_name,
         dropped_unmodelled_operand || unenumerated_union_operand,
     )
+}
+
+thread_local! {
+    /// Deferred merges already handed out on this thread, keyed by the operand
+    /// resolvers. A property both operands declare is merged afresh for every
+    /// surface that carries it, and every fresh deferred reference owned its own
+    /// memo, so `window` on one `Window & typeof globalThis` surface re-merged
+    /// the same ~1000 members each time a consumer peeled it — that repetition,
+    /// not any single merge, is what assignability's structural walk turned into
+    /// gigabytes. Sharing the resolver shares the memo. Held weakly: an entry
+    /// lives exactly as long as some reference still points at it, and a live
+    /// entry keeps its operands (hence the keyed addresses) alive, so a dead
+    /// entry is the only way an address can be reused and it fails to upgrade.
+    /// Cleared with the program type caches.
+    static DEFERRED_MERGES: std::cell::RefCell<
+        surge_ts_types::fx::FxHashMap<DeferredMergeKey, std::sync::Weak<LazyIntersectionMerge>>,
+    > = std::cell::RefCell::new(surge_ts_types::fx::FxHashMap::default());
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct DeferredMergeKey {
+    resolvers: Vec<usize>,
+    dropped_unmodelled_operand: bool,
+}
+
+const DEFERRED_MERGES_PRUNE_INTERVAL: usize = 4096;
+
+pub(crate) fn clear_deferred_merges() {
+    DEFERRED_MERGES.with(|merges| merges.borrow_mut().clear());
+}
+
+/// The resolver for merging `members` (all references) later, shared with every
+/// earlier deferred intersection of the same operand instances.
+fn deferred_merge(
+    members: Vec<Type>,
+    dropped_unmodelled_operand: bool,
+) -> std::sync::Arc<LazyIntersectionMerge> {
+    let key = DeferredMergeKey {
+        resolvers: members
+            .iter()
+            .filter_map(|ty| match ty {
+                Type::Reference(reference) => Some(reference.resolver_address()),
+                _ => None,
+            })
+            .collect(),
+        dropped_unmodelled_operand,
+    };
+    DEFERRED_MERGES.with(|merges| {
+        let mut merges = merges.borrow_mut();
+        if let Some(shared) = merges.get(&key).and_then(std::sync::Weak::upgrade) {
+            crate::program::record_program_counter(|c| c.lazy_intersection_share_count += 1);
+            return shared;
+        }
+        if merges.len() % DEFERRED_MERGES_PRUNE_INTERVAL == DEFERRED_MERGES_PRUNE_INTERVAL - 1 {
+            merges.retain(|_, weak| weak.strong_count() > 0);
+        }
+        let resolver = std::sync::Arc::new(LazyIntersectionMerge {
+            members,
+            dropped_unmodelled_operand,
+            memo: std::sync::OnceLock::new(),
+        });
+        merges.insert(key, std::sync::Arc::downgrade(&resolver));
+        resolver
+    })
 }
 
 /// Resolver for a deferred all-reference intersection: the member peel + merge
@@ -323,11 +569,24 @@ impl surge_ts_types::ResolveReference for LazyIntersectionMerge {
     }
 }
 
+
 fn merge_intersection_members_now(
     members: Vec<Type>,
     display_name: Option<String>,
     dropped_unmodelled_operand: bool,
 ) -> Type {
+    // A type that names itself through one of its own properties re-enters the
+    // property merge below with the operands it is already merging. `Window &
+    // typeof globalThis` alternates `window`/`self` with a period of two; left
+    // alone the walk never terminates, and bounding it by depth alone still
+    // fans out exponentially (two recursive properties per level, each level
+    // re-merging ~1000 members) — that shape peaked at 55 GB RSS.
+    let _frame = match MergeStack::enter(&members) {
+        MergeEntry::Frame(frame) => frame,
+        MergeEntry::Cycle => return cyclic_merge_result(members),
+        MergeEntry::DepthExceeded => return open_merge_fallback(members),
+    };
+
     // Peel reference operands (`StudentBulkImportRow & { … }`) so a named object
     // member contributes its properties to the merged intersection surface.
     let members: Vec<Type> = members.iter().map(Type::peeled).collect();

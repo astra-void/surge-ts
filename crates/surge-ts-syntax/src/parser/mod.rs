@@ -60,6 +60,8 @@ fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
         Statement::ExpressionStatement(expression_statement) => {
             parse_expression_statement(expression_statement).map(|statement| vec![statement])
         }
+        Statement::IfStatement(if_statement) => functions::parse_if_statement(if_statement)
+            .map(|if_statement| vec![ParsedStatement::If(Box::new(if_statement))]),
         _ => None,
     }
 }
@@ -195,24 +197,63 @@ fn parse_expression_statement(
     }
 }
 
+
+/// The value a logical assignment stores: `x ??= v` is `x = x ?? v`, and
+/// `||=`/`&&=` likewise, so the ordinary assignment check and the narrowing it
+/// establishes apply. Other compound operators are not modelled and yield
+/// `None`.
+pub(super) fn logical_assignment_value(
+    operator: AssignmentOperator,
+    target: ParsedExpression,
+    target_span: Option<crate::TextSpan>,
+    value: ParsedExpression,
+    value_span: Option<crate::TextSpan>,
+) -> Option<ParsedExpression> {
+    let logical = match operator {
+        AssignmentOperator::Assign => return Some(value),
+        AssignmentOperator::LogicalNullish => {
+            return Some(ParsedExpression::NullishCoalescing {
+                left: Box::new(target),
+                left_span: target_span,
+                right: Box::new(value),
+                right_span: value_span,
+            });
+        }
+        AssignmentOperator::LogicalOr => crate::ParsedLogicalOperator::Or,
+        AssignmentOperator::LogicalAnd => crate::ParsedLogicalOperator::And,
+        _ => return None,
+    };
+    Some(ParsedExpression::Logical {
+        left: Box::new(target),
+        left_span: target_span,
+        operator: logical,
+        operator_span: None,
+        right: Box::new(value),
+        right_span: value_span,
+    })
+}
+
 fn parse_assignment_expression(
     assignment: &oxc_ast::ast::AssignmentExpression<'_>,
 ) -> Option<ParsedAssignment> {
-    if assignment.operator != AssignmentOperator::Assign {
-        return None;
-    }
-
     let AssignmentTarget::AssignmentTargetIdentifier(identifier) = &assignment.left else {
         return None;
     };
 
+    let target_span = Some(text_span_from_oxc_span(identifier.span));
     let (value, value_span) = parse_expression(&assignment.right);
+    let value_span = Some(text_span_from_oxc_span(value_span));
+    let target = ParsedExpression::Identifier {
+        name: identifier.name.to_string(),
+        span: target_span,
+    };
+    let value = logical_assignment_value(assignment.operator, target, target_span, value, value_span)?;
 
     Some(ParsedAssignment {
         target_name: identifier.name.to_string(),
-        target_span: Some(text_span_from_oxc_span(identifier.span)),
+        target_span,
         value,
-        value_span: Some(text_span_from_oxc_span(value_span)),
+        value_span,
     })
 }
 

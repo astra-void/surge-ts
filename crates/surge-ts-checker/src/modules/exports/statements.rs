@@ -315,7 +315,12 @@ pub(crate) fn collect_exports_from_statement(
                     type_declarations,
                 );
             }
-            if let Some(symbol) = local_symbols.get_shared(&class.name) {
+            // The exportable set carries the class *after* its namespace merge
+            // (`namespace EE { export const X }`); the binding-time table does not.
+            if let Some(symbol) = exportable_values
+                .get_shared(&class.name)
+                .or_else(|| local_symbols.get_shared(&class.name))
+            {
                 if symbols.get(&class.name).is_none() {
                     symbols.insert_shared(class.name.clone(), symbol);
                 }

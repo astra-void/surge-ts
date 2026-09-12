@@ -32,6 +32,63 @@ pub(crate) fn check_program_file_statements(
     }
 }
 
+/// A module-scope `if`: the condition is checked, and when one branch cannot
+/// fall through (`if (isCancel(value)) process.exit(0)`) the statements after
+/// it see the other branch's narrowing, exactly as a function body would.
+/// The branch bodies themselves are not checked here — module scope has no
+/// flow state to check them under yet — which is what happened to them before
+/// the parser kept them at all.
+pub(crate) fn check_module_if_statement(
+    if_statement: &surge_ts_syntax::ParsedIfStatement,
+    ctx: &mut CheckerContext,
+) {
+    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    // The condition is evaluated for its narrowing only. Reporting it would
+    // change what a module-scope `if` costs relative to the statements around
+    // it: its branches are not checked yet, and a condition that reads a value
+    // surge models more loosely than tsc (`args.verbose` off a parsed-options
+    // object that degraded to an index signature) would report where tsc
+    // does not. Its diagnostics are discarded like a probe's.
+    let checkpoint = ctx.diagnostics().len();
+    let _ = crate::checks::expr::evaluate_expression(
+        &if_statement.condition,
+        if_statement.condition_span,
+        &symbols,
+        ctx,
+    );
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    let scopes = crate::symbols::ScopeStack::from_root(symbols);
+    let diverts = |body: &[surge_ts_syntax::ParsedFunctionBodyStatement]| {
+        let flow = crate::flow::analyze_function_body_flow(body);
+        flow.guarantees_value_return
+            || flow.guarantees_exit
+            || crate::checks::function::body_ends_in_never_call(body, &scopes)
+    };
+    let then_diverts = diverts(&if_statement.then_body);
+    let else_diverts = !if_statement.else_body.is_empty() && diverts(&if_statement.else_body);
+    let surviving_branch = match (then_diverts, else_diverts) {
+        (true, false) => false,
+        (false, true) => true,
+        _ => return,
+    };
+    let base = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    let narrowed = crate::checks::function::narrow_condition_symbol_table(
+        &if_statement.condition,
+        &base,
+        surviving_branch,
+    );
+    let narrowed = crate::checks::function::narrow_predicate_guards_symbol_table(
+        &if_statement.condition,
+        narrowed.as_ref().unwrap_or(&base),
+        surviving_branch,
+        ctx,
+    )
+    .or(narrowed);
+    if let Some(narrowed) = narrowed {
+        ctx.symbols = narrowed;
+    }
+}
+
 pub(crate) fn check_program_statement(
     statement: ParsedStatement,
     file_index: usize,
@@ -65,6 +122,7 @@ pub(crate) fn check_program_statement(
         ParsedStatement::Expression(expression) => {
             expr::check_expression_statement(*expression, ctx);
         }
+        ParsedStatement::If(if_statement) => check_module_if_statement(&if_statement, ctx),
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
         ParsedStatement::ClassDeclaration(class) => {

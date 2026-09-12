@@ -146,18 +146,128 @@ pub(crate) fn module_instantiation_memo_key(
     }
 }
 
+/// Program-lifetime companion to the module-scoped instantiation memo, holding
+/// **clean expansions only**. Default on since 2026-09-12
+/// (`SURGE_IFACE_MEMO_PROGRAM=0` turns it off, `=check` restricts it to the
+/// check phase).
+///
+/// The module scoping of the primary memo is deliberate — see the tier's doc
+/// above: dropping the map on every module/file change is what stops a degraded
+/// (`had_error`) shape outliving the scope that produced it, which the
+/// memory-lifetime rules require. So this companion never stores a degraded
+/// result; only the `had_error == false` expansions, whose fingerprint already
+/// pins phase, scope openness, stage, attempt, module scope and scope layers.
+///
+/// Three conditions had to hold before this could share across modules, each
+/// found by the memo moving a diagnostic rather than by inspection:
+///
+/// * the fingerprint must not carry the consumer's per-module declaration-table
+///   instance id where the body provably does not read that table
+///   (`interface_memo_table_identity_dropped`), or no two modules ever agree on
+///   a key;
+/// * a body expanded under a shadow context (`values.rs`) must not be stored:
+///   the shadow's environment store dies with it, and every later peel of a
+///   lazy reference captured there degrades to `Unknown`
+///   (`DeclarationEnvironmentStore::is_program_lifetime`);
+/// * a body whose HERITAGE re-entered an outer in-progress frame must not be
+///   stored — its inherited surface is incomplete in a caller-dependent way —
+///   while a member annotation that did so only embeds a nominal cycle
+///   reference and stays a function of its key (`resolve_interface`).
+///
+/// Measured with all three in place (2026-09-12, six corpora byte-identical):
+/// tanstack-query 40.0G → 6.0G instructions and 1.03 GB → 189 MB peak
+/// footprint, trpc −11% / −30%, zod −12%.
+static PROGRAM_MODULE_INSTANTIATION_MEMO: std::sync::OnceLock<
+    std::sync::Mutex<surge_ts_types::fx::FxHashMap<DeclarationResolutionKey, Type>>,
+> = std::sync::OnceLock::new();
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProgramMemoMode {
+    Off,
+    /// `=check`: share only while the check phase runs. Every module has been
+    /// bound by then, so two consumers cannot disagree about how much of the
+    /// program exists — which is the failure the analysis phase exhibits.
+    CheckPhase,
+    /// The default: share in every phase.
+    All,
+}
+
+fn program_module_memo_mode() -> ProgramMemoMode {
+    static MODE: std::sync::OnceLock<ProgramMemoMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(
+        || match std::env::var("SURGE_IFACE_MEMO_PROGRAM").as_deref().ok() {
+            Some("0") => ProgramMemoMode::Off,
+            Some("check") => ProgramMemoMode::CheckPhase,
+            _ => ProgramMemoMode::All,
+        },
+    )
+}
+
+fn program_module_memo_enabled() -> bool {
+    match program_module_memo_mode() {
+        ProgramMemoMode::Off => false,
+        ProgramMemoMode::CheckPhase => crate::program::in_check_phase(),
+        ProgramMemoMode::All => true,
+    }
+}
+
+fn program_module_memo()
+-> &'static std::sync::Mutex<surge_ts_types::fx::FxHashMap<DeclarationResolutionKey, Type>> {
+    PROGRAM_MODULE_INSTANTIATION_MEMO
+        .get_or_init(|| std::sync::Mutex::new(surge_ts_types::fx::FxHashMap::default()))
+}
+
+pub(crate) fn clear_program_module_instantiation_memo() {
+    if let Some(memo) = PROGRAM_MODULE_INSTANTIATION_MEMO.get()
+        && let Ok(mut memo) = memo.lock()
+    {
+        memo.clear();
+    }
+}
+
 pub(crate) fn get_module_instantiation_memo(
     ctx: &CheckerContext,
     key: &DeclarationResolutionKey,
 ) -> Option<ResolvedType> {
-    let cache = ctx.resolved_named_types.lock().ok()?;
-    match cache.get(key) {
-        Some(DeclarationResolutionState::Resolved { ty, had_error }) => Some(ResolvedType {
+    if let Ok(cache) = ctx.resolved_named_types.lock()
+        && let Some(DeclarationResolutionState::Resolved { ty, had_error }) = cache.get(key)
+    {
+        return Some(ResolvedType {
             ty: ty.clone(),
             had_error: *had_error,
-        }),
-        _ => None,
+        });
     }
+    if program_module_memo_enabled() && !program_memo_excluded(key) {
+        if let Ok(memo) = program_module_memo().lock()
+            && let Some(ty) = memo.get(key)
+        {
+            crate::program::record_program_counter(|c| c.program_memo_hit_count += 1);
+            return Some(ResolvedType {
+                ty: ty.clone(),
+                had_error: false,
+            });
+        }
+        crate::program::record_program_counter(|c| c.program_memo_miss_count += 1);
+        if program_memo_dump_enabled() {
+            eprintln!(
+                "[program-memo-miss] {} in {} fp={:x} reader={} check={}",
+                key.name,
+                key.file_name.rsplit('/').next().unwrap_or(""),
+                key.fingerprint,
+                ctx.file_name.rsplit('/').next().unwrap_or(""),
+                crate::program::in_check_phase()
+            );
+        }
+    }
+    None
+}
+
+/// Opt-in (`SURGE_PROGRAM_MEMO_DUMP=1`): one line per program-memo miss and
+/// store, for finding which fingerprint component keeps a type graph's
+/// consumers from sharing an expansion.
+pub(crate) fn program_memo_dump_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_PROGRAM_MEMO_DUMP").is_some())
 }
 
 /// Upper bound on entries one module-scoped memo map may hold, overridable via
@@ -179,11 +289,79 @@ fn module_instantiation_memo_cap() -> usize {
     })
 }
 
+/// EXPERIMENT KNOB (`SURGE_IFACE_MEMO_EXCLUDE=<substr>[,<substr>...]`): keep
+/// declarations whose key's file name contains any listed substring out of the
+/// program-lifetime memo. Used to bisect which declarations a cross-consumer
+/// share is answering differently.
+/// Whether this expansion's shape depended on a heritage base the resolver
+/// could not pin down. `resolve_interface_declaration` sets `base_is_open` when
+/// a base resolves to `Any`/`Unknown`/`had_error`, and surfaces it on the result
+/// as `synthetic_open_index`.
+///
+/// Such an expansion is **consumer-dependent**: whether the base resolved at all
+/// depends on what the triggering module could see, so one consumer's answer is
+/// not another's. That is the case a cross-consumer share gets wrong —
+/// `@typescript-eslint`'s `Variable` (whose `defs`/`scope` come from
+/// `VariableBase` in another file) and `TSESTree.Identifier` (whose `parent`
+/// comes from its base node type) swap which of them is missing members
+/// depending on which module expanded first.
+fn expansion_is_consumer_dependent(ty: &Type) -> bool {
+    match ty {
+        Type::Object(object) => object.synthetic_open_index,
+        _ => false,
+    }
+}
+
+fn program_memo_excluded(key: &DeclarationResolutionKey) -> bool {
+    static EXCLUDES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let excludes = EXCLUDES.get_or_init(|| {
+        std::env::var("SURGE_IFACE_MEMO_EXCLUDE")
+            .map(|value| {
+                value
+                    .split(',')
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    if excludes.is_empty() {
+        return false;
+    }
+    excludes
+        .iter()
+        .any(|needle| key.file_name.contains(needle.as_str()) || key.name.contains(needle.as_str()))
+}
+
 pub(crate) fn store_module_instantiation_memo(
     ctx: &CheckerContext,
     key: DeclarationResolutionKey,
     resolved: &ResolvedType,
+    base_is_open: bool,
 ) {
+    // A shadow context's environment store dies with the shadow, so a body
+    // expanded there carries lazy references that peel to `Unknown` for every
+    // later reader (observed as `Variable` losing its inherited `scope`).
+    if program_module_memo_enabled()
+        && ctx.declaration_environment_store.is_program_lifetime()
+        && !resolved.had_error
+        && !base_is_open
+        && !program_memo_excluded(&key)
+        && let Ok(mut memo) = program_module_memo().lock()
+    {
+        crate::program::record_program_counter(|c| c.program_memo_store_count += 1);
+        if program_memo_dump_enabled() {
+            eprintln!(
+                "[program-memo-store] {} in {} fp={:x} writer={} check={}",
+                key.name,
+                key.file_name.rsplit('/').next().unwrap_or(""),
+                key.fingerprint,
+                ctx.file_name.rsplit('/').next().unwrap_or(""),
+                crate::program::in_check_phase()
+            );
+        }
+        memo.insert(key.clone(), resolved.ty.clone());
+    }
     if let Ok(mut cache) = ctx.resolved_named_types.lock() {
         if cache.len() >= module_instantiation_memo_cap() {
             return;
@@ -494,7 +672,10 @@ impl LazySignatureEnvironment {
         });
         let mut substitution = TypeParameterSubstitution::new();
         for type_parameter in type_parameters {
-            substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
+            substitution.insert_placeholder(
+                type_parameter.name.clone(),
+                Type::type_parameter(&type_parameter.name),
+            );
         }
         Some(Self {
             type_parameters: Arc::from(type_parameters),
@@ -1613,6 +1794,13 @@ pub(crate) fn make_lazy_type_reference(
 /// nominal identity and defers re-expansion to [`LazyInstantiation`], so forcing
 /// the back-edge peels one level to the real recursive shape (bounded by the lazy
 /// peel stack) instead of collapsing to `unknown`.
+/// How many lazy references are currently being peeled. A resolution that runs
+/// inside a peel pays that peel's stack on top of its own, so the two depths
+/// have to be bounded together rather than separately.
+pub(crate) fn lazy_peel_depth() -> usize {
+    LAZY_PEEL_STACK.with(|stack| stack.borrow().len())
+}
+
 pub(crate) fn make_recursive_cycle_reference(
     ctx: &mut CheckerContext,
     name: &str,
@@ -2051,6 +2239,20 @@ fn build_stable_interface_declaration_id(
     })
 }
 
+/// EXPERIMENT KNOB (`SURGE_IFACE_KEY_ENV=0`): drop the environment component of
+/// `InterfaceInstantiationKey`, restoring the pre-2026-09-11 key. Measurement
+/// only — the weak key shares a user interface's expansion across resolution
+/// environments, which the memory-lifetime rules forbid. It exists to size how
+/// much of the cache's miss rate the environment component is responsible for.
+fn interface_key_environment_discriminator(ctx: &CheckerContext) -> u64 {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var("SURGE_IFACE_KEY_ENV").as_deref() != Ok("0")) {
+        return 0;
+    }
+    ctx.declaration_environment()
+        .canonicalization_discriminator()
+}
+
 pub(crate) fn canonical_physical_interface_key_with_declaration(
     interface: &crate::symbols::InterfaceInfo,
     substitution: &TypeParameterSubstitution,
@@ -2061,12 +2263,19 @@ pub(crate) fn canonical_physical_interface_key_with_declaration(
     let mut arguments = Vec::with_capacity(interface.body.type_parameters.len());
     let mut budget = 128usize;
     for parameter in &interface.body.type_parameters {
-        if substitution.is_placeholder(&parameter.name) {
-            return Err(InterfaceCacheSkipReason::UnresolvedTypeArgument);
-        }
         let Some(argument) = substitution.get(&parameter.name) else {
             return Err(InterfaceCacheSkipReason::UnresolvedTypeArgument);
         };
+        // A placeholder slot whose value is a `Type::TypeParameter` is the
+        // declaration's own parameter standing for itself, which is a perfectly
+        // good cache key. A placeholder slot holding anything else was filled by
+        // a resolution that may have degraded to `Unknown`, and the
+        // memory-lifetime rules forbid caching that — keep refusing it.
+        if substitution.is_placeholder(&parameter.name)
+            && !matches!(argument, Type::TypeParameter(_))
+        {
+            return Err(InterfaceCacheSkipReason::UnresolvedTypeArgument);
+        }
         // Display-inclusive identity: the deep display fingerprint keeps
         // structurally-equal-but-differently-rendered arguments apart, so a
         // cached instantiation never substitutes another context's rendering
@@ -2086,6 +2295,7 @@ pub(crate) fn canonical_physical_interface_key_with_declaration(
         environment: InterfaceEnvironmentIdentity {
             no_lib: ctx.options.no_lib,
             skip_lib_check: ctx.options.skip_lib_check,
+            environment_discriminator: interface_key_environment_discriminator(ctx),
         },
     })
 }
@@ -2118,6 +2328,9 @@ fn canonical_type_identity(
             value.value.as_str(),
         ))),
         Type::BooleanLiteral(value) => Some(CanonicalTypeIdentity::BooleanLiteral(*value)),
+        Type::TypeParameter(parameter) => Some(CanonicalTypeIdentity::TypeParameter(
+            parameter.name.clone(),
+        )),
         _ => None,
     };
     if let Some(identity) = primitive {
@@ -2180,7 +2393,7 @@ fn canonical_type_identity(
             .clone()
             .map(CanonicalTypeIdentity::NamedObject)
             .ok_or(InterfaceCacheSkipReason::UnsupportedTypeArgument),
-        Type::Unknown | Type::GenuineUnknown => {
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
             Err(InterfaceCacheSkipReason::UnresolvedTypeArgument)
         }
         Type::Union(union) if widened => {
@@ -2297,7 +2510,7 @@ pub(crate) fn validate_physical_interface_cache_value(
                 }
                 Ok(())
             }
-            Type::Unknown => Err(InterfaceCacheValueRejection::Unknown),
+            Type::Unknown | Type::TypeParameter(_) => Err(InterfaceCacheValueRejection::Unknown),
             _ => Ok(()),
         }
     }
@@ -2820,3 +3033,4 @@ mod physical_interface_cache_tests {
         assert!(std::ptr::eq(first.payload(), second.payload()));
     }
 }
+

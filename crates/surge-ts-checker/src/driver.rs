@@ -34,6 +34,7 @@ pub fn check_source_with_options(
     let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(file_name.clone(), classify_file_kind(&file_name));
     let mut ctx = CheckerContext::new(file_name.clone(), options, file_kinds);
+    ctx.declaration_environment_store.mark_program_lifetime();
 
     inject_generated_default_libs(&mut ctx);
 
@@ -461,14 +462,49 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
         );
     }
 
+    // The global object is a nominal reference, not a bare structural object,
+    // for the same reason interfaces are: `Window & typeof globalThis` names
+    // itself through `window`/`self`, and only nominal identity lets two sites
+    // that spell it agree without unfolding it. As a structural operand every
+    // resolution site minted a fresh merged surface, so the intersection merge
+    // and assignability walked an unbounded unfolding of the same type; a
+    // reference keeps `typeof globalThis` deferred inside the intersection and
+    // tsc-shaped in diagnostics.
+    let global_object = surge_ts_types::Type::Object(crate::arena::alloc_object_type(properties, None));
     ctx.ambient_global_symbols.insert(
         "globalThis".to_string(),
         crate::symbols::SymbolInfo {
-            ty: surge_ts_types::Type::Object(crate::arena::alloc_object_type(properties, None)),
+            ty: surge_ts_types::Type::Reference(surge_ts_types::TypeReference::new(
+                GLOBAL_THIS_REFERENCE_ID,
+                "typeof globalThis",
+                Vec::new(),
+                std::sync::Arc::new(GlobalObjectType(std::sync::Arc::new(global_object))),
+            )),
             kind: crate::symbols::SymbolKind::Const,
             function_signature: None,
         },
     );
+}
+
+/// Reference id of `typeof globalThis`. Declaration ids are `file\0Name`, so a
+/// leading NUL keeps it disjoint from every declaration, like the intersection
+/// ids.
+const GLOBAL_THIS_REFERENCE_ID: &str = "\u{0}globalThis";
+
+struct GlobalObjectType(std::sync::Arc<surge_ts_types::Type>);
+
+impl surge_ts_types::ResolveReference for GlobalObjectType {
+    fn resolve(&self) -> surge_ts_types::Type {
+        (*self.0).clone()
+    }
+
+    fn resolve_arc(&self) -> std::sync::Arc<surge_ts_types::Type> {
+        self.0.clone()
+    }
+
+    fn peek_resolved(&self) -> Option<std::sync::Arc<surge_ts_types::Type>> {
+        Some(self.0.clone())
+    }
 }
 
 pub(crate) fn validate_direct_utility_aliases(
@@ -684,6 +720,70 @@ fn collect_type_declarations_from_statement(statement: &ParsedStatement, ctx: &m
         }
         _ => {}
     }
+}
+
+/// `export { X }` inside `declare namespace ns` re-exports an outer binding as
+/// `ns.X` — fastify's entry file publishes `FastifyRequest` this way from an
+/// import. Imports live in the module's scope layers, not its local table, so
+/// this runs once the scope is assembled and returns the local table with those
+/// members added (shared unchanged when there are none). The export-table pass
+/// then publishes `ns.X` bare like any declared member, which is what gives a
+/// `declare module` augmentation of `X` a real interface to merge into rather
+/// than an empty slot to shadow.
+pub(crate) fn with_namespace_reexports(
+    local: Arc<crate::symbols::TypeDeclarationTable>,
+    statements: &[ParsedStatement],
+    scope: &crate::symbols::TypeDeclarationScope,
+) -> Arc<crate::symbols::TypeDeclarationTable> {
+    let mut additions: Vec<(String, TypeDeclarationInfo)> = Vec::new();
+    for statement in statements {
+        let namespace = match statement {
+            ParsedStatement::NamespaceDeclaration(namespace) => namespace,
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => match declaration.as_ref()
+                {
+                    ParsedStatement::NamespaceDeclaration(namespace) => namespace,
+                    _ => continue,
+                },
+                _ => continue,
+            },
+            _ => continue,
+        };
+        for inner in &namespace.statements {
+            let ParsedStatement::ExportDeclaration(export) = inner else {
+                continue;
+            };
+            let ParsedExportDeclaration::Named {
+                specifiers,
+                module_specifier: None,
+                ..
+            } = export.as_ref()
+            else {
+                continue;
+            };
+            for specifier in specifiers {
+                let key = format!("{}.{}", namespace.name, specifier.exported_name);
+                if local.get(&key).is_some() {
+                    continue;
+                }
+                let Some(declaration) = scope.get(&specifier.local_name) else {
+                    continue;
+                };
+                additions.push((
+                    key.clone(),
+                    crate::modules::rename_type_declaration(declaration.clone(), key),
+                ));
+            }
+        }
+    }
+    if additions.is_empty() {
+        return local;
+    }
+    let mut table = local.as_ref().clone();
+    for (key, declaration) in additions {
+        let _ = table.insert(&key, declaration);
+    }
+    Arc::new(table)
 }
 
 /// Registers a namespace's interfaces and type aliases under qualified names
@@ -935,6 +1035,9 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         }
         ParsedStatement::Expression(expression) => {
             expr::check_expression_statement(*expression, ctx);
+        }
+        ParsedStatement::If(if_statement) => {
+            crate::program::check_module_if_statement(&if_statement, ctx);
         }
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
@@ -1309,7 +1412,10 @@ fn validate_direct_utility_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
     let mut substitution = crate::infer::TypeParameterSubstitution::new();
     for type_parameter in &alias.type_parameters {
         substitution
-            .insert_placeholder(type_parameter.name.clone(), surge_ts_types::Type::Unknown);
+            .insert_placeholder(
+                type_parameter.name.clone(),
+                surge_ts_types::Type::type_parameter(&type_parameter.name),
+            );
     }
     ctx.push_type_parameter_constraints_only(&alias.type_parameters);
     let _ = crate::infer::map_parsed_type_with_substitution(alias.ty.clone(), ctx, &substitution);

@@ -537,11 +537,29 @@ impl TypeDeclarationHandle {
 #[derive(Debug, Clone)]
 pub(crate) struct TypeDeclarationScope {
     layers: Vec<Arc<TypeDeclarationTable>>,
+    /// A scope built before the file's imports were bound — it carries the
+    /// file's own declarations only. A declaration exported with one of these
+    /// attached resolves every imported name in its body to `unknown`, so the
+    /// attachment is replaceable: see `attach_type_resolution_scope`.
+    preliminary: bool,
 }
 
 impl TypeDeclarationScope {
     pub(crate) fn new(layers: Vec<Arc<TypeDeclarationTable>>) -> Self {
-        Self { layers }
+        Self {
+            layers,
+            preliminary: false,
+        }
+    }
+
+    /// Marks a scope as built before import binding.
+    pub(crate) fn preliminary(mut self) -> Self {
+        self.preliminary = true;
+        self
+    }
+
+    pub(crate) fn is_preliminary(&self) -> bool {
+        self.preliminary
     }
 
     /// Census-only: layer table identities, for the scope↔table cycle probe.
@@ -562,6 +580,18 @@ impl TypeDeclarationScope {
 
         crate::program::record_declaration_lookup(layers_visited);
         None
+    }
+
+    /// Debug-only (`SURGE_TRACE_HAD_ERROR`): per-layer sizes and a name sample.
+    pub(crate) fn debug_layer_summary(&self) -> String {
+        self.layers
+            .iter()
+            .map(|layer| {
+                let names: Vec<&str> = layer.iter().map(|(name, _)| name.as_ref()).take(6).collect();
+                format!("{}[{}]", layer.len(), names.join(","))
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
     }
 
     pub(crate) fn get_handle(&self, name: &str) -> Option<TypeDeclarationHandle> {

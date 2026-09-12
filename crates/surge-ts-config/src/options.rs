@@ -165,7 +165,7 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
     TsConfigOptionDefinition {
         name: "allowImportingTsExtensions",
         value_kind: TsConfigOptionValueKind::Boolean,
-        support: TsConfigOptionSupport::KnownNoop,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "isolatedDeclarations",
@@ -220,7 +220,7 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
     TsConfigOptionDefinition {
         name: "noUncheckedIndexedAccess",
         value_kind: TsConfigOptionValueKind::Boolean,
-        support: TsConfigOptionSupport::KnownNoop,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "exactOptionalPropertyTypes",

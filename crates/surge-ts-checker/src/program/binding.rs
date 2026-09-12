@@ -32,6 +32,7 @@ pub(crate) fn collect_preliminary_module_type_bindings(
     let mut preliminary_local_export_tables = Vec::with_capacity(parsed_files.len());
     let mut preliminary_type_diagnostics = Vec::new();
     let initial_diagnostics_len = ctx.diagnostics().len();
+    let has_file_keyed_augmentations = has_file_keyed_module_augmentations(ctx);
 
     for parsed_file in parsed_files {
         if !parsed_file.is_module && parsed_file.file_kind != FileKind::DependencyDeclaration {
@@ -50,10 +51,19 @@ pub(crate) fn collect_preliminary_module_type_bindings(
         let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
         let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
-        let raw_local_type_declarations = Arc::new(std::mem::take(&mut ctx.type_declarations));
-        let preliminary_raw_scope = Arc::new(TypeDeclarationScope::new(vec![
-            raw_local_type_declarations.clone(),
-        ]));
+        let mut raw_local_type_declarations = std::mem::take(&mut ctx.type_declarations);
+        if has_file_keyed_augmentations {
+            let file_identity = crate::modules::canonical_file_identity(&parsed_file.file_name);
+            merge_file_keyed_module_augmentation_into_declarations(
+                &mut raw_local_type_declarations,
+                &file_identity,
+                ctx,
+            );
+        }
+        let raw_local_type_declarations = Arc::new(raw_local_type_declarations);
+        let preliminary_raw_scope = Arc::new(
+            TypeDeclarationScope::new(vec![raw_local_type_declarations.clone()]).preliminary(),
+        );
         let local_type_declarations = Arc::new(attach_resolution_scope_to_declarations(
             raw_local_type_declarations.as_ref(),
             preliminary_raw_scope,
@@ -71,9 +81,9 @@ pub(crate) fn collect_preliminary_module_type_bindings(
             metrics.collect_type_declarations_duration += collect_duration;
         });
 
-        let preliminary_resolution_scope = Arc::new(TypeDeclarationScope::new(vec![
-            local_type_declarations.clone(),
-        ]));
+        let preliminary_resolution_scope = Arc::new(
+            TypeDeclarationScope::new(vec![local_type_declarations.clone()]).preliminary(),
+        );
         ctx.thin_superseded_value_collection = true;
         let preliminary_export_table = build_module_export_table(
             parsed_file,
@@ -108,9 +118,9 @@ pub(crate) fn collect_preliminary_module_type_bindings(
                 return None;
             };
 
-            Some(Arc::new(TypeDeclarationScope::new(vec![
-                local_type_declarations.clone(),
-            ])))
+            Some(Arc::new(
+                TypeDeclarationScope::new(vec![local_type_declarations.clone()]).preliminary(),
+            ))
         })
         .collect::<Vec<_>>();
     record_program_timing(timings, |timings| {
@@ -153,6 +163,74 @@ pub(crate) fn collect_preliminary_module_type_bindings(
         preliminary_module_import_bindings,
         preliminary_type_diagnostics,
     )
+}
+
+fn upgrade_analysis_scopes_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_UPGRADE_ANALYSIS_SCOPES").as_deref() == Ok("1"))
+}
+
+fn declaration_resolution_scope(
+    declaration: &TypeDeclarationInfo,
+) -> Option<&Arc<TypeDeclarationScope>> {
+    match declaration {
+        TypeDeclarationInfo::Alias(alias) => alias.resolution_scope.as_ref(),
+        TypeDeclarationInfo::Interface(interface) => interface.resolution_scope.as_ref(),
+    }
+}
+
+/// Opt-in (`SURGE_UPGRADE_ANALYSIS_SCOPES=1`): replaces the import-less scope
+/// `collect_preliminary_module_type_bindings` attaches at collection time with
+/// the module's real one (own declarations + import layers).
+///
+/// A declaration keeps its attached scope wherever it travels, so an alias
+/// exported with the preliminary scope resolves every *imported* name in its
+/// body to `unknown` — and for a consumer that is the published type of
+/// anything built from it. The check phase recovers through
+/// `module_scope_by_file`; module analysis runs map-less by design, so the
+/// degraded shape is what the export table carries. tRPC's
+/// `createTRPCNext<AppRouter>` is this shape: the export is `unknown` for every
+/// page that imports it, which silences the 12 `TS2339`s tsc reports there.
+///
+/// Off by default because the honest export is not yet an improvement: with it
+/// on, a router surge cannot model decides `ProtectedIntersection`'s
+/// `keyof A & keyof B extends never` from a key set it never had, and the
+/// string-literal error type that conditional produces swallows every property
+/// read off the router — 12 `TS2339` closed, 13 opened, in the examples where
+/// tsc models the router and surge does not. Turning it on for good needs
+/// degraded-argument provenance the substitution does not carry today.
+fn upgrade_preliminary_resolution_scopes(
+    declarations: &TypeDeclarationTable,
+    scope: &Arc<TypeDeclarationScope>,
+) -> Option<TypeDeclarationTable> {
+    let needs_upgrade = declarations.iter().any(|(_, declaration)| {
+        declaration_resolution_scope(declaration)
+            .is_none_or(|attached| attached.is_preliminary())
+    });
+    if !needs_upgrade {
+        return None;
+    }
+
+    let mut upgraded = TypeDeclarationTable::new();
+    for (name, declaration) in declarations.iter() {
+        let declaration = match declaration_resolution_scope(declaration)
+            .is_none_or(|attached| attached.is_preliminary())
+        {
+            false => declaration.clone(),
+            true => match declaration.clone() {
+                TypeDeclarationInfo::Alias(mut alias) => {
+                    alias.resolution_scope = Some(scope.clone());
+                    TypeDeclarationInfo::Alias(alias)
+                }
+                TypeDeclarationInfo::Interface(mut interface) => {
+                    interface.resolution_scope = Some(scope.clone());
+                    TypeDeclarationInfo::Interface(interface)
+                }
+            },
+        };
+        let _ = upgraded.insert(name.as_ref(), declaration);
+    }
+    Some(upgraded)
 }
 
 pub(crate) fn attach_resolution_scope_to_declarations(
@@ -306,6 +384,24 @@ fn analyze_module(
         scope_layers.extend(imported_layers);
     }
     let full_type_declarations_scope = Arc::new(TypeDeclarationScope::new(scope_layers));
+    let local_type_declarations = crate::driver::with_namespace_reexports(
+        local_type_declarations.clone(),
+        &parsed_file.statements,
+        &full_type_declarations_scope,
+    );
+    let local_type_declarations = match upgrade_analysis_scopes_enabled()
+        .then(|| {
+            upgrade_preliminary_resolution_scopes(
+                &local_type_declarations,
+                &full_type_declarations_scope,
+            )
+        })
+        .flatten()
+    {
+        Some(upgraded) => Arc::new(upgraded),
+        None => local_type_declarations,
+    };
+    let local_type_declarations = &local_type_declarations;
     ctx.type_declarations = local_type_declarations.as_ref().clone();
     ctx.type_declaration_scope = Some(full_type_declarations_scope.clone());
     record_program_timing(timings, |timings| {
@@ -345,6 +441,7 @@ fn analyze_module(
         }
         let split_start = analyze_split_enabled().then(Instant::now);
         ctx.thin_superseded_value_collection = !lower_global_augmentation_values;
+        crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "seed");
         let value_env = crate::modules::collect_exportable_value_symbols(
             &parsed_file.statements,
             local_type_declarations.as_ref(),

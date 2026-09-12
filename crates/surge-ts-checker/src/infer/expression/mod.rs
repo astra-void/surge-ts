@@ -269,7 +269,7 @@ pub(crate) fn infer_expression(
             }
         }
         ParsedExpression::ConstAssertion { expression, .. } => {
-            infer_expression(expression, symbols, ctx)
+            literals::infer_const_expression(expression, symbols, ctx)
         }
         ParsedExpression::ArrowFunction(arrow_function) => InferredExpression::Known(
             Type::Function(infer_arrow_function(arrow_function.as_ref(), symbols, ctx)),
@@ -298,7 +298,34 @@ pub(crate) fn infer_expression(
                         );
                     InferredExpression::Known(return_type)
                 }
-                Type::Unknown | Type::GenuineUnknown | Type::Any => InferredExpression::Unknown,
+                Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Any => InferredExpression::Unknown,
+                // A value typed by an interface or alias carrying a generic call
+                // signature is a `Type::Reference` here, and its answer depends on
+                // binding the call's type arguments — the same recovery the
+                // property spelling runs.
+                // Narrow on purpose: only a callee whose *declaration* carries a
+                // written generic call signature takes this path. Instantiating
+                // every other callable reference here replaced a clean `unknown`
+                // — which the check phase then resolves properly — with a
+                // half-bound answer, and cost trpc 213 true positives.
+                callee_type
+                    if crate::checks::call::written_call_signature_recovery_enabled()
+                        && crate::checks::call::interface_call_signature_info(callee_type, ctx)
+                            .is_some() =>
+                {
+                    let callee_type = callee_type.clone();
+                    match crate::checks::call::callable_member_call_return_type(
+                        &callee_type,
+                        type_arguments,
+                        *callee_span,
+                        arguments,
+                        symbols,
+                        ctx,
+                    ) {
+                        Some(return_type) => InferredExpression::Known(return_type),
+                        None => InferredExpression::Unknown,
+                    }
+                }
                 _ => InferredExpression::Unknown,
             },
             None => InferredExpression::Unknown,

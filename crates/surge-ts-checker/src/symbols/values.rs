@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
+
+use surge_ts_syntax::ParsedExpression;
 use surge_ts_types::fx::FxBuildHasher;
 
 use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan};
@@ -34,6 +36,14 @@ impl Clone for SymbolInfo {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FunctionSignatureInfo {
+    /// Set when this signature is the instantiation template of an *overload
+    /// group*: the group's value type is the permissive fold of every overload
+    /// and only the first declaration's parsed signature is kept, so a call
+    /// instantiated through it against a later overload's argument shape binds
+    /// the wrong parameters (`vi.spyOn(obj, "method")` against the `"get"`
+    /// accessor overload). Paths that instantiate on their own initiative
+    /// consult this and leave the folded type as it is.
+    pub(crate) overloaded: bool,
     pub(crate) type_parameters: Vec<ParsedTypeParameter>,
     pub(crate) parameter_types: Vec<Option<ParsedType>>,
     /// Declared parameter names (`None` for binding patterns), parallel to
@@ -55,6 +65,11 @@ pub(crate) struct FunctionSignatureInfo {
     /// stored under qualified keys, so instantiation re-resolves them under this
     /// prefix.
     pub(crate) namespace_prefix: Option<Arc<str>>,
+    /// The overload of this group that declares a `x is T` return, when the
+    /// signature kept for the group does not. Only guard narrowing reads it:
+    /// the folded value type and every instantiation path are untouched, so
+    /// carrying it cannot change which parameters a call binds.
+    pub(crate) predicate_overload: Option<Arc<FunctionSignatureInfo>>,
 }
 
 #[derive(Debug, Default)]
@@ -86,6 +101,11 @@ pub(crate) struct SymbolTable {
     // narrowed table, so it is empty in nearly every table and its `Arc` clone
     // is effectively free. Shares the copy-on-write discipline of `symbols`.
     declared_types: Option<Arc<HashMap<Arc<str>, Type, FxBuildHasher>>>,
+    // The condition a boolean `const` guard was written as (`const ok = a &&
+    // isError(a)`), so a conditional expression tested on `ok` narrows by that
+    // condition exactly as an `if (ok)` does. Written only by the function-body
+    // declaration path; empty in nearly every table.
+    alias_conditions: Option<Arc<HashMap<Arc<str>, Arc<ParsedExpression>, FxBuildHasher>>>,
     // Optional read-only fallback consulted by lookups (`get`, `get_handle`,
     // `contains_let_or_const`) when a name is absent from `symbols`. A function
     // body's root scope sets this to the module/ambient environment instead of
@@ -108,6 +128,7 @@ impl Clone for SymbolTable {
             declaration_spans: Arc::clone(&self.declaration_spans),
             function_implementations: Arc::clone(&self.function_implementations),
             declared_types: self.declared_types.clone(),
+            alias_conditions: self.alias_conditions.clone(),
             parent: self.parent.clone(),
         }
     }
@@ -131,6 +152,7 @@ impl SymbolTable {
             declaration_spans: Arc::new(HashMap::default()),
             function_implementations: Arc::new(HashSet::default()),
             declared_types: self.declared_types.clone(),
+            alias_conditions: self.alias_conditions.clone(),
             parent: self.parent.clone(),
         }
     }
@@ -143,6 +165,7 @@ impl SymbolTable {
             declaration_spans: Arc::new(HashMap::default()),
             function_implementations: Arc::new(HashSet::default()),
             declared_types: None,
+            alias_conditions: None,
             parent: Some(parent),
         }
     }
@@ -167,6 +190,7 @@ impl SymbolTable {
             declaration_spans: Arc::clone(&parent.declaration_spans),
             function_implementations: Arc::clone(&parent.function_implementations),
             declared_types: parent.declared_types.clone(),
+            alias_conditions: parent.alias_conditions.clone(),
             parent: Some(parent),
         }
     }
@@ -306,6 +330,39 @@ impl SymbolTable {
             .as_ref()
             .into_iter()
             .flat_map(|declared_types| declared_types.keys())
+    }
+
+    pub(crate) fn set_alias_condition(
+        &mut self,
+        name: Arc<str>,
+        condition: Option<Arc<ParsedExpression>>,
+    ) {
+        match condition {
+            Some(condition) => {
+                let conditions = self.alias_conditions.get_or_insert_with(Default::default);
+                Arc::make_mut(conditions).insert(name, condition);
+            }
+            None => {
+                if let Some(conditions) = self.alias_conditions.as_mut()
+                    && conditions.contains_key(&name)
+                {
+                    Arc::make_mut(conditions).remove(&name);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn alias_condition(&self, name: &str) -> Option<Arc<ParsedExpression>> {
+        if self.symbols.contains_key(name) {
+            return self
+                .alias_conditions
+                .as_ref()
+                .and_then(|conditions| conditions.get(name))
+                .cloned();
+        }
+        self.parent
+            .as_ref()
+            .and_then(|parent| parent.alias_condition(name))
     }
 
     pub(crate) fn declared_type(&self, name: &str) -> Option<&Type> {

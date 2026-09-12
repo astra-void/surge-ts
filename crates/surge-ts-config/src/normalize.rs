@@ -57,6 +57,16 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.no_property_access_from_index_signature);
             }
+            "noUncheckedIndexedAccess" => {
+                normalized.no_unchecked_indexed_access =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_unchecked_indexed_access);
+            }
+            "allowImportingTsExtensions" => {
+                normalized.allow_importing_ts_extensions =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.allow_importing_ts_extensions);
+            }
             "noUnusedLocals" => {
                 normalized.no_unused_locals =
                     parse_bool_option(key, value, config_dir, diagnostics)

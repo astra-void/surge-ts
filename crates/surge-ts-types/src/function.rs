@@ -102,6 +102,13 @@ pub struct FunctionType {
     /// The type-alias name this signature was written as (`type Fn = (x: string)
     /// => void`), which tsc displays instead of the structural form.
     alias_name: Option<Arc<str>>,
+    /// The checker's record of the declaration this value-level signature came
+    /// from (`typeof fn` over a generic `declare function fn<T>`), so a call
+    /// through a property typed by it can still instantiate the declared type
+    /// parameters. Opaque here: this crate has no declaration table. Handle
+    /// metadata like the names above — never part of the payload, identity, or
+    /// equality.
+    declaration: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl FunctionType {
@@ -115,6 +122,7 @@ impl FunctionType {
             parameter_names: None,
             type_parameter_head: None,
             alias_name: None,
+            declaration: None,
         }
     }
 
@@ -140,6 +148,7 @@ impl FunctionType {
                         parameter_names: None,
                         type_parameter_head: None,
                         alias_name: None,
+                        declaration: None,
                     };
                 }
                 Err((parameters, return_type)) => {
@@ -158,6 +167,7 @@ impl FunctionType {
                         parameter_names: None,
                         type_parameter_head: None,
                         alias_name: None,
+                        declaration: None,
                     };
                 }
             }
@@ -176,6 +186,7 @@ impl FunctionType {
             parameter_names: None,
             type_parameter_head: None,
             alias_name: None,
+            declaration: None,
         }
     }
 
@@ -209,6 +220,16 @@ impl FunctionType {
 
     pub fn alias_name(&self) -> Option<&str> {
         self.alias_name.as_deref()
+    }
+
+    /// Attaches the declaration record this signature was read from.
+    pub fn with_declaration(mut self, declaration: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        self.declaration = Some(declaration);
+        self
+    }
+
+    pub fn declaration(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        self.declaration.as_deref()
     }
 
     pub fn payload(&self) -> &FunctionTypePayload {
@@ -319,6 +340,7 @@ impl Clone for FunctionType {
             parameter_names: self.parameter_names.clone(),
             type_parameter_head: self.type_parameter_head.clone(),
             alias_name: self.alias_name.clone(),
+            declaration: self.declaration.clone(),
         }
     }
 }

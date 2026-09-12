@@ -11,7 +11,8 @@ use crate::symbols::{SymbolInfo, SymbolTable, TypeDeclarationTable};
 
 pub(crate) mod candidates;
 mod diagnostics;
-mod exports;
+pub(crate) mod exports;
+pub(crate) use exports::{peel_exported_statement, statics_merged_into, statics_merged_into_symbol};
 pub(crate) mod imports;
 mod node_builtins;
 mod resolution;

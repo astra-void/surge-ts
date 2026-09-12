@@ -16,7 +16,7 @@ enum DiscriminantMatch {
     Unknown,
 }
 
-fn literal_expression_value(expression: &ParsedExpression) -> Option<Type> {
+pub(super) fn literal_expression_value(expression: &ParsedExpression) -> Option<Type> {
     match expression {
         ParsedExpression::StringLiteral(value) => Some(Type::StringLiteral(value.clone())),
         ParsedExpression::BooleanLiteral(value) => Some(Type::BooleanLiteral(*value)),
@@ -38,6 +38,16 @@ pub(super) fn const_member_literal_value(
     expression: &ParsedExpression,
     symbols: &SymbolTable,
 ) -> Option<Type> {
+    // A bare `const CACHE_VERSION = 1` keeps its literal type, so it
+    // discriminates like the member form.
+    if let ParsedExpression::Identifier { name, .. } = expression {
+        let ty = symbols.get(name)?.ty.peeled();
+        return matches!(
+            ty,
+            Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+        )
+        .then_some(ty);
+    }
     let ParsedExpression::PropertyAccess {
         object,
         property_name,
@@ -170,6 +180,47 @@ pub(super) fn parse_identifier_literal_equality(
         && let Some(literal) = literal_expression_value(left)
     {
         return Some((name.as_str(), literal, eq));
+    }
+    None
+}
+
+/// Parses `o.p === "lit"` / `o?.p !== 3` — the literal-equality test on a
+/// property reference, which [`parse_identifier_literal_equality`] leaves alone.
+/// Returns the reference, the literal's expression (the guard re-reads it, so the
+/// guard stays a borrow of the condition), and whether the operator is an
+/// equality test. The discriminant narrowers read the same shape to filter the *base*
+/// union; this feeds the reference guard that narrows the property itself, so
+/// `if (filters?.refetchType === 'none') return` leaves `filters?.refetchType`
+/// without `'none'` afterwards.
+pub(super) fn parse_reference_literal_equality(
+    condition: &'_ ParsedExpression,
+) -> Option<(&'_ ParsedExpression, &'_ ParsedExpression, bool)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let eq = match operator {
+        ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::Equals => true,
+        ParsedBinaryOperator::StrictNotEquals | ParsedBinaryOperator::NotEquals => false,
+        _ => return None,
+    };
+    let is_reference = |expression: &ParsedExpression| {
+        matches!(
+            expression,
+            ParsedExpression::PropertyAccess { .. } | ParsedExpression::OptionalPropertyAccess { .. }
+        )
+    };
+    if is_reference(left) && literal_expression_value(right).is_some() {
+        return Some((left.as_ref(), right.as_ref(), eq));
+    }
+    if is_reference(right) && literal_expression_value(left).is_some() {
+        return Some((right.as_ref(), left.as_ref(), eq));
     }
     None
 }
@@ -409,6 +460,30 @@ pub(super) fn parse_discriminant_condition(
     parse_discriminant_condition_with(condition, &|_| None)
 }
 
+/// `x?.p === lit` holds only when `x` is not nullish (a nullish `x` reads
+/// `undefined`, which equals no literal), so the true branch drops `x`'s
+/// `undefined` even when `p` is no discriminant — tsc's optional-chain
+/// containment narrowing. `None` when nothing changes.
+pub(super) fn narrow_optional_chain_base(
+    condition: &ParsedExpression,
+    subject_ty: &Type,
+    literal: &Type,
+    keep_matching: bool,
+) -> Option<Type> {
+    let ParsedExpression::Binary { left, right, .. } = condition else {
+        return None;
+    };
+    let optional_access = matches!(
+        left.as_ref(),
+        ParsedExpression::OptionalPropertyAccess { .. }
+    ) || matches!(right.as_ref(), ParsedExpression::OptionalPropertyAccess { .. });
+    if !optional_access || !keep_matching || *literal == Type::Undefined {
+        return None;
+    }
+    let narrowed = surge_ts_types::remove_undefined(subject_ty);
+    (narrowed != *subject_ty && !narrowed.is_unknown()).then_some(narrowed)
+}
+
 /// `parse_discriminant_condition` with an extra resolver for operands that are
 /// not literal tokens but still denote a unit literal type.
 pub(super) fn parse_discriminant_condition_with<'a>(
@@ -438,7 +513,15 @@ pub(super) fn parse_discriminant_condition_with<'a>(
         resolve_literal: &dyn Fn(&ParsedExpression) -> Option<Type>,
     ) -> Option<(&'a ParsedExpression, &'a str, Type, bool)> {
         let literal = literal_expression_value(value).or_else(|| resolve_literal(value))?;
+        // `x?.kind === "a"` discriminates like `x.kind === "a"`; a nullish `x`
+        // reads `undefined`, which never equals a literal, so the member
+        // filter drops it exactly as it drops any member without the property.
         if let ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        }
+        | ParsedExpression::OptionalPropertyAccess {
             object,
             property_name,
             ..
@@ -471,8 +554,10 @@ pub(crate) fn narrow_discriminant_symbol_table(
     match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let symbol = symbols.get(name)?;
-            let narrowed =
-                narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)?;
+            let narrowed = narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)
+                .or_else(|| {
+                    narrow_optional_chain_base(condition, &symbol.ty, &literal, keep_matching)
+                })?;
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
             narrowed_symbols.insert_narrowed(
                 name.clone(),
@@ -612,12 +697,53 @@ fn narrow_member_by_property_presence(
 
 /// Narrows a union by whether each member has `property` (`"prop" in obj`).
 /// `keep_present` selects members that have it (the `in` true branch).
+/// Members every object answers through `Object.prototype`. `"toString" in x` is
+/// true for any object, so it proves nothing new, and synthesizing the key would
+/// shadow the real member and turn a working `x.toString()` into an error.
+fn is_object_prototype_member(property: &str) -> bool {
+    matches!(
+        property,
+        "toString"
+            | "toLocaleString"
+            | "valueOf"
+            | "hasOwnProperty"
+            | "isPrototypeOf"
+            | "propertyIsEnumerable"
+            | "constructor"
+            | "__proto__"
+    )
+}
+
 pub(super) fn narrow_union_by_property_presence(
     ty: &Type,
     property: &str,
     keep_present: bool,
 ) -> Option<Type> {
     let peeled = ty.peeled();
+    // A non-union object learns the key it was just tested for. tsc reports the
+    // result as `T & Record<"p", unknown>`; carrying the property on the object
+    // itself is the same member surface. Only the true branch learns anything —
+    // absence proves nothing about a type that never declared the key — and the
+    // key is a required literal, never an index signature, which would make
+    // every other read off the value a permissive hit.
+    if keep_present
+        && let Type::Object(object) = &peeled
+        && matches!(
+            property_presence_of(&peeled, property),
+            PropertyPresence::Absent
+        )
+        && !is_object_prototype_member(property)
+    {
+        let mut properties = (*object.properties).clone();
+        properties.insert(
+            std::sync::Arc::from(property),
+            surge_ts_types::ObjectProperty::required(Type::GenuineUnknown),
+        );
+        return Some(Type::Object(crate::arena::alloc_object_type(
+            properties,
+            object.string_index_type.as_deref().cloned(),
+        )));
+    }
     let Type::Union(union) = &peeled else {
         return None;
     };
@@ -716,6 +842,21 @@ fn typeof_tag_of(member: &Type) -> Option<&'static str> {
 /// Narrows a union by a `typeof x === "tag"` guard. `keep_matching` keeps the
 /// members whose runtime tag is `tag` (the `=== true` branch); otherwise removes
 /// them. Members with an undecidable tag are kept either way.
+/// The type a `typeof x === "<tag>"` test proves for a subject that carries no
+/// tag of its own. Only the tags that name exactly one type qualify: `"object"`
+/// admits every object shape plus `null`, and `"function"` every signature.
+fn type_for_typeof_tag(tag: &str) -> Option<Type> {
+    match tag {
+        "string" => Some(Type::String),
+        "number" => Some(Type::Number),
+        "boolean" => Some(Type::Boolean),
+        "bigint" => Some(Type::BigInt),
+        "symbol" => Some(Type::Symbol),
+        "undefined" => Some(Type::Undefined),
+        _ => None,
+    }
+}
+
 pub(super) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
     let Type::Union(union) = ty else {
         return None;
@@ -727,7 +868,16 @@ pub(super) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
             Some(member_tag) => (member_tag == tag) == keep_matching,
             None => true,
         })
-        .cloned()
+        // The `unknown` keyword carries no tag, so it survives the filter and
+        // leaves the union unassignable to anything the guard just proved. In
+        // the matching branch the tag *is* the member's type, which is how tsc
+        // reads `typeof x === 'string'` on an `unknown`. Only the genuine
+        // keyword qualifies: `Type::Unknown` is the degradation sentinel, and
+        // rewriting it would claim knowledge surge does not have.
+        .map(|member| match (member, keep_matching) {
+            (Type::GenuineUnknown, true) => type_for_typeof_tag(tag).unwrap_or_else(|| member.clone()),
+            _ => member.clone(),
+        })
         .collect();
 
     if kept.is_empty() || kept.len() == union.types().len() {
@@ -862,11 +1012,11 @@ fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool> {
     // array member renders as `T[]` and a tuple as `[A, B]`, so the name compare
     // below rejected both and `messageOrMessages instanceof Array ? … : [ … ]`
     // narrowed nothing. Same membership test `Array.isArray` uses.
-    if ctor_name == "Array" && !matches!(member, Type::Any | Type::Unknown | Type::GenuineUnknown) {
+    if ctor_name == "Array" && !matches!(member, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)) {
         return Some(is_array_like_member(member));
     }
     match member {
-        Type::Any | Type::Unknown | Type::GenuineUnknown => None,
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
         Type::String
         | Type::StringLiteral(_)
         | Type::Number
@@ -1097,7 +1247,7 @@ pub(super) fn narrow_union_by_arrayness(ty: &Type, keep_arrays: bool) -> Option<
         .types()
         .iter()
         .filter(|member| match member {
-            Type::Any | Type::Unknown | Type::GenuineUnknown => true,
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => true,
             Type::Array(_) | Type::Tuple(_) => keep_arrays,
             // `Array<T>` / `ReadonlyArray<T>` written in generic form stays a
             // nominal reference rather than `Type::Array`, so match by name too.
@@ -1213,7 +1363,7 @@ pub(super) fn narrow_union_by_arraybufferview(ty: &Type, keep_views: bool) -> Op
         .types()
         .iter()
         .filter(|member| match member {
-            Type::Any | Type::Unknown | Type::GenuineUnknown => true,
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => true,
             _ => is_array_buffer_view_type(member) == keep_views,
         })
         .cloned()
@@ -1248,6 +1398,11 @@ pub(super) struct PredicateGuardInfo {
     /// The callee's signature, kept so a generic predicate (`x is OK<T>`) can
     /// infer `T` from the tested argument at the guard site.
     pub(super) signature: std::sync::Arc<crate::symbols::FunctionSignatureInfo>,
+    /// The call's other arguments, by declared position, so a generic
+    /// predicate's remaining type parameters can be inferred from them —
+    /// `isMatching(pattern, value)` states its target in terms of the *pattern*.
+    /// Empty unless the signature is generic, since nothing else reads it.
+    pub(super) other_arguments: Vec<(usize, ParsedExpression)>,
     /// Position of the tested parameter in `signature.parameter_types`.
     pub(super) parameter_index: usize,
 }
@@ -1295,6 +1450,15 @@ pub(super) fn parse_type_predicate_condition(
         return None;
     }
     let signature = signature_of(callee_name)?;
+    // An overload group keeps one declaration's parsed signature, which need not
+    // be the one that declared the predicate; the fold records that overload
+    // alongside. `arguments.get(index)` below still decides whether this call
+    // reaches the predicate's parameter, so a call of a *different* overload
+    // narrows nothing.
+    let signature = match &signature.return_type {
+        Some(surge_ts_syntax::ParsedType::Predicate(_)) => signature,
+        _ => signature.predicate_overload.clone()?,
+    };
     let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = &signature.return_type else {
         return None;
     };
@@ -1307,9 +1471,20 @@ pub(super) fn parse_type_predicate_condition(
         .iter()
         .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))?;
     let (subject, path) = super::reference_path(&arguments.get(index)?.expression)?;
+    let other_arguments = if signature.type_parameters.is_empty() {
+        Vec::new()
+    } else {
+        arguments
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| *position != index)
+            .map(|(position, argument)| (position, argument.expression.clone()))
+            .collect()
+    };
     Some(PredicateGuardInfo {
         subject,
         path,
+        other_arguments,
         predicate_type,
         declaring_file: signature.declaring_file.clone(),
         namespace_prefix: signature.namespace_prefix.clone(),
@@ -1363,8 +1538,19 @@ pub(super) fn narrow_by_predicate(
         }
         return Some(union_type(remaining));
     }
+    // A non-union subject narrows to the predicate whenever the predicate is a
+    // subtype of it, which is tsc's rule. Requiring the subject *not* to be
+    // assignable to the predicate as well is stricter than tsc and silently
+    // depended on that direction failing: an `unknown` subject narrowed because
+    // nothing is assignable to it, while `{}` did not, because an
+    // index-signature-only target such as `Record<string, unknown>` accepts any
+    // object. `any` and the degradation sentinel are excluded — both are
+    // assignable in every direction, so narrowing them would invent a type for
+    // a subject whose real one was never reconstructed. The genuine `unknown`
+    // keyword is not excluded: narrowing it is the case that already works.
     if keep_matching
-        && !surge_ts_types::is_assignable_to(&peeled, predicate)
+        && !matches!(peeled, Type::Any | Type::Unknown | Type::TypeParameter(_))
+        && peeled != *predicate
         && surge_ts_types::is_assignable_to(predicate, &peeled)
     {
         return Some(predicate.clone());

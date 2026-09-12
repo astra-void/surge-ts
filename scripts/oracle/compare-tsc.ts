@@ -221,6 +221,7 @@ export const fixturePresets: Record<string, string> = {
   'declarations-hardening': path.join(workspaceRoot, 'tests/compat-projects/declarations-hardening/tsconfig.json'),
   'module-export-visibility-hardening': path.join(workspaceRoot, 'tests/compat-projects/module-export-visibility-hardening/tsconfig.json'),
   'declaration-reexports-hardening': path.join(workspaceRoot, 'tests/compat-projects/declaration-reexports-hardening/tsconfig.json'),
+  'nested-predicate-enclosing-type-parameter-basic': path.join(workspaceRoot, 'tests/compat-projects/nested-predicate-enclosing-type-parameter-basic/tsconfig.json'),
   'namespace-import-reexport-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-import-reexport-basic/tsconfig.json'),
   'namespace-nested-member-lazy-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-nested-member-lazy-scope-basic/tsconfig.json'),
   'function-type-binding-pattern-param-basic': path.join(workspaceRoot, 'tests/compat-projects/function-type-binding-pattern-param-basic/tsconfig.json'),
@@ -228,6 +229,9 @@ export const fixturePresets: Record<string, string> = {
   'package-exports-types-hardening': path.join(workspaceRoot, 'tests/compat-projects/package-exports-types-hardening/tsconfig.json'),
   'diagnostics-pack': path.join(workspaceRoot, 'tests/compat-projects/diagnostics-pack/tsconfig.json'),
   'generics-basic': path.join(workspaceRoot, 'tests/compat-projects/generics-basic/tsconfig.json'),
+  'relative-module-augmentation-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-module-augmentation-basic/tsconfig.json'),
+  'relative-module-augmentation-heritage-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-module-augmentation-heritage-basic/tsconfig.json'),
+  'object-spread-any-source-basic': path.join(workspaceRoot, 'tests/compat-projects/object-spread-any-source-basic/tsconfig.json'),
   'relative-js-extension-substitution-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-js-extension-substitution-basic/tsconfig.json'),
   'relative-directory-index-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-directory-index-basic/tsconfig.json'),
   'import-graph-generated-relative-basic': path.join(workspaceRoot, 'tests/compat-projects/import-graph-generated-relative-basic/tsconfig.json'),
@@ -236,6 +240,10 @@ export const fixturePresets: Record<string, string> = {
   'generic-cache-unresolved-argument-diagnostics-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-cache-unresolved-argument-diagnostics-basic/tsconfig.json'),
   'generic-cache-module-source-not-persisted-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-cache-module-source-not-persisted-basic/tsconfig.json'),
   'generic-cache-dependency-instantiation-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-cache-dependency-instantiation-basic/tsconfig.json'),
+  'degraded-generic-argument-conditional-provenance-basic': path.join(workspaceRoot, 'tests/compat-projects/degraded-generic-argument-conditional-provenance-basic/tsconfig.json'),
+  'disjoint-protected-intersection-basic': path.join(workspaceRoot, 'tests/compat-projects/disjoint-protected-intersection-basic/tsconfig.json'),
+  'implicit-returns-any-return-basic': path.join(workspaceRoot, 'tests/compat-projects/implicit-returns-any-return-basic/tsconfig.json'),
+  'undecidable-conditional-never-branch-basic': path.join(workspaceRoot, 'tests/compat-projects/undecidable-conditional-never-branch-basic/tsconfig.json'),
   'skip-lib-check-dependency-dts': path.join(workspaceRoot, 'tests/compat-projects/skip-lib-check-dependency-dts/tsconfig.json'),
   'skip-lib-check-local-dts': path.join(workspaceRoot, 'tests/compat-projects/skip-lib-check-local-dts/tsconfig.json'),
   'package-imports': path.join(workspaceRoot, 'tests/compat-projects/package-imports/tsconfig.json'),
@@ -365,7 +373,56 @@ export const fixturePresets: Record<string, string> = {
   'json-module-import-basic': path.join(workspaceRoot, 'tests/compat-projects/json-module-import-basic/tsconfig.json'),
   'json-module-resolution-disabled-basic': path.join(workspaceRoot, 'tests/compat-projects/json-module-resolution-disabled-basic/tsconfig.json'),
   'instanceof-heritage-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-heritage-narrowing-basic/tsconfig.json'),
+  'type-literal-method-overloads-basic': path.join(workspaceRoot, 'tests/compat-projects/type-literal-method-overloads-basic/tsconfig.json'),
+  'symbol-keyed-indexed-access-basic': path.join(workspaceRoot, 'tests/compat-projects/symbol-keyed-indexed-access-basic/tsconfig.json'),
+  'element-access-typeof-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/element-access-typeof-narrowing-basic/tsconfig.json'),
+  'union-target-sequence-literal-basic': path.join(workspaceRoot, 'tests/compat-projects/union-target-sequence-literal-basic/tsconfig.json'),
+  'union-target-object-literal-member-basic': path.join(workspaceRoot, 'tests/compat-projects/union-target-object-literal-member-basic/tsconfig.json'),
+  'const-assertion-nested-literal-basic': path.join(workspaceRoot, 'tests/compat-projects/const-assertion-nested-literal-basic/tsconfig.json'),
+  'overload-group-type-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/overload-group-type-predicate-basic/tsconfig.json'),
+  'predicate-type-argument-from-arguments-basic': path.join(workspaceRoot, 'tests/compat-projects/predicate-type-argument-from-arguments-basic/tsconfig.json'),
   'class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/class-static-inheritance-basic/tsconfig.json'),
+  'declaration-flow-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/declaration-flow-narrowing-basic/tsconfig.json'),
+  'lib-reference-index-and-signature-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-reference-index-and-signature-scope-basic/tsconfig.json'),
+  'namespace-reexport-augmentation-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-reexport-augmentation-basic/tsconfig.json'),
+  'rest-infer-capture-basic': path.join(workspaceRoot, 'tests/compat-projects/rest-infer-capture-basic/tsconfig.json'),
+  'annotated-object-method-parameter-basic': path.join(workspaceRoot, 'tests/compat-projects/annotated-object-method-parameter-basic/tsconfig.json'),
+  'property-truthiness-discriminant-basic': path.join(workspaceRoot, 'tests/compat-projects/property-truthiness-discriminant-basic/tsconfig.json'),
+  'alias-condition-conditional-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/alias-condition-conditional-expression-basic/tsconfig.json'),
+  'cross-module-alias-body-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/cross-module-alias-body-scope-basic/tsconfig.json'),
+  'typeof-class-without-value-basic': path.join(workspaceRoot, 'tests/compat-projects/typeof-class-without-value-basic/tsconfig.json'),
+  'generic-default-arguments-display-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-default-arguments-display-basic/tsconfig.json'),
+  'synthetic-default-import-type-members-basic': path.join(workspaceRoot, 'tests/compat-projects/synthetic-default-import-type-members-basic/tsconfig.json'),
+  'module-scope-if-divergence-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/module-scope-if-divergence-narrowing-basic/tsconfig.json'),
+  'ambient-class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-class-static-inheritance-basic/tsconfig.json'),
+  'interface-extends-function-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-extends-function-alias-basic/tsconfig.json'),
+  'iterable-element-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/iterable-element-inference-basic/tsconfig.json'),
+  'generic-class-static-inheritance-no-global-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-class-static-inheritance-no-global-merge-basic/tsconfig.json'),
+  'namespace-value-member-annotation-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-value-member-annotation-basic/tsconfig.json'),
+  'numeric-enum-number-assignability-basic': path.join(workspaceRoot, 'tests/compat-projects/numeric-enum-number-assignability-basic/tsconfig.json'),
+  'import-equals-module-namespace-basic': path.join(workspaceRoot, 'tests/compat-projects/import-equals-module-namespace-basic/tsconfig.json'),
+  'reexported-namespace-object-members-basic': path.join(workspaceRoot, 'tests/compat-projects/reexported-namespace-object-members-basic/tsconfig.json'),
+  'argument-mismatch-first-only-basic': path.join(workspaceRoot, 'tests/compat-projects/argument-mismatch-first-only-basic/tsconfig.json'),
+  'unused-destructured-parameters-basic': path.join(workspaceRoot, 'tests/compat-projects/unused-destructured-parameters-basic/tsconfig.json'),
+  'annotated-union-written-unknown-initializer-basic': path.join(workspaceRoot, 'tests/compat-projects/annotated-union-written-unknown-initializer-basic/tsconfig.json'),
+  'generic-class-constructor-argument-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-class-constructor-argument-inference-basic/tsconfig.json'),
+  'generic-callback-argument-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-callback-argument-inference-basic/tsconfig.json'),
+  'possibly-undefined-receiver-basic': path.join(workspaceRoot, 'tests/compat-projects/possibly-undefined-receiver-basic/tsconfig.json'),
+  'no-unchecked-indexed-access-basic': path.join(workspaceRoot, 'tests/compat-projects/no-unchecked-indexed-access-basic/tsconfig.json'),
+  'ts-extension-import-basic': path.join(workspaceRoot, 'tests/compat-projects/ts-extension-import-basic/tsconfig.json'),
+  'spelling-suggestion-basic': path.join(workspaceRoot, 'tests/compat-projects/spelling-suggestion-basic/tsconfig.json'),
+  'logical-assignment-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/logical-assignment-narrowing-basic/tsconfig.json'),
+  'element-access-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/element-access-guard-narrowing-basic/tsconfig.json'),
+  'intersection-self-reference-cycle-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-self-reference-cycle-basic/tsconfig.json'),
+  'optional-value-union-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-value-union-inference-basic/tsconfig.json'),
+  'exports-dotted-runtime-target-basic': path.join(workspaceRoot, 'tests/compat-projects/exports-dotted-runtime-target-basic/tsconfig.json'),
+  'arrow-argument-parameter-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/arrow-argument-parameter-inference-basic/tsconfig.json'),
+  'array-reference-parameter-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/array-reference-parameter-inference-basic/tsconfig.json'),
+  'rest-parameter-alias-annotation-basic': path.join(workspaceRoot, 'tests/compat-projects/rest-parameter-alias-annotation-basic/tsconfig.json'),
+  'awaited-nullable-union-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/awaited-nullable-union-alias-basic/tsconfig.json'),
+  'property-literal-equality-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/property-literal-equality-narrowing-basic/tsconfig.json'),
+  'typeof-function-member-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/typeof-function-member-generic-call-basic/tsconfig.json'),
+  'method-type-parameter-default-basic': path.join(workspaceRoot, 'tests/compat-projects/method-type-parameter-default-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
@@ -533,7 +590,9 @@ export function resolveProjectPresetOrPath(projectInput: string): string {
         throw new Error(`missing tsconfig.json at ${normalizePathForDisplay(tsconfigPath)}`);
       }
 
-      if (stats.isFile() && isTsConfigPath(resolvedPath)) {
+      // A variant config beside the canonical one (`tsconfig.surge.json`, the
+      // aggregate a monorepo corpus is measured through) is a tsconfig too.
+      if (stats.isFile() && isTsConfigVariantPath(resolvedPath)) {
         return resolvedPath;
       }
     }
@@ -1590,7 +1649,20 @@ function formatParseFailure(output: string, error: unknown): string {
   return [`Parse error: ${message}`, 'Output:', output.trim() || '(empty)'].join('\n');
 }
 
+// Report the version of the package the oracle actually invokes; a workspace
+// whose node_modules lags the pinned alias would otherwise record a version it
+// never ran. The devDependency spec is only a fallback for an uninstalled tree.
 function readPinnedTypeScriptVersion(): string {
+  const installedManifest = path.join(workspaceRoot, 'node_modules', oracleTypeScript, 'package.json');
+  try {
+    const manifest = JSON.parse(readFileSync(installedManifest, 'utf8')) as { version?: string };
+    if (typeof manifest.version === 'string') {
+      return manifest.version;
+    }
+  } catch {
+    // fall through to the declared spec
+  }
+
   const packageJsonPath = path.join(workspaceRoot, 'package.json');
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
     devDependencies?: Record<string, string>;
@@ -1599,7 +1671,7 @@ function readPinnedTypeScriptVersion(): string {
   const deps = packageJson.devDependencies ?? {};
   const spec = deps[oracleTypeScript] ?? 'unknown';
   // devDependency specs are pnpm aliases (`npm:typescript@7.0.2`); surface just
-  // the resolved version for display.
+  // the declared version for display.
   return spec.replace(/^npm:typescript@/, '');
 }
 
@@ -1613,6 +1685,11 @@ export function isSourceFilePath(value: string): boolean {
 
 export function isTsConfigPath(value: string): boolean {
   return path.basename(normalizePathForDisplay(value)).toLowerCase() === 'tsconfig.json';
+}
+
+export function isTsConfigVariantPath(value: string): boolean {
+  const basename = path.basename(normalizePathForDisplay(value)).toLowerCase();
+  return basename.endsWith('.json') && basename.includes('tsconfig');
 }
 
 export function resolveWorkspacePath(value: string): string {

@@ -34,7 +34,18 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSBooleanKeyword(_) => Some(ParsedType::Boolean),
         TSType::TSUndefinedKeyword(_) => Some(ParsedType::Undefined),
         TSType::TSNullKeyword(_) => Some(ParsedType::Undefined),
-        TSType::TSObjectKeyword(_) => Some(ParsedType::Unknown),
+        // `object` is every non-primitive, which the empty object type already
+        // models exactly for the member surface: a property read off it is an
+        // error and an assignment out of it is checked. Degrading it to the
+        // sentinel instead made both silent.
+        TSType::TSObjectKeyword(_) => Some(ParsedType::Object(std::sync::Arc::new(
+            ParsedObjectType {
+                properties: Vec::new(),
+                string_index_type: None,
+                call_signature: None,
+                construct_signature: None,
+            },
+        ))),
         // `symbol` and `bigint` have no modelled representation; degrade to
         // `Unknown` rather than dropping the annotation, which would poison any
         // call/construct signature that mentions them (e.g. `SymbolConstructor`).
@@ -390,7 +401,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
     for element in &tuple_type.element_types {
         match element {
             TSTupleElement::TSNamedTupleMember(member) => {
-                if member.optional || matches!(member.element_type, TSTupleElement::TSRestType(_)) {
+                if matches!(member.element_type, TSTupleElement::TSRestType(_)) {
                     return Some(homogeneous_variadic_tuple(tuple_type));
                 }
                 let Some(inner) = member.element_type.as_ts_type() else {
@@ -400,9 +411,18 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
                     return None;
                 };
 
-                elements.push(parsed_element);
+                elements.push(optional_tuple_element(parsed_element, member.optional));
             }
-            TSTupleElement::TSOptionalType(_) | TSTupleElement::TSRestType(_) => {
+            // An optional element reads as `T | undefined`; the shorter lengths
+            // it admits are handled by tuple assignability, which lets a source
+            // stop short of trailing slots that accept `undefined`.
+            TSTupleElement::TSOptionalType(optional) => {
+                let Some(parsed_element) = parse_type(&optional.type_annotation) else {
+                    return None;
+                };
+                elements.push(optional_tuple_element(parsed_element, true));
+            }
+            TSTupleElement::TSRestType(_) => {
                 return Some(homogeneous_variadic_tuple(tuple_type));
             }
             _ => {
@@ -416,6 +436,14 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
     }
 
     Some(ParsedType::Tuple(std::sync::Arc::new(elements)))
+}
+
+fn optional_tuple_element(element: ParsedType, optional: bool) -> ParsedType {
+    if optional {
+        ParsedType::Union(std::sync::Arc::new(vec![element, ParsedType::Undefined]))
+    } else {
+        element
+    }
 }
 
 /// A variadic tuple whose fixed and rest elements are all the *same* type

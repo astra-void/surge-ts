@@ -35,6 +35,7 @@ pub(crate) fn resolve_function_type(
     let local_substitution = extend_substitution_with_type_parameters(
         substitution,
         &function_type.type_parameters,
+        &function_type.parameters,
         ctx,
         resolving,
     );
@@ -127,6 +128,7 @@ pub(crate) fn resolve_function_type_lazy_components(
     let local_substitution = extend_substitution_with_type_parameters(
         substitution,
         &function_type.type_parameters,
+        &function_type.parameters,
         ctx,
         resolving,
     );
@@ -278,6 +280,34 @@ pub(crate) fn resolve_object_type(
     for property in &object_type.properties {
         let property_type = resolve_parsed_type(property.ty.clone(), ctx, resolving, substitution);
         had_error |= property_type.had_error;
+
+        // Same-named function members of one type literal are overloads, exactly
+        // as they are in an interface body, so they fold into one permissive
+        // signature the same way. Without this the last declaration won and every
+        // earlier overload was dropped, which reported a call matching an earlier
+        // overload's arity against the last one's (ts-pattern's `.with`).
+        if let Some(existing) = properties.get(property.name.as_str())
+            && let Type::Function(existing_fn) = &existing.ty
+            && let Type::Function(incoming) = &property_type.ty
+        {
+            let merged = crate::infer::types::interface::merge_overload_signatures(
+                existing_fn,
+                incoming,
+            );
+            let optional = existing.optional && property.optional;
+            let method = existing.method || property.is_method;
+            properties.insert(
+                property.name.as_str().into(),
+                if optional {
+                    ObjectProperty::optional(Type::Function(merged))
+                } else {
+                    ObjectProperty::required(Type::Function(merged))
+                }
+                .with_method(method),
+            );
+            continue;
+        }
+
         let object_property = if property.optional {
             ObjectProperty::optional(property_type.ty)
         } else {

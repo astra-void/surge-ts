@@ -30,6 +30,17 @@ pub(crate) use utility::*;
 pub(crate) struct TypeParameterSubstitution {
     values: Option<Arc<Vec<(Arc<str>, Type)>>>,
     placeholders: Option<Arc<Vec<Arc<str>>>>,
+    /// Type parameters whose inferred literal candidates must not widen: a
+    /// constrained parameter (`R extends "json" | "blob"`) decides for itself
+    /// whether a literal survives, as tsc's contextual widening does.
+    literal_keeping: Option<Arc<Vec<Arc<str>>>>,
+    /// Type parameters bound to a *degraded* resolution. A binding is a bare
+    /// `Type`, so without this a failed argument reads back clean and the
+    /// operators downstream decide from a value surge never resolved. Kept as a
+    /// name set beside the bindings, like `placeholders`, so the hot
+    /// per-binding tuple does not grow and the common (nothing degraded) case
+    /// costs one `None`.
+    degraded: Option<Arc<Vec<Arc<str>>>>,
 }
 
 impl TypeParameterSubstitution {
@@ -84,7 +95,7 @@ impl TypeParameterSubstitution {
             if let Err(index) =
                 placeholders.binary_search_by(|existing| existing.as_ref().cmp(&*name))
             {
-                placeholders.insert(index, name);
+                placeholders.insert(index, name.clone());
             }
         } else if let Some(placeholders) = self.placeholders.as_mut() {
             if let Ok(index) =
@@ -93,10 +104,51 @@ impl TypeParameterSubstitution {
                 Arc::make_mut(placeholders).remove(index);
             }
         }
+        if let Some(degraded) = self.degraded.as_mut()
+            && let Ok(index) = degraded.binary_search_by(|existing| existing.as_ref().cmp(&*name))
+        {
+            Arc::make_mut(degraded).remove(index);
+        }
+    }
+
+    /// Records that `name`'s binding came from a degraded resolution. Call
+    /// after the `set`/`insert` that bound it — `set` clears the mark, so a
+    /// later clean rebind does not inherit it.
+    pub(crate) fn mark_degraded(&mut self, name: &str) {
+        let degraded = Arc::make_mut(self.degraded.get_or_insert_with(|| Arc::new(Vec::new())));
+        if let Err(index) = degraded.binary_search_by(|existing| existing.as_ref().cmp(name)) {
+            degraded.insert(index, Arc::from(name));
+        }
+    }
+
+    pub(crate) fn is_degraded(&self, name: &str) -> bool {
+        self.degraded.as_deref().is_some_and(|degraded| {
+            degraded
+                .binary_search_by(|existing| existing.as_ref().cmp(name))
+                .is_ok()
+        })
     }
 
     pub(crate) fn insert(&mut self, name: String, ty: Type) {
         self.set(name, ty, false);
+    }
+
+    pub(crate) fn mark_keeps_literal(&mut self, name: &str) {
+        let keeping = Arc::make_mut(
+            self.literal_keeping
+                .get_or_insert_with(|| Arc::new(Vec::new())),
+        );
+        if let Err(index) = keeping.binary_search_by(|existing| existing.as_ref().cmp(name)) {
+            keeping.insert(index, Arc::from(name));
+        }
+    }
+
+    pub(crate) fn keeps_literal(&self, name: &str) -> bool {
+        self.literal_keeping.as_deref().is_some_and(|keeping| {
+            keeping
+                .binary_search_by(|existing| existing.as_ref().cmp(name))
+                .is_ok()
+        })
     }
 
     pub(crate) fn insert_placeholder(&mut self, name: String, ty: Type) {
@@ -129,7 +181,14 @@ impl TypeParameterSubstitution {
         let Self {
             values,
             placeholders,
+            literal_keeping,
+            degraded,
         } = other;
+        if let Some(keeping) = literal_keeping {
+            for name in keeping.iter() {
+                self.mark_keeps_literal(name);
+            }
+        }
         let Some(values) = values else {
             return;
         };
@@ -145,6 +204,12 @@ impl TypeParameterSubstitution {
                 .binary_search_by(|existing| existing.as_ref().cmp(&*name))
                 .is_ok();
             self.set(name.as_ref().to_string(), ty, is_placeholder);
+        }
+        // After the `set` calls, which clear stale marks.
+        if let Some(degraded) = degraded {
+            for name in degraded.iter() {
+                self.mark_degraded(name);
+            }
         }
     }
 }
@@ -198,6 +263,17 @@ pub(crate) fn map_parsed_type_with_substitution(
     ctx: &mut CheckerContext,
     substitution: &TypeParameterSubstitution,
 ) -> Type {
+    try_map_parsed_type_with_substitution(parsed_type, ctx, substitution).ty
+}
+
+/// `map_parsed_type_with_substitution` that keeps the resolution's `had_error`
+/// flag. A caller that acts on the resolved shape rather than merely carrying
+/// it — deciding a constraint, say — needs to know the shape is degraded.
+pub(crate) fn try_map_parsed_type_with_substitution(
+    parsed_type: ParsedType,
+    ctx: &mut CheckerContext,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
     let mut resolving = Vec::new();
     with_type_copy_reason(TypeCopyReason::SubstitutionChanged, || {
         resolve_parsed_type(
@@ -206,11 +282,10 @@ pub(crate) fn map_parsed_type_with_substitution(
             &mut resolving,
             &merged_type_parameter_substitution(ctx, substitution),
         )
-        .ty
     })
 }
 
-fn merged_type_parameter_substitution(
+pub(crate) fn merged_type_parameter_substitution(
     ctx: &CheckerContext,
     substitution: &TypeParameterSubstitution,
 ) -> TypeParameterSubstitution {
@@ -235,7 +310,10 @@ pub(crate) fn validate_local_type_declaration(
         TypeDeclarationInfo::Alias(alias) => {
             let mut substitution = TypeParameterSubstitution::new();
             for type_parameter in &alias.body.type_parameters {
-                substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
+                substitution.insert_placeholder(
+                    type_parameter.name.clone(),
+                    Type::type_parameter(&type_parameter.name),
+                );
             }
 
             let mut resolving = Vec::new();
@@ -259,7 +337,10 @@ pub(crate) fn validate_local_type_declaration(
         TypeDeclarationInfo::Interface(interface) => {
             let mut substitution = TypeParameterSubstitution::new();
             for type_parameter in &interface.body.type_parameters {
-                substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
+                substitution.insert_placeholder(
+                    type_parameter.name.clone(),
+                    Type::type_parameter(&type_parameter.name),
+                );
             }
 
             let mut resolving = Vec::new();

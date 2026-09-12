@@ -80,6 +80,7 @@ impl TypeGraphCensus {
             | Type::Void
             | Type::Any
             | Type::Unknown
+            | Type::TypeParameter(_)
             | Type::GenuineUnknown
             | Type::Never
             | Type::StringLiteral(_)

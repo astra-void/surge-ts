@@ -484,6 +484,11 @@ impl Project {
         // path-canonicalize memo are likewise done: nothing canonicalizes or
         // resolves packages after this point, and a later `check` on a fresh
         // `Project` simply re-fills them.
+        //
+        // The parses themselves are not loader-lifetime: the checker would
+        // otherwise re-parse every one of these files from the same text, so
+        // they move on to it instead of being dropped with the scanner.
+        let prescanned_sources = specifier_scanner.take_parsed_sources();
         drop(specifier_scanner);
         drop(import_graph_state);
         drop(package_resolution_cache);
@@ -520,6 +525,8 @@ impl Project {
             no_property_access_from_index_signature: loaded
                 .compiler_options
                 .no_property_access_from_index_signature,
+            no_unchecked_indexed_access: loaded.compiler_options.no_unchecked_indexed_access,
+            allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions,
             no_unused_locals: loaded.compiler_options.no_unused_locals,
             no_unused_parameters: loaded.compiler_options.no_unused_parameters,
             no_lib: loaded.compiler_options.no_lib,
@@ -553,10 +560,12 @@ impl Project {
         }
 
         let checking_start = Instant::now();
-        let result = Checker::new()
-            .options(checker_options)
-            .jobs(options.jobs)
-            .check(inputs);
+        let result = surge_ts_checker::lowlevel::check_program_with_prescanned_sources(
+            inputs,
+            prescanned_sources,
+            checker_options,
+            options.jobs,
+        );
         if collect {
             timings.checking += checking_start.elapsed();
         }

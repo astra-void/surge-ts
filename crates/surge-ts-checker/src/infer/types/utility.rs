@@ -14,8 +14,9 @@ use crate::symbols::{TypeAliasInfo, TypeDeclarationHandle};
 /// Whether a type alias body introduces a structural boundary that makes a
 /// self-reference legal (tsc's rule for recursive type aliases). Object, array,
 /// tuple, function, mapped and template-literal bodies all qualify; a union or
-/// intersection qualifies when any member does. A bare alias reference,
-/// conditional, indexed access, etc. do not, so `type A = A` stays an error.
+/// intersection qualifies when any member does, and so does a conditional. A
+/// bare alias reference, indexed access, etc. do not, so `type A = A` stays an
+/// error.
 fn alias_body_supports_recursion(ty: &ParsedType) -> bool {
     match ty {
         ParsedType::Object(_)
@@ -23,12 +24,110 @@ fn alias_body_supports_recursion(ty: &ParsedType) -> bool {
         | ParsedType::Tuple(_)
         | ParsedType::Function(_)
         | ParsedType::Mapped(_)
-        | ParsedType::TemplateLiteral(_) => true,
+        | ParsedType::TemplateLiteral(_)
+        // tsc has allowed a type alias to recurse through a conditional since
+        // 4.1 (`type TuplePrefixes<T> = T extends readonly [] ? readonly []
+        // : TuplePrefixes<DropLast<T>> | T`). Treating it as an illegal cycle
+        // degraded every declaration that reached it — tanstack's
+        // `QueryFilters.queryKey` tainted the whole query-core graph.
+        | ParsedType::Conditional(_) => true,
         ParsedType::Union(members) | ParsedType::Intersection(members) => {
             members.iter().any(alias_body_supports_recursion)
         }
         _ => false,
     }
+}
+
+/// The namespace a member was declared in (`React` for `React.MouseEvent`),
+/// from the *original* declared name so a renamed import still finds its
+/// siblings; `None` for a top-level declaration.
+pub(crate) fn namespace_member_prefix(declared_name: Option<&str>, name: &str) -> Option<String> {
+    declared_name
+        .unwrap_or(name)
+        .rsplit_once('.')
+        .map(|(prefix, _)| prefix.to_string())
+}
+
+/// Opt-in (`SURGE_GENERIC_RECURSIVE_ALIAS=1`): give a generic alias's
+/// resolution frame the identity of its *instantiation* rather than its
+/// declaration, so recursing into itself with different arguments is no longer
+/// read as a cycle. Without it a recursive generic record (a router/client
+/// proxy built from `{ [K in keyof T]: … Self<T[K]> }`) collapses to the
+/// degradation sentinel and every read downstream of it goes silent.
+///
+/// Off by default: it costs two tanstack-query false positives, where a
+/// recursive tuple-prefix union loses its recursive member. See
+/// REAL_PROJECT_COMPAT.md. The back-edge itself deliberately stays the
+/// sentinel — handing it a lazy self-reference overflows the stack in the
+/// intersection merge.
+fn generic_recursive_alias_references() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_GENERIC_RECURSIVE_ALIAS").as_deref() == Ok("1"))
+}
+
+/// Nested instantiations of the *same* generic declaration that are allowed
+/// before the back-edge is treated as a cycle. A router/client proxy nests as
+/// deep as its record (`post.listPosts`), never far; the cap is what keeps a
+/// genuinely unbounded recursion (`type A<T> = A<T[]>`) from expanding forever
+/// once distinct arguments stop it colliding with itself.
+const MAX_NESTED_INSTANTIATIONS: usize = 8;
+
+/// Total depth of the declaration-resolution stack before an instantiation is
+/// abandoned as excessively deep. Discriminating frames by their arguments lets
+/// a chain that used to stop at the first repeat keep going, so a genuinely
+/// unbounded generic (tRPC's builder chain rebuilds its router type per
+/// method) needs a ceiling of its own or it exhausts the process stack. This is
+/// the same guard tsc spends its `TS2589` on.
+const MAX_RESOLUTION_DEPTH: usize = 24;
+
+/// The `resolving`-stack identity for one *instantiation*.
+///
+/// The plain declaration key carries no arguments, so `Decorate<{post: …}>` and
+/// the `Decorate<{listPosts: …}>` its own body asks for collide and the second
+/// is read as a self-cycle — which is why every recursive generic record
+/// collapsed to the degradation sentinel. Discriminating the frame by its
+/// resolved arguments lets a terminating recursion resolve concretely, and
+/// still collides exactly when the arguments repeat, which is the real cycle.
+fn instantiation_frame_key(
+    declaration_key: &DeclarationResolutionKey,
+    is_generic: bool,
+    pre_resolved_arguments: Option<&[Type]>,
+) -> DeclarationResolutionKey {
+    if !is_generic {
+        return declaration_key.clone();
+    }
+    let Some(arguments) = pre_resolved_arguments.filter(|arguments| !arguments.is_empty()) else {
+        return declaration_key.clone();
+    };
+    let mut hasher = surge_ts_types::fx::FxHasher::default();
+    for argument in arguments {
+        std::hash::Hasher::write_u64(
+            &mut hasher,
+            crate::speculative::display_type_fingerprint(argument),
+        );
+    }
+    let fingerprint = std::hash::Hasher::finish(&hasher);
+    DeclarationResolutionKey {
+        fingerprint: fingerprint | (1u64 << 63),
+        ..declaration_key.clone()
+    }
+}
+
+/// Whether `resolving` already holds `MAX_NESTED_INSTANTIATIONS` frames of this
+/// declaration, whatever their arguments.
+fn nested_instantiation_limit_reached(
+    resolving: &[DeclarationResolutionKey],
+    declaration_key: &DeclarationResolutionKey,
+) -> bool {
+    resolving
+        .iter()
+        .filter(|frame| {
+            frame.file_name == declaration_key.file_name
+                && frame.name == declaration_key.name
+                && frame.namespace == declaration_key.namespace
+        })
+        .count()
+        >= MAX_NESTED_INSTANTIATIONS
 }
 
 pub(crate) fn resolve_type_alias(
@@ -42,7 +141,27 @@ pub(crate) fn resolve_type_alias(
     pre_resolved_arguments: Option<&[Type]>,
 ) -> ResolvedType {
     let declaration_key = super::cache::alias_resolution_key(alias);
-    if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
+    // Under the instantiation-aware gate a generic back-edge is a cycle only
+    // when its *arguments* repeat, or when the nesting cap is reached.
+    let frame_key = if generic_recursive_alias_references() {
+        instantiation_frame_key(
+            &declaration_key,
+            !alias.body.type_parameters.is_empty(),
+            pre_resolved_arguments,
+        )
+    } else {
+        declaration_key.clone()
+    };
+    let nesting_exhausted = generic_recursive_alias_references()
+        && frame_key != declaration_key
+        && (resolving.len() + super::cache::lazy_peel_depth() * MAX_RESOLUTION_DEPTH / 4
+            >= MAX_RESOLUTION_DEPTH
+            || nested_instantiation_limit_reached(resolving, &declaration_key));
+    if let Some(index) = resolving
+        .iter()
+        .position(|name| name == &frame_key)
+        .or_else(|| nesting_exhausted.then(|| resolving.len().saturating_sub(1)))
+    {
         ctx.note_resolution_cycle(index);
         // tsc only rejects a type alias that references itself *without* an
         // intervening structural type (`type A = A`, `type A = B; type B = A`).
@@ -72,6 +191,11 @@ pub(crate) fn resolve_type_alias(
             .iter()
             .any(|&frame| frame > index);
         let legal_recursion = alias_body_supports_recursion(&alias.body.ty) || structural_crossing;
+        // A *generic* back-edge stays the degradation sentinel even under the
+        // gate. With frames discriminated by their arguments this branch is
+        // only reached when the arguments actually repeat — a genuinely
+        // infinite type — and handing that back as a lazy self-reference is
+        // what the intersection merge then peels forever.
         if legal_recursion && alias.body.type_parameters.is_empty() {
             return ResolvedType {
                 ty: make_recursive_cycle_reference(
@@ -94,18 +218,32 @@ pub(crate) fn resolve_type_alias(
         }
         return ResolvedType {
             ty: Type::Unknown,
-            had_error: !legal_recursion,
+            // Abandoning a recursion at the nesting/depth cap is *not* a
+            // resolved answer: the shape it would have produced is merely
+            // unfinished, so the cap degrades rather than handing back a clean
+            // sentinel a consumer would then trust. The taint also keeps the
+            // truncated shape out of every cache. A genuine repeated-argument
+            // cycle keeps the existing `!legal_recursion` answer.
+            had_error: !legal_recursion || nesting_exhausted,
         };
     }
 
-    resolving.push(declaration_key.clone());
+    resolving.push(frame_key);
     // See the matching comment in `resolve_interface`: an empty per-file
     // fallback (ambient-module files) must not clobber the installed scope.
     let effective_scope = alias.resolution_scope.clone().or_else(|| {
         ctx.module_scope_for_file(&alias.file_name)
             .filter(|scope| !scope.is_empty())
     });
-    let Some(bound_arguments) = bind_type_arguments(
+    // A default is authored inside the declaring namespace and names its
+    // siblings bare (express's `Request<P = ParamsDictionary, …>` under
+    // `namespace e`), so it binds under the same prefix the body resolves under.
+    let default_prefix = namespace_member_prefix(alias.declared_name.as_deref(), &alias.name);
+    if let Some(prefix) = default_prefix.clone() {
+        ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix);
+    }
+    let bound = bind_type_arguments(
         &alias.body.type_parameters,
         type_arguments,
         &alias.name,
@@ -115,7 +253,12 @@ pub(crate) fn resolve_type_alias(
         substitution,
         pre_resolved_arguments,
         Some((&effective_scope, &alias.file_name)),
-    ) else {
+    );
+    if default_prefix.is_some() {
+        ctx.namespace_member_resolution_depth -= 1;
+        ctx.namespace_member_prefix_stack.pop();
+    }
+    let Some(bound_arguments) = bound else {
         resolving.pop();
         return ResolvedType {
             ty: Type::Unknown,
@@ -213,6 +356,22 @@ pub(crate) fn resolve_type_alias(
     }
 }
 
+/// A utility that rebuilds its source's property map must carry the source's
+/// *checker-injected* openness marker, not just the index type it produced.
+/// Without it the openness is laundered into a declared-looking index
+/// signature, and every consumer that reads the marker rather than the index —
+/// object spread, `noPropertyAccessFromIndexSignature` — treats a shape surge
+/// could not enumerate as fully enumerated.
+fn carry_open_marker(
+    rebuilt: surge_ts_types::ObjectType,
+    source: &surge_ts_types::ObjectType,
+) -> surge_ts_types::ObjectType {
+    if source.synthetic_open_index {
+        return rebuilt.with_open_index_marker();
+    }
+    rebuilt
+}
+
 pub(crate) fn resolve_builtin_utility_alias(
     alias_name: &str,
     substitution: &TypeParameterSubstitution,
@@ -256,9 +415,9 @@ pub(crate) fn resolve_partial_utility_type(
 
     ResolvedType {
         // A homomorphic mapped type preserves its source's index signature.
-        ty: Type::Object(alloc_object_type(
-            properties,
-            object_type.string_index_type.as_deref().cloned(),
+        ty: Type::Object(carry_open_marker(
+            alloc_object_type(properties, object_type.string_index_type.as_deref().cloned()),
+            &object_type,
         )),
         had_error: false,
     }
@@ -293,9 +452,9 @@ pub(crate) fn resolve_required_utility_type(
     }
 
     ResolvedType {
-        ty: Type::Object(alloc_object_type(
-            properties,
-            object_type.string_index_type.as_deref().cloned(),
+        ty: Type::Object(carry_open_marker(
+            alloc_object_type(properties, object_type.string_index_type.as_deref().cloned()),
+            &object_type,
         )),
         had_error: false,
     }
@@ -471,9 +630,9 @@ pub(crate) fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution
         // `string` whenever `T` has a string index signature — so the result stays
         // open. Dropping it made every unlisted member of an open source read as
         // missing.
-        ty: Type::Object(alloc_object_type(
-            properties,
-            object_type.string_index_type.as_deref().cloned(),
+        ty: Type::Object(carry_open_marker(
+            alloc_object_type(properties, object_type.string_index_type.as_deref().cloned()),
+            &object_type,
         )),
         had_error: false,
     }
@@ -496,8 +655,17 @@ pub(crate) fn resolve_parameters_utility_type(
         };
     };
 
+    // `Parameters<(...args: A[]) => R>` is `A[]`, not a one-tuple holding the
+    // array; a rest parameter spreads into the parameter list. A rest behind
+    // fixed parameters (`[a: string, ...rest: number[]]`) has no tuple shape
+    // surge can express and keeps the array as its last element.
+    let parameters = function_type.parameters();
+    let ty = match parameters {
+        [rest] if function_type.is_variadic() => rest.clone(),
+        _ => Type::Tuple(parameters.to_vec()),
+    };
     ResolvedType {
-        ty: Type::Tuple(function_type.parameters().to_vec()),
+        ty,
         had_error: false,
     }
 }

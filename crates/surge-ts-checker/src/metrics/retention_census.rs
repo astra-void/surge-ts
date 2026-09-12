@@ -581,7 +581,7 @@ fn classify_fallback(function: &FunctionType) -> FallbackClass {
             return;
         }
         match ty {
-            Type::Unknown => *found_unknown = true,
+            Type::Unknown | Type::TypeParameter(_) => *found_unknown = true,
             Type::Function(function) => {
                 for parameter in function.parameters() {
                     visit(
@@ -1335,6 +1335,16 @@ fn parsed_statement_bytes(statement: &surge_ts_syntax::ParsedStatement) -> u64 {
                     .statements
                     .iter()
                     .map(parsed_statement_bytes)
+                    .sum::<u64>()
+        }
+        S::If(if_statement) => {
+            size_of::<surge_ts_syntax::ParsedIfStatement>() as u64
+                + parsed_expression_bytes(&if_statement.condition)
+                + if_statement
+                    .then_body
+                    .iter()
+                    .chain(&if_statement.else_body)
+                    .map(parsed_body_statement_bytes)
                     .sum::<u64>()
         }
         S::UnsupportedDeclaration { .. } => 0,

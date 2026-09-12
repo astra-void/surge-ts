@@ -25,7 +25,7 @@ pub(super) fn evaluate_optional_index_access(
 
     match base_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
         Type::Tuple(elements) => {
             let index_result =
                 evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
@@ -136,15 +136,42 @@ pub(super) fn evaluate_index_access(
         }
 
         ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2304(object_name, ctx.file_name.clone()),
+            unresolved_name_diagnostic(object_name, symbols, ctx),
             choose_span(object_span, fallback_span),
         ));
         return InferredExpression::Unknown;
     };
+    if let Some(narrowed) = crate::infer::narrowed_element_read_named(object_name, index, symbols)
+    {
+        return InferredExpression::Known(narrowed);
+    }
 
-    match &symbol.ty {
+    let receiver_type = strip_reported_undefined_receiver(
+        &ParsedExpression::Identifier {
+            name: object_name.to_string(),
+            span: object_span,
+        },
+        symbol.ty.clone(),
+        object_span,
+        fallback_span,
+        symbols,
+        ctx,
+    );
+
+    // A nominal array reference (`Array<number>`, `ReadonlyArray<string>`)
+    // indexes like the array it names; left unpeeled it fell through to the
+    // object arm and reported the *receiver* as a missing property.
+    let receiver_type = match &receiver_type {
+        Type::Reference(_) => match receiver_type.peeled() {
+            peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
+            _ => receiver_type,
+        },
+        _ => receiver_type,
+    };
+
+    match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
         Type::Tuple(elements) => {
             let index_result =
                 evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
@@ -192,7 +219,10 @@ pub(super) fn evaluate_index_access(
                 return InferredExpression::Unknown;
             }
 
-            InferredExpression::Known(union_type(elements.to_vec()))
+            InferredExpression::Known(crate::infer::unchecked_index_read(
+                union_type(elements.to_vec()),
+                ctx,
+            ))
         }
         Type::Array(element_type) => {
             if element_type.as_ref().is_unknown() {
@@ -224,9 +254,11 @@ pub(super) fn evaluate_index_access(
                 return InferredExpression::Unknown;
             }
 
-            InferredExpression::Known(with_type_copy_reason(
-                TypeCopyReason::ExpressionInference,
-                || element_type.as_ref().clone(),
+            InferredExpression::Known(crate::infer::unchecked_index_read(
+                with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                    element_type.as_ref().clone()
+                }),
+                ctx,
             ))
         }
         Type::Object(_)
@@ -264,7 +296,7 @@ pub(super) fn evaluate_index_access(
             // …), so a literal index there is never a TS2339 — emitting one was a
             // false positive (`path[0]` reported as `Property 'path' ... 'string'`).
             let receiver_is_object_like = matches!(
-                symbol.ty,
+                receiver_type,
                 Type::Object(_) | Type::Function(_) | Type::Reference(_)
             );
             let Some(key) = literal_index_key(&index_type) else {
@@ -277,7 +309,7 @@ pub(super) fn evaluate_index_access(
             // literal index on the alias fell through to here and was reported as
             // a property missing from the receiver — named after the receiver
             // binding, since that is what this arm has in hand.
-            if let Some(element_type) = literal_tuple_element(&symbol.ty.peeled(), &key) {
+            if let Some(element_type) = literal_tuple_element(&receiver_type.peeled(), &key) {
                 return InferredExpression::Known(element_type);
             }
 
@@ -285,17 +317,20 @@ pub(super) fn evaluate_index_access(
             // a numeric key is converted to a string, which is why
             // `record[1]` reads a `Record<number, T>` and a `Record<string, T>`
             // alike. Only a receiver that declares neither is a real TS2339.
-            if let Type::Object(object_type) = symbol.ty.peeled() {
+            if let Type::Object(object_type) = receiver_type.peeled() {
                 if let Some(member) = object_type.get_property_access_type(&key) {
                     return InferredExpression::Known(member);
                 }
                 if let Some(index_type) = object_type.string_index_type.as_deref() {
-                    return InferredExpression::Known(index_type.clone());
+                    return InferredExpression::Known(crate::infer::unchecked_index_read(
+                        index_type.clone(),
+                        ctx,
+                    ));
                 }
             }
 
             if receiver_is_object_like {
-                let object_type_name = symbol.ty.name();
+                let object_type_name = receiver_type.name();
                 ctx.push(diagnostic_with_syntax_span(
                     Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone()),
                     choose_span(object_span, fallback_span),

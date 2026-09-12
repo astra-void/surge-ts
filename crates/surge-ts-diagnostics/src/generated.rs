@@ -25,6 +25,16 @@ pub const TS5102: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS5097: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS5097",
+    number: Some(5097),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An import path can only end with a '{0}' extension when 'allowImportingTsExtensions' is enabled.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS5108: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS5108",
     number: Some(5108),
@@ -181,6 +191,26 @@ pub const TS18046: DiagnosticDescriptor = DiagnosticDescriptor {
     source: DiagnosticSource::TypeScript,
     category: DiagnosticCategory::Error,
     message_template: "'{0}' is of type 'unknown'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2532: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2532",
+    number: Some(2532),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Object is possibly 'undefined'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS18048: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS18048",
+    number: Some(18048),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is possibly 'undefined'.",
     argument_count: 1,
     support: DiagnosticSupport::Emitted,
 };
@@ -615,6 +645,16 @@ pub const TS6133: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS6198: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6198",
+    number: Some(6198),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "All destructured elements are unused.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS6196: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS6196",
     number: Some(6196),
@@ -858,6 +898,7 @@ pub const SURGE_TYPE_DECLARATION_CYCLE: DiagnosticDescriptor = DiagnosticDescrip
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS5112,
     TS5102,
+    TS5097,
     TS5108,
     TS1360,
     TS1361,
@@ -874,6 +915,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2315,
     TS2322,
     TS18046,
+    TS2532,
+    TS18048,
     TS2339,
     TS2344,
     TS2345,
@@ -917,6 +960,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7019,
     TS4111,
     TS6133,
+    TS6198,
     TS6196,
     TS4114,
     TS7029,
@@ -953,6 +997,15 @@ impl Diagnostic {
     pub fn ts5102(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS5102,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts5097(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS5097,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
@@ -1124,6 +1177,20 @@ impl Diagnostic {
     pub fn ts18046(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS18046,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2532(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2532, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts18048(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS18048,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
@@ -1551,6 +1618,11 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6198(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS6198, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

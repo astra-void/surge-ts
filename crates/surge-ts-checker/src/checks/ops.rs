@@ -83,18 +83,19 @@ pub(crate) fn evaluate_logical_expression(
 
     // A logical expression yields one of its operand *values*, not `boolean`:
     // `a || b` is `NonNullable<a> | b` (the left's nullish branch is gone when it
-    // falls through), and `a && b` is `a | b` (`a` when falsy, otherwise `b`).
-    // `??` has its own handler. Modelling the operand union avoids false
-    // assignability errors like `string | undefined || "x"` being treated as
-    // `boolean`.
+    // falls through), and `a && b` is `falsy(a) | b` (`a`'s falsy part when it
+    // stops the chain, otherwise `b`). `??` has its own handler. Modelling the
+    // operand union avoids false assignability errors like
+    // `string | undefined || "x"` being treated as `boolean`.
     let result = match operator {
         surge_ts_syntax::ParsedLogicalOperator::Or => surge_ts_types::union_type(vec![
             surge_ts_types::remove_nullish(left_ty),
             right_ty.clone(),
         ]),
-        surge_ts_syntax::ParsedLogicalOperator::And => {
-            surge_ts_types::union_type(vec![left_ty.clone(), right_ty.clone()])
-        }
+        surge_ts_syntax::ParsedLogicalOperator::And => surge_ts_types::union_type(vec![
+            crate::infer::falsy_part(left_ty),
+            right_ty.clone(),
+        ]),
     };
     InferredExpression::Known(result)
 }
@@ -461,8 +462,8 @@ fn types_overlap_for_equality(left: &Type, right: &Type) -> bool {
         // `any`, `unknown` and `never` are comparable to everything, so a
         // degraded operand — or a union that merely *contains* one — must never
         // reach the disjointness verdict below.
-        (Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Never, _)
-        | (_, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Never) => true,
+        (Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Never, _)
+        | (_, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Never) => true,
         (Type::StringLiteral(left_value), Type::StringLiteral(right_value)) => {
             left_value == right_value
         }

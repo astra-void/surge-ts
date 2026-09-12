@@ -10,6 +10,16 @@ use crate::context::{CheckerContext, DeclarationResolutionKey};
 use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default_lib_file_name};
 use crate::symbols::{InterfaceInfo, TypeDeclarationHandle};
 
+/// Opt-in `SURGE_IFACE_CACHE_ALL=1`: extend the instantiation cache beyond the
+/// physical default lib to every interface declaration, check phase only.
+///
+/// Kept off (re-measured 2026-09-11). It looked like a 7% win, but only because
+/// `InterfaceInstantiationKey` carried no environment component — two run-wide
+/// booleans, so user interfaces were shared across resolution environments,
+/// which the memory-lifetime rules forbid. With the environment discriminator
+/// now in the key the cache stops hitting on this corpus and the gate costs
+/// **+1.2%** on tanstack-query. Reach for the module-instantiation memo, whose
+/// fingerprint was designed for cross-environment sharing, not for this.
 fn extended_interface_cache_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_IFACE_CACHE_ALL").is_some())
@@ -79,15 +89,18 @@ fn defer_interface_member_annotation(annotation: &ParsedType, optional: bool) ->
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ModuleInstantiationMemoMode {
     Off,
-    /// Default. The module-analysis phase only, where 99% of the repeated
-    /// expansions are (measured on zod: 1.14M of 1.15M degradation events).
+    /// `SURGE_IFACE_MODULE_MEMO=analysis`: the module-analysis phase only,
+    /// where 99% of the repeated expansions are (measured on zod: 1.14M of
+    /// 1.15M degradation events).
     Analysis,
-    /// Opt-in `SURGE_IFACE_MODULE_MEMO=all`: also memoize during the check
-    /// phase. Measured as diagnostic-affecting on trpc — it removes the
-    /// `Type 'QueryClient' is not assignable to type 'QueryClient'` false
-    /// positive by making the two package copies' expansions agree — so it is
-    /// not the default until that nominal-identity gap is resolved on its own
-    /// terms.
+    /// Default since 2026-09-11: also memoize during the check phase, worth
+    /// -6.1% instructions on tanstack-query. The earlier note here recorded this
+    /// as diagnostic-affecting on trpc; that no longer reproduces — ky, ofetch,
+    /// zod, trpc and tanstack-query are byte-identical with and without it, and
+    /// the full oracle sweep is unchanged, measured in one binary on both arms.
+    /// (The original measurement compared two binaries built from a tree that
+    /// moved between them.) `SURGE_IFACE_MODULE_MEMO=analysis` restores the
+    /// analysis-phase-only behaviour.
     All,
 }
 
@@ -96,8 +109,8 @@ fn module_instantiation_memo_mode() -> ModuleInstantiationMemoMode {
     *MODE.get_or_init(
         || match std::env::var("SURGE_IFACE_MODULE_MEMO").as_deref().ok() {
             Some("0") => ModuleInstantiationMemoMode::Off,
-            Some("all") => ModuleInstantiationMemoMode::All,
-            _ => ModuleInstantiationMemoMode::Analysis,
+            Some("analysis") => ModuleInstantiationMemoMode::Analysis,
+            _ => ModuleInstantiationMemoMode::All,
         },
     )
 }
@@ -129,6 +142,23 @@ fn module_instantiation_memo_active() -> bool {
 ///   when a declaration has no pre-attached scope, and which
 ///   `with_type_declaration_scope` leaves as the *caller's* scope when the
 ///   declaration's own is `None`.
+/// The per-module table instance id is dropped from the fingerprint by default
+/// (`SURGE_IFACE_MEMO_TABLE=1` restores it) where the body provably does not
+/// read the consumer's table — the condition that lets the program-lifetime
+/// memo in `cache.rs` share one expansion across the modules of a type graph.
+/// The module-scoped memo is wiped per module regardless, so the narrower key
+/// changes nothing there (measured: 290,880 -> 290,879 expansions).
+/// EXPERIMENT KNOB (`SURGE_IFACE_MEMO_FRAGMENTS=1`).
+fn interface_memo_fragment_identity_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_IFACE_MEMO_FRAGMENTS").as_deref() == Ok("1"))
+}
+
+fn interface_memo_table_identity_dropped() -> bool {
+    static DROPPED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DROPPED.get_or_init(|| std::env::var("SURGE_IFACE_MEMO_TABLE").as_deref() != Ok("1"))
+}
+
 fn module_instantiation_memo_fingerprint(
     interface: &InterfaceInfo,
     local_substitution: &TypeParameterSubstitution,
@@ -145,9 +175,53 @@ fn module_instantiation_memo_fingerprint(
     ));
     hasher.write_u64(ctx.resolution_stage_counter);
     hasher.write_u64(ctx.environment_attempt);
+    // The consumer's local declaration table is part of the fingerprint only
+    // when the body can actually read it. `binding.rs` clones the table per
+    // module and `TypeDeclarationTable::clone` mints a fresh instance id, so
+    // including it unconditionally makes every consumer of one type graph
+    // disagree on the key — which is exactly what `lookup_ignores_local_table`
+    // already calls out as "it makes expansions depend on which module
+    // triggered them (defeating cross-module expansion reuse)".
+    //
+    // The predicate has to describe the state the *body* resolves under, not the
+    // caller's: this runs before `with_file_name` / `with_type_declaration_scope`
+    // are entered below, so it predicts what they will install — a cross-file
+    // resolution (already crossed, or about to cross into the interface's own
+    // file) with a scope installed (the declaration's own, or an inherited one).
+    // The two cases write different discriminants so they cannot collide.
+    let body_crosses_file =
+        ctx.cross_file_resolution_depth > 0 || *ctx.file_name != *interface.file_name;
+    let body_has_scope =
+        declaration_effective_scope.is_some() || ctx.type_declaration_scope.is_some();
+    let drop_table_identity = interface_memo_table_identity_dropped()
+        && body_crosses_file
+        && body_has_scope;
     let (table_instance, table_version) = ctx.type_declarations.snapshot_identity();
-    hasher.write_u64(table_instance);
+    if !drop_table_identity {
+        hasher.write_u64(table_instance);
+    }
+    // The mutation counter is kept even when the instance id is dropped.
+    // `snapshot_identity` bundles two different things: `instance_id`, the
+    // per-clone identity that `binding.rs` mints fresh for every module (the
+    // consumer-local shadowing the predicate above proves is bypassed), and
+    // `version`, which `TypeDeclarationTable::upsert` bumps on every
+    // declaration-merging write. Merging is *not* bypassed by resolving under
+    // the declaration's own scope — an interface augmented after one consumer
+    // expanded it has a different body for the next one. Clones inherit the
+    // version, so it stays comparable across the per-module clones.
     hasher.write_u64(table_version);
+    // EXPERIMENT: a merged interface's body depends on which fragments the
+    // consumer can see — `declare module` augmentation lands in a copy of the
+    // export table, so two consumers legitimately disagree about the same
+    // declaration. Hash the fragment list so a merged declaration can only
+    // share with a consumer that sees the same fragments.
+    if interface_memo_fragment_identity_enabled() {
+        hasher.write_usize(interface.body.declaration_fragments.len());
+        for fragment in &interface.body.declaration_fragments {
+            hasher.write(fragment.file_name.as_bytes());
+            hasher.write_usize(fragment.declaration_start);
+        }
+    }
     hasher.write_usize(if ctx.module_scope_by_file.is_empty() {
         0
     } else {
@@ -247,7 +321,14 @@ pub(crate) fn resolve_interface(
         ctx.module_scope_for_file(&interface.file_name)
             .filter(|scope| !scope.is_empty())
     });
-    let Some(bound_arguments) = bind_type_arguments(
+    // See `resolve_type_alias`: a default names its namespace siblings bare.
+    let default_prefix =
+        crate::infer::types::utility::namespace_member_prefix(interface.declared_name.as_deref(), &interface.name);
+    if let Some(prefix) = default_prefix.clone() {
+        ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix);
+    }
+    let bound = bind_type_arguments(
         &interface.body.type_parameters,
         type_arguments,
         &interface.name,
@@ -257,7 +338,12 @@ pub(crate) fn resolve_interface(
         substitution,
         pre_resolved_arguments,
         Some((&declaration_effective_scope, &interface.file_name)),
-    ) else {
+    );
+    if default_prefix.is_some() {
+        ctx.namespace_member_resolution_depth -= 1;
+        ctx.namespace_member_prefix_stack.pop();
+    }
+    let Some(bound_arguments) = bound else {
         resolving.pop();
         return ResolvedType {
             ty: Type::Unknown,
@@ -569,6 +655,17 @@ pub(crate) fn resolve_interface(
     let subtree_lowest_cycle = ctx.lowest_cycle_target_index;
     ctx.lowest_cycle_target_index = saved_lowest_cycle.min(subtree_lowest_cycle);
     let cycle_free = subtree_lowest_cycle >= cycle_floor;
+    // A member annotation that re-enters an in-progress frame embeds a cycle
+    // reference carrying its own resolved arguments — a nominal handle any later
+    // reader peels on demand, so the body is still a function of its key. What
+    // a re-entry does poison is HERITAGE: a base that is mid-resolution on the
+    // stack contributes no inherited members, and that incomplete surface
+    // depends on which frames the caller had open (`QueryObserverOptions`
+    // spread without `queryKey` when its `WithRequired<QueryOptions<…>>` base
+    // was an outer frame). Only a heritage re-entry into an outer frame keeps
+    // the body out of the module memo.
+    let heritage_lowest_cycle = LAST_EXPANSION_HERITAGE_LOWEST_CYCLE.with(std::cell::Cell::get);
+    let heritage_outer_cycle_free = heritage_lowest_cycle.saturating_add(1) >= cycle_floor;
     if is_namespace_member {
         ctx.namespace_member_resolution_depth -= 1;
         ctx.namespace_member_prefix_stack.pop();
@@ -645,15 +742,44 @@ pub(crate) fn resolve_interface(
     // declaration's own resolution scope (an unmodelled `enum` member type, a
     // dotted namespace reference) misses identically at every site inside the
     // region this map covers, and the miss emits nothing.
-    if let Some(key) = module_memo_key
-        && cycle_free
-        && !emitted_diagnostics
-        && !degraded_during_expansion
-        && in_flight_degraded_read_epoch() == in_flight_reads_before
-    {
-        store_module_instantiation_memo(ctx, key, &resolved);
+    if let Some(key) = module_memo_key {
+        let in_flight_clean = in_flight_degraded_read_epoch() == in_flight_reads_before;
+        let base_is_open = LAST_EXPANSION_BASE_IS_OPEN.with(std::cell::Cell::get);
+        if heritage_outer_cycle_free
+            && !emitted_diagnostics
+            && !degraded_during_expansion
+            && in_flight_clean
+        {
+            store_module_instantiation_memo(ctx, key, &resolved, base_is_open);
+        } else if super::cache::program_memo_dump_enabled() {
+            eprintln!(
+                "[program-memo-skip] {} heritage_outer_cycle={} diagnostics={} degraded={} in_flight={} had_error={} base_open={} check={}",
+                interface.name,
+                !heritage_outer_cycle_free,
+                emitted_diagnostics,
+                degraded_during_expansion,
+                !in_flight_clean,
+                resolved.had_error,
+                base_is_open,
+                crate::program::in_check_phase()
+            );
+        }
     }
     resolved
+}
+
+thread_local! {
+    /// `base_is_open` of the most recently completed
+    /// [`resolve_interface_declaration`]. Read by `resolve_interface` at its
+    /// memo-store site, which runs immediately after the call returns, so the
+    /// last write is always the outermost expansion's own.
+    pub(crate) static LAST_EXPANSION_BASE_IS_OPEN: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    /// `ctx.lowest_cycle_target_index` as it stood once the most recently
+    /// completed `resolve_interface_declaration` had resolved its heritage,
+    /// before any member annotation. Read at the same memo-store site.
+    pub(crate) static LAST_EXPANSION_HERITAGE_LOWEST_CYCLE: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(usize::MAX) };
 }
 
 pub(crate) fn resolve_interface_declaration(
@@ -729,6 +855,16 @@ pub(crate) fn resolve_interface_declaration(
         // `Type::Reference`; peel it so its inherited members and index signature
         // are merged structurally.
         match resolved_base.ty.peeled() {
+            // `interface RequestHandler<…> extends core.RequestHandler<…> {}`
+            // (express) extends an alias of a *function type*: the derived
+            // interface is callable with exactly that signature and declares
+            // nothing else, so treat the base like an object whose only member
+            // is its call signature.
+            Type::Function(function_type) => {
+                if inherited_call_signature.is_none() {
+                    inherited_call_signature = Some(function_type);
+                }
+            }
             Type::Object(object_type) => {
                 for (name, property) in object_type.properties.iter() {
                     // Derived members shadow inherited ones; probe before
@@ -759,10 +895,15 @@ pub(crate) fn resolve_interface_declaration(
                         inherited_methods,
                     );
                 }
-                if inherited_index_type.is_none() {
-                    if let Some(index_type) = &object_type.string_index_type {
-                        inherited_index_type = Some(index_type.as_ref().clone());
-                    }
+                // A base's checker-injected openness is not a declared index
+                // signature: inheriting it as one made every undeclared member
+                // of the derived type a false TS4111 instead of staying open.
+                if object_type.synthetic_open_index {
+                    base_is_open = true;
+                } else if inherited_index_type.is_none()
+                    && let Some(index_type) = &object_type.string_index_type
+                {
+                    inherited_index_type = Some(index_type.as_ref().clone());
                 }
                 // Call/construct signatures are inherited like members: React's
                 // `ForwardRefExoticComponent extends ExoticComponent` carries its
@@ -813,11 +954,12 @@ pub(crate) fn resolve_interface_declaration(
             // in user source too or every inherited member access is a false
             // TS2339. Only the *genuine* `unknown` keyword keeps the derived
             // type closed outside declaration files.
-            Type::Unknown => base_is_open = true,
+            Type::Unknown | Type::TypeParameter(_) => base_is_open = true,
             Type::GenuineUnknown => base_is_open |= in_declaration_file,
             _ => {}
         }
     }
+    LAST_EXPANSION_HERITAGE_LOWEST_CYCLE.with(|cell| cell.set(ctx.lowest_cycle_target_index));
 
     let mut own_method_group_contaminated =
         surge_ts_types::fx::FxHashMap::<String, bool>::default();
@@ -986,7 +1128,7 @@ pub(crate) fn resolve_interface_declaration(
             } else if emitted_diagnostics {
                 Some(crate::program::InterfaceDegradationReason::DiagnosticProduced)
             } else if matches!(value_rejection, Some(InterfaceCacheValueRejection::Unknown))
-                || matches!(property_type.ty, Type::Unknown)
+                || matches!(property_type.ty, Type::Unknown | Type::TypeParameter(_))
                 || degraded
             {
                 Some(crate::program::InterfaceDegradationReason::UnknownFallback)
@@ -1172,6 +1314,13 @@ pub(crate) fn resolve_interface_declaration(
 
     // An own index signature takes precedence; otherwise inherit one from a
     // base interface (e.g. `interface ProcessEnv extends Dict<string>`).
+    let openness_is_synthetic =
+        string_index_type.is_none() && inherited_index_type.is_none() && base_is_open;
+    // Publish the raw flag for the program-lifetime memo. `openness_is_synthetic`
+    // is not a usable proxy: a declared or inherited index signature suppresses
+    // it while `base_is_open` is still true, and it is exactly those expansions
+    // whose shape depended on a base the resolver could not pin down.
+    LAST_EXPANSION_BASE_IS_OPEN.with(|flag| flag.set(base_is_open));
     let resolved_index_type = match string_index_type {
         Some(parsed) => {
             let resolved = crate::program::with_dts_expansion_reason(
@@ -1185,6 +1334,9 @@ pub(crate) fn resolve_interface_declaration(
     };
 
     let mut object_type = alloc_object_type(properties, resolved_index_type);
+    if openness_is_synthetic {
+        object_type = object_type.with_open_index_marker();
+    }
     if let Some(call_signature) = call_signature {
         let resolved = crate::program::with_dts_expansion_reason(
             crate::program::DtsExpansionReason::InterfaceCallSignatureMapping,

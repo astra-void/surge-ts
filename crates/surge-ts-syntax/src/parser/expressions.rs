@@ -1283,16 +1283,25 @@ fn parse_computed_member_expression(
         });
     }
 
-    let Expression::Identifier(object_identifier) = &member_expression.object else {
-        return None;
-    };
-
     let (index, index_span) = parse_expression(&member_expression.expression);
+    let index_span = Some(text_span_from_oxc_span(index_span));
 
-    Some(ParsedExpression::IndexAccess {
-        object_name: object_identifier.name.to_string(),
-        object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+    if let Expression::Identifier(object_identifier) = &member_expression.object {
+        return Some(ParsedExpression::IndexAccess {
+            object_name: object_identifier.name.to_string(),
+            object_span: Some(text_span_from_oxc_span(object_identifier.span)),
+            index: Box::new(index),
+            index_span,
+        });
+    }
+
+    // `box.list[0]`, `f()[i]`: the receiver is any expression, and dropping
+    // the access left everything inside it unchecked.
+    let (object, object_span) = parse_expression(&member_expression.object);
+    Some(ParsedExpression::ElementAccess {
+        object: Box::new(object),
+        object_span: Some(text_span_from_oxc_span(object_span)),
         index: Box::new(index),
-        index_span: Some(text_span_from_oxc_span(index_span)),
+        index_span,
     })
 }

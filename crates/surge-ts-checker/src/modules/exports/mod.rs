@@ -5,7 +5,7 @@ mod promise;
 mod statements;
 mod table;
 mod type_exports;
-mod values;
+pub(crate) mod values;
 
 pub(crate) use namespace::*;
 pub(crate) use promise::*;
@@ -63,3 +63,5 @@ pub(crate) fn attach_type_resolution_scope_if_missing(
         None => declaration,
     }
 }
+
+pub(crate) use values::{peel_exported_statement, statics_merged_into, statics_merged_into_symbol};

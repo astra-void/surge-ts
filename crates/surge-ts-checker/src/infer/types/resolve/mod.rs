@@ -23,6 +23,8 @@ use indexed_access::resolve_indexed_access_type;
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::ParsedType;
+use std::sync::Arc;
+
 use surge_ts_types::{NumberLiteralType, Type, TypeCopyReason, union_type, with_type_copy_reason};
 
 use crate::context::{CheckerContext, DeclarationResolutionKey, convert_span};
@@ -196,6 +198,17 @@ pub(crate) fn resolve_parsed_type(
                 .symbols
                 .get(&type_of.name)
                 .cloned()
+                .or_else(|| {
+                    ctx.signature_parameter_bindings
+                        .iter()
+                        .rev()
+                        .find(|(name, _)| name == &type_of.name)
+                        .map(|(_, ty)| crate::symbols::SymbolInfo {
+                            ty: ty.clone(),
+                            kind: crate::symbols::SymbolKind::Parameter,
+                            function_signature: None,
+                        })
+                })
                 .or_else(|| ctx.ambient_global_symbols.get(&type_of.name).cloned())
                 .or_else(|| {
                     ctx.module_value_fallback
@@ -231,11 +244,57 @@ pub(crate) fn resolve_parsed_type(
                         had_error: false,
                     };
                 }
-                // A class reached through `import type { Class }` has a type
-                // declaration but no value symbol; tsc still resolves
-                // `typeof Class` there. Degrade instead of reporting a name the
-                // file demonstrably declares.
-                if ctx.lookup_type_declaration(&type_of.name).is_some() {
+                // A class reached through `import type { Class }`, or named
+                // inside the ambient module that declares it (`http`'s
+                // `RequestListener<Request extends typeof IncomingMessage = …>`),
+                // has a type declaration but no value symbol in reach; tsc still
+                // resolves `typeof Class` there. Stand in a constructor surface
+                // over the instance type — enough for `InstanceType<typeof C>`
+                // and for a constructor-shaped constraint — kept open so a static
+                // member surge cannot see is never reported. Anything else
+                // degrades instead of reporting a name the file demonstrably
+                // declares.
+                if let Some(handle) = ctx.lookup_type_declaration_handle(&type_of.name) {
+                    if type_of.members.is_empty()
+                        && matches!(handle.get(), crate::symbols::TypeDeclarationInfo::Interface(_))
+                    {
+                        let instance = resolve_named_type(
+                            std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+                                name: type_of.name.clone(),
+                                span: type_of.name_span,
+                                type_arguments: Vec::new(),
+                            }),
+                            ctx,
+                            resolving,
+                            substitution,
+                        );
+                        // A tainted expansion is left degraded: standing a
+                        // constructor over a shape whose base failed to resolve
+                        // was measured to make `Mock<RequestListener>` uncallable
+                        // again, because the eager class body it embeds carries
+                        // the sentinel into every declared function parameter.
+                        if !instance.had_error && !instance.ty.is_unknown() {
+                            let mut properties = surge_ts_types::PropertyMap::default();
+                            properties.insert(
+                                "prototype".into(),
+                                surge_ts_types::ObjectProperty::required(instance.ty.clone()),
+                            );
+                            let constructor = surge_ts_types::FunctionType::new(
+                                vec![Type::Any],
+                                instance.ty,
+                                true,
+                                0,
+                            );
+                            return ResolvedType {
+                                ty: Type::Object(
+                                    surge_ts_types::ObjectType::new(properties, None)
+                                        .with_open_index_marker()
+                                        .with_construct_signature(constructor),
+                                ),
+                                had_error: false,
+                            };
+                        }
+                    }
                     return ResolvedType {
                         ty: Type::Unknown,
                         had_error: true,
@@ -259,6 +318,20 @@ pub(crate) fn resolve_parsed_type(
             // degrades to `Unknown` silently rather than emitting a false
             // positive, since the base name itself was resolved.
             let mut ty = symbol.ty;
+            // `typeof fn` over a generic declaration keeps the declaration on
+            // the function handle: a property typed by it (`vi.fn`) is called
+            // through the property path, which otherwise has only the bare
+            // resolved signature and cannot bind the type parameters.
+            if type_of.members.is_empty()
+                && let Some(signature) = symbol.function_signature.as_ref()
+                && !signature.type_parameters.is_empty()
+                && !signature.overloaded
+                && let Type::Function(function) = ty
+            {
+                let concrete: Arc<crate::symbols::FunctionSignatureInfo> = Arc::clone(signature);
+                let declaration: Arc<dyn std::any::Any + Send + Sync> = concrete;
+                ty = Type::Function(function.with_declaration(declaration));
+            }
             // A base still standing at the degradation sentinel is a value whose
             // type is not known *yet* (a forward reference resolved during an
             // earlier pass), not a value without the member. Reporting a clean
@@ -320,7 +393,14 @@ pub(crate) fn resolve_parsed_type(
                 _ => {
                     return ResolvedType {
                         ty: Type::Unknown,
-                        had_error: false,
+                        // A degraded operand yields a degraded key set, not a
+                        // clean one. Reporting it clean is what lets an
+                        // intersection simplify `keyof A & keyof <degraded>`
+                        // down to `keyof A` and a conditional then answer
+                        // `extends never` from a key set that never existed —
+                        // the `ProtectedIntersection` collision branch fires on
+                        // a router surge could not model.
+                        had_error: resolved_inner.had_error,
                     };
                 }
             }
@@ -337,7 +417,7 @@ pub(crate) fn resolve_parsed_type(
                 } else {
                     union_type(keys)
                 },
-                had_error: false,
+                had_error: resolved_inner.had_error,
             }
         }
         ParsedType::Mapped(mapped) => resolve_mapped_type(

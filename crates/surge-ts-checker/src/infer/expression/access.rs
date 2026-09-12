@@ -21,6 +21,9 @@ pub(crate) fn infer_index_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    if let Some(narrowed) = narrowed_element_read_named(object_name, index, symbols) {
+        return InferredExpression::Known(narrowed);
+    }
     let Some(symbol) = symbols.get(object_name) else {
         return InferredExpression::UnresolvedIdentifier {
             name: object_name.to_string(),
@@ -28,9 +31,16 @@ pub(crate) fn infer_index_access(
         };
     };
 
-    match &symbol.ty {
+    let receiver_type = match &symbol.ty {
+        Type::Reference(_) => match symbol.ty.peeled() {
+            peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
+            _ => symbol.ty.clone(),
+        },
+        other => other.clone(),
+    };
+    match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in union_type.types() {
@@ -62,7 +72,7 @@ pub(crate) fn infer_index_access(
                         if !surge_ts_types::is_assignable_to(&index_type, &Type::Number) {
                             return InferredExpression::Unknown;
                         }
-                        result_types.push(element_type.clone());
+                        result_types.push(unchecked_index_read(element_type.clone(), ctx));
                     }
                     _ => return InferredExpression::Unknown,
                 }
@@ -90,7 +100,7 @@ pub(crate) fn infer_index_access(
                 return InferredExpression::Unknown;
             }
 
-            InferredExpression::Known(element_type.clone())
+            InferredExpression::Known(unchecked_index_read(element_type.clone(), ctx))
         }
         Type::Object(_)
         | Type::Function(_)
@@ -132,7 +142,7 @@ pub(crate) fn infer_tuple_index_access(
     }
 
     if is_assignable_to(&index_type, &Type::Number) {
-        return InferredExpression::Known(union_type(elements.to_vec()));
+        return InferredExpression::Known(unchecked_index_read(union_type(elements.to_vec()), ctx));
     }
 
     let _ = index_span;
@@ -163,7 +173,10 @@ pub(crate) fn infer_property_access(
         crate::program::DtsExpansionReason::PropertyLookup,
         || match &object_type {
             Type::Any => InferredExpression::Known(Type::Any),
-            Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
+            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+            // The check pass reports the receiver; the access itself has no
+            // type tsc would continue with.
+            Type::Undefined => InferredExpression::Unknown,
             Type::Union(union_type) => {
                 // A sentinel member means part of the receiver is unmodelled, so
                 // a miss on any *other* member says nothing about the source —
@@ -175,15 +188,27 @@ pub(crate) fn infer_property_access(
                 {
                     return InferredExpression::Unknown;
                 }
+                // `a?.b.c` keeps the chain's `undefined`; a plain `x.c` on a
+                // possibly-`undefined` `x` is an error the check pass reports,
+                // and tsc then types the access from the defined part alone.
+                let keeps_undefined = object.continues_optional_chain();
                 let mut result_types = vec![];
                 for ty in union_type.types() {
                     if *ty == Type::Undefined {
-                        result_types.push(ty.clone());
+                        if keeps_undefined {
+                            result_types.push(ty.clone());
+                        }
                         continue;
                     }
                     match ty.get_property_access_type(property_name) {
-                        Some(ty) => result_types.push(ty),
+                        Some(property_type) => result_types.push(
+                            widen_index_signature_read(ty, property_name, property_type, ctx),
+                        ),
                         None if no_lib_array_member(ty, ctx) => result_types.push(Type::Any),
+                        // Same rule as the single-receiver arm below: a member
+                        // whose reference peels to the sentinel is a shape surge
+                        // could not reconstruct, not a type without the member.
+                        None if ty.peeled().is_unknown() => return InferredExpression::Unknown,
                         None => {
                             return InferredExpression::MissingProperty {
                                 property_name: property_name.to_string(),
@@ -197,7 +222,14 @@ pub(crate) fn infer_property_access(
             }
             _ => object_type
                 .get_property_access_type(property_name)
-                .map(InferredExpression::Known)
+                .map(|property_type| {
+                    InferredExpression::Known(widen_index_signature_read(
+                        &object_type,
+                        property_name,
+                        property_type,
+                        ctx,
+                    ))
+                })
                 .unwrap_or_else(|| {
                     if no_lib_array_member(&object_type, ctx) {
                         InferredExpression::Known(Type::Any)
@@ -221,6 +253,63 @@ pub(crate) fn infer_property_access(
         timings.property_access_checking += property_access_start.elapsed()
     });
     result
+}
+
+/// A guard on this exact element access (`if (xs[i])`) recorded a narrowed
+/// read under the access's rendered key; see
+/// `narrow_element_reference_guards_in_scope`.
+pub(crate) fn narrowed_element_read(
+    object: &ParsedExpression,
+    index: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<Type> {
+    let key = crate::checks::function::element_reference_key(object, index)?;
+    symbols.get(&key).map(|symbol| symbol.ty.clone())
+}
+
+pub(crate) fn narrowed_element_read_named(
+    object_name: &str,
+    index: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<Type> {
+    let key =
+        crate::checks::function::element_reference_key_named(object_name, &[], index)?;
+    symbols.get(&key).map(|symbol| symbol.ty.clone())
+}
+
+/// Under `noUncheckedIndexedAccess` a member that exists only through a string
+/// index signature reads as `T | undefined`, like the element access it is.
+fn widen_index_signature_read(
+    receiver: &Type,
+    property_name: &str,
+    property_type: Type,
+    ctx: &CheckerContext,
+) -> Type {
+    if ctx.options.no_unchecked_indexed_access
+        && receiver.property_only_from_string_index(property_name)
+    {
+        unchecked_index_read(property_type, ctx)
+    } else {
+        property_type
+    }
+}
+
+/// Under `noUncheckedIndexedAccess` an array or index-signature element read is
+/// `T | undefined`; a tuple element at a literal index is exact and never
+/// widened.
+pub(crate) fn unchecked_index_read(element_type: Type, ctx: &CheckerContext) -> Type {
+    // `any`/`unknown` absorb `undefined`; the degradation sentinel must stay
+    // the sentinel rather than become a union the checks would read as typed.
+    if !ctx.options.no_unchecked_indexed_access
+        || matches!(
+            element_type,
+            Type::Any | Type::GenuineUnknown | Type::Unknown | Type::TypeParameter(_)
+        )
+    {
+        element_type
+    } else {
+        union_type(vec![element_type, Type::Undefined])
+    }
 }
 
 /// The symbol bound to a qualified `ns.member` value key, using the same lookup
@@ -304,7 +393,7 @@ pub(crate) fn infer_property_call(
 
     if matches!(
         object_type,
-        Type::Any | Type::Unknown | Type::GenuineUnknown
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)
     ) && let ParsedExpression::Identifier { name, .. } = object
         && let Some(inferred) = infer_qualified_namespace_call(
             name,
@@ -322,9 +411,44 @@ pub(crate) fn infer_property_call(
         return inferred;
     }
 
+    // `Promise<T>` is modelled as its awaited `T`, so a `.then`/`.catch`/`.finally`
+    // chained on a promise-returning call lands on the value type, which declares
+    // no such member. The checking path answers these from the chain; without the
+    // same answer here the inference-only path degrades, and a generic call whose
+    // argument is `() => sleep(10).then(() => 'data')` then binds no type
+    // argument at all (vitest's `vi.fn`).
+    if matches!(property_name, "then" | "catch" | "finally")
+        && !matches!(
+            object_type,
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)
+        )
+        && !crate::checks::call::declares_own_property(&object_type, property_name)
+    {
+        let chained = if property_name == "then" {
+            match arguments.first() {
+                Some(callback) => match infer_expression(&callback.expression, symbols, ctx) {
+                    InferredExpression::Known(Type::Function(function_type)) => {
+                        crate::checks::call::promise_like_awaited_type(function_type.return_type())
+                    }
+                    InferredExpression::Known(ty) => {
+                        crate::checks::call::promise_like_awaited_type(&ty)
+                    }
+                    _ => Type::Unknown,
+                },
+                None => Type::Unknown,
+            }
+        } else {
+            object_type.clone()
+        };
+        record_program_timing(ctx.timings.as_ref(), |timings| {
+            timings.property_access_checking += property_call_start.elapsed()
+        });
+        return InferredExpression::Known(chained);
+    }
+
     let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
         Type::Array(element_type) if property_name == "find" => {
             InferredExpression::Known(surge_ts_types::union_type(vec![
                 element_type.as_ref().clone(),
@@ -388,12 +512,33 @@ pub(crate) fn infer_property_call(
                     },
                 }
             }
-            Some(Type::Function(function_type)) => {
-                InferredExpression::Known(function_type.return_type().clone())
-            }
             Some(Type::Any) => InferredExpression::Known(Type::Any),
             None if no_lib_array_member(&object_type, ctx) => InferredExpression::Known(Type::Any),
-            Some(_) | None => InferredExpression::Unknown,
+            // A member typed by a generic call signature answers its return type
+            // only once the call's type arguments are bound, and a reference to a
+            // callable interface has to be peeled before it looks callable at all.
+            Some(Type::Function(function_type))
+                if !crate::checks::call::written_call_signature_recovery_enabled() =>
+            {
+                InferredExpression::Known(function_type.return_type().clone())
+            }
+            Some(_) if !crate::checks::call::written_call_signature_recovery_enabled() => {
+                InferredExpression::Unknown
+            }
+            Some(member_type) => {
+                match crate::checks::call::callable_member_call_return_type(
+                    &member_type,
+                    type_arguments,
+                    *property_span,
+                    arguments,
+                    symbols,
+                    ctx,
+                ) {
+                    Some(return_type) => InferredExpression::Known(return_type),
+                    None => InferredExpression::Unknown,
+                }
+            }
+            None => InferredExpression::Unknown,
         },
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {
@@ -425,6 +570,9 @@ pub(crate) fn infer_element_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    if let Some(narrowed) = narrowed_element_read(object, index, symbols) {
+        return InferredExpression::Known(narrowed);
+    }
     let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {
@@ -447,7 +595,7 @@ pub(crate) fn infer_element_access(
             match infer_expression(index, symbols, ctx) {
                 InferredExpression::Known(Type::NumberLiteral(_))
                 | InferredExpression::Known(Type::Number) => {
-                    InferredExpression::Known((**element_type).clone())
+                    InferredExpression::Known(unchecked_index_read((**element_type).clone(), ctx))
                 }
                 _ => InferredExpression::Unknown,
             }
@@ -478,7 +626,7 @@ pub(crate) fn infer_optional_index_access(
 
     match &base_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
         Type::Tuple(elements) => {
             let result = infer_tuple_index_access(elements, index, index_span, symbols, ctx);
             match result {
@@ -539,7 +687,7 @@ pub(crate) fn infer_optional_property_access(
     let base_type = surge_ts_types::remove_undefined(&object_type);
 
     let result_type = match base_type {
-        Type::Unknown | Type::GenuineUnknown | Type::Any => {
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Any => {
             InferredExpression::Known(base_type.clone())
         }
         Type::Union(ref union_type) => {

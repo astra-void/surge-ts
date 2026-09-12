@@ -55,10 +55,11 @@ pub(crate) fn check_function_variable_declaration(
         if matches!(variable_kind, ParsedVariableKind::Const)
             && is_condition_shaped(initializer)
         {
-            flow_state.record_alias_guard_condition(
-                local_name.clone(),
-                std::sync::Arc::new(initializer.clone()),
-            );
+            let condition = std::sync::Arc::new(initializer.clone());
+            flow_state.record_alias_guard_condition(local_name.clone(), condition.clone());
+            scopes.record_alias_condition(local_name.as_str(), Some(condition));
+        } else {
+            scopes.record_alias_condition(local_name.as_str(), None);
         }
         // A `const` bound to a property reference is a discriminant alias:
         // `const { direction } = opts` lowers to `direction = opts.direction`,
@@ -134,6 +135,12 @@ pub(crate) fn check_function_variable_declaration(
 
     let visible_symbols = visible_symbols(scopes);
 
+    let probe_initializer = (literal_initializer_type.is_none()
+        && variable.declared_type.is_some()
+        && !initializer_flow_blocked)
+        .then(|| variable.initializer.clone())
+        .flatten();
+
     if let Some(symbol) = check_variable_declaration_against_symbols(
         variable,
         visible_symbols,
@@ -156,9 +163,25 @@ pub(crate) fn check_function_variable_declaration(
         // assignment still checks against the declaration. Only a literal
         // initializer participates — its type is known without re-evaluating
         // (and re-reporting) the expression.
-        let narrowed = literal_initializer_type.filter(|initialized| {
-            matches!(symbol.ty, Type::Union(_)) && is_assignable_to(initialized, &symbol.ty)
-        });
+        let narrowed = literal_initializer_type
+            .filter(|initialized| {
+                matches!(symbol.ty, Type::Union(_)) && is_assignable_to(initialized, &symbol.ty)
+            })
+            .or_else(|| {
+                let Type::Union(union) = &symbol.ty else {
+                    return None;
+                };
+                let assigned =
+                    assigned_initializer_type(probe_initializer.as_ref()?, visible_symbols, ctx)?;
+                let kept: Vec<Type> = union
+                    .types()
+                    .iter()
+                    .filter(|member| is_assignable_to(&assigned, member))
+                    .cloned()
+                    .collect();
+                (!kept.is_empty() && kept.len() < union.types().len())
+                    .then(|| surge_ts_types::union_type(kept))
+            });
         match narrowed {
             Some(initialized) => {
                 let declared = symbol.ty.clone();
@@ -177,6 +200,34 @@ pub(crate) fn check_function_variable_declaration(
                 scopes.insert_current_handle(local_name.as_str(), symbol);
             }
         }
+    }
+}
+
+/// tsc narrows an annotated union declaration by whatever it is initialized
+/// with, not only by a literal: `let client: PC | undefined = persisted` starts
+/// out as `PC`. Only a cleanly inferred initializer proves anything — a written
+/// `unknown` is not a degradation, so a type that carries one (`{ [k: string]:
+/// unknown }`) still narrows. The initializer was already checked against the
+/// annotation; this re-evaluation runs without that contextual type, so
+/// whatever it reports (an implicit-any method parameter, say) is a probe
+/// artifact and is discarded.
+fn assigned_initializer_type(
+    initializer: &ParsedExpression,
+    visible_symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let checkpoint = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(initializer, visible_symbols, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    match inferred {
+        InferredExpression::Known(ty)
+            if !ty.is_unknown()
+                && !matches!(ty, Type::Any)
+                && !super::body::type_contains_degradation_sentinel(&ty) =>
+        {
+            Some(ty)
+        }
+        _ => None,
     }
 }
 
@@ -466,15 +517,62 @@ fn rewrite_discriminant_aliases(
 }
 
 /// The condition an `if` really tests: an identifier bound to a boolean `const`
-/// guard stands for the expression it was initialized from.
+/// guard stands for the expression it was initialized from, also when it is one
+/// operand of the condition's `&&`/`||`/`!` structure (`isRefetch && mode ===
+/// 'reset'` narrows through `isRefetch`).
 fn resolved_alias_condition(
     condition: &ParsedExpression,
     flow_state: &FunctionFlowState,
 ) -> Option<std::sync::Arc<ParsedExpression>> {
-    let ParsedExpression::Identifier { name, .. } = condition else {
-        return None;
-    };
-    flow_state.alias_guard_condition(name)
+    match condition {
+        ParsedExpression::Identifier { name, .. } => flow_state.alias_guard_condition(name),
+        _ => expand_alias_conditions(condition, flow_state).map(std::sync::Arc::new),
+    }
+}
+
+fn expand_alias_conditions(
+    condition: &ParsedExpression,
+    flow_state: &FunctionFlowState,
+) -> Option<ParsedExpression> {
+    match condition {
+        ParsedExpression::Identifier { name, .. } => flow_state
+            .alias_guard_condition(name)
+            .map(|expression| (*expression).clone()),
+        ParsedExpression::Logical {
+            left,
+            left_span,
+            operator,
+            operator_span,
+            right,
+            right_span,
+        } => {
+            let expanded_left = expand_alias_conditions(left, flow_state);
+            let expanded_right = expand_alias_conditions(right, flow_state);
+            if expanded_left.is_none() && expanded_right.is_none() {
+                return None;
+            }
+            Some(ParsedExpression::Logical {
+                left: Box::new(expanded_left.unwrap_or_else(|| (**left).clone())),
+                left_span: *left_span,
+                operator: *operator,
+                operator_span: *operator_span,
+                right: Box::new(expanded_right.unwrap_or_else(|| (**right).clone())),
+                right_span: *right_span,
+            })
+        }
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operator_span,
+            operand,
+            operand_span,
+        } => expand_alias_conditions(operand, flow_state).map(|expanded| ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operator_span: *operator_span,
+            operand: Box::new(expanded),
+            operand_span: *operand_span,
+        }),
+        _ => None,
+    }
 }
 
 /// Whether a branch body ends in a call to a `never`-returning function
@@ -483,7 +581,7 @@ fn resolved_alias_condition(
 /// type, so this one type-dependent case is decided here, where the scope is in
 /// hand — without it the fall-through of `if (!args.file) { …; process.exit(1); }`
 /// keeps the unnarrowed `string | undefined`.
-fn body_ends_in_never_call(body: &[ParsedFunctionBodyStatement], scopes: &ScopeStack) -> bool {
+pub(crate) fn body_ends_in_never_call(body: &[ParsedFunctionBodyStatement], scopes: &ScopeStack) -> bool {
     match body.last() {
         Some(ParsedFunctionBodyStatement::Block(block)) => body_ends_in_never_call(block, scopes),
         Some(ParsedFunctionBodyStatement::Expression(expression)) => {
@@ -1253,6 +1351,12 @@ pub(crate) fn check_function_try_statement(
                     }
                 }
 
+                // tsc types an unannotated catch variable `unknown` under
+                // `strict`. surge keeps the degradation sentinel until an
+                // `unknown` *source* is rejected by assignability at all —
+                // today it is not, so the genuine `unknown` only added TS18046
+                // where an `asserts` static method (`ZodError.assert(err)`)
+                // would have narrowed it.
                 let catch_type = handler_clause
                     .declared_type
                     .clone()
@@ -1317,6 +1421,12 @@ pub(crate) fn check_function_try_statement(
                     }
                 }
 
+                // tsc types an unannotated catch variable `unknown` under
+                // `strict`. surge keeps the degradation sentinel until an
+                // `unknown` *source* is rejected by assignability at all —
+                // today it is not, so the genuine `unknown` only added TS18046
+                // where an `asserts` static method (`ZodError.assert(err)`)
+                // would have narrowed it.
                 let catch_type = handler_clause
                     .declared_type
                     .clone()
@@ -1450,7 +1560,18 @@ pub(crate) fn check_member_assignment(
     };
     let _ = object_span;
 
-    let Some(target_type) = object_type.get_property_access_type(property_name) else {
+    // A write checks against the property's *declared* type: after
+    // `if (o.flag === undefined)` the read type is narrowed to `undefined`, but
+    // `o.flag = true` is still an assignment to `boolean | undefined`.
+    let declared_object_type = match object.as_ref() {
+        ParsedExpression::Identifier { name, .. } => visible_symbols.declared_type(name).cloned(),
+        _ => None,
+    };
+    let Some(target_type) = declared_object_type
+        .as_ref()
+        .and_then(|declared| declared.get_property_access_type(property_name))
+        .or_else(|| object_type.get_property_access_type(property_name))
+    else {
         return;
     };
 
@@ -1508,9 +1629,19 @@ pub(crate) fn check_this_property_assignment(
         return;
     };
 
-    let Some(property_type) = this_symbol
-        .ty
-        .get_property_access_type(&assignment.property_name)
+    // A write checks against the property's *declared* type, as
+    // `check_member_assignment` does for `o.p = …`: inside
+    // `if (this.value === "valid") this.value = "dirty"` the read type of
+    // `this.value` is narrowed to `"valid"`, but the write still targets
+    // `"aborted" | "dirty" | "valid"`.
+    let Some(property_type) = visible_symbols
+        .declared_type("this")
+        .and_then(|declared| declared.get_property_access_type(&assignment.property_name))
+        .or_else(|| {
+            this_symbol
+                .ty
+                .get_property_access_type(&assignment.property_name)
+        })
     else {
         return;
     };
@@ -1578,7 +1709,7 @@ pub(crate) fn update_assigned_symbol_type(
         } else {
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
         }
-    } else if matches!(symbol.ty, Type::Any | Type::Unknown | Type::GenuineUnknown) {
+    } else if matches!(symbol.ty, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)) {
         union_type(vec![
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone()),
             value_ty,

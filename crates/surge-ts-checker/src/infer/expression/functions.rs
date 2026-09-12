@@ -16,47 +16,61 @@ pub(crate) fn infer_arrow_function(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> surge_ts_types::FunctionType {
+    // This sketch feeds generic-call inference (`fn(impl?: T)` bound from a
+    // `vi.fn((n: number) => …)` argument); the authoritative
+    // `check_arrow_function_expression` pass follows with the contextual
+    // signature and reports the annotations' own diagnostics, so the ones the
+    // mapping emits here are discarded. A generic arrow keeps the untyped
+    // sketch: its annotations name type parameters no scope here declares.
+    let typed_annotations = arrow_function.type_parameters.is_empty();
+    let diagnostics_before = ctx.diagnostics().len();
     let parameters = arrow_function
         .parameters
         .iter()
-        .map(|parameter| {
-            if parameter.declared_type.is_some() {
-                Type::Any
-            } else {
-                match &parameter.binding_name {
-                    surge_ts_syntax::ParsedBindingName::Identifier { .. } => Type::Any,
-                    surge_ts_syntax::ParsedBindingName::ObjectPattern(_) => Type::Any,
-                    surge_ts_syntax::ParsedBindingName::ArrayPattern(_) => Type::Any,
-                    surge_ts_syntax::ParsedBindingName::Unsupported { .. } => Type::Any,
+        .map(|parameter| match &parameter.declared_type {
+            // An annotation that does not resolve stays `any`, which is what
+            // every parameter was before annotations were read at all, so it
+            // cannot newly disable an inference that used to succeed.
+            Some(declared_type) if typed_annotations => {
+                let mapped = map_parsed_type(declared_type.clone(), ctx);
+                if mapped.is_unknown() {
+                    Type::Any
+                } else {
+                    mapped
                 }
             }
+            _ => Type::Any,
         })
         .collect::<Vec<_>>();
+    let declared_return_type = arrow_function.return_type.as_ref().and_then(|ty| {
+        if typed_annotations {
+            let mapped = map_parsed_type(ty.clone(), ctx);
+            (!mapped.is_unknown()).then_some(mapped)
+        } else {
+            primitive_declared_return_type(ty)
+        }
+    });
+    ctx.truncate_diagnostics(diagnostics_before);
 
     let return_type = match &arrow_function.body {
-        ParsedArrowFunctionBody::Expression(expression) => {
-            match infer_expression(expression, symbols, ctx) {
+        ParsedArrowFunctionBody::Expression(expression) => declared_return_type.unwrap_or_else(|| {
+            let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
+            match infer_expression(expression, &locals, ctx) {
                 InferredExpression::Known(ty) => ty,
                 _ => Type::Unknown,
             }
-        }
-        ParsedArrowFunctionBody::Block(body) => arrow_function
-            .return_type
-            .as_ref()
-            .and_then(|ty| match ty {
-                surge_ts_syntax::ParsedType::String => Some(Type::String),
-                surge_ts_syntax::ParsedType::Number => Some(Type::Number),
-                surge_ts_syntax::ParsedType::Boolean => Some(Type::Boolean),
-                surge_ts_syntax::ParsedType::Any => Some(Type::Any),
-                surge_ts_syntax::ParsedType::Unknown => Some(Type::Unknown),
-                surge_ts_syntax::ParsedType::UnknownKeyword => Some(Type::GenuineUnknown),
-                surge_ts_syntax::ParsedType::Undefined => Some(Type::Undefined),
-                surge_ts_syntax::ParsedType::Void => Some(Type::Void),
-                _ => None,
-            })
+        }),
+        ParsedArrowFunctionBody::Block(body) => declared_return_type
             .or_else(|| {
-                infer_block_body_return_type(body, &arrow_function.parameters, symbols, ctx)
+                let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
+                infer_block_body_return_type(body, &arrow_function.parameters, locals, ctx)
             })
+            // A body with no `return` anywhere returns `void`, as tsc types it.
+            // Leaving it at the degradation sentinel made the sketch unusable for
+            // generic inference: `vi.fn((result) => { … })` inferred no `T`, so
+            // `Mock<T>` stayed uninstantiated and every use of the mock was a
+            // false error.
+            .or_else(|| (!body_contains_return(body)).then_some(Type::Void))
             .unwrap_or(Type::Unknown),
     };
 
@@ -66,6 +80,43 @@ pub(crate) fn infer_arrow_function(
         false,
         required_parameter_count(arrow_function.parameters.as_slice()),
     )
+}
+
+fn primitive_declared_return_type(ty: &surge_ts_syntax::ParsedType) -> Option<Type> {
+    match ty {
+        surge_ts_syntax::ParsedType::String => Some(Type::String),
+        surge_ts_syntax::ParsedType::Number => Some(Type::Number),
+        surge_ts_syntax::ParsedType::Boolean => Some(Type::Boolean),
+        surge_ts_syntax::ParsedType::Any => Some(Type::Any),
+        surge_ts_syntax::ParsedType::Unknown => Some(Type::Unknown),
+        surge_ts_syntax::ParsedType::UnknownKeyword => Some(Type::GenuineUnknown),
+        surge_ts_syntax::ParsedType::Undefined => Some(Type::Undefined),
+        surge_ts_syntax::ParsedType::Void => Some(Type::Void),
+        _ => None,
+    }
+}
+
+fn body_locals(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    parameter_types: &[Type],
+    symbols: &SymbolTable,
+) -> SymbolTable {
+    let mut locals = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    for (parameter, ty) in parameters.iter().zip(parameter_types) {
+        let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
+        else {
+            continue;
+        };
+        let _ = locals.insert(
+            name.clone(),
+            crate::symbols::SymbolInfo {
+                ty: ty.clone(),
+                kind: crate::symbols::SymbolKind::Parameter,
+                function_signature: None,
+            },
+        );
+    }
+    locals
 }
 
 pub(crate) fn required_parameter_count(
@@ -92,10 +143,39 @@ pub(crate) fn required_parameter_count(
 /// contribute its type to the call's inference. Anything with branching, a bare
 /// `return;`, or a binding pattern yields `None`, keeping the previous
 /// `Unknown` — the body would need real flow analysis to type honestly.
+/// Whether a function body contains a `return` anywhere, nested statements
+/// included. A nested `function` declaration is its own body and does not count.
+fn body_contains_return(body: &[surge_ts_syntax::ParsedFunctionBodyStatement]) -> bool {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+
+    body.iter().any(|statement| match statement {
+        Statement::Return(_) => true,
+        Statement::Block(statements) => body_contains_return(statements),
+        Statement::If(statement) => {
+            body_contains_return(&statement.then_body) || body_contains_return(&statement.else_body)
+        }
+        Statement::While(statement) => body_contains_return(&statement.body),
+        Statement::ForOf(statement) => body_contains_return(&statement.body),
+        Statement::Switch(statement) => statement
+            .cases
+            .iter()
+            .any(|case| body_contains_return(&case.consequent)),
+        Statement::Try(statement) => {
+            body_contains_return(&statement.block)
+                || statement
+                    .handler
+                    .as_ref()
+                    .is_some_and(|handler| body_contains_return(&handler.body))
+                || body_contains_return(&statement.finalizer)
+        }
+        _ => false,
+    })
+}
+
 fn infer_block_body_return_type(
     body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
     parameters: &[surge_ts_syntax::ParsedFunctionParameter],
-    symbols: &SymbolTable,
+    mut locals: SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     use surge_ts_syntax::{ParsedBindingName, ParsedFunctionBodyStatement};
@@ -121,19 +201,11 @@ fn infer_block_body_return_type(
         return None;
     }
 
-    let mut locals = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-    for parameter in parameters {
-        let ParsedBindingName::Identifier { name, .. } = &parameter.binding_name else {
-            return None;
-        };
-        let _ = locals.insert(
-            name.clone(),
-            crate::symbols::SymbolInfo {
-                ty: Type::Any,
-                kind: crate::symbols::SymbolKind::Parameter,
-                function_signature: None,
-            },
-        );
+    if parameters
+        .iter()
+        .any(|parameter| !matches!(parameter.binding_name, ParsedBindingName::Identifier { .. }))
+    {
+        return None;
     }
 
     let mut returned = Vec::new();

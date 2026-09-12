@@ -895,6 +895,10 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         counters.lazy_reference_blocked_count
     );
     eprintln!(
+        "    lazy_reference_placeholder_deferral_count: {}",
+        counters.lazy_reference_placeholder_deferral_count
+    );
+    eprintln!(
         "    lazy_reference_degraded_expansion_count: {}",
         counters.lazy_reference_degraded_expansion_count
     );
@@ -982,6 +986,18 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
         (
             "physical_interface_cache_hit_count",
             counters.physical_interface_cache_hit_count,
+        ),
+        (
+            "program_memo_hit_count",
+            counters.program_memo_hit_count,
+        ),
+        (
+            "program_memo_miss_count",
+            counters.program_memo_miss_count,
+        ),
+        (
+            "program_memo_store_count",
+            counters.program_memo_store_count,
         ),
         (
             "physical_interface_cache_miss_count",
@@ -1229,6 +1245,10 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     eprintln!(
         "    lazy_intersection_peel_count: {}",
         counters.lazy_intersection_peel_count
+    );
+    eprintln!(
+        "    lazy_intersection_share_count: {}",
+        counters.lazy_intersection_share_count
     );
     eprintln!(
         "    lazy_annotation_reference_create_count: {}",

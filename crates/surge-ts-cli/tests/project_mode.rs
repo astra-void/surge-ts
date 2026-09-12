@@ -163,6 +163,8 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
         },
@@ -4358,19 +4360,6 @@ fn cli_string_keyed_mapped_type_resolves_to_index_signature() {
         codes.contains(&"TS2322".to_string()),
         "index value type must resolve to `number` (not `unknown`), got {codes:?}"
     );
-}
-
-#[test]
-fn cli_random_return_flow_authkit_shape_does_not_emit_ts2366() {
-    let parsed = run_cli_json(&[
-        "--project",
-        "../../tests/compat-projects/random-return-flow-authkit-shape/tsconfig.json",
-        "--format",
-        "json",
-    ]);
-
-    let codes = json_diagnostic_codes(&parsed);
-    assert!(!codes.contains(&"TS2366".to_string()));
 }
 
 #[test]

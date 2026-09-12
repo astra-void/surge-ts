@@ -259,7 +259,7 @@ pub(crate) fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, 
 /// genuine TS2322s. Only surge's could-not-model sentinel warrants no-cascade.
 fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
-        Type::Unknown => true,
+        Type::Unknown | Type::TypeParameter(_) => true,
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {

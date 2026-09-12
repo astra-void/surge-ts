@@ -812,6 +812,7 @@ name = "surge-ts-checker"
 version = "0.1.0"
 dependencies = [
  "libmimalloc-sys",
+ "memchr",
  "oxc_allocator",
  "serde",
  "surge-ts-diagnostics",

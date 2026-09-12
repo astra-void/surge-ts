@@ -469,6 +469,8 @@ fn run_single_file_mode(
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             no_lib,

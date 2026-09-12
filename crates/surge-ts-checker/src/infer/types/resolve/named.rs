@@ -17,6 +17,23 @@ fn defer_concrete_library_aliases() -> bool {
     *ENABLED.get_or_init(|| std::env::var("SURGE_EAGER_DEPENDENCY_ALIASES").as_deref() != Ok("1"))
 }
 
+/// Opt-in (`SURGE_DEFER_PLACEHOLDER_INSTANTIATIONS=1`): defer user generic
+/// interface instantiations whose arguments are signature placeholders instead
+/// of expanding them eagerly. Measured 2026-09-10 on tanstack-query (see
+/// docs/perf/TANSTACK-QUERY-PROFILE-2026-09-10.md): the deferred references are
+/// peeled straight back by intersection merges, conditional `extends` checks and
+/// heritage resolution, so the expansion volume barely moves (interface
+/// resolution attempts +6%), zod peak RSS grows ~45% (captured environments
+/// outlive the pre-pass), and the clean shapes unmask latent false positives that
+/// the degraded expansions used to hide. Kept for the follow-up that makes those
+/// consumers lazy too; production behavior stays eager. Read once.
+fn defer_placeholder_instantiations() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("SURGE_DEFER_PLACEHOLDER_INSTANTIATIONS").as_deref() == Ok("1")
+    })
+}
+
 /// Kill switch (`SURGE_DISABLE_SIG_CONTEXT_CACHE=1`) for the signature-context
 /// instantiation tier, for regression isolation and A/B experiments. Read once.
 fn signature_context_cache_enabled() -> bool {
@@ -37,7 +54,7 @@ fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) ->
     }
     *budget -= 1;
     match ty {
-        Type::Unknown => false,
+        Type::Unknown | Type::TypeParameter(_) => false,
         Type::String
         | Type::Number
         | Type::Boolean
@@ -129,7 +146,40 @@ fn resolve_value_heritage_base(
     })
 }
 
+/// Opt-in (`SURGE_TYPE_PROBE=<substring>`) probe: prints what a named type
+/// resolved to, with its taint, every time a matching name is resolved.
+fn type_probe_filter() -> Option<&'static str> {
+    static FILTER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FILTER
+        .get_or_init(|| std::env::var("SURGE_TYPE_PROBE").ok())
+        .as_deref()
+}
+
 pub(crate) fn resolve_named_type(
+    named_type: std::sync::Arc<ParsedNamedType>,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let Some(filter) = type_probe_filter() else {
+        return resolve_named_type_inner(named_type, ctx, resolving, substitution);
+    };
+    let probed = named_type.name.contains(filter);
+    let name = probed.then(|| named_type.name.clone());
+    let resolved = resolve_named_type_inner(named_type, ctx, resolving, substitution);
+    if let Some(name) = name {
+        eprintln!(
+            "[type-probe] {name} had_error={} check_phase={} file={} ty={}",
+            resolved.had_error,
+            crate::program::in_check_phase(),
+            ctx.file_name,
+            crate::infer::types::cache::lazy_value_trace_shape(&resolved.ty),
+        );
+    }
+    resolved
+}
+
+fn resolve_named_type_inner(
     named_type: std::sync::Arc<ParsedNamedType>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
@@ -138,7 +188,10 @@ pub(crate) fn resolve_named_type(
     if let Some(ty) = substitution.get(&named_type.name) {
         return ResolvedType {
             ty: ty.clone(),
-            had_error: false,
+            // A binding made from a degraded argument stays degraded: reporting
+            // it clean here is what let `keyof`/intersection/conditional decide
+            // from a type surge never resolved.
+            had_error: substitution.is_degraded(&named_type.name),
         };
     }
 
@@ -166,6 +219,13 @@ pub(crate) fn resolve_named_type(
                 ctx.module_scope_by_file.len(),
                 crate::program::in_check_phase(),
                 ctx.file_name
+            );
+            eprintln!(
+                "[had-error]   scope-layers {}",
+                ctx.type_declaration_scope
+                    .as_ref()
+                    .map(|scope| scope.debug_layer_summary())
+                    .unwrap_or_else(|| "<none>".to_string())
             );
         }
         return ResolvedType {
@@ -319,8 +379,27 @@ pub(crate) fn resolve_named_type(
     // the structural expansion. Build that display name from the resolved type
     // arguments and tag the resolved object with it for diagnostics.
     let branch_alias = alias_resolves_to_its_branch(declaration);
-    let alias_display_name =
-        generic_instantiation_display_name(&named_type, declaration.declared_name());
+    // An interface (a class in a `.d.ts` is bound as one) and a *library*
+    // alias fill in their defaults here, which is what lets an argument-less
+    // `ServerResponse` or `http.RequestListener` take the lazy path. A user
+    // alias keeps its eager path: deferring it the same way changed a zod
+    // call-site union (`$ZodSuperRefineIssue` against an `Identity<…>`
+    // parameter).
+    let alias_display_name = generic_instantiation_display_name(
+        &named_type,
+        declaration.declared_name(),
+        match declaration {
+            // `library_scoped` reads `file_kinds`, which an analysis-phase
+            // context does not carry; the path decides there.
+            TypeDeclarationInfo::Alias(alias)
+                if library_scoped || is_dependency_declaration_path(&alias.file_name) =>
+            {
+                &alias.body.type_parameters
+            }
+            TypeDeclarationInfo::Alias(_) => &[],
+            TypeDeclarationInfo::Interface(interface) => &interface.body.type_parameters,
+        },
+    );
 
     // An instantiation is interned/short-circuited only when it is *concrete* —
     // no type parameter is bound in any active scope, so a program-wide entry keyed
@@ -514,8 +593,51 @@ pub(crate) fn resolve_named_type(
     // `unknown` — because inside a generic body a placeholder argument collapses
     // to `unknown`, and freezing a placeholder-dependent expansion into a shared
     // reference would drop the members a later substitution should have added.
+    //
+    // A `Promise<T>`/`PromiseLike<T>` whose awaited `T` can be `undefined` is
+    // collapsed eagerly instead. `await` is erased at parse time, so the eager
+    // path's collapse to `T` is the only place the awaited form is produced,
+    // and a deferred one stays an opaque reference member that only a peel
+    // opens: inside a generic alias body — `type Promisable<T> = T |
+    // Promise<T>` instantiated as `Promisable<Client | undefined>` — the union
+    // kept a `Promise<T>` member, and every consumer that reads union members
+    // structurally (truthiness narrowing, the `?.` short-circuit, the
+    // possibly-`undefined` check) missed the `undefined` inside it. The gate is
+    // on the awaited nullability on purpose: collapsing *every* promise here
+    // erased the `void | Promise<void>` and `return this.promise` distinctions
+    // the deferred form happens to keep under the implicit-await model
+    // (measured: ky 0→1, zod 21→22, trpc +1). Collapsing costs no expansion.
+    // Scoped to a promise written inside a *source* type-alias body, which is
+    // where it sits as a union member next to its own awaited type. A promise
+    // written as a return annotation, or inside a dependency's own alias
+    // (`MaybePromise`, `Thenable` in rollup/vite), keeps deferring: collapsing
+    // those shifted an unrelated zod assignability verdict through the shared
+    // instantiation store without ever touching zod's sources.
+    // The enclosing-declaration lookup runs last: it is a table probe with
+    // its own bookkeeping, and running it for every library instantiation
+    // moved a zod verdict on its own, with no collapse ever firing.
+    let awaited_may_be_undefined = matches!(declaration.declared_name(), "Promise" | "PromiseLike")
+        && reference_arguments
+            .as_ref()
+            .and_then(|arguments| arguments.first())
+            .is_some_and(|awaited| match awaited {
+                Type::Undefined => true,
+                Type::Union(union) => union
+                    .types()
+                    .iter()
+                    .any(|member| matches!(member, Type::Undefined)),
+                _ => false,
+            })
+        && resolving
+            .last()
+            .and_then(|key| ctx.lookup_type_declaration(&key.name))
+            .is_some_and(|info| match info {
+                TypeDeclarationInfo::Alias(alias) => !ctx.is_library_scoped_file(&alias.file_name),
+                TypeDeclarationInfo::Interface(_) => false,
+            });
     if matches!(declaration, TypeDeclarationInfo::Interface(_))
         && declaration_file_is_library_scoped(declaration, ctx)
+        && !awaited_may_be_undefined
         && let (Some(display), Some(arguments)) =
             (alias_display_name.as_ref(), reference_arguments.as_ref())
         && (concrete_instantiation
@@ -534,6 +656,57 @@ pub(crate) fn resolve_named_type(
             ),
             had_error: false,
         };
+    }
+
+    // Opt-in: defer a *user* generic interface instantiation whose type
+    // arguments name a signature placeholder (`QueryBehavior<TQueryFnData, …>` in
+    // the signature of `function f<TQueryFnData>(…)`). The placeholder resolves
+    // to `unknown`, so neither interning tier accepts the expansion, and the
+    // eager path re-expands the declaration's whole reachable graph for every
+    // generic signature that mentions it — three times per function (final
+    // module analysis, the check-phase signature pre-pass, and the body check).
+    // Generic calls re-resolve the signature from syntax with real bindings, so
+    // the placeholder shape is read only by consumers that peel it. The lazy
+    // reference expands on first peel and interns under a placeholder-only key
+    // (namespace + argument mask) so it can never alias a literal `Foo<unknown>`
+    // whose body resolved without the placeholder marks. See the gate's doc
+    // comment for why this is not the default.
+    if defer_placeholder_instantiations()
+        && matches!(declaration, TypeDeclarationInfo::Interface(_))
+        && !library_scoped
+        && let (Some(display), Some(arguments)) =
+            (alias_display_name.as_ref(), reference_arguments.as_ref())
+    {
+        let placeholder_mask = named_type
+            .type_arguments
+            .iter()
+            .enumerate()
+            .filter(|(_, argument)| parsed_type_is_placeholder_reference(argument, substitution))
+            .fold(0u64, |mask, (index, _)| mask | (1u64 << (index % 64)));
+        if placeholder_mask != 0 {
+            crate::program::record_program_counter(|c| {
+                c.lazy_reference_placeholder_deferral_count += 1
+            });
+            let placeholder_key = DeclarationResolutionKey {
+                file_name: decl_key.file_name.clone(),
+                name: decl_key.name.clone(),
+                namespace: crate::context::DeclarationNamespace::PlaceholderInstantiation,
+                fingerprint: placeholder_mask,
+            };
+            return ResolvedType {
+                ty: make_lazy_type_reference(
+                    ctx,
+                    &reference_id,
+                    display,
+                    handle,
+                    placeholder_key,
+                    named_type.type_arguments.clone(),
+                    arguments.clone(),
+                    substitution.clone_with_reason(TypeCopyReason::SubstitutionUnchanged),
+                ),
+                had_error: false,
+            };
+        }
     }
 
     // Measure cycles triggered by this resolution alone. The declaration is pushed
@@ -810,12 +983,12 @@ fn record_signature_context_store(key: &DeclarationResolutionKey) {
 /// intern program-wide even when the resolution was otherwise clean.
 fn type_may_carry_degradation(ty: &Type) -> bool {
     match ty {
-        Type::Unknown => true,
+        Type::Unknown | Type::TypeParameter(_) => true,
         Type::Union(union) => union
             .payload()
             .types
             .iter()
-            .any(|member| matches!(member, Type::Unknown)),
+            .any(|member| matches!(member, Type::Unknown | Type::TypeParameter(_))),
         _ => false,
     }
 }
@@ -862,25 +1035,76 @@ fn declaration_file_is_library_scoped(
         TypeDeclarationInfo::Alias(alias) => &alias.file_name,
         TypeDeclarationInfo::Interface(interface) => &interface.file_name,
     };
-    ctx.is_library_scoped_file(file_name)
+    // A synthetic context carries no `file_kinds`, which closed the lazy path
+    // for every dependency declaration reached from a default-bound
+    // substitution; the path answers there.
+    ctx.is_library_scoped_file(file_name) || is_dependency_declaration_path(file_name)
+}
+
+/// [`crate::driver::parsed_type_display`] for a type-parameter *default*, which
+/// may also be a `typeof C` query (`RequestListener<Request extends typeof
+/// IncomingMessage = typeof IncomingMessage>`); tsc displays it verbatim. A
+/// *written* `typeof` argument must not render: it would let a utility alias
+/// over a file-local value (`ReturnType<typeof createDeferred>`) defer to a
+/// lazy resolver that has no value scope for that file.
+fn default_type_display(ty: &ParsedType) -> Option<String> {
+    match ty {
+        ParsedType::TypeOf(type_of) => Some(format!(
+            "typeof {}",
+            std::iter::once(type_of.name.as_str())
+                .chain(type_of.members.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(".")
+        )),
+        // A default is often itself an instantiation (`Record<string, any>`,
+        // express's `LocalsObj extends Record<string, any> = Record<string,
+        // any>`); tsc renders it nested the same way.
+        ParsedType::Named(named) if !named.type_arguments.is_empty() => {
+            let arguments = named
+                .type_arguments
+                .iter()
+                .map(default_type_display)
+                .collect::<Option<Vec<_>>>()?;
+            Some(format!("{}<{}>", named.name, arguments.join(", ")))
+        }
+        other => crate::driver::parsed_type_display(other),
+    }
+}
+
+/// A declaration file under `node_modules`: the path-based half of
+/// [`declaration_file_is_library_scoped`], for contexts whose `file_kinds` map
+/// is absent.
+fn is_dependency_declaration_path(file_name: &str) -> bool {
+    file_name.ends_with(".d.ts")
+        && (file_name.contains("/node_modules/") || file_name.contains("\\node_modules\\"))
 }
 
 /// Builds the alias display name for a generic instantiation (`Box<string>`)
 /// from the *syntactic* type arguments. This renders arguments without resolving
 /// them, so it has no diagnostic or caching side effects and — like tsc — keeps a
-/// type-alias argument by its name rather than expanding it. Returns `None` when
-/// there are no type arguments or any argument is not a simple renderable form.
+/// type-alias argument by its name rather than expanding it. A generic written
+/// without arguments instantiates its defaults, and tsc displays it with them
+/// filled in (`ServerResponse<IncomingMessage>`); rendering that here is also
+/// what lets such a reference take the same lazy path as an explicit one instead
+/// of eagerly expanding a library class whose heritage may not resolve. Returns
+/// `None` when an argument (or a needed default) is not a simple renderable form.
 fn generic_instantiation_display_name(
     named_type: &ParsedNamedType,
     declaration_name: &str,
+    type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
 ) -> Option<String> {
+    let mut names = Vec::with_capacity(type_parameters.len());
     if named_type.type_arguments.is_empty() {
-        return None;
-    }
-
-    let mut names = Vec::with_capacity(named_type.type_arguments.len());
-    for argument in &named_type.type_arguments {
-        names.push(crate::driver::parsed_type_display(argument)?);
+        for parameter in type_parameters {
+            names.push(default_type_display(parameter.default_type.as_ref()?)?);
+        }
+        if names.is_empty() {
+            return None;
+        }
+    } else {
+        for argument in &named_type.type_arguments {
+            names.push(crate::driver::parsed_type_display(argument)?);
+        }
     }
 
     Some(format!("{}<{}>", declaration_name, names.join(", ")))
@@ -923,7 +1147,10 @@ fn wrap_enum_member_reference(
     let Some(enum_name) = alias.enum_name.as_deref() else {
         return resolved;
     };
-    if resolved.had_error || matches!(resolved.ty, Type::Reference(_) | Type::Unknown) {
+    if resolved.had_error || matches!(
+        resolved.ty,
+        Type::Reference(_) | Type::Unknown | Type::TypeParameter(_)
+    ) {
         return resolved;
     }
     // tsc qualifies an exported enum's type with the module it came from and
@@ -936,10 +1163,28 @@ fn wrap_enum_member_reference(
     } else {
         enum_name.to_string()
     };
+    let numeric = enum_resolution_is_numeric(&resolved.ty);
     let interned = intern_instantiation(ctx, decl_key, &[], resolved.ty.clone());
+    let reference = make_type_reference(reference_id.to_string(), display, Vec::new(), interned);
+    let reference = match (numeric, reference) {
+        (true, Type::Reference(reference)) => Type::Reference(reference.numeric_enum()),
+        (_, reference) => reference,
+    };
     ResolvedType {
-        ty: make_type_reference(reference_id.to_string(), display, Vec::new(), interned),
+        ty: reference,
         had_error: false,
+    }
+}
+
+/// Whether a lowered `enum` body is numeric — every member (or, for the enum
+/// type itself, every union arm) is a number. tsc lets any `number` flow into a
+/// numeric enum and rejects `string` for a string enum, so the distinction is
+/// the whole point of the marker.
+fn enum_resolution_is_numeric(ty: &Type) -> bool {
+    match ty {
+        Type::Number | Type::NumberLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(enum_resolution_is_numeric),
+        _ => false,
     }
 }
 

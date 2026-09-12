@@ -31,11 +31,22 @@ pub(crate) fn should_check_missing_return(return_type: &Type) -> bool {
     };
     !matches!(
         return_type,
-        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Undefined | Type::Void
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Undefined | Type::Void
     ) && !type_contains_unknown(return_type)
 }
 
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
+    contains_unknown(ty, false)
+}
+
+/// Whether a type carries surge's degradation sentinel. A written `unknown` is
+/// not degradation — `{ [k: string]: unknown }` is a fully determined type — so
+/// a caller that only wants to know whether inference gave up asks this.
+pub(crate) fn type_contains_degradation_sentinel(ty: &Type) -> bool {
+    contains_unknown(ty, true)
+}
+
+fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
     thread_local! {
         // References resolved while walking the current type, to break the cyclic
         // structural graphs lazy nominal references form (interface A whose member
@@ -45,24 +56,33 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
             const { std::cell::RefCell::new(Vec::new()) };
     }
     match ty {
-        Type::Unknown | Type::GenuineUnknown => true,
-        Type::Array(element) => type_contains_unknown(element),
-        Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
+        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::GenuineUnknown => !sentinel_only,
+        Type::Array(element) => contains_unknown(element, sentinel_only),
+        Type::Tuple(elements) => elements
+            .iter()
+            .any(|element| contains_unknown(element, sentinel_only)),
         Type::Function(function) => {
-            function.parameters().iter().any(type_contains_unknown)
-                || type_contains_unknown(function.return_type())
+            function
+                .parameters()
+                .iter()
+                .any(|parameter| contains_unknown(parameter, sentinel_only))
+                || contains_unknown(function.return_type(), sentinel_only)
         }
         Type::Object(object) => {
             object
                 .properties
                 .values()
-                .any(|property| type_contains_unknown(&property.ty))
+                .any(|property| contains_unknown(&property.ty, sentinel_only))
                 || object
                     .string_index_type
                     .as_deref()
-                    .is_some_and(type_contains_unknown)
+                    .is_some_and(|index| contains_unknown(index, sentinel_only))
         }
-        Type::Union(union) => union.types().iter().any(type_contains_unknown),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| contains_unknown(member, sentinel_only)),
         Type::Reference(reference) => {
             let on_path = VISITING_REFERENCES.with(|visiting| {
                 visiting
@@ -78,7 +98,7 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
                     .borrow_mut()
                     .push((reference.id.clone(), reference.arguments.clone()));
             });
-            let result = type_contains_unknown(&reference.resolve());
+            let result = contains_unknown(&reference.resolve(), sentinel_only);
             VISITING_REFERENCES.with(|visiting| {
                 visiting.borrow_mut().pop();
             });

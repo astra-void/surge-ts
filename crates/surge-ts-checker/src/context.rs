@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -171,6 +172,64 @@ struct DeclarationEnvironmentKey {
     visit: u64,
 }
 
+thread_local! {
+    /// One-entry front cache for [`DeclarationEnvironmentStore::intern`]. Held
+    /// per thread rather than on the context because `CheckerContext` must stay
+    /// `Sync`; a stale entry is impossible because the hit path compares the
+    /// cached key field-by-field against the live context, so an entry filled
+    /// by a different context can only miss. The store owner is carried so two
+    /// programs on one thread cannot trade identities.
+    static DECLARATION_ENVIRONMENT_MEMO: RefCell<
+        Option<(u32, DeclarationEnvironmentKey, DeclarationEnvironmentId, u64)>,
+    > = const { RefCell::new(None) };
+}
+
+impl DeclarationEnvironmentKey {
+    /// Whether this key is exactly what `intern` would build for `ctx` right
+    /// now. Every field of the struct is compared, in cheapest-first order, so
+    /// a hit is equivalent to building the key and finding it in the store —
+    /// but without the `String`/`Vec` allocations or the store lock. Keep this
+    /// in sync with the key construction in `DeclarationEnvironmentStore::intern`.
+    fn matches(&self, ctx: &CheckerContext) -> bool {
+        if self.file_kind != ctx.current_file_kind
+            || self.stage_at_intern != ctx.resolution_stage_counter
+            || self.visit != ctx.environment_visit_counter
+            || self.type_declarations_identity != ctx.type_declarations.snapshot_identity()
+            || self.has_scope != ctx.type_declaration_scope.is_some()
+        {
+            return false;
+        }
+        let module_scope_identity = if ctx.module_scope_by_file.is_empty() {
+            0
+        } else {
+            Arc::as_ptr(&ctx.module_scope_by_file) as usize
+        };
+        let module_values_identity = if ctx.module_local_values_by_file.is_empty() {
+            0
+        } else {
+            Arc::as_ptr(&ctx.module_local_values_by_file) as usize
+        };
+        if self.module_scope_identity != module_scope_identity
+            || self.module_values_identity != module_values_identity
+            || self.resolved_named_types_identity != ctx.resolved_named_types_identity
+        {
+            return false;
+        }
+        let layers_match = match ctx.type_declaration_scope.as_ref() {
+            Some(scope) => {
+                let layers = scope.layers();
+                layers.len() == self.scope_layers.len()
+                    && layers
+                        .iter()
+                        .zip(self.scope_layers.iter())
+                        .all(|(layer, cached)| layer.snapshot_identity() == *cached)
+            }
+            None => self.scope_layers.is_empty(),
+        };
+        layers_match && self.file_name == ctx.file_name
+    }
+}
+
 fn environment_content_discriminator(key: &DeclarationEnvironmentKey) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = surge_ts_types::fx::FxHasher::default();
@@ -230,6 +289,11 @@ struct DeclarationEnvironmentData {
 #[derive(Debug)]
 pub(crate) struct DeclarationEnvironmentStore {
     owner: u32,
+    /// Set on the program root's store only. A shadow context (`values.rs`)
+    /// mints its own store, which dies with the shadow; a reference captured
+    /// into it degrades to `Unknown` on every later peel. Program-lifetime
+    /// caches must not accept a value produced under such a store.
+    program_lifetime: std::sync::atomic::AtomicBool,
     next_index: AtomicU32,
     requests: AtomicU64,
     hits: AtomicU64,
@@ -256,11 +320,22 @@ pub(crate) struct DeclarationEnvironmentHandle {
 }
 
 impl DeclarationEnvironmentStore {
+    pub(crate) fn mark_program_lifetime(&self) {
+        self.program_lifetime
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_program_lifetime(&self) -> bool {
+        self.program_lifetime
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn new() -> Arc<Self> {
         let owner = NEXT_DECLARATION_ENVIRONMENT_OWNER.fetch_add(1, Ordering::Relaxed);
         assert_ne!(owner, 0, "declaration-environment owner space exhausted");
         Arc::new(Self {
             owner,
+            program_lifetime: std::sync::atomic::AtomicBool::new(false),
             next_index: AtomicU32::new(1),
             requests: AtomicU64::new(0),
             hits: AtomicU64::new(0),
@@ -289,6 +364,25 @@ impl DeclarationEnvironmentStore {
 
     fn intern(self: &Arc<Self>, ctx: &CheckerContext) -> DeclarationEnvironmentHandle {
         self.requests.fetch_add(1, Ordering::Relaxed);
+        // One-entry front cache. `declaration_environment()` is called once per
+        // lazy-reference creation (487k times on tanstack-query) and almost
+        // always lands on the same environment as the previous call, but
+        // building the key allocates a `String` and a `Vec` and consulting the
+        // store takes a global lock. The memo holds the exact key the store
+        // would have hashed, so a hit is indistinguishable from an intern.
+        if let Some((id, discriminator)) = DECLARATION_ENVIRONMENT_MEMO.with(|memo| {
+            memo.borrow()
+                .as_ref()
+                .filter(|(owner, key, _, _)| *owner == self.owner && key.matches(ctx))
+                .map(|(_, _, id, discriminator)| (*id, *discriminator))
+        }) {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return DeclarationEnvironmentHandle {
+                id,
+                discriminator,
+                store: Arc::downgrade(self),
+            };
+        }
         let key = DeclarationEnvironmentKey {
             file_name: ctx.file_name.clone(),
             file_kind: ctx.current_file_kind,
@@ -324,9 +418,13 @@ impl DeclarationEnvironmentStore {
             .unwrap_or_else(|error| error.into_inner());
         if let Some((id, discriminator)) = entries.by_key.get(&key) {
             self.hits.fetch_add(1, Ordering::Relaxed);
+            let (id, discriminator) = (*id, *discriminator);
+            drop(entries);
+            DECLARATION_ENVIRONMENT_MEMO
+                .with(|memo| *memo.borrow_mut() = Some((self.owner, key, id, discriminator)));
             return DeclarationEnvironmentHandle {
-                id: *id,
-                discriminator: *discriminator,
+                id,
+                discriminator,
                 store: Arc::downgrade(self),
             };
         }
@@ -340,8 +438,11 @@ impl DeclarationEnvironmentStore {
             self.snapshot_type_declarations(ctx),
         ));
         debug_assert_eq!(id.index(), entries.by_id.len());
-        entries.by_key.insert(key, (id, discriminator));
+        entries.by_key.insert(key.clone(), (id, discriminator));
         entries.by_id.push(data);
+        drop(entries);
+        DECLARATION_ENVIRONMENT_MEMO
+            .with(|memo| *memo.borrow_mut() = Some((self.owner, key, id, discriminator)));
         DeclarationEnvironmentHandle {
             id,
             discriminator,
@@ -565,6 +666,14 @@ impl CheckerContext {
         fn admits_undefined(ty: &surge_ts_types::Type) -> bool {
             match ty {
                 surge_ts_types::Type::Void | surge_ts_types::Type::Undefined => true,
+                // tsc asks this question only of a *non-void, non-`any`*
+                // function, so `return <any>` suppresses TS7030 where
+                // `return <unknown>` does not. `Type::Unknown` is surge's
+                // "could not model" sentinel, not the `unknown` keyword
+                // (`GenuineUnknown`), and letting it decide turns an unresolved
+                // type into a diagnostic — the cascade the sentinel exists to
+                // avoid.
+                surge_ts_types::Type::Any | surge_ts_types::Type::Unknown => true,
                 surge_ts_types::Type::Union(union) => union.types().iter().any(admits_undefined),
                 surge_ts_types::Type::Reference(reference) => admits_undefined(&reference.resolve()),
                 _ => false,
@@ -645,6 +754,8 @@ pub struct CheckerOptions {
     pub no_fallthrough_cases_in_switch: bool,
     pub no_implicit_override: bool,
     pub no_property_access_from_index_signature: bool,
+    pub no_unchecked_indexed_access: bool,
+    pub allow_importing_ts_extensions: bool,
     pub no_unused_locals: bool,
     pub no_unused_parameters: bool,
     pub stub_external_modules: bool,
@@ -726,6 +837,8 @@ impl Default for CheckerOptions {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             stub_external_modules: false,
@@ -755,6 +868,14 @@ pub(crate) enum DeclarationNamespace {
     /// the concrete tier's — same declaration, same arguments, different
     /// representation.
     TypeSignatureContext,
+    /// Generic instantiations deferred because a type argument is a signature
+    /// *placeholder* (`QueryBehavior<TQueryFnData, …>` inside
+    /// `function f<TQueryFnData>(…)`). The placeholder resolves to `unknown`
+    /// but also marks the declaration's own parameter, which changes how the
+    /// body resolves (deferred conditionals, indexed accesses), so the peeled
+    /// expansion must never share a bucket with a literal `Foo<unknown>`. The
+    /// key's `fingerprint` carries the placeholder argument mask.
+    PlaceholderInstantiation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -828,6 +949,16 @@ pub(crate) enum CanonicalTypeIdentity {
         arguments: Arc<[Self]>,
     },
     NamedObject(Arc<str>),
+    /// An unsubstituted type parameter, identified by its declared name.
+    ///
+    /// Admitting this is the point of [`surge_ts_types::Type::TypeParameter`]:
+    /// before it existed a placeholder argument arrived as `Type::Unknown`,
+    /// indistinguishable from a degraded resolution, and the key builder had to
+    /// refuse it (287,082 refusals on tanstack-query). The name is carried
+    /// rather than collapsing every parameter to one identity, so that two
+    /// declarations whose parameters are not interchangeable cannot share a key
+    /// — a missed hit is cheap, a wrong hit is not.
+    TypeParameter(Arc<str>),
     /// A structural identity paired with the argument's display fingerprint.
     /// Structurally-equal arguments can carry different rendered display forms
     /// (the canonical-store display-substitution class); a cache keyed without
@@ -978,6 +1109,14 @@ impl SubstitutionStore {
 pub(crate) struct InterfaceEnvironmentIdentity {
     pub(crate) no_lib: bool,
     pub(crate) skip_lib_check: bool,
+    /// Content discriminator of the resolution environment the expansion was
+    /// produced under — the same hash the canonical type store uses. Without it
+    /// the key is `(declaration, arguments)` plus two run-constant booleans,
+    /// which is the declaration-identity-only sharing the memory-lifetime rules
+    /// forbid: the cache now covers every user interface during the check
+    /// phase, where module scope, augmentation generation and the live
+    /// declaration table all differ between consumers.
+    pub(crate) environment_discriminator: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1052,6 +1191,15 @@ pub(crate) struct CheckerContext {
     pub(crate) current_file_kind: FileKind,
     pub(crate) options: Arc<CheckerOptions>,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    /// The argument whose TS2345 the call being checked has already stopped
+    /// reporting at: tsc names only the first inapplicable argument of a call.
+    /// Scoped to that argument's own span, so a call nested inside it still
+    /// reports its own first mismatch.
+    pub(crate) suppressed_argument_mismatch_span: Option<DiagnosticTextSpan>,
+    /// Parameters already bound while a signature's annotations are being
+    /// mapped, so a later annotation's `typeof <earlier parameter>` resolves the
+    /// way tsc's parameter scope does. Empty outside signature mapping.
+    pub(crate) signature_parameter_bindings: Vec<(String, Type)>,
     // Dedup index for `push`, mirroring the keys of `diagnostics`. `push` rejected
     // duplicates by scanning the whole `diagnostics` vec (re-rendering every code
     // to a `String` per comparison), so a context that emits D diagnostics was
@@ -1216,6 +1364,10 @@ pub(crate) struct CheckerContext {
     /// a lazy annotation reference instead of an eagerly mapped type. See
     /// `infer::types::cache::make_lazy_value_annotation_reference`.
     pub(crate) lazy_library_value_annotations: bool,
+    /// Set on the export-collection shadow context: an initializer's arrow whose
+    /// return type is written has a signature fixed by its annotations, and the
+    /// shadow discards diagnostics, so checking its body there is pure cost.
+    pub(crate) skip_annotated_function_bodies: bool,
     /// While set, exportable-value collection runs THIN (`Unknown` types, no
     /// annotation/initializer resolution). Set only around the superseded
     /// analysis rounds' collection calls; see `modules::exports::values::
@@ -1255,6 +1407,10 @@ pub(crate) struct CheckerContext {
     /// surge's modelling gap rather than the source. Same rule as
     /// [`Self::unmodelled_jsx_props_depth`].
     pub(crate) degraded_expected_type_depth: usize,
+    /// How deep the per-property union-member probe is nested. It types a
+    /// literal's properties against a candidate union, and a nested literal
+    /// probes again, so the depth is what keeps that from multiplying.
+    pub(crate) union_member_probe_depth: usize,
     /// One frame per block-bodied function being checked against a CONTEXTUAL
     /// return type it did not annotate. See
     /// `ContextualReturnFrame`.
@@ -1332,6 +1488,8 @@ impl CheckerContext {
             current_file_kind,
             options,
             diagnostics: Vec::new(),
+            suppressed_argument_mismatch_span: None,
+            signature_parameter_bindings: Vec::new(),
             diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
             stats: CompatibilityStats::default(),
@@ -1373,6 +1531,7 @@ impl CheckerContext {
             module_local_values_by_file: Arc::new(FxHashMap::default()),
             thin_superseded_value_collection: false,
             lazy_library_value_annotations: false,
+            skip_annotated_function_bodies: false,
             jsx_intrinsic_elements_declarer: None,
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
@@ -1380,6 +1539,7 @@ impl CheckerContext {
             namespace_member_resolution_depth: 0,
             unmodelled_jsx_props_depth: 0,
             degraded_expected_type_depth: 0,
+            union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
             next_body_frame_active: false,
@@ -1438,6 +1598,8 @@ impl CheckerContext {
             current_file_kind: data.current_file_kind,
             options: data.options.clone(),
             diagnostics: Vec::new(),
+            suppressed_argument_mismatch_span: None,
+            signature_parameter_bindings: Vec::new(),
             diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
             stats: CompatibilityStats::default(),
@@ -1487,6 +1649,7 @@ impl CheckerContext {
             module_local_values_by_file: data.module_local_values_by_file.clone(),
             thin_superseded_value_collection: false,
             lazy_library_value_annotations: false,
+            skip_annotated_function_bodies: false,
             jsx_intrinsic_elements_declarer: data.jsx_intrinsic_elements_declarer.clone(),
             type_parameter_scopes: data.type_parameter_scopes.clone(),
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
@@ -1494,6 +1657,7 @@ impl CheckerContext {
             namespace_member_resolution_depth: 0,
             unmodelled_jsx_props_depth: 0,
             degraded_expected_type_depth: 0,
+            union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
             next_body_frame_active: false,
@@ -1568,12 +1732,14 @@ impl CheckerContext {
         if let Ok(mut cache) = self.lazy_member_annotation_templates.lock() {
             cache.clear();
         }
+        crate::infer::types::cache::clear_program_module_instantiation_memo();
         self.substitution_store.clear();
         if let Ok(mut environments) = self.declaration_environment_store.entries.lock() {
             environments.by_key.clear();
             environments.by_id.clear();
         }
         crate::program::clear_program_module_scopes();
+        crate::infer::types::clear_deferred_merges();
         surge_ts_types::clear_name_intern_table();
     }
 
@@ -1787,6 +1953,7 @@ impl CheckerContext {
         self.file_umd_global_names.clear();
         self.file_umd_global_names_owner = None;
         self.degraded_expected_type_depth = 0;
+        self.union_member_probe_depth = 0;
         self.contextual_return_frames.clear();
         self.in_contextual_return_check = false;
         self.next_body_frame_active = false;
@@ -1947,9 +2114,7 @@ impl CheckerContext {
     /// scope lookup serves the body's own names. Same-file resolution and
     /// windows with no installed scope keep the local-table consult.
     fn lookup_ignores_local_table(&self) -> bool {
-        self.cross_file_resolution_depth > 0
-            && self.current_file_kind == FileKind::DependencyDeclaration
-            && self.type_declaration_scope.is_some()
+        self.cross_file_resolution_depth > 0 && self.type_declaration_scope.is_some()
     }
 
     /// A global interface re-opened by several declarations lives fully merged in
@@ -2075,6 +2240,27 @@ impl CheckerContext {
             if let Some(handle) = self.lookup_type_declaration_handle_exact(&candidate) {
                 return Some(handle);
             }
+        }
+        None
+    }
+
+    /// The declaration `name` resolves to in another file's own module scope
+    /// (local declarations plus its resolved imports). Read-only and pointed at
+    /// one file: a caller that needs to read a declaration's members without
+    /// re-pointing the whole context at its file — which bumps the
+    /// declaration-environment generation every later resolution is keyed on —
+    /// asks this instead.
+    pub(crate) fn lookup_type_declaration_handle_in_file(
+        &self,
+        name: &str,
+        file: &str,
+    ) -> Option<crate::symbols::TypeDeclarationHandle> {
+        if let Some(scope) = self.module_scope_by_file.get(file) {
+            return scope.get_handle(name);
+        }
+        if self.module_scope_by_file.is_empty() {
+            return crate::program::program_module_scope_for_file(file)
+                .and_then(|scope| scope.get_handle(name));
         }
         None
     }
@@ -2215,6 +2401,14 @@ impl CheckerContext {
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
         if self.should_suppress(&diagnostic) {
             self.record_suppressed(&diagnostic);
+            return;
+        }
+        if matches!(
+            diagnostic.code,
+            surge_ts_diagnostics::DiagnosticCode::TypeScript(2345)
+        ) && diagnostic.span.is_some()
+            && diagnostic.span == self.suppressed_argument_mismatch_span
+        {
             return;
         }
         // An assignability verdict raised while checking a return value against a

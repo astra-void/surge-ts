@@ -14,7 +14,8 @@ pub(crate) fn build_module_export_table(
 
     let split_start = crate::program::binding::analyze_split_enabled()
         .then(std::time::Instant::now);
-    let exportable_values = collect_exportable_value_symbols(
+    crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow_mut() = "et");
+        let exportable_values = collect_exportable_value_symbols(
         &parsed_file.statements,
         local_type_declarations,
         local_symbols,
@@ -29,7 +30,6 @@ pub(crate) fn build_module_export_table(
     let mut symbols = SymbolTable::new();
     let mut default_symbol = None;
     let mut export_assignment_symbol = None;
-
     for statement in &parsed_file.statements {
         collect_exports_from_statement(
             statement,
@@ -234,6 +234,12 @@ pub(crate) fn try_resolve_module_export_table(
                     timings.export_table_lookup += resolution_start.elapsed();
                     timings.package_export_lookup += resolution_start.elapsed();
                 });
+                let mut export_table = export_table;
+                crate::program::apply_file_keyed_module_augmentation(
+                    &mut export_table,
+                    resolved_file_name.as_str(),
+                    ctx,
+                );
                 return Some((export_table, Some(resolved_index)));
             }
         }
@@ -265,6 +271,12 @@ pub(crate) fn try_resolve_module_export_table(
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.export_table_lookup += resolution_start.elapsed();
             });
+            let mut export_table = export_table;
+            crate::program::apply_file_keyed_module_augmentation(
+                &mut export_table,
+                &canonical_file_identity(&resolved.resolved_file_name),
+                ctx,
+            );
             return Some((export_table, Some(resolved.resolved_file_index)));
         }
     }

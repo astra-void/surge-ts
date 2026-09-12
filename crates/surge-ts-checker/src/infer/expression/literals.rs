@@ -26,6 +26,17 @@ pub(crate) fn infer_object_literal(
 ) -> Type {
     let object_literal_start = Instant::now();
     let mut merged_properties: PropertyMap = PropertyMap::default();
+    // A spread source that surge could not fully enumerate carries
+    // `synthetic_open_index`. The members it stands for are real — the derived
+    // interface was kept open precisely because they exist — so the spread
+    // result must stay open too; a closed result reports every one of them as a
+    // missing property (tanstack's `defaultQueryOptions` spreads
+    // `QueryObserverOptions`, whose `extends WithRequired<QueryOptions<…>,
+    // 'queryKey'>` base degrades, and read `queryHash`/`networkMode`/`persister`
+    // /`queryFn` off the result). A *declared* index signature is deliberately
+    // not propagated here; only surge's own openness marker is.
+    let mut spread_source_is_open = false;
+    let mut spread_source_is_any = false;
     for property in properties {
         record_property_lookup();
         record_object_literal_property_check();
@@ -38,7 +49,20 @@ pub(crate) fn infer_object_literal(
             // A spread whose type we cannot model as an object is skipped rather
             // than collapsing the whole literal.
             match infer_object_property_value(&property.value, symbols, ctx).peeled() {
+                // `{ ...anyValue, k: v }` is `any` in tsc: the spread can carry
+                // anything, so the literal has no knowable shape at all. The
+                // remaining properties are still walked for their own
+                // diagnostics; only the resulting type collapses.
+                Type::Any => {
+                    spread_source_is_any = true;
+                }
+                // Surge's own degradation sentinel: the members it stands for
+                // are real but unenumerable, so the result must stay open.
+                Type::Unknown => {
+                    spread_source_is_open = true;
+                }
                 Type::Object(source) => {
+                    spread_source_is_open |= source.synthetic_open_index;
                     for (name, source_property) in source.properties.iter() {
                         merged_properties.insert(name.clone(), source_property.clone());
                     }
@@ -47,7 +71,12 @@ pub(crate) fn infer_object_literal(
                 // each member's properties, and a property absent from (or
                 // optional in) some member becomes optional — the shape tsc
                 // infers for a conditional spread.
-                Type::Union(source) => merge_union_spread(&source, &mut merged_properties),
+                Type::Union(source) => {
+                    spread_source_is_open |= source.types().iter().any(|member| {
+                        matches!(member, Type::Object(object) if object.synthetic_open_index)
+                    });
+                    merge_union_spread(&source, &mut merged_properties);
+                }
                 _ => continue,
             }
             continue;
@@ -59,7 +88,15 @@ pub(crate) fn infer_object_literal(
         );
     }
 
-    let result = Type::Object(alloc_object_type(merged_properties, None));
+    let result = if spread_source_is_any {
+        Type::Any
+    } else if spread_source_is_open {
+        let mut object = alloc_object_type(merged_properties, Some(Type::Any));
+        object = object.with_open_index_marker();
+        Type::Object(object)
+    } else {
+        Type::Object(alloc_object_type(merged_properties, None))
+    };
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.object_literal_checking += object_literal_start.elapsed()
     });
@@ -117,6 +154,49 @@ fn merge_union_spread(source: &surge_ts_types::UnionType, merged: &mut PropertyM
                 ObjectProperty::required(ty)
             },
         );
+    }
+}
+
+/// A `[…] as const` argument, typed the way the assertion says: an array literal
+/// is a tuple and a nested one is a nested tuple, all the way down. The inference
+/// sketch previously forwarded straight through the assertion, so
+/// `flatMap(range, (x) => [[x, x, x]] as const)` handed `number[][]` to the
+/// inference of `readonly B[]` and `B` came out as `number[]` instead of the inner
+/// tuple. Leaves go through ordinary inference, so their literal types survive.
+pub(crate) fn infer_const_expression(
+    expression: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    match expression {
+        ParsedExpression::ArrayLiteral { elements, .. } => {
+            let mut element_types = Vec::with_capacity(elements.len());
+            for element in elements {
+                match infer_const_expression(&element.expression, symbols, ctx) {
+                    InferredExpression::Known(ty) if !ty.is_unknown() => element_types.push(ty),
+                    _ => return InferredExpression::Unknown,
+                }
+            }
+            InferredExpression::Known(Type::Tuple(element_types))
+        }
+        ParsedExpression::ObjectLiteral { properties, .. }
+            if !properties.iter().any(|property| property.is_spread) =>
+        {
+            let mut members = surge_ts_types::PropertyMap::default();
+            for property in properties {
+                match infer_const_expression(&property.value, symbols, ctx) {
+                    InferredExpression::Known(ty) if !ty.is_unknown() => {
+                        members.insert(
+                            property.name.as_str().into(),
+                            surge_ts_types::ObjectProperty::required(ty),
+                        );
+                    }
+                    _ => return InferredExpression::Unknown,
+                }
+            }
+            InferredExpression::Known(Type::Object(crate::arena::alloc_object_type(members, None)))
+        }
+        _ => infer_expression(expression, symbols, ctx),
     }
 }
 

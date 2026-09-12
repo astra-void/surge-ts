@@ -54,12 +54,14 @@ pub(crate) fn bind_type_arguments(
             // resolution is exponential on deeply nested generics (each level
             // re-resolves its arguments), so reusing the probe result is what keeps
             // a nominal-reference instantiation linear.
+            let mut argument_had_error = false;
             let resolved_ty = if let Some(pre) = pre_resolved.and_then(|pre| pre.get(index)) {
                 pre.clone()
             } else {
                 let resolved_argument =
                     resolve_parsed_type(argument.clone(), ctx, resolving, parent_substitution);
-                bound_had_error |= resolved_argument.had_error;
+                argument_had_error = resolved_argument.had_error;
+                bound_had_error |= argument_had_error;
                 resolved_argument.ty
             };
 
@@ -67,6 +69,9 @@ pub(crate) fn bind_type_arguments(
                 substitution.insert_placeholder(parameter.name.clone(), resolved_ty);
             } else {
                 substitution.insert(parameter.name.clone(), resolved_ty);
+            }
+            if argument_had_error {
+                substitution.mark_degraded(&parameter.name);
             }
             continue;
         }
@@ -103,6 +108,9 @@ pub(crate) fn bind_type_arguments(
         } else {
             substitution.insert(parameter.name.clone(), resolved_default.ty);
         }
+        if resolved_default.had_error {
+            substitution.mark_degraded(&parameter.name);
+        }
     }
 
     Some(BoundTypeArguments {
@@ -114,6 +122,7 @@ pub(crate) fn bind_type_arguments(
 pub(crate) fn extend_substitution_with_type_parameters(
     parent_substitution: &TypeParameterSubstitution,
     type_parameters: &[ParsedTypeParameter],
+    value_parameters: &[surge_ts_syntax::ParsedFunctionTypeParameter],
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
 ) -> TypeParameterSubstitution {
@@ -126,11 +135,28 @@ pub(crate) fn extend_substitution_with_type_parameters(
         effective_substitution
             .extend(substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged));
 
+        // A signature's own type parameter is decided at the call site, so a
+        // declared default only applies when nothing can infer it. Surge builds
+        // this `FunctionType` without call context and drops the type-parameter
+        // list, so a default baked into a *parameter* annotation hardens an
+        // uninferred generic into a concrete type: `m<T = string>(x: T)` would
+        // reject `o.m(42)`, and `f1<Q extends K[] = K[]>(o: Opts<Q>)` would
+        // reject a caller's own `Opts<Q>`. Bind the uninferred sentinel there
+        // instead — the reading assignability already treats as "could not be
+        // inferred" — and keep the default for a parameter no argument mentions
+        // (`m<T = string>(): T[]`), where tsc uses it too. Only a defaulted
+        // parameter can be hardened, so the scan is gated on there being one.
+        let inferable_from_arguments = parameter.default_type.is_some()
+            && value_parameters.iter().any(|value_parameter| {
+                parsed_type_mentions_type_parameter(&value_parameter.ty, &parameter.name)
+            });
+
         let resolved = parameter.default_type.clone().map(|default_type| {
             resolve_parsed_type(default_type, ctx, resolving, &effective_substitution)
         });
 
         let ty = match resolved {
+            Some(_) if inferable_from_arguments => Type::Unknown,
             Some(resolved) if !resolved.had_error => resolved.ty,
             Some(_) => Type::Unknown,
             None => Type::Unknown,
@@ -147,6 +173,79 @@ pub(crate) fn extend_substitution_with_type_parameters(
     }
 
     substitution
+}
+
+/// Whether `ty` names the type parameter `name` anywhere within it. A syntactic
+/// over-approximation: a nested signature that shadows `name` still counts, which
+/// only ever moves a binding toward the permissive uninferred sentinel.
+fn parsed_type_mentions_type_parameter(ty: &ParsedType, name: &str) -> bool {
+    match ty {
+        ParsedType::Named(named) => {
+            named.name == name
+                || named
+                    .type_arguments
+                    .iter()
+                    .any(|argument| parsed_type_mentions_type_parameter(argument, name))
+        }
+        ParsedType::Array(inner) | ParsedType::KeyOf(inner) => {
+            parsed_type_mentions_type_parameter(inner, name)
+        }
+        ParsedType::Union(members)
+        | ParsedType::Intersection(members)
+        | ParsedType::Tuple(members) => members
+            .iter()
+            .any(|member| parsed_type_mentions_type_parameter(member, name)),
+        ParsedType::Function(function) => {
+            function
+                .parameters
+                .iter()
+                .any(|parameter| parsed_type_mentions_type_parameter(&parameter.ty, name))
+                || parsed_type_mentions_type_parameter(&function.return_type, name)
+        }
+        ParsedType::Object(object) => {
+            object
+                .properties
+                .iter()
+                .any(|property| parsed_type_mentions_type_parameter(&property.ty, name))
+                || object
+                    .construct_signature
+                    .as_deref()
+                    .into_iter()
+                    .chain(object.call_signature.as_deref())
+                    .any(|signature| {
+                        signature
+                            .parameters
+                            .iter()
+                            .any(|parameter| {
+                                parsed_type_mentions_type_parameter(&parameter.ty, name)
+                            })
+                            || parsed_type_mentions_type_parameter(&signature.return_type, name)
+                    })
+        }
+        ParsedType::IndexedAccess(indexed) => {
+            parsed_type_mentions_type_parameter(&indexed.object_type, name)
+                || parsed_type_mentions_type_parameter(&indexed.index_type, name)
+        }
+        ParsedType::Mapped(mapped) => {
+            parsed_type_mentions_type_parameter(&mapped.constraint, name)
+                || parsed_type_mentions_type_parameter(&mapped.value_type, name)
+        }
+        ParsedType::Conditional(conditional) => {
+            parsed_type_mentions_type_parameter(&conditional.check_type, name)
+                || parsed_type_mentions_type_parameter(&conditional.extends_type, name)
+                || parsed_type_mentions_type_parameter(&conditional.true_type, name)
+                || parsed_type_mentions_type_parameter(&conditional.false_type, name)
+        }
+        ParsedType::TemplateLiteral(template) => template
+            .interpolations
+            .iter()
+            .any(|part| parsed_type_mentions_type_parameter(part, name)),
+        ParsedType::Predicate(predicate) => predicate
+            .ty
+            .as_ref()
+            .is_some_and(|ty| parsed_type_mentions_type_parameter(ty, name)),
+        _ => false,
+    }
 }
 
 pub(crate) fn parsed_type_is_placeholder_reference(

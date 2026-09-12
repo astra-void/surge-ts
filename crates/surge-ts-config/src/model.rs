@@ -31,6 +31,11 @@ pub struct NormalizedCompilerOptions {
     pub no_implicit_override: bool,
     /// `compilerOptions.noPropertyAccessFromIndexSignature`. Independent of `strict`; defaults off.
     pub no_property_access_from_index_signature: bool,
+    /// `compilerOptions.noUncheckedIndexedAccess`. Independent of `strict`; defaults off.
+    pub no_unchecked_indexed_access: bool,
+    /// `compilerOptions.allowImportingTsExtensions`. Defaults off; without it an
+    /// import path ending in a TypeScript extension is TS5097.
+    pub allow_importing_ts_extensions: bool,
     /// `compilerOptions.noUnusedLocals`. Independent of `strict`; defaults off.
     pub no_unused_locals: bool,
     /// `compilerOptions.noUnusedParameters`. Independent of `strict`; defaults off.
@@ -87,6 +92,8 @@ impl Default for NormalizedCompilerOptions {
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
+            no_unchecked_indexed_access: false,
+            allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             target: ScriptTarget::ES2024,

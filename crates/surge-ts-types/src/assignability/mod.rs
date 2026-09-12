@@ -238,7 +238,20 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         // type there, so failing on a degraded *source* turns every unmodelled
         // corner into a false-positive cascade. The same leniency already
         // applies to sentinel arguments in the same-generic fast path below.
-        || matches!(from, Type::Unknown)
+        || matches!(from, Type::Unknown | Type::TypeParameter(_))
+    {
+        return true;
+    }
+
+    // tsc lets any `number` flow into a numeric `enum` — its own
+    // `Flags.A | Flags.B` is typed `number`, and the bitwise combination is the
+    // normal way to build a flag argument. The reverse (a string into a string
+    // enum) is rejected, which is why only the numeric marker opens this.
+    if matches!(to, Type::Reference(reference) if reference.numeric_enum)
+        && matches!(
+            from.base_primitive().as_ref().unwrap_or(from),
+            Type::Number | Type::NumberLiteral(_)
+        )
     {
         return true;
     }
@@ -316,7 +329,7 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                     .iter()
                     .zip(to_ref.arguments.iter())
                     .all(|(from_arg, to_arg)| {
-                        matches!(from_arg, Type::Any | Type::Unknown | Type::GenuineUnknown)
+                        matches!(from_arg, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_))
                             || matches!(to_arg, Type::Any)
                             || is_assignable_to(from_arg, to_arg)
                     });
@@ -373,12 +386,18 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             is_function_assignable_to(source, target)
         }
         (Type::Array(source), Type::Array(target)) => is_assignable_to(source, target),
+        // A source may stop short of trailing target slots that accept
+        // `undefined` — how an optional element (`[string, string?]`) is
+        // represented.
         (Type::Tuple(source), Type::Tuple(target)) => {
-            source.len() == target.len()
+            source.len() <= target.len()
                 && source
                     .iter()
                     .zip(target.iter())
                     .all(|(source_ty, target_ty)| is_assignable_to(source_ty, target_ty))
+                && target[source.len()..]
+                    .iter()
+                    .all(|target_ty| is_assignable_to(&Type::Undefined, target_ty))
         }
         (Type::Tuple(source), Type::Array(target)) => source
             .iter()
@@ -460,7 +479,12 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                 .properties
                 .values()
                 .all(|property| property.is_optional())
-                && target.string_index_type.is_none()
+                // Only an index signature the source *declared* rejects here. A
+                // checker-injected openness marker records an intersection operand
+                // surge could not enumerate (`T & {}` where `T` stayed generic), so
+                // treating it as a declared `[key: string]: T` turns surge's own
+                // modelling loss into a false rejection of an array against `{}`.
+                && !target.declares_string_index_access()
                 && target.call_signature().is_none()
                 && target.construct_signature().is_none()
         }
@@ -489,7 +513,7 @@ fn parameter_carries_degraded_unknown(ty: &Type, depth: usize) -> bool {
         return false;
     }
     match ty {
-        Type::Unknown => true,
+        Type::Unknown | Type::TypeParameter(_) => true,
         Type::Reference(reference) => {
             reference
                 .arguments
@@ -535,7 +559,8 @@ fn parameter_carries_degraded_unknown(ty: &Type, depth: usize) -> bool {
 fn expanded_signature(function: &FunctionType) -> (std::borrow::Cow<'_, [Type]>, usize, bool) {
     let parameters = function.parameters();
     if function.is_variadic()
-        && let Some(Type::Tuple(elements)) = parameters.last()
+        && let Some(rest) = parameters.last()
+        && let Type::Tuple(elements) = rest_slot_shape(rest)
     {
         let leading = parameters.len() - 1;
         let mut expanded = parameters[..leading].to_vec();
@@ -554,6 +579,22 @@ fn expanded_signature(function: &FunctionType) -> (std::borrow::Cow<'_, [Type]>,
     )
 }
 
+/// The structural shape behind a rest slot. A rest annotation resolves to the
+/// array or tuple it is written as, but written as a deferred alias
+/// (`...args: Parameters<F>`, vitest's `MockParameters<T>`) it arrives as a
+/// lazy reference, and matching the variant on it directly compared the whole
+/// rest as one positional parameter — every such mock read as not assignable
+/// to any callback. The peel happens here, at comparison time, and not when the
+/// signature is built: a declared generic signature holds that reference bound
+/// to a placeholder, and forcing its memo there froze the placeholder
+/// expansion for every later instantiation.
+fn rest_slot_shape(rest: &Type) -> Type {
+    match rest {
+        Type::Reference(_) => rest.peeled(),
+        other => other.clone(),
+    }
+}
+
 /// Widens a variadic signature's parameter list so a positional comparison
 /// reaches every slot the rest parameter covers. A rest parameter is stored as
 /// the array it is written as (`...items: T[]` -> `T[]`), so comparing it
@@ -567,11 +608,14 @@ fn widen_variadic_parameters<'a>(
     if !is_variadic {
         return parameters;
     }
-    let Some(Type::Array(element)) = parameters.last() else {
+    let Some(rest) = parameters.last() else {
+        return parameters;
+    };
+    let Type::Array(element) = rest_slot_shape(rest) else {
         return parameters;
     };
     let leading = parameters.len() - 1;
-    let element = element.as_ref().clone();
+    let element = *element;
     let mut widened = parameters[..leading].to_vec();
     widened.resize(width.max(leading + 1), element);
     std::borrow::Cow::Owned(widened)

@@ -695,7 +695,7 @@ fn fingerprint_type(ty: &Type, budget: &mut FingerprintBudget) -> Option<u64> {
     let mut hasher = FxHasher::default();
     std::mem::discriminant(ty).hash(&mut hasher);
     match ty {
-        Type::Unknown => return None,
+        Type::Unknown | Type::TypeParameter(_) => return None,
         Type::StringLiteral(value) => value.hash(&mut hasher),
         Type::NumberLiteral(value) => value.value.hash(&mut hasher),
         Type::BooleanLiteral(value) => value.hash(&mut hasher),
@@ -807,7 +807,7 @@ fn canonical_types_equal(left: &Type, right: &Type) -> bool {
 fn fingerprint_property_type(ty: &Type, budget: &mut FingerprintBudget) -> Option<u64> {
     if matches!(
         ty,
-        Type::Unknown | Type::Function(_) | Type::Object(_) | Type::Reference(_)
+        Type::Unknown | Type::TypeParameter(_) | Type::Function(_) | Type::Object(_) | Type::Reference(_)
     ) {
         return None;
     }
@@ -843,7 +843,7 @@ fn fingerprint_property_type(ty: &Type, budget: &mut FingerprintBudget) -> Optio
         | Type::Any
         | Type::GenuineUnknown
         | Type::Never => {}
-        Type::Unknown | Type::Function(_) | Type::Object(_) | Type::Reference(_) => unreachable!(),
+        Type::Unknown | Type::TypeParameter(_) | Type::Function(_) | Type::Object(_) | Type::Reference(_) => unreachable!(),
     }
     budget.depth -= 1;
     Some(hasher.finish())

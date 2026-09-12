@@ -31,7 +31,7 @@ pub(crate) fn check_assignment_with_symbols(
             return;
         }
 
-        let diagnostic = Diagnostic::ts2304(&assignment.target_name, ctx.file_name.clone())
+        let diagnostic = crate::checks::expr::unresolved_name_diagnostic(&assignment.target_name, symbols, ctx)
             .with_span(convert_span(target_span));
         ctx.push(diagnostic);
         return;
@@ -108,7 +108,7 @@ fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
             const { std::cell::RefCell::new(Vec::new()) };
     }
     match ty {
-        surge_ts_types::Type::Unknown => true,
+        surge_ts_types::Type::Unknown | surge_ts_types::Type::TypeParameter(_) => true,
         // A degraded member hidden behind a lazy nominal reference must suppress
         // the comparison exactly as an inline one does: `is_assignable_to` peels
         // the reference and compares the unmodelled members structurally, so

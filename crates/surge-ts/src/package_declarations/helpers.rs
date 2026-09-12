@@ -782,18 +782,31 @@ pub(super) fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
     // extensions before declarations (tsc probes `.ts`/`.tsx` ahead of `.d.ts`
     // even inside `node_modules`, so a dependency shipping sources gets them).
     if is_runtime_javascript_file(&path) {
-        let stem = path.with_extension("");
-        return if path_ends_with_ignore_ascii_case(&path, ".mjs") {
-            vec![stem.with_extension("mts"), stem.with_extension("d.mts")]
-        } else if path_ends_with_ignore_ascii_case(&path, ".cjs") {
-            vec![stem.with_extension("cts"), stem.with_extension("d.cts")]
-        } else {
-            vec![
-                stem.with_extension("ts"),
-                stem.with_extension("tsx"),
-                stem.with_extension("d.ts"),
-            ]
+        let (runtime_extension, substitutes): (&str, &[&str]) =
+            if path_ends_with_ignore_ascii_case(&path, ".mjs") {
+                (".mjs", &["mts", "d.mts"])
+            } else if path_ends_with_ignore_ascii_case(&path, ".cjs") {
+                (".cjs", &["cts", "d.cts"])
+            } else if path_ends_with_ignore_ascii_case(&path, ".jsx") {
+                (".jsx", &["ts", "tsx", "d.ts"])
+            } else {
+                (".js", &["ts", "tsx", "d.ts"])
+            };
+
+        // Only the runtime extension comes off, and the substitute is appended
+        // to whatever is left. A published bundle usually carries an inner dot
+        // in its name — `react-error-boundary.cjs.mjs`, `index.esm.js` — and
+        // `with_extension` rewrites the segment *before* the runtime one, so
+        // asking it for `d.mts` yields `react-error-boundary.d.mts` and the
+        // shipped `react-error-boundary.cjs.d.mts` is never probed. tsc strips
+        // only the runtime extension, which is what this does.
+        let Some(base) = strip_trailing_extension(&path, runtime_extension) else {
+            return Vec::new();
         };
+        return substitutes
+            .iter()
+            .map(|extension| append_extension(&base, extension))
+            .collect();
     }
 
     if path.extension().is_some() {
@@ -809,6 +822,22 @@ pub(super) fn declaration_candidates(path: PathBuf) -> Vec<PathBuf> {
         path.with_extension("d.mts"),
         path.with_extension("d.cts"),
     ]
+}
+
+/// Remove a known trailing extension without touching the rest of the name.
+/// Returns `None` for a non-UTF-8 file name, where the caller has nothing
+/// meaningful to probe anyway.
+fn strip_trailing_extension(path: &Path, suffix: &str) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_str()?;
+    let stem = file_name.get(..file_name.len() - suffix.len())?;
+    Some(path.with_file_name(stem))
+}
+
+fn append_extension(base: &Path, extension: &str) -> PathBuf {
+    let mut file_name = base.as_os_str().to_os_string();
+    file_name.push(".");
+    file_name.push(extension);
+    PathBuf::from(file_name)
 }
 
 // Suffix checks run per candidate in the resolution hot loops; matching on

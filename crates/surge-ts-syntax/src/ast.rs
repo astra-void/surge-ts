@@ -54,6 +54,11 @@ pub enum ParsedStatement {
     /// An identifier-named namespace/module block such as `declare namespace JSX { ... }`.
     /// String-named `declare module "pkg"` blocks use [`ParsedDeclareModuleDeclaration`].
     NamespaceDeclaration(Box<ParsedNamespaceDeclaration>),
+    /// A module-scope `if`. Its branches are function-body statements, the
+    /// same lowering a function body uses, so the checker can decide whether a
+    /// branch leaves the module (`if (isCancel(x)) process.exit(0)`) and narrow
+    /// the statements that follow.
+    If(Box<ParsedIfStatement>),
     UnsupportedDeclaration {
         span: Option<TextSpan>,
     },
@@ -95,8 +100,8 @@ pub enum ParsedType {
     Any,
     Unknown,
     /// The genuine `unknown` keyword, kept distinct from [`ParsedType::Unknown`]
-    /// (which doubles as surge's conservative degrade target for `object`,
-    /// `intrinsic`, and unparseable annotations). Only this
+    /// (which doubles as surge's conservative degrade target for `intrinsic`
+    /// and unparseable annotations). Only this
     /// variant lowers to [`Type::GenuineUnknown`], so the checker can emit
     /// `TS18046` on a genuinely-`unknown`-typed receiver without flagging a
     /// merely-degraded one.
@@ -319,6 +324,9 @@ pub struct ParsedObjectBindingPattern {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedObjectBindingElement {
     pub property_name: String,
+    /// `{ a }` rather than `{ a: a }`. Unused-binding reporting keys on it:
+    /// tsc exempts an `_`-prefixed local only when it renames a property.
+    pub shorthand: bool,
     pub binding_name: ParsedBindingName,
     pub name_span: Option<TextSpan>,
     pub has_default: bool,
@@ -1302,5 +1310,28 @@ impl ParsedNamedType {
             bytes += argument.estimated_heap_bytes();
         }
         bytes
+    }
+}
+
+impl ParsedExpression {
+    /// Whether this expression is a later link of an optional chain, so a
+    /// member access on it short-circuits with the chain instead of being a
+    /// non-optional access on a possibly-`undefined` receiver: the `.c` of
+    /// `a?.b.c` never runs when `a?.b` is `undefined`.
+    pub fn continues_optional_chain(&self) -> bool {
+        match self {
+            ParsedExpression::OptionalPropertyAccess { .. }
+            | ParsedExpression::OptionalIndexAccess { .. }
+            | ParsedExpression::OptionalPropertyCall { .. }
+            | ParsedExpression::OptionalCall { .. } => true,
+            ParsedExpression::PropertyAccess { object, .. }
+            | ParsedExpression::ElementAccess { object, .. }
+            | ParsedExpression::PropertyCall { object, .. } => object.continues_optional_chain(),
+            ParsedExpression::ExpressionCall { callee, .. } => callee.continues_optional_chain(),
+            ParsedExpression::NonNullAssertion {
+                in_optional_chain, ..
+            } => *in_optional_chain,
+            _ => false,
+        }
     }
 }

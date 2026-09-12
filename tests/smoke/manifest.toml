@@ -1007,7 +1007,7 @@ expected_diagnostics = ["TS2339"]
 [[case]]
 name = "property-call-non-object-undefined"
 path = "tests/smoke/property_call_non_object_undefined.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS18048"]
 
 [[case]]
 name = "property-call-non-object-function-missing-property"
@@ -6533,9 +6533,9 @@ path = "tests/smoke/tuple_property_length_assignment_mismatch.ts"
 expected_diagnostics = ["TS2322"]
 
 [[case]]
-name = "tuple-property-length-union-undefined-policy-pinned"
-path = "tests/smoke/tuple_property_length_union_undefined_policy_pinned.ts"
-expected_diagnostics = []
+name = "tuple-property-length-union-undefined-reports-ts18048"
+path = "tests/smoke/tuple_property_length_union_undefined_reports_ts18048.ts"
+expected_diagnostics = ["TS18048"]
 
 [[case]]
 name = "array-property-unknown-method-still-unsupported"

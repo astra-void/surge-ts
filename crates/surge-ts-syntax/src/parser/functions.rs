@@ -245,10 +245,6 @@ fn parse_expression_statement_as_function_body(
 fn parse_member_assignment(
     assignment: &oxc_ast::ast::AssignmentExpression<'_>,
 ) -> Option<crate::ParsedMemberAssignment> {
-    if assignment.operator != AssignmentOperator::Assign {
-        return None;
-    }
-
     let AssignmentTarget::StaticMemberExpression(member) = &assignment.left else {
         return None;
     };
@@ -269,37 +265,60 @@ fn parse_member_assignment(
     if value == ParsedExpression::Unknown {
         return None;
     }
+    let target_span = Some(text_span_from_oxc_span(member.span));
+    let value_span = Some(text_span_from_oxc_span(value_span));
+    let value = super::logical_assignment_value(
+        assignment.operator,
+        target.clone(),
+        target_span,
+        value,
+        value_span,
+    )?;
 
     Some(crate::ParsedMemberAssignment {
         target,
-        target_span: Some(text_span_from_oxc_span(member.span)),
+        target_span,
         value,
-        value_span: Some(text_span_from_oxc_span(value_span)),
+        value_span,
     })
 }
 
 fn parse_this_property_assignment(
     assignment: &oxc_ast::ast::AssignmentExpression<'_>,
 ) -> Option<ParsedThisPropertyAssignment> {
-    if assignment.operator != AssignmentOperator::Assign {
-        return None;
-    }
-
     let AssignmentTarget::StaticMemberExpression(member) = &assignment.left else {
         return None;
     };
 
-    if !matches!(&member.object, Expression::ThisExpression(_)) {
+    let Expression::ThisExpression(this_expression) = &member.object else {
         return None;
-    }
+    };
 
     let (value, value_span) = parse_expression(&assignment.right);
+    let value_span = Some(text_span_from_oxc_span(value_span));
+    let property_span = Some(text_span_from_oxc_span(member.property.span));
+    let target = ParsedExpression::PropertyAccess {
+        object: Box::new(ParsedExpression::This {
+            span: Some(text_span_from_oxc_span(this_expression.span)),
+        }),
+        object_span: Some(text_span_from_oxc_span(this_expression.span)),
+        property_name: member.property.name.to_string(),
+        property_span,
+        is_bracketed: false,
+    };
+    let value = super::logical_assignment_value(
+        assignment.operator,
+        target,
+        Some(text_span_from_oxc_span(member.span)),
+        value,
+        value_span,
+    )?;
 
     Some(ParsedThisPropertyAssignment {
         property_name: member.property.name.to_string(),
-        property_span: Some(text_span_from_oxc_span(member.property.span)),
+        property_span,
         value,
-        value_span: Some(text_span_from_oxc_span(value_span)),
+        value_span,
     })
 }
 
@@ -317,7 +336,7 @@ fn parse_variable_declaration_as_function_body(
         .collect()
 }
 
-fn parse_if_statement(if_statement: &IfStatement<'_>) -> Option<ParsedIfStatement> {
+pub(super) fn parse_if_statement(if_statement: &IfStatement<'_>) -> Option<ParsedIfStatement> {
     let (condition, condition_span) = parse_expression(&if_statement.test);
     let then_body = parse_branch_body(&if_statement.consequent);
     let else_body = if_statement
@@ -565,6 +584,7 @@ fn parse_object_binding_element(
         _ => {
             return Some(ParsedObjectBindingElement {
                 property_name: "<unsupported>".to_string(),
+                shorthand: false,
                 binding_name: ParsedBindingName::Unsupported {
                     span: Some(text_span_from_oxc_span(property.span)),
                 },
@@ -589,6 +609,7 @@ fn parse_object_binding_element(
 
     Some(ParsedObjectBindingElement {
         property_name,
+        shorthand: property.shorthand,
         binding_name,
         name_span,
         has_default,

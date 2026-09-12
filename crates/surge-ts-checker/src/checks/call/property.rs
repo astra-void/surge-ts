@@ -125,10 +125,24 @@ fn filtered_element_type(
     let [argument] = arguments else {
         return None;
     };
-    let ParsedExpression::Identifier { name, .. } = &argument.expression else {
-        return None;
-    };
-    crate::checks::function::predicate_target_of_value(name, symbols, ctx)
+    match &argument.expression {
+        ParsedExpression::Identifier { name, .. } => {
+            crate::checks::function::predicate_target_of_value(name, symbols, ctx)
+        }
+        // An inline `(x): x is T => …` carries its predicate on the arrow's
+        // written return type.
+        ParsedExpression::ArrowFunction(arrow) => {
+            let Some(ParsedType::Predicate(predicate)) = &arrow.return_type else {
+                return None;
+            };
+            if predicate.asserts || !arrow.type_parameters.is_empty() {
+                return None;
+            }
+            let target = crate::infer::map_parsed_type(predicate.ty.clone()?, ctx);
+            (!target.is_unknown()).then_some(target)
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn check_property_call_like(
@@ -144,7 +158,24 @@ pub(crate) fn check_property_call_like(
 ) -> Option<Type> {
     let object_ty =
         match crate::checks::expr::evaluate_expression(object, object_span, symbols, ctx) {
-            crate::infer::InferredExpression::Known(ty) => ty,
+            // `Promise<T>` is modelled as its awaited `T` (see the `.then`
+            // arm below), so a `void`-resolving promise looks `undefined` to
+            // the receiver check; the promise itself is never nullish.
+            crate::infer::InferredExpression::Known(ty)
+                if matches!(property_name, "then" | "catch" | "finally") =>
+            {
+                ty
+            }
+            crate::infer::InferredExpression::Known(ty) => {
+                crate::checks::expr::strip_reported_undefined_receiver(
+                    object,
+                    ty,
+                    object_span,
+                    call_span,
+                    symbols,
+                    ctx,
+                )
+            }
             // The receiver did not resolve, but the arguments are still code:
             // an unresolved name, a missing member or an implicit-any parameter
             // inside them is reported by tsc regardless of what the callee is.
@@ -177,7 +208,7 @@ pub(crate) fn check_property_call_like(
     // reported as a missing member. Treat the receiver as the awaited value
     // instead — the chain keeps its collapsed result so further links resolve.
     if matches!(property_name, "then" | "catch" | "finally")
-        && !matches!(object_ty, Type::Unknown)
+        && !matches!(object_ty, Type::Unknown | Type::TypeParameter(_))
         && !declares_own_property(&object_ty, property_name)
     {
         return if property_name == "then" {
@@ -190,7 +221,7 @@ pub(crate) fn check_property_call_like(
     // A namespace binding that has not resolved in this round reads as `any` or
     // as the sentinel; the qualified `ns.member` entry still carries the member's
     // real signature, so try it before answering from the degraded receiver.
-    if matches!(object_ty, Type::Any | Type::Unknown | Type::GenuineUnknown)
+    if matches!(object_ty, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_))
         && let ParsedExpression::Identifier { name, .. } = object
         && let Some(result) = try_qualified_namespace_call(
             name,
@@ -215,13 +246,32 @@ pub(crate) fn check_property_call_like(
         // reasoning as the unresolved-receiver arm above. `evaluate_arguments_
         // context_free` keeps implicit-any gated on receiver provenance, so a
         // callback whose contextual type surge lost is still not reported.
-        Type::Unknown | Type::GenuineUnknown => {
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             None
         }
+        // The predicate decides the element type; the call is still checked
+        // like any other `filter`, which is what gives an inline arrow its
+        // contextual parameter types.
         Type::Array(_) if filtered_element.is_some() => {
-            for argument in arguments {
-                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            match object_ty.get_property_access_type("filter") {
+                Some(Type::Function(filter)) => {
+                    check_function_type_call(
+                        &filter,
+                        property_span,
+                        call_span,
+                        type_arguments,
+                        arguments,
+                        symbols,
+                        ctx,
+                    )?;
+                }
+                _ => {
+                    for argument in arguments {
+                        let _ =
+                            evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+                    }
+                }
             }
             filtered_element.map(|element| Type::Array(Box::new(element)))
         }
@@ -301,6 +351,11 @@ pub(crate) fn check_property_call_like(
                 }
 
                 let Some(property_type) = ty.get_property_access_type(property_name) else {
+                    // A member whose reference peels to the sentinel is a shape
+                    // surge could not reconstruct, not a type without the member.
+                    if ty.peeled().is_unknown() {
+                        return None;
+                    }
                     if no_lib_array_member(ty, ctx) {
                         result_types.push(Type::Any);
                         continue;
@@ -315,8 +370,18 @@ pub(crate) fn check_property_call_like(
                     return None;
                 };
 
+                let declared_member = property_type.clone();
                 match callable_property_signature(property_type) {
                     Type::Function(function_type) => {
+                        let function_type = instantiate_declared_member_signature(
+                            &function_type,
+                            Some(&declared_member),
+                            type_arguments,
+                            property_span,
+                            arguments,
+                            symbols,
+                            ctx,
+                        );
                         let return_type = check_function_type_call(
                             &function_type,
                             property_span,
@@ -329,7 +394,7 @@ pub(crate) fn check_property_call_like(
                         result_types.push(return_type);
                     }
                     Type::Any => result_types.push(Type::Any),
-                    Type::Unknown | Type::GenuineUnknown => return None,
+                    Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => return None,
                     // A member whose own type is a union of callables sharing
                     // one signature is callable, and one carrying the
                     // degradation sentinel proves nothing — the same rules the
@@ -417,21 +482,33 @@ pub(crate) fn check_property_call_like(
                 return result;
             }
 
+            let declared_member = property_type.clone();
             match callable_property_signature(property_type) {
-                Type::Function(function_type) => check_function_type_call(
-                    &function_type,
-                    property_span,
-                    call_span,
-                    type_arguments,
-                    arguments,
-                    symbols,
-                    ctx,
-                ),
+                Type::Function(function_type) => {
+                    let function_type = instantiate_declared_member_signature(
+                        &function_type,
+                        Some(&declared_member),
+                        type_arguments,
+                        property_span,
+                        arguments,
+                        symbols,
+                        ctx,
+                    );
+                    check_function_type_call(
+                        &function_type,
+                        property_span,
+                        call_span,
+                        type_arguments,
+                        arguments,
+                        symbols,
+                        ctx,
+                    )
+                }
                 Type::Any => {
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
                     Some(Type::Any)
                 }
-                Type::Unknown | Type::GenuineUnknown => None,
+                Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
                 // See the union arm in the multi-receiver loop above: a property
                 // typed as a union of callables is callable, and one carrying the
                 // degradation sentinel is not a source error.
@@ -497,14 +574,14 @@ fn check_promise_then_call(
 /// index signature. A `.d.ts` class whose base could not be resolved is left open
 /// with a permissive string index, which would otherwise make every value look
 /// like a thenable.
-fn declares_own_property(ty: &Type, name: &str) -> bool {
+pub(crate) fn declares_own_property(ty: &Type, name: &str) -> bool {
     if let Type::Object(object_type) = ty.peeled() {
         return object_type.get_property_type(name).is_some();
     }
     ty.get_property_access_type(name).is_some()
 }
 
-fn promise_like_awaited_type(ty: &Type) -> Type {
+pub(crate) fn promise_like_awaited_type(ty: &Type) -> Type {
     if let Type::Reference(reference) = ty {
         let base = reference
             .display
@@ -546,12 +623,27 @@ pub(crate) fn check_optional_property_call(
     let base_type = surge_ts_types::remove_undefined(&object_type);
     let base_type_name = base_type.name();
 
+    // Same awaited-value modelling as the non-optional path: `result?.catch(...)`
+    // on a `Promise<void> | undefined` lands on `void`, not on a missing member.
+    if matches!(property_name, "then" | "catch" | "finally")
+        && !base_type.is_unknown()
+        && !declares_own_property(&base_type, property_name)
+    {
+        let continued = if property_name == "then" {
+            check_promise_then_call(base_type, arguments, symbols, ctx)
+        } else {
+            evaluate_arguments_context_free(object, arguments, symbols, ctx);
+            Some(base_type)
+        };
+        return continued.map(|ty| union_type(vec![ty, Type::Undefined]));
+    }
+
     match base_type {
         Type::Any => {
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(Type::Any)
         }
-        Type::Unknown | Type::GenuineUnknown => None,
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
         Type::Array(element_type) if property_name == "map" => check_array_map_call(
             element_type.as_ref(),
             property_span,
@@ -594,6 +686,11 @@ pub(crate) fn check_optional_property_call(
                 }
 
                 let Some(property_type) = ty.get_property_access_type(property_name) else {
+                    // A member whose reference peels to the sentinel is a shape
+                    // surge could not reconstruct, not a type without the member.
+                    if ty.peeled().is_unknown() {
+                        return None;
+                    }
                     if no_lib_array_member(ty, ctx) {
                         result_types.push(Type::Any);
                         continue;
@@ -609,8 +706,18 @@ pub(crate) fn check_optional_property_call(
 
                 let property_type_base = surge_ts_types::remove_undefined(&property_type);
 
+                let declared_member = property_type_base.clone();
                 match callable_property_signature(property_type_base) {
                     Type::Function(function_type) => {
+                        let function_type = instantiate_declared_member_signature(
+                            &function_type,
+                            Some(&declared_member),
+                            type_arguments,
+                            property_span,
+                            arguments,
+                            symbols,
+                            ctx,
+                        );
                         let return_type = check_function_type_call(
                             &function_type,
                             property_span,
@@ -623,7 +730,7 @@ pub(crate) fn check_optional_property_call(
                         result_types.push(return_type);
                     }
                     Type::Any => result_types.push(Type::Any),
-                    Type::Unknown | Type::GenuineUnknown => return None,
+                    Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => return None,
                     _ => {
                         ctx.push(diagnostic_with_syntax_span(
                             Diagnostic::ts2349(ctx.file_name.clone()),
@@ -686,22 +793,34 @@ pub(crate) fn check_optional_property_call(
 
             let property_type_base = surge_ts_types::remove_undefined(&property_type);
 
+            let declared_member = property_type_base.clone();
             match callable_property_signature(property_type_base) {
-                Type::Function(function_type) => check_function_type_call(
-                    &function_type,
-                    property_span,
-                    call_span,
-                    type_arguments,
-                    arguments,
-                    symbols,
-                    ctx,
-                )
-                .map(|ret| union_type(vec![ret, Type::Undefined])),
+                Type::Function(function_type) => {
+                    let function_type = instantiate_declared_member_signature(
+                        &function_type,
+                        Some(&declared_member),
+                        type_arguments,
+                        property_span,
+                        arguments,
+                        symbols,
+                        ctx,
+                    );
+                    check_function_type_call(
+                        &function_type,
+                        property_span,
+                        call_span,
+                        type_arguments,
+                        arguments,
+                        symbols,
+                        ctx,
+                    )
+                    .map(|ret| union_type(vec![ret, Type::Undefined]))
+                }
                 Type::Any => {
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
                     Some(Type::Any)
                 }
-                Type::Unknown | Type::GenuineUnknown => None,
+                Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
                 _ => {
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2349(ctx.file_name.clone()),
@@ -715,6 +834,98 @@ pub(crate) fn check_optional_property_call(
             }
         }
     }
+}
+
+/// A member typed by `typeof fn` over a generic declaration carries that
+/// declaration (see the `typeof` arm of `resolve_parsed_type`); the call
+/// instantiates its type parameters from the arguments exactly as a call on the
+/// declared symbol would, so `vi.fn()` binds `T` (to its default) instead of
+/// returning `Mock<T>` with the parameter bare. Any other function-typed member
+/// is used as resolved.
+fn instantiate_declared_member_signature<'a>(
+    function_type: &'a surge_ts_types::FunctionType,
+    declared_member: Option<&Type>,
+    type_arguments: &[ParsedType],
+    type_argument_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> std::borrow::Cow<'a, surge_ts_types::FunctionType> {
+    let declared_signature = function_type
+        .declaration()
+        .and_then(|declaration| declaration.downcast_ref::<crate::symbols::FunctionSignatureInfo>())
+        .filter(|signature| !signature.type_parameters.is_empty());
+    if let Some(signature) = declared_signature {
+        return surge_ts_types::with_type_copy_reason(
+            surge_ts_types::TypeCopyReason::CallResolution,
+            || {
+                super::instantiate::instantiate_function_type(
+                    function_type,
+                    Some(signature),
+                    &[],
+                    type_arguments,
+                    type_argument_span,
+                    arguments,
+                    None,
+                    symbols,
+                    ctx,
+                )
+            },
+        );
+    }
+    // A member typed by an interface or alias carrying a generic call signature
+    // has no declaration on its handle at all: `resolve_function_type` erases
+    // the signature's type parameters to the degradation sentinel and keeps
+    // only their rendering. The written signature is read back off the
+    // declaration the member names, the same recovery the bare-call path runs.
+    let Some(written) = declared_member
+        .filter(|_| super::written_call_signature_recovery_enabled())
+        .and_then(|declared| super::interface_call_signature_info(declared, ctx))
+    else {
+        return std::borrow::Cow::Borrowed(function_type);
+    };
+    surge_ts_types::with_type_copy_reason(surge_ts_types::TypeCopyReason::CallResolution, || {
+        super::instantiate::instantiate_function_type(
+            function_type,
+            Some(&written.signature),
+            &written.outer_type_arguments,
+            type_arguments,
+            type_argument_span,
+            arguments,
+            None,
+            symbols,
+            ctx,
+        )
+    })
+}
+
+/// The return type of calling a callable member, instantiated. The inference
+/// side reads a member's return type straight off the resolved handle, which for
+/// a generic call signature still carries the erased type parameters — an object
+/// literal holding a nested builder call (`t.router({ post: t.router({…}) })`)
+/// is inferred there, so without this the outer call sees an unresolved argument
+/// and abandons its own instantiation.
+pub(crate) fn callable_member_call_return_type(
+    member_type: &Type,
+    type_arguments: &[ParsedType],
+    property_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Function(function_type) = callable_property_signature(member_type.clone()) else {
+        return None;
+    };
+    let function_type = instantiate_declared_member_signature(
+        &function_type,
+        Some(member_type),
+        type_arguments,
+        property_span,
+        arguments,
+        symbols,
+        ctx,
+    );
+    Some(function_type.return_type().clone())
 }
 
 /// Under `noLib` the array member surface comes from the configured replacement

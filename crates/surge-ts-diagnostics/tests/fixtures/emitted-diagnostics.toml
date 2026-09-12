@@ -675,3 +675,36 @@ status = "emitted"
 fixtures = [
   "tests/smoke/manifest.toml",
 ]
+
+[TS2532]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "possibly-undefined-receiver-basic and no-unchecked-indexed-access-basic presets",
+]
+
+[TS18048]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "possibly-undefined-receiver-basic and logical-assignment-narrowing-basic presets",
+]
+
+[TS6198]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program.rs",
+]
+oracle = [
+  "unused-destructured-parameters-basic preset",
+]
+
+[TS5097]
+status = "emitted"
+oracle = [
+  "ts-extension-import-basic preset",
+]

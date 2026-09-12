@@ -568,7 +568,7 @@ pub(crate) fn apply_variable_declaration_state(
 fn type_assumed_initialized(ty: &surge_ts_types::Type) -> bool {
     use surge_ts_types::Type;
     match ty {
-        Type::Any | Type::Undefined | Type::Unknown | Type::GenuineUnknown | Type::Void => true,
+        Type::Any | Type::Undefined | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Void => true,
         Type::Union(union) => union.types().iter().any(type_assumed_initialized),
         _ => false,
     }

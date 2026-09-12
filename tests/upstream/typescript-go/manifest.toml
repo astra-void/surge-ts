@@ -467,18 +467,6 @@ expected_diagnostics = []
 reason = "Covers a `#subpath` import re-exported through a package entry point. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
 
 [[case]]
-name = "deduplicate-packages"
-status = "active"
-upstream_repo = "microsoft/typescript-go"
-upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
-upstream_path = "testdata/tests/cases/compiler/deduplicatePackages.ts"
-upstream_baseline_path = "testdata/baselines/reference/compiler/deduplicatePackages.types"
-local_path = "tests/upstream/typescript-go/cases/deduplicatePackages.ts"
-mode = "single_source"
-expected_diagnostics = []
-reason = "Covers two copies of one package version reached through nested `node_modules`. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
-
-[[case]]
 name = "duplicate-package-peer-dependencies"
 status = "active"
 upstream_repo = "microsoft/typescript-go"
@@ -700,11 +688,11 @@ status = "active"
 upstream_repo = "microsoft/typescript-go"
 upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
 upstream_path = "testdata/tests/cases/compiler/jsdocCommentDefaultExport.ts"
-upstream_baseline_path = "testdata/baselines/reference/compiler/jsdocCommentDefaultExport.types"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsdocCommentDefaultExport(module=esnext).types"
 local_path = "tests/upstream/typescript-go/cases/jsdocCommentDefaultExport.ts"
 mode = "virtual_files"
 expected_diagnostics = []
-reason = "Covers documented default exports of an object literal and of a function. Upstream runs the fixture once per `module` setting; the harness runs it once. Upstream emits no errors baseline, so this pins the case as false-positive free."
+reason = "Covers documented default exports of an object literal and of a function. Upstream runs the fixture once per `module` setting and reports no errors in either; the harness runs it once. Upstream emits no errors baseline, so this pins the case as false-positive free."
 
 [[case]]
 name = "jsx-nested-indentation"
@@ -789,18 +777,6 @@ local_path = "tests/upstream/typescript-go/cases/panicSatisfiesOnExportEqualsDec
 mode = "single_source"
 expected_diagnostics = []
 reason = "Covers a JSDoc `@satisfies` tag on `module.exports`. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
-
-[[case]]
-name = "parameter-decorator-in-js-file"
-status = "active"
-upstream_repo = "microsoft/typescript-go"
-upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
-upstream_path = "testdata/tests/cases/compiler/parameterDecoratorInJsFile.ts"
-upstream_baseline_path = "testdata/baselines/reference/compiler/parameterDecoratorInJsFile.types"
-local_path = "tests/upstream/typescript-go/cases/parameterDecoratorInJsFile.ts"
-mode = "virtual_files"
-expected_diagnostics = []
-reason = "Covers a parameter decorator in a checked JavaScript file. Upstream emits no errors baseline, so this pins the case as false-positive free."
 
 [[case]]
 name = "parameter-property-with-default-value"

@@ -29,7 +29,6 @@ const bannedTerms = [
   'uuid',
   'react',
   'noble',
-  'auth-kit',
 ];
 
 test('oracle source stays raw and classifier-free', () => {

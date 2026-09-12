@@ -162,6 +162,27 @@ fn parameter_to_type_parameter(parameter: &ParsedFunctionParameter) -> ParsedFun
     }
 }
 
+/// The written constructor signature of a generic class, carried on its `any`
+/// value side so `new C(arg)` can infer the class's type arguments from the
+/// arguments instead of falling back to their declared defaults
+/// (`MutationObserver<…, TVariables = void>` stayed at `void`). Only an explicit
+/// constructor contributes: with none there is nothing to infer from.
+fn generic_class_constructor_signature(
+    class: &ParsedClassDeclaration,
+    ctx: &CheckerContext,
+) -> Option<Arc<crate::symbols::FunctionSignatureInfo>> {
+    let constructor = class.members.iter().find_map(|member| match member {
+        ParsedClassMember::Constructor(constructor) => Some(constructor),
+        _ => None,
+    })?;
+    Some(crate::checks::function::function_signature_info(
+        &class.type_parameters,
+        &constructor.parameters,
+        None,
+        &ctx.file_name,
+    ))
+}
+
 /// Builds the constructor/static-side value symbol: a `Type::Object` whose
 /// properties are the static members and whose construct signature yields the
 /// instance type.
@@ -187,7 +208,7 @@ pub(crate) fn build_class_value_symbol_with_scope(
         return SymbolInfo {
             ty: Type::Any,
             kind: SymbolKind::Const,
-            function_signature: None,
+            function_signature: generic_class_constructor_signature(class, ctx),
         };
     }
 
@@ -267,9 +288,18 @@ fn inherited_static_properties(
     let Some(base) = class.extends.first() else {
         return PropertyMap::default();
     };
+    // A base bound by an import is not in the scope being built: inside
+    // `declare module "stream"`, `class Stream extends EventEmitter` names the
+    // block's `import { EventEmitter } from "node:events"`, which the export
+    // table build seeds as the value fallback.
     let Some(base_symbol) = scope
         .and_then(|scope| scope.get(&base.name))
         .or_else(|| ctx.symbols.get(&base.name))
+        .or_else(|| {
+            ctx.module_value_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.get(&base.name))
+        })
     else {
         return PropertyMap::default();
     };

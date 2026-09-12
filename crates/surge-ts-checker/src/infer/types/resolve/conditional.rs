@@ -113,7 +113,7 @@ pub(crate) fn resolve_conditional_type(
             // produce a closed concrete shape (`{}`) and flag every real property
             // as excess. The genuine `unknown` keyword is `GenuineUnknown` and
             // still evaluates normally.
-            if matches!(member, Type::Unknown) {
+            if matches!(member, Type::Unknown | Type::TypeParameter(_)) {
                 results.push(Type::Unknown);
                 continue;
             }
@@ -139,7 +139,7 @@ pub(crate) fn resolve_conditional_type(
                     crate::program::DtsExpansionReason::ConditionalType,
                     || member.peeled(),
                 );
-                if matches!(peeled, Type::Unknown) {
+                if matches!(peeled, Type::Unknown | Type::TypeParameter(_)) {
                     results.push(Type::Unknown);
                     continue;
                 }
@@ -523,9 +523,10 @@ fn bind_signature_infer_captures(
         .filter(|parameter| !parameter.is_this);
     for (index, pattern_parameter) in pattern_parameters.enumerate() {
         if pattern_parameter.rest {
+            let remaining = &check_parameters[index.min(check_parameters.len())..];
             bind_infer_captures(
                 &pattern_parameter.ty,
-                &Type::Tuple(check_parameters[index.min(check_parameters.len())..].to_vec()),
+                &remaining_parameters_type(remaining, check_function.is_variadic()),
                 substitution,
                 ctx,
                 resolving,
@@ -557,6 +558,30 @@ fn bind_signature_infer_captures(
     );
 }
 
+/// The parameter list a rest pattern captures from `remaining`. A check
+/// signature's own rest parameter is stored as its array type, so it is the
+/// capture itself rather than a one-element tuple around it (`Parameters<(...a:
+/// any[]) => R>` is `any[]`). Fixed parameters ahead of a rest have no variadic
+/// tuple to land in here; they widen into the element union instead.
+fn remaining_parameters_type(remaining: &[Type], check_is_variadic: bool) -> Type {
+    if !check_is_variadic {
+        return Type::Tuple(remaining.to_vec());
+    }
+    match remaining {
+        [] => Type::Tuple(Vec::new()),
+        [rest] => rest.clone(),
+        [fixed @ .., rest] => {
+            let element = match rest.peeled() {
+                Type::Array(element) => element.as_ref().clone(),
+                other => other,
+            };
+            let mut members = fixed.to_vec();
+            members.push(element);
+            Type::Array(Box::new(surge_ts_types::union_type(members)))
+        }
+    }
+}
+
 fn callable_signature(ty: &Type) -> Option<&surge_ts_types::FunctionType> {
     match ty {
         Type::Function(function) => Some(function),
@@ -577,7 +602,8 @@ fn seed_infer_placeholders(pattern: &ParsedType, substitution: &mut TypeParamete
     collect_infer_names(pattern, &mut names);
     for name in names {
         if substitution.get(&name).is_none() {
-            substitution.insert_placeholder(name, Type::Unknown);
+            let placeholder = Type::type_parameter(&name);
+            substitution.insert_placeholder(name, placeholder);
         }
     }
 }
@@ -601,6 +627,14 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
                 collect_infer_names(&parameter.ty, names);
             }
             collect_infer_names(&function.return_type, names);
+        }
+        // `(value: any) => value is infer narrowed`. The capture sits in the
+        // predicate, not in a plain return type, so without this arm the name is
+        // never seeded and the true branch resolves it as an unknown type name.
+        ParsedType::Predicate(predicate) => {
+            if let Some(ty) = &predicate.ty {
+                collect_infer_names(ty, names);
+            }
         }
         ParsedType::Named(named) => {
             for argument in &named.type_arguments {
@@ -663,6 +697,10 @@ fn parsed_type_contains_infer(ty: &ParsedType) -> bool {
                 || parsed_type_contains_infer(&function.return_type)
         }
         ParsedType::Named(named) => named.type_arguments.iter().any(parsed_type_contains_infer),
+        ParsedType::Predicate(predicate) => predicate
+            .ty
+            .as_ref()
+            .is_some_and(parsed_type_contains_infer),
         _ => false,
     }
 }

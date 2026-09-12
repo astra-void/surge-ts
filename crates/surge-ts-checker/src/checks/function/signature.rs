@@ -349,9 +349,14 @@ pub(crate) fn map_function_signature(
     let mut parameter_symbols = None;
     let mut parameter_bindings: Vec<(String, Type)> = Vec::new();
 
+    let outer_parameter_bindings = std::mem::take(&mut ctx.signature_parameter_bindings);
     for (index, parameter) in parameters.iter().enumerate() {
         let inferred_parameter_type = if let Some(declared_type) = parameter.declared_type.clone() {
-            map_parsed_type_with_substitution(declared_type, ctx, &type_parameter_substitution)
+            ctx.signature_parameter_bindings = parameter_bindings.clone();
+            let mapped =
+                map_parsed_type_with_substitution(declared_type, ctx, &type_parameter_substitution);
+            ctx.signature_parameter_bindings.clear();
+            mapped
         } else if let Some(initializer) = parameter.initializer.as_ref() {
             let parameter_symbols = parameter_symbols.get_or_insert_with(|| {
                 let mut symbols = ctx
@@ -418,6 +423,7 @@ pub(crate) fn map_function_signature(
         }
     }
 
+    ctx.signature_parameter_bindings = parameter_bindings.clone();
     let function_return_type = return_type
         .map(|return_type| {
             with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || {
@@ -429,6 +435,7 @@ pub(crate) fn map_function_signature(
             })
         })
         .unwrap_or(Type::Unknown);
+    ctx.signature_parameter_bindings = outer_parameter_bindings;
 
     if pushed_type_parameter_scope {
         ctx.pop_type_parameter_scope();
@@ -654,7 +661,10 @@ pub(crate) fn build_type_parameter_substitution(
     let mut substitution = TypeParameterSubstitution::new();
 
     for type_parameter in type_parameters {
-        substitution.insert_placeholder(type_parameter.name.clone(), Type::Unknown);
+        substitution.insert_placeholder(
+            type_parameter.name.clone(),
+            Type::type_parameter(&type_parameter.name),
+        );
     }
 
     substitution
@@ -667,6 +677,7 @@ pub(crate) fn function_signature_info(
     declaring_file: &str,
 ) -> Arc<FunctionSignatureInfo> {
     Arc::new(FunctionSignatureInfo {
+        overloaded: false,
         type_parameters: type_parameters.to_vec(),
         parameter_types: parameters
             .iter()
@@ -682,6 +693,7 @@ pub(crate) fn function_signature_info(
         return_type: return_type.cloned(),
         declaring_file: Some(Arc::from(declaring_file)),
         namespace_prefix: None,
+        predicate_overload: None,
     })
 }
 
@@ -700,6 +712,7 @@ pub(crate) fn function_type_signature_info(
         .iter()
         .filter(|parameter| !parameter.is_this);
     Arc::new(FunctionSignatureInfo {
+        overloaded: false,
         type_parameters: function_type.type_parameters.clone(),
         parameter_types: value_parameters
             .clone()
@@ -711,6 +724,7 @@ pub(crate) fn function_type_signature_info(
         return_type: Some((*function_type.return_type).clone()),
         declaring_file: Some(Arc::from(declaring_file)),
         namespace_prefix: None,
+        predicate_overload: None,
     })
 }
 
@@ -755,7 +769,7 @@ pub(crate) fn with_type_parameter_scope<R>(
 ///
 /// The union — rather than `any` — keeps the group's contextual typing usable, so
 /// an object-literal argument still types its callback parameters.
-fn merge_overload_group_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
+pub(crate) fn merge_overload_group_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
     let (longer, shorter) = if a.parameters().len() >= b.parameters().len() {
         (a, b)
     } else {
@@ -786,6 +800,54 @@ fn merge_overload_group_signatures(a: &FunctionType, b: &FunctionType) -> Functi
         a.required_parameter_count()
             .min(b.required_parameter_count()),
     )
+}
+
+/// Whether a signature's return is a `x is T` type predicate (an `asserts`
+/// clause is a different narrowing and is not one).
+fn declares_type_predicate(signature: &FunctionSignatureInfo) -> bool {
+    matches!(
+        &signature.return_type,
+        Some(surge_ts_syntax::ParsedType::Predicate(predicate))
+            if !predicate.asserts && predicate.ty.is_some()
+    )
+}
+
+/// Records the group's predicate-bearing overload on the signature the group
+/// keeps, so guard narrowing can reach it without the folded signature changing.
+/// The first such overload wins, and a signature that already declares a
+/// predicate itself needs nothing.
+fn attach_predicate_overload(
+    kept: Option<Arc<FunctionSignatureInfo>>,
+    incoming: Option<&Arc<FunctionSignatureInfo>>,
+) -> Option<Arc<FunctionSignatureInfo>> {
+    let kept = kept?;
+    let Some(incoming) = incoming else {
+        return Some(kept);
+    };
+    if kept.predicate_overload.is_some()
+        || declares_type_predicate(&kept)
+        || !declares_type_predicate(incoming)
+    {
+        return Some(kept);
+    }
+    let mut carried = (*kept).clone();
+    carried.predicate_overload = Some(incoming.clone());
+    Some(Arc::new(carried))
+}
+
+/// Flags the template signature of an overload group; see
+/// `FunctionSignatureInfo::overloaded`.
+pub(crate) fn mark_overloaded(
+    signature: Option<Arc<FunctionSignatureInfo>>,
+) -> Option<Arc<FunctionSignatureInfo>> {
+    signature.map(|signature| {
+        if signature.overloaded {
+            return signature;
+        }
+        let mut flagged = (*signature).clone();
+        flagged.overloaded = true;
+        Arc::new(flagged)
+    })
 }
 
 pub(crate) fn register_function_signature(
@@ -830,12 +892,24 @@ pub(crate) fn register_function_signature(
         {
             let merged = merge_overload_group_signatures(existing_function, &function_type);
             let existing_signature = existing.function_signature.clone();
+            // The group keeps one declaration's parsed signature, and swapping
+            // which one would break the other overloads' callers. But a type
+            // predicate is the one thing only the declaration that wrote it can
+            // supply — guard narrowing reads it off this signature — so the
+            // predicate-bearing overload is carried alongside instead.
+            // ts-pattern's `isMatching` declares its predicate on the *second*
+            // overload, and without this the guard found none and narrowed
+            // nothing.
+            let existing_signature = attach_predicate_overload(
+                existing_signature,
+                function_signature.as_ref(),
+            );
             symbols.insert(
                 name,
                 SymbolInfo {
                     ty: Type::Function(merged),
                     kind: SymbolKind::Function,
-                    function_signature: existing_signature.or(function_signature),
+                    function_signature: mark_overloaded(existing_signature.or(function_signature)),
                 },
             );
         }
@@ -883,8 +957,8 @@ fn debug_assert_reads_sorted(reads: &[String]) {
 }
 
 /// Reports TS6133 for each identifier parameter whose name never appears in the
-/// body's collected reads (and is not `_`-prefixed). Object/array patterns and
-/// the `this` pseudo-parameter are skipped.
+/// body's collected reads (and is not `_`-prefixed), and walks destructuring
+/// patterns for their unused bindings. The `this` pseudo-parameter is skipped.
 pub(crate) fn emit_unused_parameters(
     parameters: &[ParsedFunctionParameter],
     reads: &[String],
@@ -892,19 +966,151 @@ pub(crate) fn emit_unused_parameters(
 ) {
     debug_assert_reads_sorted(reads);
     for parameter in parameters {
-        let ParsedBindingName::Identifier { name, span } = &parameter.binding_name else {
-            continue;
-        };
-        if name == "this" || name.starts_with('_') || body_reads_name(reads, name) {
-            continue;
+        match &parameter.binding_name {
+            ParsedBindingName::Identifier { name, span } => {
+                if name == "this" || name.starts_with('_') || body_reads_name(reads, name) {
+                    continue;
+                }
+                let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
+                let diagnostic = match span {
+                    Some(span) => diagnostic.with_span(convert_span(*span)),
+                    None => diagnostic,
+                };
+                ctx.push(diagnostic);
+            }
+            ParsedBindingName::ObjectPattern(pattern) => {
+                emit_unused_object_pattern_bindings(pattern, reads, ctx);
+            }
+            ParsedBindingName::ArrayPattern(pattern) => {
+                emit_unused_array_pattern_bindings(pattern, reads, ctx);
+            }
+            ParsedBindingName::Unsupported { .. } => {}
         }
-        let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
-        let diagnostic = match span {
-            Some(span) => diagnostic.with_span(convert_span(*span)),
+    }
+}
+
+/// One unused binding found inside a destructuring pattern: the name tsc
+/// renders (the *local* one, so `{ a: x }` reports `x`) and where it points.
+struct UnusedBinding<'a> {
+    name: &'a str,
+    span: Option<TextSpan>,
+}
+
+/// Reports the unused bindings of one pattern level. tsc groups them per
+/// pattern: when every element of the pattern is unused it collapses the whole
+/// group into a single TS6198 on the pattern, and otherwise names each binding
+/// with TS6133. A one-element group is always named, which is why
+/// `({ a }: O) => 1` reports `'a'` and `({ a, b }: O) => 1` reports the
+/// collapsed form.
+fn report_pattern_group(
+    unused: Vec<UnusedBinding<'_>>,
+    element_count: usize,
+    pattern_span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if unused.is_empty() {
+        return;
+    }
+    if unused.len() >= 2 && unused.len() == element_count {
+        let diagnostic = Diagnostic::ts6198(ctx.file_name.clone());
+        let diagnostic = match pattern_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+        return;
+    }
+    for binding in unused {
+        let diagnostic = Diagnostic::ts6133(binding.name, ctx.file_name.clone());
+        let diagnostic = match binding.span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,
         };
         ctx.push(diagnostic);
     }
+}
+
+fn emit_unused_object_pattern_bindings(
+    pattern: &ParsedObjectBindingPattern,
+    reads: &[String],
+    ctx: &mut CheckerContext,
+) {
+    let mut unused = Vec::new();
+    // `const { a, ...rest } = o` uses `a` to keep it *out* of `rest`, so tsc
+    // never reports the named siblings of an object rest — only the rest
+    // binding itself can be unused. Array rest has no such role.
+    let has_rest = pattern.rest.is_some();
+    for element in &pattern.elements {
+        match &element.binding_name {
+            ParsedBindingName::Identifier { name, span } => {
+                // `_`-prefixing exempts an object binding only when it renames
+                // a property (`{ a: _a }`); shorthand `{ _a }` still reports.
+                let renamed_to_ignore = !element.shorthand && name.starts_with('_');
+                if has_rest || renamed_to_ignore || body_reads_name(reads, name) {
+                    continue;
+                }
+                unused.push(UnusedBinding {
+                    name,
+                    span: span.or(element.name_span),
+                });
+            }
+            ParsedBindingName::ObjectPattern(nested) => {
+                emit_unused_object_pattern_bindings(nested, reads, ctx);
+            }
+            ParsedBindingName::ArrayPattern(nested) => {
+                emit_unused_array_pattern_bindings(nested, reads, ctx);
+            }
+            ParsedBindingName::Unsupported { .. } => {}
+        }
+    }
+    collect_unused_rest(pattern.rest.as_deref(), reads, false, &mut unused);
+    let element_count = pattern.elements.len() + usize::from(has_rest);
+    report_pattern_group(unused, element_count, pattern.span, ctx);
+}
+
+fn emit_unused_array_pattern_bindings(
+    pattern: &ParsedArrayBindingPattern,
+    reads: &[String],
+    ctx: &mut CheckerContext,
+) {
+    let mut unused = Vec::new();
+    for element in pattern.elements.iter().flatten() {
+        match element {
+            ParsedBindingName::Identifier { name, span } => {
+                if name.starts_with('_') || body_reads_name(reads, name) {
+                    continue;
+                }
+                unused.push(UnusedBinding { name, span: *span });
+            }
+            ParsedBindingName::ObjectPattern(nested) => {
+                emit_unused_object_pattern_bindings(nested, reads, ctx);
+            }
+            ParsedBindingName::ArrayPattern(nested) => {
+                emit_unused_array_pattern_bindings(nested, reads, ctx);
+            }
+            ParsedBindingName::Unsupported { .. } => {}
+        }
+    }
+    collect_unused_rest(pattern.rest.as_deref(), reads, true, &mut unused);
+    let element_count = pattern.elements.len() + usize::from(pattern.rest.is_some());
+    report_pattern_group(unused, element_count, pattern.span, ctx);
+}
+
+/// An array rest (`[..._rest]`) honours the `_` exemption like any array
+/// element; an object rest (`{ ..._rest }`) renames nothing, so it does not.
+fn collect_unused_rest<'a>(
+    rest: Option<&'a ParsedBindingName>,
+    reads: &[String],
+    underscore_exempts: bool,
+    unused: &mut Vec<UnusedBinding<'a>>,
+) {
+    let Some(ParsedBindingName::Identifier { name, span }) = rest else {
+        return;
+    };
+    if (underscore_exempts && name.starts_with('_')) || body_reads_name(reads, name) {
+        return;
+    }
+    unused.push(UnusedBinding { name, span: *span });
 }
 
 /// Reports TS6133 for each function-local `const`/`let`/`var`, and TS6196 for

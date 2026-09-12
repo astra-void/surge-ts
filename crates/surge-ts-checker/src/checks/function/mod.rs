@@ -54,6 +54,12 @@ pub(crate) fn collect_function_declaration_signature(
         static LAZY_DEPENDENCY_SIGNATURES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let lazy_dependency_signatures = *LAZY_DEPENDENCY_SIGNATURES
             .get_or_init(|| std::env::var_os("SURGE_EAGER_DEPENDENCY_SIGNATURES").is_none());
+        // Deferral stays scoped to installed-package declarations. Extending it
+        // to the physical `lib.*.d.ts` set looks attractive (largest
+        // declaration surface, small slice of it used) and is diagnostically
+        // free, but it is a measured loss: building lazy references for the
+        // whole lib surface costs more than the deferred mapping saves.
+        // See docs/perf/LOADER-PARSE-HANDOFF.md § Not taken.
         if ctx.current_file_kind == crate::context::FileKind::DependencyDeclaration
             && allow_lazy_dependency_signature
             && lazy_dependency_signatures
@@ -396,7 +402,10 @@ pub(crate) fn check_arrow_function_expression_anchored(
     let expanded_contextual_parameter_types = expected_type
         .map(|expected_type| contextual_parameter_types(expected_type, parameters.len()));
     let contextual_parameter_types = expanded_contextual_parameter_types.as_deref();
-    with_type_parameter_scope(&type_parameters, ctx, |ctx| {
+    let vc_arrow_start = std::time::Instant::now();
+    let vc_ret_annot = return_type.is_some();
+    let vc_block = matches!(body, ParsedArrowFunctionBody::Block(_));
+    let vc_result = with_type_parameter_scope(&type_parameters, ctx, |ctx| {
         // Resolve the arrow's annotations against the value symbols visible at
         // the arrow site, mirroring `check_variable_declaration_against_symbols`:
         // `(x: typeof localConst) => …` must see the enclosing function body's
@@ -450,6 +459,16 @@ pub(crate) fn check_arrow_function_expression_anchored(
             }
         }
 
+        if ctx.skip_annotated_function_bodies && has_explicit_return_type {
+            return alloc_function_type(
+                parameter_types,
+                return_type,
+                function_type.is_variadic(),
+                function_type.required_parameter_count(),
+            )
+            .with_parameter_names(signature::written_binding_names(&parameters));
+        }
+
         let mut scopes =
             ScopeStack::from_root(symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup));
         scopes.push_function_scope();
@@ -466,7 +485,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
         match body {
             ParsedArrowFunctionBody::Expression(expression) => {
                 let return_type_for_body = match &return_type {
-                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Void => None,
+                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Void => None,
                     ty => Some(ty),
                 };
                 let inferred_body = match return_type_for_body {
@@ -497,7 +516,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 );
                 let body_flow = analyze_function_body_flow(&statements);
                 let return_type_for_body = match &return_type {
-                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::Void => None,
+                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Void => None,
                     ty => Some(ty),
                 };
                 // A contextual return type this arrow did not annotate is not a
@@ -565,5 +584,11 @@ pub(crate) fn check_arrow_function_expression_anchored(
             function_type.required_parameter_count(),
         )
         .with_parameter_names(signature::written_binding_names(&parameters))
-    })
+    });
+    if crate::modules::exports::values::VC_TRACE_DEPTH.with(std::cell::Cell::get) > 0
+        && crate::modules::exports::values::vc_trace_enabled()
+    {
+        eprintln!("[vc-arrow] pass={} ret_annot={} block={} us={}", crate::modules::exports::values::VC_TRACE_PASS.with(|p| *p.borrow()), vc_ret_annot, vc_block, vc_arrow_start.elapsed().as_micros());
+    }
+    vc_result
 }

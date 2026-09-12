@@ -243,6 +243,18 @@ pub(crate) struct TypeCreationSnapshot {
 }
 
 pub(crate) fn type_creation_snapshot() -> TypeCreationSnapshot {
+    // Every consumer of this snapshot only ever feeds a `record_program_counter`
+    // closure or the d.ts expansion trace, both of which are gated. Taking it
+    // unconditionally locked the global counter mutex and copied the whole
+    // `ProgramCounters` struct once per interface resolution (672k times on
+    // tanstack-query), which profiled at ~7% of the run with counters off.
+    if !super::counters_enabled() && !dts_expansion_trace_enabled() {
+        return TypeCreationSnapshot {
+            object_types: 0,
+            function_types: 0,
+            union_types: 0,
+        };
+    }
     let program = snapshot_program_counters();
     let functions = snapshot_function_type_counters();
     let unions = snapshot_union_type_counters();

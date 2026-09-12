@@ -516,7 +516,20 @@ pub(super) fn resolve_indexed_access_type(
                     had_error: false,
                 };
             }
-            if let Type::Unknown = invalid_index {
+            // The parser drops computed members (`[matcher](): R`), so a type
+            // whose key is a symbol has no member table to validate against — a
+            // report here would be about surge's own gap, not the source.
+            // ts-pattern's `CustomP<…>[matcher]` is the shape.
+            if matches!(invalid_index, Type::Symbol) {
+                if generic_indexed_access {
+                    record_generic_indexed_access_unknown_fallback();
+                }
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: false,
+                };
+            }
+            if let Type::Unknown | Type::TypeParameter(_) = invalid_index {
                 // In a generic context (a type-parameter receiver/key or a
                 // substituted reference) an `unknown` index is a resolution
                 // limitation we cannot validate — e.g. `T[keyof T]` where `keyof T`
