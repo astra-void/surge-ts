@@ -280,7 +280,10 @@ pub(crate) fn resolve_type_alias(
     // builtin utilities (which clone the source property, keeping optionality)
     // even from the physical lib.
     let physical_modifier_utility = is_physical_default_lib_file_name(&alias.file_name)
-        && matches!(&*alias.name, "Pick" | "Omit" | "Required" | "Readonly");
+        && matches!(
+            &*alias.name,
+            "Pick" | "Omit" | "Required" | "Readonly" | "NoInfer"
+        );
     if from_default_lib || physical_modifier_utility {
         if let Some(resolved) = resolve_builtin_utility_alias(
             &alias.name,
@@ -390,6 +393,12 @@ pub(crate) fn resolve_builtin_utility_alias(
         "Partial" => Some(resolve_partial_utility_type(substitution)),
         "Required" => Some(resolve_required_utility_type(substitution)),
         "Readonly" => Some(resolve_readonly_utility_type(substitution)),
+        // `NoInfer<T>` is an inference marker only (`type NoInfer<T> =
+        // intrinsic` in the lib); in type position it is `T`.
+        "NoInfer" => Some(ResolvedType {
+            ty: substitution.get("T").cloned().unwrap_or(Type::Unknown),
+            had_error: false,
+        }),
         "Record" => Some(resolve_record_utility_type(substitution)),
         "Pick" => Some(resolve_pick_utility_type(substitution, name_span, ctx)),
         "Omit" => Some(resolve_omit_utility_type(substitution)),
@@ -488,15 +497,17 @@ pub(crate) fn resolve_readonly_utility_type(
         };
     };
 
-    let Type::Object(object_type) = source_type.peeled() else {
-        return ResolvedType {
-            ty: Type::Unknown,
-            had_error: false,
-        };
+    // `readonly` properties are not modelled, so an object is returned as it
+    // is; an array or tuple becomes the readonly shape.
+    let ty = match source_type.peeled() {
+        Type::Object(object_type) => Type::Object(object_type),
+        sequence @ (Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)) => {
+            crate::infer::types::resolve::readonly_reference(sequence)
+        }
+        _ => Type::Unknown,
     };
-
     ResolvedType {
-        ty: Type::Object(object_type),
+        ty,
         had_error: false,
     }
 }
@@ -769,6 +780,10 @@ fn record_literal_keys(key_type: &Type) -> Option<Vec<String>> {
 
 pub(crate) fn string_literal_union_keys(ty: &Type) -> Option<Vec<String>> {
     match ty {
+        // `never` is the empty key set: `Omit<T, never>` is `T` (ts-pattern's
+        // `Chainable<p, omitted = never>` is written exactly that way) and
+        // `Pick<T, never>` is `{}`. Refusing it degraded both to the sentinel.
+        Type::Never => Some(Vec::new()),
         Type::StringLiteral(value) => Some(vec![value.clone()]),
         Type::Union(union) => {
             let mut keys = Vec::new();
