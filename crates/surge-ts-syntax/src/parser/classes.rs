@@ -36,6 +36,22 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
         name_span: Some(text_span_from_oxc_span(id.span)),
         type_parameters: parse_type_parameters(class.type_parameters.as_deref()),
         extends: parse_class_heritage(class),
+        implements: class
+            .implements
+            .iter()
+            .filter_map(|implemented| {
+                let (name, span) = super::types::flatten_type_name(&implemented.expression)?;
+                Some(ParsedNamedType {
+                    name,
+                    span: Some(span),
+                    type_arguments: implemented
+                        .type_arguments
+                        .as_deref()
+                        .and_then(super::types::parse_type_arguments)
+                        .unwrap_or_default(),
+                })
+            })
+            .collect(),
         members,
         span: Some(text_span_from_oxc_span(class.span)),
     })

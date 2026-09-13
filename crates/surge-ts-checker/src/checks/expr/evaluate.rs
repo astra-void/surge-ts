@@ -93,12 +93,13 @@ pub(crate) fn evaluate_expression(
         ParsedExpression::New {
             callee,
             callee_span,
+            span,
             type_arguments,
             arguments,
         } => match check_new_like(
             callee,
             *callee_span,
-            None,
+            *span,
             type_arguments,
             arguments,
             None,

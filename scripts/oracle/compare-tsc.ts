@@ -415,6 +415,8 @@ export const fixturePresets: Record<string, string> = {
   'shorthand-property-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/shorthand-property-scope-basic/tsconfig.json'),
   'switch-case-comparability-basic': path.join(workspaceRoot, 'tests/compat-projects/switch-case-comparability-basic/tsconfig.json'),
   'abstract-member-implementation-basic': path.join(workspaceRoot, 'tests/compat-projects/abstract-member-implementation-basic/tsconfig.json'),
+  'class-implements-interface-basic': path.join(workspaceRoot, 'tests/compat-projects/class-implements-interface-basic/tsconfig.json'),
+  'abstract-class-instantiation-basic': path.join(workspaceRoot, 'tests/compat-projects/abstract-class-instantiation-basic/tsconfig.json'),
   'lib-reference-index-and-signature-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-reference-index-and-signature-scope-basic/tsconfig.json'),
   'namespace-reexport-augmentation-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-reexport-augmentation-basic/tsconfig.json'),
   'rest-infer-capture-basic': path.join(workspaceRoot, 'tests/compat-projects/rest-infer-capture-basic/tsconfig.json'),

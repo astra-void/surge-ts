@@ -537,6 +537,7 @@ fn parse_new_expression(new_expression: &NewExpression<'_>) -> Option<ParsedExpr
     Some(ParsedExpression::New {
         callee: Box::new(callee),
         callee_span: Some(text_span_from_oxc_span(callee_span)),
+        span: Some(text_span_from_oxc_span(new_expression.span)),
         type_arguments,
         arguments,
     })

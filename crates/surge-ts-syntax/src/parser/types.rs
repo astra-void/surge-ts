@@ -358,7 +358,7 @@ fn parse_type_reference(type_reference: &TSTypeReference<'_>) -> Option<ParsedTy
 /// Flatten a (possibly qualified) type name into a dotted string and the span of
 /// the head identifier, e.g. `React.ComponentProps` -> `"React.ComponentProps"`.
 /// Mirrors how namespace members are registered under qualified keys.
-fn flatten_type_name(type_name: &TSTypeName<'_>) -> Option<(String, crate::TextSpan)> {
+pub(crate) fn flatten_type_name(type_name: &TSTypeName<'_>) -> Option<(String, crate::TextSpan)> {
     match type_name {
         TSTypeName::IdentifierReference(identifier) => Some((
             identifier.name.to_string(),

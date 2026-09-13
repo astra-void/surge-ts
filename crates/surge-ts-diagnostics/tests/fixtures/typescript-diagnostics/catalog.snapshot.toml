@@ -873,6 +873,22 @@ message = "Non-abstract class '{0}' is missing implementations for the following
 arity = 4
 
 [[diagnostic]]
+code = "TS2511"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot create an instance of an abstract class."
+arity = 0
+
+[[diagnostic]]
+code = "TS2420"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class '{0}' incorrectly implements interface '{1}'."
+arity = 2
+
+[[diagnostic]]
 code = "surge::parser-error"
 category = "Error"
 source = "surge-ts"

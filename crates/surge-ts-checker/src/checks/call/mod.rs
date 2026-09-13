@@ -606,6 +606,21 @@ pub(crate) fn check_new_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    // An `abstract class` has a construct signature like any other class — the
+    // instance type is still what `new` produces, and tsc reports the
+    // instantiation without cascading.
+    if let ParsedExpression::Identifier { name, .. } = callee
+        && let Some(crate::symbols::TypeDeclarationInfo::Interface(info)) =
+            ctx.lookup_type_declaration(name)
+        && info.is_abstract_class
+    {
+        // tsc underlines the whole `new` expression, not the class name.
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2511(ctx.file_name.clone()),
+            call_span.or(callee_span),
+        ));
+    }
+
     // Physical-lib mode: `new Foo<Args>()` produces an instance of the `Foo`
     // interface (the instance interface shares the constructor's name, e.g.
     // `Map<K, V>`, `Date`, `URL`, `Response`). Prefer resolving the real

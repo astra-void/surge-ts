@@ -162,6 +162,7 @@ fn evaluate_expression_with_expected_type_inner(
     if let ParsedExpression::New {
         callee,
         callee_span,
+        span,
         type_arguments,
         arguments,
     } = expression
@@ -169,7 +170,7 @@ fn evaluate_expression_with_expected_type_inner(
         return match super::call::check_new_like(
             callee,
             *callee_span,
-            None,
+            *span,
             type_arguments,
             arguments,
             Some(expected_type),

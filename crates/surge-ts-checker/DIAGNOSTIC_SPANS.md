@@ -67,6 +67,8 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS18004 unresolved shorthand property | the shorthand identifier's span |
 | TS2678 case not comparable | the `case` test expression's span |
 | TS2515/TS2654/TS2655 unimplemented abstract members | the derived class's name span |
+| TS2420 unimplemented interface member | the class's name span, once per `implements` clause |
+| TS2511 abstract instantiation | the whole `new` expression |
 | surge::unsupported-declaration | keyword or full statement span, pinned |
 | surge::unsupported-module-syntax | import/export statement span, pinned |
 | parser-error | parser-provided best-effort span when available; otherwise no span |

@@ -508,6 +508,10 @@ pub struct ParsedClassDeclaration {
     /// this is modelled as a list so the instance side can reuse the interface
     /// heritage-merge path. A non-identifier base (e.g. a mixin call) is dropped.
     pub extends: Vec<ParsedNamedType>,
+    /// Interfaces named in an `implements` clause. They contribute nothing to
+    /// the instance type — the class has to declare the members itself, which
+    /// is what makes an unimplemented one reportable.
+    pub implements: Vec<ParsedNamedType>,
     pub members: Vec<ParsedClassMember>,
     pub span: Option<TextSpan>,
 }
@@ -836,6 +840,9 @@ pub enum ParsedExpression {
     New {
         callee: Box<ParsedExpression>,
         callee_span: Option<TextSpan>,
+        /// The whole `new C(…)` expression, which is what tsc underlines for a
+        /// diagnostic about the instantiation itself rather than the callee.
+        span: Option<TextSpan>,
         type_arguments: Vec<ParsedType>,
         arguments: Vec<ParsedCallArgument>,
     },

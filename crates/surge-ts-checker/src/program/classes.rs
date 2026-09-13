@@ -37,7 +37,7 @@ pub(crate) fn class_instance_interface_info(
         .collect();
     members.extend(constructor_parameter_property_members(class));
 
-    InterfaceInfo::new(
+    let mut info = InterfaceInfo::new(
         class.name.clone(),
         file_name,
         class.name_span,
@@ -48,7 +48,9 @@ pub(crate) fn class_instance_interface_info(
         None,
         Vec::new(),
         None,
-    )
+    );
+    info.is_abstract_class = class.is_abstract;
+    info
 }
 
 fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<ParsedInterfaceMember> {
@@ -569,8 +571,166 @@ fn implemented_member_name(member: &ParsedClassMember) -> Option<String> {
     }
 }
 
+/// TS2420: a class has to declare every required member of each interface it
+/// implements — an `implements` clause contributes nothing to the class, it
+/// only constrains it.
+///
+/// Only the *missing member* half of tsc's check runs here; a member that is
+/// present but whose type does not match is TS2416, which surge does not report
+/// yet. Interface resolution is conservative in the same way the abstract-member
+/// check is: anything that does not resolve to a source-declared interface
+/// leaves that clause unchecked.
+fn check_implemented_interfaces(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    if class.implements.is_empty() || class.is_declare {
+        return;
+    }
+
+    let Some(declared) = declared_instance_member_names(class, ctx) else {
+        // Part of the class's own surface is out of reach — a base class from a
+        // declaration file, an unresolved heritage name — so a member that looks
+        // missing may simply be inherited. Report nothing.
+        return;
+    };
+
+    for implemented in &class.implements {
+        let Some(required) = unimplemented_interface_members(&implemented.name, &declared, ctx)
+        else {
+            continue;
+        };
+        if required.is_empty() {
+            continue;
+        }
+        let diagnostic =
+            Diagnostic::ts2420(&class.name, &implemented.name, ctx.file_name.clone());
+        let diagnostic = match class.name_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+    }
+}
+
+/// Every instance member name the class has: what its body declares, what a
+/// same-named interface merged into it declares, and what it inherits. `None`
+/// when any part of that chain is not source-declared, which is what keeps an
+/// inherited member surge cannot see from reading as a missing one.
+fn declared_instance_member_names(
+    class: &ParsedClassDeclaration,
+    ctx: &CheckerContext,
+) -> Option<std::collections::HashSet<String>> {
+    let mut declared: std::collections::HashSet<String> = class
+        .members
+        .iter()
+        .filter_map(declared_member_name)
+        .collect();
+    declared.extend(
+        constructor_parameter_property_members(class)
+            .into_iter()
+            .map(|member| member.name),
+    );
+
+    // The instance-side declaration surge built for this class is where a
+    // merged `interface C {}` of the same name lands, heritage included.
+    let mut stack: Vec<String> = class
+        .extends
+        .iter()
+        .map(|base| base.name.clone())
+        .collect();
+    if let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&class.name) {
+        for member in &info.body.members {
+            declared.insert(member.name.clone());
+        }
+        stack.extend(info.body.extends.iter().map(|base| base.name.clone()));
+    }
+
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while let Some(name) = stack.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&name) else {
+            return None;
+        };
+        if info.file_name.ends_with(".d.ts") {
+            return None;
+        }
+        for member in &info.body.members {
+            declared.insert(member.name.clone());
+        }
+        stack.extend(info.body.extends.iter().map(|base| base.name.clone()));
+    }
+
+    Some(declared)
+}
+
+/// The required members of `interface_name` (its own and its bases') that
+/// `declared` does not cover. `None` when the interface, or any interface it
+/// extends, is not a source-declared object shape.
+fn unimplemented_interface_members(
+    interface_name: &str,
+    declared: &std::collections::HashSet<String>,
+    ctx: &CheckerContext,
+) -> Option<Vec<String>> {
+    let mut required = Vec::new();
+    let mut stack = vec![interface_name.to_string()];
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    while let Some(name) = stack.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        match ctx.lookup_type_declaration(&name) {
+            Some(TypeDeclarationInfo::Interface(info)) => {
+                if info.file_name.ends_with(".d.ts") {
+                    return None;
+                }
+                for member in &info.body.members {
+                    if !member.optional && !declared.contains(&member.name) {
+                        required.push(member.name.clone());
+                    }
+                }
+                stack.extend(info.body.extends.iter().map(|base| base.name.clone()));
+            }
+            // `implements SomeAlias` where the alias is written as an object
+            // type is the same constraint; any other alias body (a union, a
+            // conditional, a generic instantiation) is left alone.
+            Some(TypeDeclarationInfo::Alias(alias))
+                if alias.body.type_parameters.is_empty()
+                    && !alias.file_name.ends_with(".d.ts") =>
+            {
+                let surge_ts_syntax::ParsedType::Object(object) = &alias.body.ty else {
+                    return None;
+                };
+                for property in &object.properties {
+                    if !property.optional && !declared.contains(&property.name) {
+                        required.push(property.name.clone());
+                    }
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    Some(required)
+}
+
+/// Every instance member name a class body declares, `abstract` ones included:
+/// an abstract member is a declaration, which is what an `implements` clause
+/// asks for.
+fn declared_member_name(member: &ParsedClassMember) -> Option<String> {
+    match member {
+        ParsedClassMember::Property(property) if !property.is_static => Some(property.name.clone()),
+        ParsedClassMember::Method(method) if !method.is_static => Some(method.name.clone()),
+        ParsedClassMember::Accessor(accessor) if !accessor.is_static => {
+            Some(accessor.name.clone())
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     check_inherited_abstract_members(class, ctx);
+    check_implemented_interfaces(class, ctx);
 
     // Ambient classes have no bodies; generic classes are out of scope and would
     // resolve member/`this` types against unbound type parameters.

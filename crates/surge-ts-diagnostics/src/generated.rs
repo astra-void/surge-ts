@@ -1095,6 +1095,26 @@ pub const TS2655: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2511: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2511",
+    number: Some(2511),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot create an instance of an abstract class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2420: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2420",
+    number: Some(2420),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Class '{0}' incorrectly implements interface '{1}'.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const SURGE_PARSER_ERROR: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "surge::parser-error",
     number: None,
@@ -1265,6 +1285,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2515,
     TS2654,
     TS2655,
+    TS2511,
+    TS2420,
     SURGE_PARSER_ERROR,
     SURGE_DUPLICATE_TYPE_PARAMETER,
     SURGE_UNSUPPORTED_MODULE_SYNTAX,
@@ -2284,6 +2306,23 @@ impl Diagnostic {
                 DiagnosticArg::from(arg1.to_string()),
                 DiagnosticArg::from(arg2.to_string()),
                 DiagnosticArg::from(arg3.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2511(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2511, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2420(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2420,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
             ],
             file_name,
         )

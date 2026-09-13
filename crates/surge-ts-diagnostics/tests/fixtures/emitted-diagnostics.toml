@@ -792,6 +792,18 @@ oracle = [
   "abstract-member-implementation-basic",
 ]
 
+[TS2511]
+status = "emitted"
+oracle = [
+  "abstract-class-instantiation-basic",
+]
+
+[TS2420]
+status = "emitted"
+oracle = [
+  "class-implements-interface-basic",
+]
+
 ["surge::unsupported-module-syntax"]
 status = "emitted"
 fixtures = [

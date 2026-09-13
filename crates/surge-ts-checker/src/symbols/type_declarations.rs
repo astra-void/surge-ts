@@ -158,6 +158,10 @@ pub(crate) struct InterfaceInfo {
     pub(crate) file_name: Arc<str>,
     pub(crate) name_span: Option<TextSpan>,
     pub(crate) resolution_scope: Option<Arc<TypeDeclarationScope>>,
+    /// Set when this "interface" is the instance side of an `abstract class`.
+    /// Only the abstract-instantiation check reads it; nothing about the shape
+    /// depends on it.
+    pub(crate) is_abstract_class: bool,
     pub(crate) body: Arc<InterfaceBody>,
     /// See [`TypeAliasInfo::cached_resolution_key`].
     pub(crate) cached_resolution_key: std::sync::OnceLock<crate::context::DeclarationResolutionKey>,
@@ -198,6 +202,7 @@ impl InterfaceInfo {
             file_name,
             name_span,
             resolution_scope,
+            is_abstract_class: false,
             body: Arc::new(InterfaceBody {
                 type_parameters,
                 extends,
@@ -224,6 +229,7 @@ impl Clone for InterfaceInfo {
             file_name: self.file_name.clone(),
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
+            is_abstract_class: self.is_abstract_class,
             body: self.body.clone(),
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
