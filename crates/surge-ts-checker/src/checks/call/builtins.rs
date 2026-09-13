@@ -4,10 +4,10 @@ use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{ParsedCallArgument, TextSpan as SyntaxTextSpan};
 use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
 
-use crate::arena::alloc_function_type;
 use crate::checks::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use crate::context::CheckerContext;
 use crate::infer::InferredExpression;
+use crate::metrics::alloc_function_type;
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 

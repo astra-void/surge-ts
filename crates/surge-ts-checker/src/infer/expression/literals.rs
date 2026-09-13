@@ -9,9 +9,9 @@ use surge_ts_types::{
     ObjectProperty, PropertyMap, Type, TypeCopyReason, union_type, with_type_copy_reason,
 };
 
-use crate::arena::alloc_object_type;
 use crate::checks::function::check_arrow_function_expression;
 use crate::context::CheckerContext;
+use crate::metrics::alloc_object_type;
 use crate::program::{
     record_object_literal_property_check, record_program_timing, record_property_lookup,
 };
@@ -194,7 +194,9 @@ pub(crate) fn infer_const_expression(
                     _ => return InferredExpression::Unknown,
                 }
             }
-            InferredExpression::Known(Type::Object(crate::arena::alloc_object_type(members, None)))
+            InferredExpression::Known(Type::Object(crate::metrics::alloc_object_type(
+                members, None,
+            )))
         }
         _ => infer_expression(expression, symbols, ctx),
     }

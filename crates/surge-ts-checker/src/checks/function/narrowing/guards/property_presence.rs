@@ -123,7 +123,7 @@ pub(crate) fn narrow_union_by_property_presence(
             std::sync::Arc::from(property),
             surge_ts_types::ObjectProperty::required(Type::GenuineUnknown),
         );
-        return Some(Type::Object(crate::arena::alloc_object_type(
+        return Some(Type::Object(crate::metrics::alloc_object_type(
             properties,
             object.string_index_type.as_deref().cloned(),
         )));

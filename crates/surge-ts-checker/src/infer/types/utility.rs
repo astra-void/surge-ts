@@ -6,9 +6,9 @@ use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{ParsedType, TextSpan};
 use surge_ts_types::{ObjectProperty, PropertyMap, Type};
 
-use crate::arena::alloc_object_type;
 use crate::context::{CheckerContext, DeclarationResolutionKey, convert_span};
 use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default_lib_file_name};
+use crate::metrics::alloc_object_type;
 use crate::symbols::{TypeAliasInfo, TypeDeclarationHandle};
 
 /// Whether a type alias body introduces a structural boundary that makes a
@@ -214,7 +214,11 @@ pub(crate) fn resolve_type_alias(
             emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
         }
         if !legal_recursion && crate::infer::types::interface::had_error_trace_enabled() {
-            eprintln!("[had-error] alias-cycle '{}' cp={}", alias.name, crate::program::in_check_phase());
+            eprintln!(
+                "[had-error] alias-cycle '{}' cp={}",
+                alias.name,
+                crate::program::in_check_phase()
+            );
         }
         return ResolvedType {
             ty: Type::Unknown,
@@ -348,7 +352,11 @@ pub(crate) fn resolve_type_alias(
         && !resolved.had_error
         && crate::infer::types::interface::had_error_trace_enabled()
     {
-        eprintln!("[had-error] alias-args '{}' cp={}", alias.name, crate::program::in_check_phase());
+        eprintln!(
+            "[had-error] alias-args '{}' cp={}",
+            alias.name,
+            crate::program::in_check_phase()
+        );
     }
     ResolvedType {
         ty: resolved.ty,
@@ -416,7 +424,10 @@ pub(crate) fn resolve_partial_utility_type(
     ResolvedType {
         // A homomorphic mapped type preserves its source's index signature.
         ty: Type::Object(carry_open_marker(
-            alloc_object_type(properties, object_type.string_index_type.as_deref().cloned()),
+            alloc_object_type(
+                properties,
+                object_type.string_index_type.as_deref().cloned(),
+            ),
             &object_type,
         )),
         had_error: false,
@@ -453,7 +464,10 @@ pub(crate) fn resolve_required_utility_type(
 
     ResolvedType {
         ty: Type::Object(carry_open_marker(
-            alloc_object_type(properties, object_type.string_index_type.as_deref().cloned()),
+            alloc_object_type(
+                properties,
+                object_type.string_index_type.as_deref().cloned(),
+            ),
             &object_type,
         )),
         had_error: false,
@@ -631,7 +645,10 @@ pub(crate) fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution
         // open. Dropping it made every unlisted member of an open source read as
         // missing.
         ty: Type::Object(carry_open_marker(
-            alloc_object_type(properties, object_type.string_index_type.as_deref().cloned()),
+            alloc_object_type(
+                properties,
+                object_type.string_index_type.as_deref().cloned(),
+            ),
             &object_type,
         )),
         had_error: false,

@@ -3,14 +3,12 @@
 use super::*;
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedCallArgument, ParsedNamedType, ParsedObjectType, ParsedType, TextSpan,
 };
 use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
-use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::string_literal_union_keys;
 use crate::infer::{InferredExpression, infer_expression};
@@ -18,6 +16,7 @@ use crate::infer::{
     TypeParameterSubstitution, map_parsed_type_with_substitution,
     try_map_parsed_type_with_substitution,
 };
+use crate::metrics::{alloc_function_type, alloc_object_type};
 use crate::program::{
     record_generic_call_inference_attempt, record_generic_call_inference_candidate,
     record_generic_call_inference_explicit_type_args_skip, record_generic_call_inference_failed,
@@ -70,7 +69,11 @@ pub(crate) fn instantiate_function_type<'a>(
         // return type; fall back to the declared (generic) return type instead.
         let has_unresolved_argument = substitution
             .iter()
-            .filter(|(name, _)| !outer_type_arguments.iter().any(|(outer, _)| outer == name.as_ref()))
+            .filter(|(name, _)| {
+                !outer_type_arguments
+                    .iter()
+                    .any(|(outer, _)| outer == name.as_ref())
+            })
             .any(|(_, candidate)| type_argument_is_unresolved(candidate));
         let constraint_violation = enforce_explicit_keyof_constraints(
             function_signature,
@@ -121,7 +124,11 @@ pub(crate) fn instantiate_function_type<'a>(
 
     let inferred_nothing = substitution
         .iter()
-        .filter(|(name, _)| !outer_type_arguments.iter().any(|(outer, _)| outer == name.as_ref()))
+        .filter(|(name, _)| {
+            !outer_type_arguments
+                .iter()
+                .any(|(outer, _)| outer == name.as_ref())
+        })
         .all(|(_, candidate)| candidate.is_unknown());
     if inferred_nothing {
         record_generic_call_inference_failed();
@@ -631,10 +638,7 @@ fn apply_uninferred_type_parameter_defaults(
 
     let mut bound = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
     for type_parameter in uninferred {
-        let default_type = type_parameter
-            .default_type
-            .clone()
-            .expect("checked above");
+        let default_type = type_parameter.default_type.clone().expect("checked above");
         let snapshot = bound.clone_with_reason(TypeCopyReason::SubstitutionChanged);
         let resolved = with_declaring_scope(function_signature, ctx, |ctx| {
             map_parsed_type_with_substitution(default_type, ctx, &snapshot)
@@ -1368,9 +1372,10 @@ pub(crate) fn collect_inferred_type_argument(
                 // nothing (which left `TVariables` at its `void` default and
                 // rejected every `mutate(1)`).
                 let rest_element = match rest_index {
-                    Some(rest_index) if index >= rest_index => Some(
-                        rest_parameter_element_type(&actual_parameters[rest_index], index - rest_index),
-                    ),
+                    Some(rest_index) if index >= rest_index => Some(rest_parameter_element_type(
+                        &actual_parameters[rest_index],
+                        index - rest_index,
+                    )),
                     _ => None,
                 };
                 let Some(actual_parameter) = rest_element
@@ -1501,7 +1506,10 @@ pub(crate) fn collect_inferred_type_argument(
             // rule kept a single member of a union return.
             let mut grouped: Vec<(&ParsedType, Vec<Type>)> = Vec::new();
             for (target, member) in matches {
-                match grouped.iter_mut().find(|(seen, _)| std::ptr::eq(*seen, target)) {
+                match grouped
+                    .iter_mut()
+                    .find(|(seen, _)| std::ptr::eq(*seen, target))
+                {
                     Some((_, members)) => members.push(member.clone()),
                     None => grouped.push((target, vec![member.clone()])),
                 }

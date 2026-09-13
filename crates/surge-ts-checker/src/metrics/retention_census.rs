@@ -5,7 +5,7 @@
 //! tables, export tables, declaration tables), import bindings, resolution
 //! scopes, globals, the checker caches, and the canonical type store — and
 //! attributes estimated live bytes to named owner groups. All shared payloads
-//! (`Arc`s, arena tables, property maps) are pointer-deduplicated so a payload
+//! (`Arc`s, declaration tables, property maps) are pointer-deduplicated so a payload
 //! reachable from several owners is charged once, to the first group that
 //! reaches it. Estimates are shallow-struct plus owned-heap models, not
 //! allocator ground truth; compare group deltas, not absolute totals.
@@ -195,7 +195,8 @@ impl Walker {
         let map_address = table.symbols_map_address();
         if Walker::first_visit(&mut self.seen_symbol_maps, map_address) {
             for (name, symbol) in table.iter_shared() {
-                let name_bytes = (size_of::<Arc<str>>() + name.len() + size_of::<usize>() * 2) as u64;
+                let name_bytes =
+                    (size_of::<Arc<str>>() + name.len() + size_of::<usize>() * 2) as u64;
                 self.add(name_bytes);
                 self.sub("symbol_names", name_bytes);
                 self.walk_symbol_info(symbol);
@@ -451,7 +452,7 @@ impl Walker {
     }
 
     fn walk_declaration_info(&mut self, declaration: &TypeDeclarationInfo) {
-        // Table clones share arena payloads by raw pointer; charge each payload
+        // Table clones share declaration payloads by `Arc`; charge each payload
         // once no matter how many table instances index it.
         if !Walker::first_visit(
             &mut self.seen_decl_payloads,
@@ -1025,17 +1026,12 @@ fn parsed_expression_bytes(expression: &surge_ts_syntax::ParsedExpression) -> u6
                     .map(|attribute| {
                         size_of::<surge_ts_syntax::ParsedJsxAttribute>() as u64
                             + attribute.name.capacity() as u64
-                            + attribute
-                                .value
-                                .as_ref()
-                                .map_or(0, parsed_expression_bytes)
+                            + attribute.value.as_ref().map_or(0, parsed_expression_bytes)
                     })
                     .sum::<u64>()
                 + children.iter().map(parsed_jsx_child_bytes).sum::<u64>()
         }
-        E::JsxFragment { children, .. } => {
-            children.iter().map(parsed_jsx_child_bytes).sum::<u64>()
-        }
+        E::JsxFragment { children, .. } => children.iter().map(parsed_jsx_child_bytes).sum::<u64>(),
         E::ArrowFunction(arrow) => {
             let body = match &arrow.body {
                 surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => {
@@ -1086,7 +1082,10 @@ fn string_vec_bytes(strings: &[String]) -> u64 {
 
 fn parsed_function_parameter_bytes(parameter: &surge_ts_syntax::ParsedFunctionParameter) -> u64 {
     size_of::<surge_ts_syntax::ParsedFunctionParameter>() as u64
-        + parameter.declared_type.as_ref().map_or(0, parsed_type_bytes)
+        + parameter
+            .declared_type
+            .as_ref()
+            .map_or(0, parsed_type_bytes)
         + parameter
             .initializer
             .as_ref()
@@ -1143,9 +1142,7 @@ fn parsed_variable_declaration_bytes(
             .map_or(0, parsed_expression_bytes)
 }
 
-fn parsed_function_declaration_bytes(
-    function: &surge_ts_syntax::ParsedFunctionDeclaration,
-) -> u64 {
+fn parsed_function_declaration_bytes(function: &surge_ts_syntax::ParsedFunctionDeclaration) -> u64 {
     size_of::<surge_ts_syntax::ParsedFunctionDeclaration>() as u64
         + string_vec_bytes(&function.body_reads)
         + function.name.capacity() as u64
@@ -1268,10 +1265,7 @@ fn parsed_statement_bytes(statement: &surge_ts_syntax::ParsedStatement) -> u64 {
                                             .iter()
                                             .map(parsed_function_parameter_bytes)
                                             .sum::<u64>()
-                                        + method
-                                            .return_type
-                                            .as_ref()
-                                            .map_or(0, parsed_type_bytes)
+                                        + method.return_type.as_ref().map_or(0, parsed_type_bytes)
                                         + method
                                             .body
                                             .iter()
@@ -1313,9 +1307,9 @@ fn parsed_statement_bytes(statement: &surge_ts_syntax::ParsedStatement) -> u64 {
         S::ExportDeclaration(export) => {
             size_of::<surge_ts_syntax::ParsedExportDeclaration>() as u64
                 + match export.as_ref() {
-                    surge_ts_syntax::ParsedExportDeclaration::Statement {
-                        declaration, ..
-                    } => parsed_statement_bytes(declaration),
+                    surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } => {
+                        parsed_statement_bytes(declaration)
+                    }
                     _ => 0,
                 }
         }

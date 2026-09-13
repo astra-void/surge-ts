@@ -1,9 +1,11 @@
 use super::*;
 
-use surge_ts_syntax::{ParsedFunctionType, ParsedFunctionTypeParameter, ParsedObjectType};
+use surge_ts_syntax::{
+    ParsedFunctionType, ParsedFunctionTypeParameter, ParsedObjectType, ParsedTupleElement,
+};
 use surge_ts_types::{ObjectProperty, PropertyMap};
 
-use crate::arena::{alloc_function_type, alloc_object_type};
+use crate::metrics::{alloc_function_type, alloc_object_type};
 
 pub(crate) fn resolve_tuple_type(
     elements: Vec<ParsedType>,

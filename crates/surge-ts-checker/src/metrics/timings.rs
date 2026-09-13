@@ -199,7 +199,7 @@ pub(crate) fn render_program_timings(timings: &Arc<Mutex<ProgramTimings>>) {
     render_io_counters();
     render_file_metrics(&timings);
     let counters = snapshot_program_counters();
-    render_file_and_arena_counters(&counters);
+    render_file_and_payload_counters(&counters);
     render_module_and_declaration_counters(&counters);
     render_check_counters(&counters);
     render_flow_counters(&counters);
@@ -444,7 +444,7 @@ fn render_file_metrics(timings: &ProgramTimings) {
     }
 }
 
-fn render_file_and_arena_counters(counters: &ProgramCounters) {
+fn render_file_and_payload_counters(counters: &ProgramCounters) {
     eprintln!("  counters:");
     eprintln!("    files_total: {}", counters.files_total);
     eprintln!("    root_source_files: {}", counters.root_source_files);
@@ -469,20 +469,12 @@ fn render_file_and_arena_counters(counters: &ProgramCounters) {
         counters.parsed_generated_default_lib_files
     );
     eprintln!(
-        "    checker_arena_alloc_count: {}",
-        counters.checker_arena_alloc_count
+        "    checker_payload_alloc_count: {}",
+        counters.checker_payload_alloc_count
     );
     eprintln!(
-        "    arena_declaration_key_alloc_count: {}",
-        counters.arena_declaration_key_alloc_count
-    );
-    eprintln!(
-        "    arena_type_declaration_payload_alloc_count: {}",
-        counters.arena_type_declaration_payload_alloc_count
-    );
-    eprintln!(
-        "    arena_object_type_payload_alloc_count: {}",
-        counters.arena_object_type_payload_alloc_count
+        "    object_type_payload_alloc_count: {}",
+        counters.object_type_payload_alloc_count
     );
     eprintln!(
         "    type_declaration_payload_deep_clone_count: {}",
@@ -1035,14 +1027,8 @@ fn render_named_counters(counters: &ProgramCounters) {
             "physical_interface_cache_hit_count",
             counters.physical_interface_cache_hit_count,
         ),
-        (
-            "program_memo_hit_count",
-            counters.program_memo_hit_count,
-        ),
-        (
-            "program_memo_miss_count",
-            counters.program_memo_miss_count,
-        ),
+        ("program_memo_hit_count", counters.program_memo_hit_count),
+        ("program_memo_miss_count", counters.program_memo_miss_count),
         (
             "program_memo_store_count",
             counters.program_memo_store_count,

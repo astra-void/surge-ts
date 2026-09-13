@@ -12,7 +12,6 @@ use surge_ts_syntax::{
 };
 use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
-use crate::arena::alloc_function_type;
 use crate::checks::expr::evaluate_expression;
 use crate::checks::var::widen_implicit_variable_initializer_type;
 use crate::context::convert_span;
@@ -22,6 +21,7 @@ use crate::infer::{
     InferredExpression, TypeParameterSubstitution, map_parsed_type_with_substitution,
     report_duplicate_type_parameters,
 };
+use crate::metrics::alloc_function_type;
 use crate::symbols::{FunctionSignatureInfo, ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
 pub(crate) fn emit_parameter_diagnostics(

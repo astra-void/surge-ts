@@ -11,9 +11,9 @@ use surge_ts_types::{
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use super::expr::{evaluate_expression, source_display_name};
-use crate::arena::alloc_object_type;
 use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, map_parsed_type};
+use crate::metrics::alloc_object_type;
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
 
@@ -659,6 +659,8 @@ fn present_attribute_object_name(
 }
 
 fn type_contains_unknown_or_any(ty: &Type) -> bool {
-    matches!(ty, Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Any)
-        || matches!(ty, Type::Union(union) if union.types().iter().any(type_contains_unknown_or_any))
+    matches!(
+        ty,
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Any
+    ) || matches!(ty, Type::Union(union) if union.types().iter().any(type_contains_unknown_or_any))
 }

@@ -5,8 +5,8 @@ use super::*;
 use surge_ts_syntax::{ParsedArrowFunction, ParsedArrowFunctionBody};
 use surge_ts_types::Type;
 
-use crate::arena::alloc_function_type;
 use crate::context::CheckerContext;
+use crate::metrics::alloc_function_type;
 use crate::symbols::SymbolTable;
 
 use crate::infer::InferredExpression;
@@ -53,13 +53,15 @@ pub(crate) fn infer_arrow_function(
     ctx.truncate_diagnostics(diagnostics_before);
 
     let return_type = match &arrow_function.body {
-        ParsedArrowFunctionBody::Expression(expression) => declared_return_type.unwrap_or_else(|| {
-            let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
-            match infer_expression(expression, &locals, ctx) {
-                InferredExpression::Known(ty) => ty,
-                _ => Type::Unknown,
-            }
-        }),
+        ParsedArrowFunctionBody::Expression(expression) => {
+            declared_return_type.unwrap_or_else(|| {
+                let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
+                match infer_expression(expression, &locals, ctx) {
+                    InferredExpression::Known(ty) => ty,
+                    _ => Type::Unknown,
+                }
+            })
+        }
         ParsedArrowFunctionBody::Block(body) => declared_return_type
             .or_else(|| {
                 let locals = body_locals(&arrow_function.parameters, &parameters, symbols);

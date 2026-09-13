@@ -57,8 +57,6 @@ program") and `docs/MEMORY-OPTIMIZATION-REPORT.md`.
 - MUST NOT retain canonical type-store payloads strongly without measured
   justification; the stores use `Weak` retention with monotonic, never-reused
   IDs.
-- MUST register every `Drop`-requiring arena payload with the arena's
-  destructor list exactly once (`pending_drops` in arena.rs).
 - MUST NOT capture declaration span maps, value tables, diagnostics, flow
   state, or checker context in type declaration environments; environments
   hold stamp-deduplicated `Arc` table snapshots only.

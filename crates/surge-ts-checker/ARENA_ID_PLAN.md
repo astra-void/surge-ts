@@ -1,5 +1,11 @@
 # Arena / ID Landing Note
 
+> **Historical — does not describe current behavior.** This is a point-in-time
+> landing note. The `CheckerArena` bump allocator and its `ArenaStr` keys were
+> removed after `15667ea` (2026-08-19) moved `TypeDeclarationTable` onto plain
+> owned storage; the payload-handle work described here is unaffected. See
+> [MEMORY_REGIONS.md](MEMORY_REGIONS.md) for current state.
+
 This note records the v0.99 `UnionType` handle landing on top of the v0.98
 function-payload handle work, the v0.97 object-payload handle work, and the
 v0.96 arena work. `TypeDeclarationTable` still stores arena-owned declaration

@@ -512,7 +512,9 @@ fn lower_ambient_namespace_values(parsed_files: &[ParsedProgramFile], ctx: &mut 
         ctx.ambient_global_symbols.insert(
             name,
             crate::symbols::SymbolInfo {
-                ty: surge_ts_types::Type::Object(crate::arena::alloc_object_type(properties, None)),
+                ty: surge_ts_types::Type::Object(crate::metrics::alloc_object_type(
+                    properties, None,
+                )),
                 kind: crate::symbols::SymbolKind::Const,
                 function_signature: None,
             },
@@ -845,8 +847,7 @@ pub(crate) fn collect_ambient_modules(
                 match Arc::make_mut(&mut ctx.module_augmentations).get_mut(&key) {
                     Some(existing) => merge_module_export_tables(existing, &raw_export_table),
                     None => {
-                        Arc::make_mut(&mut ctx.module_augmentations)
-                            .insert(key, raw_export_table);
+                        Arc::make_mut(&mut ctx.module_augmentations).insert(key, raw_export_table);
                     }
                 }
             } else if let Some(existing_index) = ambient_module_indexes
@@ -946,15 +947,19 @@ pub(crate) fn collect_ambient_modules(
         let bindings =
             crate::modules::resolve_module_imports(&entry.file, &[], &[], &[], &|_| false, ctx);
         ctx.truncate_diagnostics(diagnostics_before);
-        let export_assigned = entry.file.statements.iter().find_map(|statement| match statement {
-            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
-                surge_ts_syntax::ParsedExportDeclaration::Equals { exported_name, .. } => {
-                    Some(exported_name.clone())
-                }
+        let export_assigned = entry
+            .file
+            .statements
+            .iter()
+            .find_map(|statement| match statement {
+                ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                    surge_ts_syntax::ParsedExportDeclaration::Equals { exported_name, .. } => {
+                        Some(exported_name.clone())
+                    }
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        });
+            });
         let Some(table) = Arc::make_mut(&mut ctx.ambient_modules).get_mut(&entry.module_specifier)
         else {
             continue;
@@ -975,16 +980,15 @@ pub(crate) fn collect_ambient_modules(
             let Some(base_type) = base_type else {
                 continue;
             };
-            if let Some(merged) = crate::modules::statics_merged_into(
-                &class.name,
-                &base_type,
-                &table.symbols,
-            ) {
+            if let Some(merged) =
+                crate::modules::statics_merged_into(&class.name, &base_type, &table.symbols)
+            {
                 let _ = table.symbols.insert(class.name.clone(), merged);
             }
             if export_assigned.as_deref() == Some(class.name.as_str())
                 && let Some(assigned) = table.export_assignment_symbol.as_deref()
-                && let Some(merged) = crate::modules::statics_merged_into_symbol(assigned, &base_type)
+                && let Some(merged) =
+                    crate::modules::statics_merged_into_symbol(assigned, &base_type)
             {
                 table.export_assignment_symbol = Some(Arc::new(merged));
                 table.namespace_export_object_type = None;
@@ -1080,9 +1084,9 @@ fn module_augmentation_key(
         parsed_files,
         &ctx.module_file_index_by_identity,
     ) {
-        Some(resolution) => module_augmentation_file_key(
-            &crate::modules::canonical_file_identity(&resolution.resolved_file_name),
-        ),
+        Some(resolution) => module_augmentation_file_key(&crate::modules::canonical_file_identity(
+            &resolution.resolved_file_name,
+        )),
         None => module_specifier.to_string(),
     }
 }
@@ -1112,7 +1116,9 @@ pub(crate) fn apply_file_keyed_module_augmentation(
         }
         for (name, symbol) in augmentation.symbols.iter_shared() {
             if export_table.symbols.get(name).is_none() {
-                let _ = export_table.symbols.insert_shared(name.clone(), symbol.clone());
+                let _ = export_table
+                    .symbols
+                    .insert_shared(name.clone(), symbol.clone());
             }
         }
     }

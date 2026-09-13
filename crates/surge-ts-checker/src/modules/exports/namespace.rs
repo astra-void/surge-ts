@@ -18,7 +18,12 @@ pub(super) fn reexported_import_source(
             | ParsedImportKind::DefaultAndNamed { specifiers, .. } => specifiers
                 .iter()
                 .find(|specifier| specifier.local_name == local_name)
-                .map(|specifier| (import.module_specifier.clone(), Some(specifier.imported_name.clone()))),
+                .map(|specifier| {
+                    (
+                        import.module_specifier.clone(),
+                        Some(specifier.imported_name.clone()),
+                    )
+                }),
             _ => None,
         }
     })
@@ -112,5 +117,5 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
 
     crate::program::record_module_export_namespace_export_object_property_count(property_count);
 
-    Type::Object(crate::arena::alloc_object_type(properties, None))
+    Type::Object(crate::metrics::alloc_object_type(properties, None))
 }

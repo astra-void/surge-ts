@@ -16,35 +16,33 @@ use crate::default_lib::load_generated_default_lib_inputs;
 use crate::driver::sync_global_this_symbol;
 use crate::modules::{ModuleExportTable, ModuleImportBindings, resolve_module_export_tables};
 use crate::paths::canonicalize_if_exists_string;
-use crate::symbols::{
-    SymbolTable, TypeDeclarationScope, TypeDeclarationTable,
-};
+use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 
 mod ambient;
 pub(crate) mod binding;
+mod check_files;
 mod classes;
+mod diagnostics;
+mod file_classify;
 mod globals;
+mod parse;
+mod phase;
+mod probes;
 mod schedule;
 mod statements;
 mod unused_locals;
-mod probes;
-mod parse;
-mod file_classify;
-mod diagnostics;
-mod phase;
-mod check_files;
 
 pub(crate) use ambient::*;
 pub(crate) use binding::*;
-pub(crate) use classes::*;
-pub(crate) use globals::*;
-pub(crate) use statements::*;
-pub(crate) use probes::*;
-use parse::*;
-pub(crate) use file_classify::*;
-pub(crate) use diagnostics::*;
-pub(crate) use phase::*;
 use check_files::*;
+pub(crate) use classes::*;
+pub(crate) use diagnostics::*;
+pub(crate) use file_classify::*;
+pub(crate) use globals::*;
+use parse::*;
+pub(crate) use phase::*;
+pub(crate) use probes::*;
+pub(crate) use statements::*;
 
 #[derive(Debug, Clone)]
 pub struct SourceFileInput {
@@ -98,12 +96,10 @@ pub struct ProgramCheckResult {
 
 #[derive(Debug, Clone)]
 struct ProgramCheckSharedState {
-    global_type_declarations: TypeDeclarationTable,
     /// Prebuilt global+ambient declaration table for script (non-module) files.
-    /// Built once on the main thread before the check-phase fan-out: inserting
-    /// allocates into the shared global arena, whose bump allocator is not
-    /// thread-safe, so workers must only clone this table (an index copy), never
-    /// rebuild it.
+    /// Built once on the main thread before the check-phase fan-out; workers
+    /// clone it per file rather than rebuilding it, so every script file sees
+    /// the same merged global interfaces.
     script_type_declarations: TypeDeclarationTable,
     global_symbols: SymbolTable,
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
@@ -137,9 +133,10 @@ impl ModuleAnalysis {
     }
 
     fn has_local_symbol(&self, name: &str) -> bool {
-        self.local_symbol_names
-            .as_ref()
-            .map_or_else(|| self.local_symbols.get(name).is_some(), |names| names.contains(name))
+        self.local_symbol_names.as_ref().map_or_else(
+            || self.local_symbols.get(name).is_some(),
+            |names| names.contains(name),
+        )
     }
 
     fn release_local_symbols_to_names(&mut self) {
@@ -205,7 +202,6 @@ pub fn check_program_with_prescanned_sources(
         check_program_with_stats_and_jobs_inner(files, prescanned, options, jobs, store)
     })
 }
-
 
 struct ProgramRun {
     timings: Option<Arc<Mutex<ProgramTimings>>>,
@@ -288,18 +284,43 @@ fn check_program_with_stats_and_jobs_inner(
         globals.type_declaration_collection_start,
         preliminary,
     );
-    let mut shared_state =
-        finalize_module_bindings(&mut parsed_files, &mut ctx, &timings, program_start, binding, globals);
+    let mut shared_state = finalize_module_bindings(
+        &mut parsed_files,
+        &mut ctx,
+        &timings,
+        program_start,
+        binding,
+        globals,
+    );
     build_module_local_values(&parsed_files, &shared_state, &mut ctx);
     record_rss_stage(
         timings.as_ref(),
         "module_local_values",
         program_start.elapsed(),
     );
-    emit_check_phase_retention_census("before_check_phase", &ctx, &store, &shared_state, &parsed_files);
+    emit_check_phase_retention_census(
+        "before_check_phase",
+        &ctx,
+        &store,
+        &shared_state,
+        &parsed_files,
+    );
     release_declaration_asts(&mut parsed_files, &ctx, &timings, program_start);
-    run_check_phase(&mut parsed_files, &mut shared_state, &mut ctx, &timings, program_start, jobs);
-    emit_check_phase_retention_census("after_check_phase", &ctx, &store, &shared_state, &parsed_files);
+    run_check_phase(
+        &mut parsed_files,
+        &mut shared_state,
+        &mut ctx,
+        &timings,
+        program_start,
+        jobs,
+    );
+    emit_check_phase_retention_census(
+        "after_check_phase",
+        &ctx,
+        &store,
+        &shared_state,
+        &parsed_files,
+    );
     // Checking is complete and the diagnostics are extracted: the cross-file
     // program state and every remaining parse tree are dead. Dropping them here
     // (rather than at function exit, after the finish measurements) makes the
@@ -545,7 +566,7 @@ fn run_preliminary_pass(
     // hit/miss on entries whose values are context-sensitive in a way conflict
     // validation cannot see (tRPC: 2 extra TS2304). Off by default until
     // environment identity is content-based; the serial-equivalent commit,
-    // per-worker contexts, and arena ownership transfer are in place.
+    // and per-worker contexts are in place.
     ctx.begin_resolution_stage();
     let analysis_worker_count = if std::env::var_os("SURGE_PARALLEL_ANALYSIS").is_some() {
         resolve_worker_count(jobs, &parsed_files)
@@ -737,8 +758,7 @@ fn bind_and_analyze_modules(
     // round, and resolving the full import graph twice measurably regresses
     // check time/memory on large cyclic programs (zod).
     ctx.begin_resolution_stage();
-    let module_scope_map =
-        module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
+    let module_scope_map = module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
     ctx.set_module_scope_by_file(module_scope_map);
     let augmentation_insertions_before_final = augmentation_value_insertion_count();
     let type_collection_start = Instant::now();
@@ -890,8 +910,7 @@ fn finalize_module_bindings(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
-    let module_scope_map =
-        module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
+    let module_scope_map = module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
     ctx.set_module_scope_by_file(module_scope_map);
     ctx.jsx_intrinsic_elements_declarer =
         locate_jsx_intrinsic_elements_declarer(&parsed_files, &module_export_tables);
@@ -926,7 +945,6 @@ fn finalize_module_bindings(
     drop(preliminary_module_import_bindings);
     crate::metrics::release_free_memory();
     let shared_state = ProgramCheckSharedState {
-        global_type_declarations,
         script_type_declarations,
         global_symbols,
         function_signatures,
@@ -942,18 +960,18 @@ fn finalize_module_bindings(
     shared_state
 }
 
-    // Per-file value tables for cross-module `typeof`. When a consumer resolves an
-    // imported type alias whose body contains `typeof <localValue>`, the value is
-    // declared in the alias's module, not the consumer's — so a per-file value
-    // table (consulted via `ctx.file_name`, which `with_file_name` sets to the
-    // declaring file during alias resolution) is needed. Built once here, before
-    // the (possibly parallel) check phase, so every job shares it read-only and the
-    // result is order-independent. The check loop is untouched. `module_analyses`'s
-    // `local_symbols` carries only function signatures, so a fresh
-    // `collect_exportable_value_symbols` pass is required to capture `const`/`class`
-    // value declarations. The seed table omits the ambient globals (they are added
-    // as a parent fallback inside the collector); the result is consulted via `get`
-    // only, so the parent fallback covers them.
+// Per-file value tables for cross-module `typeof`. When a consumer resolves an
+// imported type alias whose body contains `typeof <localValue>`, the value is
+// declared in the alias's module, not the consumer's — so a per-file value
+// table (consulted via `ctx.file_name`, which `with_file_name` sets to the
+// declaring file during alias resolution) is needed. Built once here, before
+// the (possibly parallel) check phase, so every job shares it read-only and the
+// result is order-independent. The check loop is untouched. `module_analyses`'s
+// `local_symbols` carries only function signatures, so a fresh
+// `collect_exportable_value_symbols` pass is required to capture `const`/`class`
+// value declarations. The seed table omits the ambient globals (they are added
+// as a parent fallback inside the collector); the result is consulted via `get`
+// only, so the parent fallback covers them.
 fn build_module_local_values(
     parsed_files: &[ParsedProgramFile],
     shared_state: &ProgramCheckSharedState,
@@ -1011,8 +1029,7 @@ fn build_module_local_values(
             for (name, symbol) in analysis.local_export_table.symbols.iter_shared() {
                 let _ = seed.insert_shared(name.clone(), symbol.clone());
             }
-            module_local_values
-                .insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
+            module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(seed));
             continue;
         }
         ctx.file_name = parsed_file.file_name.clone();
@@ -1060,13 +1077,13 @@ fn emit_check_phase_retention_census(
     }
 }
 
-    // All cross-file program state now lives in `shared_state`; the per-file check
-    // phase receives only the current file plus `shared_state`, never the file
-    // slice. Under `skipLibCheck`, that phase skips declaration files outright, so
-    // their parse trees are dead from here on. Releasing them before the heaviest
-    // checking phase removes the dependency `.d.ts` / default-lib ASTs that
-    // dominate peak RSS on dependency-heavy projects. Without `skipLibCheck` the
-    // check phase still walks declaration statements, so they are kept.
+// All cross-file program state now lives in `shared_state`; the per-file check
+// phase receives only the current file plus `shared_state`, never the file
+// slice. Under `skipLibCheck`, that phase skips declaration files outright, so
+// their parse trees are dead from here on. Releasing them before the heaviest
+// checking phase removes the dependency `.d.ts` / default-lib ASTs that
+// dominate peak RSS on dependency-heavy projects. Without `skipLibCheck` the
+// check phase still walks declaration statements, so they are kept.
 fn release_declaration_asts(
     parsed_files: &mut Vec<ParsedProgramFile>,
     ctx: &CheckerContext,
@@ -1300,7 +1317,9 @@ fn refresh_reexported_namespace_objects(
         };
         let mut symbol = symbol.clone();
         symbol.ty = refreshed;
-        export_table.symbols.insert_shared(name.to_string(), Arc::new(symbol));
+        export_table
+            .symbols
+            .insert_shared(name.to_string(), Arc::new(symbol));
         export_table.namespace_export_object_type = None;
     }
 }

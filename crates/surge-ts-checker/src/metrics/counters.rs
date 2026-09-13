@@ -15,10 +15,8 @@ pub(crate) struct ProgramCounters {
     pub(crate) parsed_root_source_files: u64,
     pub(crate) parsed_dependency_declaration_files: u64,
     pub(crate) parsed_generated_default_lib_files: u64,
-    pub(crate) checker_arena_alloc_count: u64,
-    pub(crate) arena_declaration_key_alloc_count: u64,
-    pub(crate) arena_type_declaration_payload_alloc_count: u64,
-    pub(crate) arena_object_type_payload_alloc_count: u64,
+    pub(crate) checker_payload_alloc_count: u64,
+    pub(crate) object_type_payload_alloc_count: u64,
     pub(crate) type_declaration_payload_deep_clone_count: u64,
     pub(crate) type_declaration_header_copy_count: u64,
     pub(crate) object_type_payload_deep_clone_count: u64,
@@ -419,20 +417,39 @@ pub(crate) fn record_type_clone_count() {
     record_program_counter(|c| c.type_clone_count += 1);
 }
 
-pub(crate) fn record_checker_arena_alloc_count() {
-    record_program_counter(|c| c.checker_arena_alloc_count += 1);
+pub(crate) fn record_checker_payload_alloc_count() {
+    record_program_counter(|c| c.checker_payload_alloc_count += 1);
 }
 
-pub(crate) fn record_arena_declaration_key_alloc_count() {
-    record_program_counter(|c| c.arena_declaration_key_alloc_count += 1);
+pub(crate) fn record_object_type_payload_alloc_count() {
+    record_program_counter(|c| c.object_type_payload_alloc_count += 1);
 }
 
-pub(crate) fn record_arena_type_declaration_payload_alloc_count() {
-    record_program_counter(|c| c.arena_type_declaration_payload_alloc_count += 1);
+/// Object- and function-type payload constructors that carry the
+/// allocation-volume counters. Routing every checker-built payload through
+/// them is what makes `checker_payload_alloc_count` a complete census.
+pub(crate) fn alloc_object_type(
+    properties: surge_ts_types::PropertyMap,
+    string_index_type: Option<surge_ts_types::Type>,
+) -> surge_ts_types::ObjectType {
+    record_checker_payload_alloc_count();
+    record_object_type_payload_alloc_count();
+    surge_ts_types::ObjectType::new(properties, string_index_type)
 }
 
-pub(crate) fn record_arena_object_type_payload_alloc_count() {
-    record_program_counter(|c| c.arena_object_type_payload_alloc_count += 1);
+pub(crate) fn alloc_function_type(
+    parameters: Vec<surge_ts_types::Type>,
+    return_type: surge_ts_types::Type,
+    is_variadic: bool,
+    required_parameter_count: usize,
+) -> surge_ts_types::FunctionType {
+    record_checker_payload_alloc_count();
+    surge_ts_types::FunctionType::new(
+        parameters,
+        return_type,
+        is_variadic,
+        required_parameter_count,
+    )
 }
 
 pub(crate) fn record_type_declaration_payload_deep_clone_count() {

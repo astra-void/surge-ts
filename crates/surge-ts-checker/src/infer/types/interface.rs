@@ -5,9 +5,9 @@ use super::*;
 use surge_ts_syntax::{ParsedFunctionType, ParsedInterfaceMember, ParsedNamedType, ParsedType};
 use surge_ts_types::{FunctionType, ObjectProperty, PropertyMap, Type, current_program_type_store};
 
-use crate::arena::{alloc_function_type, alloc_object_type};
 use crate::context::{CheckerContext, DeclarationResolutionKey};
 use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default_lib_file_name};
+use crate::metrics::{alloc_function_type, alloc_object_type};
 use crate::symbols::{InterfaceInfo, TypeDeclarationHandle};
 
 /// Opt-in `SURGE_IFACE_CACHE_ALL=1`: extend the instantiation cache beyond the
@@ -65,10 +65,10 @@ fn defer_interface_member_annotation(annotation: &ParsedType, optional: bool) ->
         // verdicts and renders.
         ParsedType::Union(members) => {
             !optional
-                && !members
-                    .iter()
-                    .any(|member| matches!(member, ParsedType::Undefined)
-                            || matches!(member, ParsedType::Named(named) if named.name == "null"))
+                && !members.iter().any(|member| {
+                    matches!(member, ParsedType::Undefined)
+                        || matches!(member, ParsedType::Named(named) if named.name == "null")
+                })
                 && !crate::modules::annotation_contains_typeof(annotation)
         }
         ParsedType::Object(_)
@@ -78,9 +78,7 @@ fn defer_interface_member_annotation(annotation: &ParsedType, optional: bool) ->
         | ParsedType::IndexedAccess(_)
         | ParsedType::Mapped(_)
         | ParsedType::Conditional(_)
-        | ParsedType::TemplateLiteral(_) => {
-            !crate::modules::annotation_contains_typeof(annotation)
-        }
+        | ParsedType::TemplateLiteral(_) => !crate::modules::annotation_contains_typeof(annotation),
         ParsedType::Array(element) => defer_interface_member_annotation(element, false),
         _ => false,
     }
@@ -193,9 +191,8 @@ fn module_instantiation_memo_fingerprint(
         ctx.cross_file_resolution_depth > 0 || *ctx.file_name != *interface.file_name;
     let body_has_scope =
         declaration_effective_scope.is_some() || ctx.type_declaration_scope.is_some();
-    let drop_table_identity = interface_memo_table_identity_dropped()
-        && body_crosses_file
-        && body_has_scope;
+    let drop_table_identity =
+        interface_memo_table_identity_dropped() && body_crosses_file && body_has_scope;
     let (table_instance, table_version) = ctx.type_declarations.snapshot_identity();
     if !drop_table_identity {
         hasher.write_u64(table_instance);
@@ -322,8 +319,10 @@ pub(crate) fn resolve_interface(
             .filter(|scope| !scope.is_empty())
     });
     // See `resolve_type_alias`: a default names its namespace siblings bare.
-    let default_prefix =
-        crate::infer::types::utility::namespace_member_prefix(interface.declared_name.as_deref(), &interface.name);
+    let default_prefix = crate::infer::types::utility::namespace_member_prefix(
+        interface.declared_name.as_deref(),
+        &interface.name,
+    );
     if let Some(prefix) = default_prefix.clone() {
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
@@ -936,8 +935,7 @@ pub(crate) fn resolve_interface_declaration(
                     if properties.contains_key(*name) {
                         continue;
                     }
-                    let Some(member_ty) =
-                        surge_ts_types::array_member_type(name, element.as_ref())
+                    let Some(member_ty) = surge_ts_types::array_member_type(name, element.as_ref())
                     else {
                         continue;
                     };

@@ -445,7 +445,6 @@ fn lower_global_augmentation_values(
                         annotation,
                     ) =>
                 {
-                    {
                     ctx.register_import_type_global(&var.name);
                     crate::infer::make_lazy_value_annotation_reference(
                         ctx,
@@ -453,7 +452,6 @@ fn lower_global_augmentation_values(
                         var.name_span.map_or(0, |span| span.start),
                         annotation.clone(),
                     )
-                }
                 }
                 Some(annotation) => crate::infer::map_parsed_type(annotation.clone(), ctx),
                 None => surge_ts_types::Type::Unknown,
@@ -540,7 +538,8 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
     // and assignability walked an unbounded unfolding of the same type; a
     // reference keeps `typeof globalThis` deferred inside the intersection and
     // tsc-shaped in diagnostics.
-    let global_object = surge_ts_types::Type::Object(crate::arena::alloc_object_type(properties, None));
+    let global_object =
+        surge_ts_types::Type::Object(crate::metrics::alloc_object_type(properties, None));
     ctx.ambient_global_symbols.insert(
         "globalThis".to_string(),
         crate::symbols::SymbolInfo {
@@ -810,11 +809,12 @@ pub(crate) fn with_namespace_reexports(
         let namespace = match statement {
             ParsedStatement::NamespaceDeclaration(namespace) => namespace,
             ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
-                ParsedExportDeclaration::Statement { declaration, .. } => match declaration.as_ref()
-                {
-                    ParsedStatement::NamespaceDeclaration(namespace) => namespace,
-                    _ => continue,
-                },
+                ParsedExportDeclaration::Statement { declaration, .. } => {
+                    match declaration.as_ref() {
+                        ParsedStatement::NamespaceDeclaration(namespace) => namespace,
+                        _ => continue,
+                    }
+                }
                 _ => continue,
             },
             _ => continue,
@@ -891,9 +891,8 @@ fn collect_namespace_type_declarations(
 /// affordable.
 fn namespace_interface_merge_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("SURGE_NS_IFACE_MERGE").is_none_or(|value| value != "0")
-    })
+    *ENABLED
+        .get_or_init(|| std::env::var_os("SURGE_NS_IFACE_MERGE").is_none_or(|value| value != "0"))
 }
 
 /// Merges from the parsed blocks in one shot rather than folding into the table
@@ -1057,10 +1056,8 @@ fn collect_namespace_type_declarations_prefixed(
             // never as a type.
             ParsedStatement::ClassDeclaration(class) => {
                 let mut register = |key: String| {
-                    let mut info = crate::program::class_instance_interface_info(
-                        class,
-                        ctx.file_name_arc(),
-                    );
+                    let mut info =
+                        crate::program::class_instance_interface_info(class, ctx.file_name_arc());
                     // Qualified name with NO declared_name, mirroring the
                     // interface arm above: the namespace-member prefix push in
                     // `resolve_interface` derives from `declared_name.unwrap_or
@@ -1481,11 +1478,10 @@ fn validate_direct_utility_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
     // so the concrete-instantiation short-circuit still applies.
     let mut substitution = crate::infer::TypeParameterSubstitution::new();
     for type_parameter in &alias.type_parameters {
-        substitution
-            .insert_placeholder(
-                type_parameter.name.clone(),
-                surge_ts_types::Type::type_parameter(&type_parameter.name),
-            );
+        substitution.insert_placeholder(
+            type_parameter.name.clone(),
+            surge_ts_types::Type::type_parameter(&type_parameter.name),
+        );
     }
     ctx.push_type_parameter_constraints_only(&alias.type_parameters);
     let _ = crate::infer::map_parsed_type_with_substitution(alias.ty.clone(), ctx, &substitution);
@@ -1559,11 +1555,11 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         Interface(crate::symbols::TypeDeclarationHandle),
     }
 
-    // Classify the existing entry through an arena-backed handle so the common
+    // Classify the existing entry through an `Arc` handle so the common
     // declaration-merging case reads the previously accumulated interface in
     // place instead of deep-cloning its (often large) member list. The handle
-    // keeps the backing arena alive and is decoupled from `ctx`, so the borrowed
-    // interface stays valid while `ctx` is borrowed mutably below.
+    // owns its payload and is decoupled from `ctx`, so the borrowed interface
+    // stays valid while `ctx` is borrowed mutably below.
     let existing = match ctx.type_declarations.get_handle(&interface.name) {
         None => Existing::None,
         Some(handle) => match handle.get() {
@@ -1579,7 +1575,10 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
             // Modules shadow instead, and are never collected under this flag.
             let ambient = ctx
                 .merge_script_interfaces_with_globals
-                .then(|| ctx.ambient_global_type_declarations.get_handle(&interface.name))
+                .then(|| {
+                    ctx.ambient_global_type_declarations
+                        .get_handle(&interface.name)
+                })
                 .flatten()
                 .filter(|handle| matches!(handle.get(), TypeDeclarationInfo::Interface(_)));
             match ambient {
@@ -1589,9 +1588,10 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
                     };
                     let incoming = filter_conflicting_interface_members(ambient, info, ctx);
                     let merged = crate::symbols::merge_interface_infos(ambient, &incoming);
-                    let _ = ctx
-                        .type_declarations
-                        .insert(interface.name.clone(), TypeDeclarationInfo::Interface(merged));
+                    let _ = ctx.type_declarations.insert(
+                        interface.name.clone(),
+                        TypeDeclarationInfo::Interface(merged),
+                    );
                 }
                 None => {
                     let _ = ctx

@@ -24,9 +24,9 @@ use super::call::{
 use super::emit_type_only_as_value_diagnostic;
 use super::function::check_arrow_function_expression;
 use super::ops;
-use crate::arena::alloc_object_type;
 use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, infer_expression};
+use crate::metrics::alloc_object_type;
 use crate::program::{record_expression_check, record_program_timing};
 use crate::spans::{choose_span, diagnostic_with_syntax_span};
 use crate::symbols::SymbolTable;

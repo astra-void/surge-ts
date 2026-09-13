@@ -2,7 +2,7 @@ use super::*;
 
 use surge_ts_types::{ObjectType, PropertyMap};
 
-use crate::arena::alloc_object_type;
+use crate::metrics::alloc_object_type;
 
 /// Reference-only intersections remain nominal during declaration indexing.
 /// Without this companion to dependency-alias deferral, constructing
@@ -256,7 +256,9 @@ fn flatten_deferred_intersections(members: Vec<Type>) -> (Vec<Type>, bool) {
                 pending.extend(reference.arguments.iter().rev().cloned());
             }
             Type::Reference(reference)
-                if reference.id.starts_with(OPEN_DEFERRED_INTERSECTION_ID_PREFIX) =>
+                if reference
+                    .id
+                    .starts_with(OPEN_DEFERRED_INTERSECTION_ID_PREFIX) =>
             {
                 unwrapped_open = true;
                 pending.extend(reference.arguments.iter().rev().cloned());
@@ -344,12 +346,13 @@ fn merge_intersection_members(members: Vec<Type>) -> Type {
         // time (the hazard the comment above describes, and the one the
         // `any`-member degradation counter pins), so defer instead: the merge
         // below peels and opens on first consumer peel.
-        if dropped_unmodelled_operand
-            && let Type::Reference(reference) = &survivor
-        {
+        if dropped_unmodelled_operand && let Type::Reference(reference) = &survivor {
             crate::program::record_program_counter(|c| c.lazy_intersection_create_count += 1);
             let display = survivor.name();
-            let id = format!("{OPEN_DEFERRED_INTERSECTION_ID_PREFIX}{}", reference.id.as_ref());
+            let id = format!(
+                "{OPEN_DEFERRED_INTERSECTION_ID_PREFIX}{}",
+                reference.id.as_ref()
+            );
             let members = vec![survivor.clone()];
             return Type::Reference(surge_ts_types::TypeReference::new(
                 id,
@@ -568,7 +571,6 @@ impl surge_ts_types::ResolveReference for LazyIntersectionMerge {
             .clone()
     }
 }
-
 
 fn merge_intersection_members_now(
     members: Vec<Type>,
@@ -852,11 +854,13 @@ fn reduce_disjoint_literals(members: &[Type]) -> Option<Type> {
                         .collect(),
                 )
             }
-            (LiteralDomain::Members(left), LiteralDomain::Members(right)) => LiteralDomain::Members(
-                left.into_iter()
-                    .filter(|member| right.contains(member))
-                    .collect(),
-            ),
+            (LiteralDomain::Members(left), LiteralDomain::Members(right)) => {
+                LiteralDomain::Members(
+                    left.into_iter()
+                        .filter(|member| right.contains(member))
+                        .collect(),
+                )
+            }
         };
         if matches!(&reduced, LiteralDomain::Members(members) if members.is_empty()) {
             return Some(Type::Never);

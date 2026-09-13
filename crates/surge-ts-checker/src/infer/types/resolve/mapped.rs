@@ -3,7 +3,7 @@ use super::*;
 use surge_ts_syntax::ParsedMappedType;
 use surge_ts_types::{ObjectProperty, PropertyMap};
 
-use crate::arena::alloc_object_type;
+use crate::metrics::alloc_object_type;
 
 /// Whether a mapped type's key constraint admits arbitrary members, which makes
 /// the result an index signature rather than a fixed property set. Mirrors

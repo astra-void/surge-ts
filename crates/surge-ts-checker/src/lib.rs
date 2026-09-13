@@ -17,7 +17,6 @@
 //! [`lowlevel`] and are not covered by the stable-API guarantees.
 
 mod api;
-mod arena;
 mod checks;
 mod context;
 mod default_lib;

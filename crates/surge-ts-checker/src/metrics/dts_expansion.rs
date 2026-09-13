@@ -259,7 +259,7 @@ pub(crate) fn type_creation_snapshot() -> TypeCreationSnapshot {
     let functions = snapshot_function_type_counters();
     let unions = snapshot_union_type_counters();
     TypeCreationSnapshot {
-        object_types: program.arena_object_type_payload_alloc_count,
+        object_types: program.object_type_payload_alloc_count,
         function_types: functions.function_type_payload_alloc_count,
         union_types: unions.union_type_payload_alloc_count,
     }

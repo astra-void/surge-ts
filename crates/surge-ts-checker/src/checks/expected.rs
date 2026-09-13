@@ -5,10 +5,9 @@ use surge_ts_syntax::{ParsedExpression, ParsedObjectProperty, TextSpan as Syntax
 use surge_ts_types::{ObjectProperty, Type, is_assignable_to};
 
 use super::expr::{evaluate_expression, source_display_name};
-use super::function::check_arrow_function_expression_with_expected_type;
-use crate::arena::alloc_object_type;
 use crate::context::CheckerContext;
 use crate::infer::InferredExpression;
+use crate::metrics::alloc_object_type;
 use crate::program::{
     record_assignability_check, record_object_literal_property_check, record_program_timing,
 };
@@ -410,11 +409,8 @@ fn evaluate_expression_with_expected_type_inner(
                     .is_none()
         })
     {
-        let diagnostic = Diagnostic::ts2353(
-            &property.name,
-            &expected_type.name(),
-            ctx.file_name.clone(),
-        );
+        let diagnostic =
+            Diagnostic::ts2353(&property.name, &expected_type.name(), ctx.file_name.clone());
         ctx.push(diagnostic_with_syntax_span(
             diagnostic,
             choose_span(
@@ -656,7 +652,11 @@ fn union_member_for_object_literal(
     }
     let candidates: Vec<&Type> = members
         .iter()
-        .filter(|member| written.iter().all(|name| member_declares_property(member, name)))
+        .filter(|member| {
+            written
+                .iter()
+                .all(|name| member_declares_property(member, name))
+        })
         .collect();
     if candidates.is_empty() {
         return None;
@@ -1131,7 +1131,8 @@ fn evaluate_tuple_literal_with_expected_type(
             // its own widened element types (`Type '[number]' is not assignable to
             // type '[]'`); the hardcoded `unknown[]` this used to print named
             // neither side truthfully.
-            let source_type_name = Type::Tuple(literal_element_types(elements, symbols, ctx)).name();
+            let source_type_name =
+                Type::Tuple(literal_element_types(elements, symbols, ctx)).name();
             let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
             let diagnostic =
                 Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());

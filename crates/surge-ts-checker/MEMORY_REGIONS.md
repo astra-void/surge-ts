@@ -2,8 +2,9 @@
 
 This note records the checker's memory-lifetime inventory, the region model the
 pipeline actually implements, and the reset/drop boundaries that enforce it.
-It is the companion to [ARENA_ID_PLAN.md](ARENA_ID_PLAN.md) (arena/handle
-representation) and to the RSS stage instrumentation in `metrics/`.
+It is the companion to [ARENA_ID_PLAN.md](ARENA_ID_PLAN.md) (the historical
+payload-handle landing note) and to the RSS stage instrumentation in
+`metrics/`.
 
 ## Region hierarchy
 
@@ -11,8 +12,6 @@ representation) and to the RSS stage instrumentation in `metrics/`.
 Compilation (one check_program_with_stats_and_jobs run)
 ├── ParserWorkerRegion × parse worker      one oxc Allocator per thread, dropped after parse
 ├── ProgramRegion                          lives to end of run
-│   ├── CheckerArena(s)                    bump storage for declaration keys/payloads; frozen
-│   │                                      before the parallel fan-out, never reset mid-run
 │   ├── ambient tables                     ambient_global_{symbols,type_declarations}, ambient_modules
 │   ├── shared_state                       global/script declaration tables, global symbols,
 │   │                                      final module analyses/import bindings/resolution scopes
@@ -54,14 +53,20 @@ Rules the code enforces:
   lives exactly as long as some consumer holds its `Arc`; see "Memory-lifetime
   program" below); its IDs embed a per-run owner tag and must never cross
   program owners.
-- No region reset bypasses destructors: `CheckerArena` bump storage registers
-  every `Drop`-requiring payload in a `pending_drops` list at allocation time
-  and runs each payload's typed `drop_in_place` exactly once when the last
-  arena handle drops (see arena.rs safety notes). Trivially droppable payloads
-  carry no destructor metadata. Before this registration existed, payloads
+- No region reset bypasses destructors. Declaration keys and payloads are
+  ordinary owned values (`String` keys, `Arc` bodies) dropped with their table,
+  so nothing here depends on manual destructor bookkeeping.
+
+  *Historical — does not describe current behavior.* Until `15667ea`
+  (2026-08-19) the declaration table stored its keys and payloads in a
+  `CheckerArena` bump allocator, whose chunks free without running `Drop`. That
+  arena registered every `Drop`-requiring payload in a `pending_drops` list and
+  ran each payload's typed `drop_in_place` exactly once when the last arena
+  handle dropped. Before that registration existed (`1ef6d85`), payloads
   allocated through `MaybeUninit` never ran `Drop`, leaking every declaration
   payload's `String`s and `Arc` refcounts to process exit (~400 MB of the tRPC
-  finish footprint).
+  finish footprint). `15667ea` moved the table off the arena; the arena itself
+  was removed once it had no remaining users.
 
 ## Lifetime inventory
 
@@ -74,7 +79,7 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
 | `SourceFileInput.source_text` | checker `files` vec | phase | dropped when `parse_program_files` returns; the CLI keeps its own copy in `ProjectCheckResult.sources` for code frames (see "Remaining retention") |
 | Prescanned `ParsedSource` (loader) | `ModuleSpecifierScanner.scanned` | phase | the loader's module-graph scan parses each source and dependency declaration; the parse is now held to the end of loading and moved into `parse_program_files` instead of being dropped and re-made there. It does not raise the peak: the same ASTs used to exist twice, once per parse. `SURGE_PRESCANNED_PARSE_REUSE=0` restores the drop-and-re-parse arm |
 | `ParsedProgramFile.statements` | `parsed_files` | program | needed by binding and the check phase; declaration-file ASTs are freed before checking under `skipLibCheck` (`declaration_ast_release` stage) |
-| Declaration payloads (`InterfaceInfo`/`TypeAliasInfo` bodies) | `CheckerArena` + `Arc` bodies | program | write-once; shared by handle |
+| Declaration payloads (`InterfaceInfo`/`TypeAliasInfo` bodies) | `TypeDeclarationTable` + `Arc` bodies | program | write-once; shared by handle |
 | `ambient_global_*`, `ambient_modules` | `CheckerContext`, `Arc` | program | built during ambient collection, read-only afterwards |
 | Preliminary module analyses / import bindings / scopes | orchestrator locals | phase | superseded by the final analysis round; dropped at `preliminary_release` (previously lived to end of run) |
 | Final `module_analyses` / `module_import_bindings` / `module_resolution_scopes` | `shared_state` | program | any worker may check any file, so the full set stays live through the check phase |
@@ -149,9 +154,6 @@ The load-bearing mechanisms, which later work must preserve:
   paths cannot ABA; expired entries are swept on the next bucket scan and an
   equivalent payload re-interns under a fresh ID. Do not convert a store back
   to strong retention without measured justification.
-- **Arena Drop registration** (`arena.rs` `pending_drops`): see the rule above.
-  Any new arena payload shape that owns heap data must be registered exactly
-  once.
 - **Compact declaration environments**: an environment captures an
   `Arc<TypeDeclarationTable>` snapshot deduplicated by the table's
   `(instance_id, version)` mutation stamp — one shared snapshot per mutation

@@ -7,11 +7,11 @@ use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use super::expr::evaluate_expression;
-use crate::arena::alloc_function_type;
 use crate::context::CheckerContext;
 use crate::context::convert_span;
 use crate::flow::{FunctionFlowState, analyze_function_body_flow, collect_function_flow_facts};
 use crate::infer::InferredExpression;
+use crate::metrics::alloc_function_type;
 use crate::program::record_program_timing;
 use crate::symbols::{ScopeStack, SymbolTable};
 
@@ -344,9 +344,8 @@ fn emit_contextual_signature_mismatch(
     }
     // tsc widens the fresh literals a returned object literal carries, so
     // `return { ok: "nope" }` renders as `{ ok: string; }`.
-    let returned = crate::checks::expr::widen_type(&surge_ts_types::union_type(
-        returned_types.to_vec(),
-    ));
+    let returned =
+        crate::checks::expr::widen_type(&surge_ts_types::union_type(returned_types.to_vec()));
     let source = alloc_function_type(
         parameter_types.to_vec(),
         returned,
@@ -482,7 +481,11 @@ pub(crate) fn check_arrow_function_expression_anchored(
         match body {
             ParsedArrowFunctionBody::Expression(expression) => {
                 let return_type_for_body = match &return_type {
-                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Void => None,
+                    Type::Any
+                    | Type::Unknown
+                    | Type::GenuineUnknown
+                    | Type::TypeParameter(_)
+                    | Type::Void => None,
                     ty => Some(ty),
                 };
                 let inferred_body = match return_type_for_body {
@@ -513,7 +516,11 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 );
                 let body_flow = analyze_function_body_flow(&statements);
                 let return_type_for_body = match &return_type {
-                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Void => None,
+                    Type::Any
+                    | Type::Unknown
+                    | Type::GenuineUnknown
+                    | Type::TypeParameter(_)
+                    | Type::Void => None,
                     ty => Some(ty),
                 };
                 // A contextual return type this arrow did not annotate is not a

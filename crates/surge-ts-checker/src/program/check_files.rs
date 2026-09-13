@@ -11,12 +11,6 @@ use surge_ts_types::with_program_type_store;
 // the bare `record_*` calls throughout this file stay in scope.
 use crate::metrics::*;
 
-use crate::context::{CheckerContext, CompatibilityStats, FileKind};
-use crate::driver::validate_direct_utility_aliases;
-use crate::driver::validate_local_type_declarations;
-use crate::symbols::{
-    TypeDeclarationScope, clone_symbol_info_handle,
-};
 use super::{
     FileCheckResult, ParsedProgramFile, ProgramCheckSharedState, census_check_milestone,
     check_program_file_statements, clone_type_declaration_table,
@@ -24,6 +18,10 @@ use super::{
     drop_suppressed_diagnostics, emit_unsupported_declaration_diagnostics,
     extend_diagnostics_dedup, module_scope_declared_names, unused_locals,
 };
+use crate::context::{CheckerContext, CompatibilityStats, FileKind};
+use crate::driver::validate_direct_utility_aliases;
+use crate::driver::validate_local_type_declarations;
+use crate::symbols::{TypeDeclarationScope, clone_symbol_info_handle};
 
 pub(super) fn check_program_files_serial(
     parsed_files: &mut [ParsedProgramFile],
@@ -882,7 +880,8 @@ pub(super) fn check_program_file(
             ctx.ambient_global_symbols
                 .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
         );
-        let mut merged_symbols = crate::symbols::SymbolTable::file_check_root(globals_parent.clone());
+        let mut merged_symbols =
+            crate::symbols::SymbolTable::file_check_root(globals_parent.clone());
         if let Some(imported_bindings) = imported_bindings {
             for (name, symbol) in imported_bindings.symbols.iter_shared() {
                 let _ = merged_symbols.insert_shared(name.clone(), symbol.clone());
@@ -1014,9 +1013,8 @@ pub(super) fn check_program_file(
             timings.per_file_statement_checking += statement_check_start.elapsed()
         });
     } else {
-        // Clone the prebuilt global+ambient table (index copy only). Inserting
-        // here would allocate into the shared global arena from a worker thread,
-        // which the arena's freeze assertion forbids.
+        // Clone the prebuilt global+ambient table rather than rebuilding it
+        // per worker, so every script file sees the same merged globals.
         ctx.type_declarations = clone_type_declaration_table(
             &shared_state.script_type_declarations,
             timings,

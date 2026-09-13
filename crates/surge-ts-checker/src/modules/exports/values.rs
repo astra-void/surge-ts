@@ -310,7 +310,7 @@ fn apply_merging_namespace_value_members(
             let _ = exportable_values.insert(
                 name.clone(),
                 SymbolInfo {
-                    ty: Type::Object(crate::arena::alloc_object_type(members.clone(), None)),
+                    ty: Type::Object(crate::metrics::alloc_object_type(members.clone(), None)),
                     kind: SymbolKind::Const,
                     function_signature: None,
                 },
@@ -325,11 +325,11 @@ fn apply_merging_namespace_value_members(
         let merged_type = match &symbol.ty {
             Type::Object(object) => Type::Object(object_with_namespace_members(object, members)),
             Type::Function(function) => Type::Object(
-                crate::arena::alloc_object_type(members.clone(), None)
+                crate::metrics::alloc_object_type(members.clone(), None)
                     .with_call_signature(function.clone()),
             ),
             Type::Unknown | Type::TypeParameter(_) => {
-                Type::Object(crate::arena::alloc_object_type(members.clone(), None))
+                Type::Object(crate::metrics::alloc_object_type(members.clone(), None))
             }
             _ => continue,
         };
@@ -356,7 +356,7 @@ fn object_with_namespace_members(
             .or_insert_with(|| member.clone());
     }
 
-    let mut merged = crate::arena::alloc_object_type(
+    let mut merged = crate::metrics::alloc_object_type(
         properties,
         object.string_index_type.as_ref().map(|ty| (**ty).clone()),
     );
@@ -539,7 +539,10 @@ pub(crate) fn statics_merged_into(
 /// namespace lowering keeps permissive) contributes every name: the derived
 /// static side is left open instead, so a consumer reading a static through it
 /// gets `any` rather than a missing-export error.
-pub(crate) fn statics_merged_into_symbol(derived: &SymbolInfo, base_type: &Type) -> Option<SymbolInfo> {
+pub(crate) fn statics_merged_into_symbol(
+    derived: &SymbolInfo,
+    base_type: &Type,
+) -> Option<SymbolInfo> {
     let base_static = match base_type {
         Type::Object(object) => object,
         Type::Any => {
@@ -572,7 +575,8 @@ pub(crate) fn statics_merged_into_symbol(derived: &SymbolInfo, base_type: &Type)
             .properties
             .iter()
             .filter(|(name, _)| {
-                name.as_ref() != "prototype" && !derived_static.properties.contains_key(name.as_ref())
+                name.as_ref() != "prototype"
+                    && !derived_static.properties.contains_key(name.as_ref())
             })
             .map(|(name, property)| (name.clone(), property.clone()))
             .collect();
@@ -640,7 +644,9 @@ fn defer_value_annotation(annotation: &surge_ts_syntax::ParsedType) -> bool {
 /// Whether an annotation reads a module through `typeof import("spec")`. The
 /// namespace behind it is registered when the file's imports are bound, which
 /// runs after global collection, so such an annotation must be deferred.
-pub(crate) fn annotation_contains_import_type_query(annotation: &surge_ts_syntax::ParsedType) -> bool {
+pub(crate) fn annotation_contains_import_type_query(
+    annotation: &surge_ts_syntax::ParsedType,
+) -> bool {
     use surge_ts_syntax::ParsedType;
     match annotation {
         ParsedType::TypeOf(type_of) => type_of.import_specifier.is_some(),
@@ -752,10 +758,9 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                 // derived from this very export; letting it shadow the module's
                 // own declaration would bind the export to the global and the
                 // global to itself.
-                let shadowed_by_import_type_global = exportable_values
-                    .get_own_shared(&variable.name)
-                    .is_none()
-                    && ctx.is_import_type_global(&variable.name);
+                let shadowed_by_import_type_global =
+                    exportable_values.get_own_shared(&variable.name).is_none()
+                        && ctx.is_import_type_global(&variable.name);
                 if exportable_values.get_shared(&variable.name).is_none()
                     || shadowed_by_import_type_global
                 {
@@ -932,23 +937,19 @@ fn namespace_exports_sibling_type(
     if name.contains('.') {
         return false;
     }
-    let ambient = [".d.ts", ".d.mts", ".d.cts"]
-        .iter()
-        .any(|extension| {
-            ctx.file_name.len() >= extension.len()
-                && ctx.file_name[ctx.file_name.len() - extension.len()..]
-                    .eq_ignore_ascii_case(extension)
-        });
+    let ambient = [".d.ts", ".d.mts", ".d.cts"].iter().any(|extension| {
+        ctx.file_name.len() >= extension.len()
+            && ctx.file_name[ctx.file_name.len() - extension.len()..]
+                .eq_ignore_ascii_case(extension)
+    });
     namespace.statements.iter().any(|statement| {
         let (exported, inner) = match statement {
-            ParsedStatement::ExportDeclaration(export) => {
-                match export.as_ref() {
-                    ParsedExportDeclaration::Statement { declaration, .. } => {
-                        (true, declaration.as_ref())
-                    }
-                    _ => return false,
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => {
+                    (true, declaration.as_ref())
                 }
-            }
+                _ => return false,
+            },
             other => (ambient, other),
         };
         if !exported {
@@ -1179,7 +1180,7 @@ pub(crate) fn collect_namespace_member_value_symbols(
 pub(crate) fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
     let mut properties = surge_ts_types::PropertyMap::default();
     fill_namespace_value_properties(namespace, &mut properties);
-    Type::Object(crate::arena::alloc_object_type(properties, None))
+    Type::Object(crate::metrics::alloc_object_type(properties, None))
 }
 
 /// [`namespace_value_object_type`] with the members' written annotations
@@ -1199,7 +1200,7 @@ pub(crate) fn namespace_value_object_type_resolved(
     let mut properties = surge_ts_types::PropertyMap::default();
     fill_namespace_value_properties(namespace, &mut properties);
     resolve_namespace_value_annotations(namespace, &namespace.name, &mut properties, ctx);
-    Type::Object(crate::arena::alloc_object_type(properties, None))
+    Type::Object(crate::metrics::alloc_object_type(properties, None))
 }
 
 /// Replaces the permissive member types [`fill_namespace_value_properties`]
@@ -1264,7 +1265,7 @@ fn resolve_namespace_value_annotations(
                 properties.insert(
                     inner.name.as_str().into(),
                     surge_ts_types::ObjectProperty::required(Type::Object(
-                        crate::arena::alloc_object_type(inner_properties, None),
+                        crate::metrics::alloc_object_type(inner_properties, None),
                     )),
                 );
             }
