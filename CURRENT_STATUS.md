@@ -48,15 +48,15 @@ level at this commit; the bisect and the before/after are in
 | --- | --- | ---: |
 | Workspace tests | `cargo nextest run --workspace` | **1932 / 1933 passed** — `literal_union_does_not_collapse_boolean_literal_with_boolean` asserts that `true | false` stays a two-member union, which `5b87a462` deliberately changed without updating the test |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **222 / 222 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **221 / 222 passed** — one message drift, see below |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **222 / 222 passed** |
-| Oracle preset sweep — both strict flags | same + both | **221 / 222 passed** — the same drift |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **224 / 224 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **223 / 224 passed** — one message drift, see below |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **224 / 224 passed** |
+| Oracle preset sweep — both strict flags | same + both | **223 / 224 passed** — the same drift |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
 | Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 222 presets the
+parity against the upstream TypeScript compiler. Across all 224 presets the
 sweep saw 342 `tsc` diagnostics and 342 `surge-ts` diagnostics, with
 `onlyTsc = 0` and `onlyRust = 0`.
 
@@ -166,9 +166,9 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 222 oracle presets under `tests/compat-projects/`, all green at the normal
+- 224 oracle presets under `tests/compat-projects/`, all green at the normal
   gate, and all but one at the strict gates (see the table above).
-- 444 compat-project fixtures in total; the ones not registered as oracle
+- 446 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
@@ -192,7 +192,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; dirty-tree measurement, not a gate (see note) |
-| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 14 | **newly provisioned, provisional** — 134 when first measured; all 14 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
+| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 9 | **newly provisioned, provisional** — 134 when first measured; all 9 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
 
 Notes that matter:
 
@@ -239,8 +239,8 @@ Notes that matter:
   receiver's string index signature (−2); the inline-arrow predicate a `filter`
   call reads was resolved with reporting on, out of the arrow's own scope (−2);
   and a union member a property-path guard rules out was kept rather than
-  dropped, which is the AWS SDK `?: never` member pattern (−10). It stands at **14**
-  after three more passes. The third: the five `TS2344` `20b5ef3` had put on this corpus are
+  dropped, which is the AWS SDK `?: never` member pattern (−10). It stands at **9**
+  after four more passes. The third: the five `TS2344` `20b5ef3` had put on this corpus are
   suppressed (a constraint stated in terms of a sibling parameter is only as
   right as surge's model of that sibling), `new SQL(…)` constructs again where a
   generic class merges with a namespace (−7), and `drizzle(client)` is callable
@@ -254,12 +254,24 @@ Notes that matter:
   mutually recursive, so surge's cycle break left every drizzle class that
   implements it unusable (−10). The same pass typed an unreachable `typeof`
   branch as `never` rather than leaving the union standing, which is the seven
-  libsql entry points (`typeof-guard-unreachable-branch-basic`). The 14 that
-  remain are five `TS7006` on an immediately-invoked arrow — whose parameters
-  tsc types from the call's own arguments, and which surge cannot reach because
-  `ParsedExpression::Call` carries a callee *name* rather than an expression —
-  four `.dbMigrations` on a degraded builder chain, two `.config` on
-  `Relation<string>`, and three one-offs. Measured from an isolated worktree, base and branch built from
+  libsql entry points (`typeof-guard-unreachable-branch-basic`). A fifth closed the four
+  `.dbMigrations` — `await` is erased at parse time, so a class that *implements*
+  `Promise<T>` reached the index as the raw query object
+  (`thenable-awaited-index-access-basic`) — and restored the guard for a
+  predicate whose subject is a property path, which had been dropped outright
+  (`predicate-property-path-subject-basic`).
+
+  **The 9 that remain each have an identified cause.** Five `TS7006` are the
+  parameters of an immediately-invoked arrow, which tsc types from the call's own
+  arguments and surge cannot reach because `ParsedExpression::Call` carries a
+  callee *name* rather than an expression. Two `.config` on `Relation<string>`
+  are a predicate guard whose subject is an *element access*: element guards
+  model truthiness, `typeof` and nullish, and have no predicate arm. One
+  `'result.typings' is possibly 'undefined'` is the `if (!x.y) { x.y = … }`
+  join — an assignment in the branch makes the property definite on both paths.
+  One `Property 'strings' does not exist on type 'TemplateStringsArray'` in
+  `sql.ts` is unreduced. The first two of those want `await` and a callee
+  expression in the AST, which is one piece of work rather than four. Measured from an isolated worktree, base and branch built from
   the same tree, but not from a clean checkout of a commit that contains these
   changes; re-measure before treating any of it as a baseline. Full inventory in
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#drizzle-orm-corpus-provisioned-2026-09-13).
