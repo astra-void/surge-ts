@@ -962,6 +962,84 @@ the stack. **The workspace test suite and the oracle sweep were not run for
 this pass** — every attempt was killed by machine pressure from concurrent
 builds — so the numbers above are corpus measurements only, not a gate result.
 
+**Follow-up (2026-09-13/14).** Turning on body-local type-alias validation
+(`SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1`) makes every `Expect<Equal<…>>`
+written inside a test callback fire (the earlier attempt validated aliases
+before the statement walk and reported 480 false `TS2304`s on `typeof x`;
+validating at statement position, with the value scope published, has none).
+That exposed 63 divergences on ts-pattern, and the burn-down found four general
+gaps:
+
+- **`Equal` identity was nominal for references.** `Type::Reference` equality
+  is nominal, so `Id<{ a: 1 }>` never matched `{ a: 1 }` and every assertion
+  over a local alias instantiation reported `false`. Identity now peels both
+  sides and walks objects, unions, arrays and tuples (`identity_equal`,
+  `2d2dd64a`).
+- **`readonly` arrays and tuples were not modelled.** `readonly T[]` lowered to
+  `T[]` in the parser and `ReadonlyArray<T>` to `T[]` at resolution, so a
+  readonly array was assignable to a mutable one, identical to it, and carried
+  `push`/`splice`. The modifier is now a `ParsedType::Readonly` operand that
+  resolves to a nominal reference (`READONLY_REFERENCE_ID`) over the mutable
+  shape: structural consumers peel it as before; assignability refuses it
+  against a mutable array/tuple target; identity tells the two apart; mutating
+  `Array.prototype` members are absent (`TS2339` on `ro.push`); readonly tuple
+  patterns still bind `infer` captures. Union contextual typing and the
+  open-shape argument checks see through the wrapper (each moved one
+  tanstack-query report otherwise). `SURGE_READONLY_ARRAYS=0` restores the old
+  lowering (`6e5f10bf`). Not done: tsc's `TS4104` code for a
+  readonly-to-mutable assignment (surge reports `TS2322`/`TS2345`), the
+  `TS2540` on `ro.length = 1`, and `as const` still yields mutable tuples.
+- **A predicate function returned by a call did not narrow.** `const isPost =
+  isMatching(pattern)` yields `(value: unknown) => value is …`; the handle
+  carries the written signature, but the named-callee guard path only read a
+  symbol's collected signature or an interface alias. It now reads the
+  handle's declaration the way a member predicate did. Overload selection also
+  treated the written `unknown` keyword as the degradation sentinel on both
+  sides, so a member taking `(pattern: unknown)` was never accepted and one
+  returning `(value: unknown) => value is T` was declined — such groups handed
+  every call the fold's `any` (`c282af17`).
+- **`[]` against a union of tuples evaluated to `any[]`.** The union member
+  selection bailed on an empty literal, which then fit no tuple member; it now
+  takes the union's empty tuple (or its lone array member). This is what the
+  `undecidable-conditional-never-branch-basic` fixture failed on under
+  `SURGE_GENERIC_RECURSIVE_ALIAS=1` now that variadic tuples are modelled; the
+  fixture passes under both settings.
+
+Under the local-check gate ts-pattern went 63 → 7 over this pass. The default
+configuration is unchanged at ky 0, ofetch 1, zod 21, tanstack-query 9,
+ts-pattern 1, trpc 1161 (the trpc delta from 1155 is another session's new
+`TS7008`, not this work). Dirty-tree measurements; tests and sweep not run.
+
+**The six that remain** (`is-matching.test.ts` 17, 46, 111, 117, 140, 152) are
+one thing: `P.string`'s own type is degraded. Every pattern builder is a
+`Chainable<p, omitted> = p & Omit<{ optional(): Chainable<p, omitted |
+'optional'>; and(…): Chainable<…>; … }, omitted>` — a *generic* alias whose
+self-instantiation sits inside an object type literal passed as a type
+argument. surge resolves that literal's members eagerly while binding `Omit`'s
+arguments, re-enters `Chainable`, and (the frame being keyed by declaration on
+the default path) reads it as a cycle: a generic back-edge degrades to the
+sentinel, so `StringPattern` is the sentinel and `P.infer<{ title: P.string
+}>` is `any` from there on. Two repairs were measured and rejected:
+
+- `SURGE_GENERIC_RECURSIVE_ALIAS=1` (argument-keyed frames) does not close it —
+  the `omitted` argument grows on every level and the `Omit` alias cycles under
+  it too (278k `alias-cycle` hits on a four-line probe) — and it no longer
+  completes on ts-pattern within ten minutes of CPU. Its earlier "surge-only
+  1 → 0" reading was a killed run counted as zero: a crashed or killed run
+  prints nothing, so every corpus count must be paired with the exit code.
+- Handing the generic back-edge a lazy self-reference when the re-entry passed
+  through a structural frame overflowed the stack (`Type::peeled` chasing an
+  expansion that was interned as a reference to itself — guarded now in
+  `LazyInstantiation::is_self_reference`), and once guarded it did nothing for
+  `Chainable` (the object literal pushes no structural frame, so the gate never
+  applied) while exposing incomplete shapes on tanstack-query (+5, members of
+  `QueryObserverResult` missing). Reverted; the guard stays.
+
+The real repair is lazy member resolution for object type literals in type
+argument position — the same deferral interface bodies already get — so the
+back-edge is created as a nominal reference rather than expanded. That is the
+sealed program behind both remaining `tsc`-only assertions as well.
+
 ## drizzle-orm corpus (provisioned 2026-09-13)
 
 drizzle-team/drizzle-orm `drizzle-orm@0.45.3` at `b786252`, installed with
