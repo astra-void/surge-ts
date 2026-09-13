@@ -101,6 +101,21 @@ pub(super) struct LazyInstantiation {
     pub(super) degraded_memo: std::sync::OnceLock<Arc<Type>>,
 }
 
+impl LazyInstantiation {
+    /// Whether an expansion is this very instantiation again: a generic alias
+    /// whose body reduces to its own back-edge (a cycle reference handed back
+    /// for the same arguments) would make `peeled` chase the reference forever.
+    fn is_self_reference(&self, ty: &Type) -> bool {
+        let Type::Reference(reference) = ty else {
+            return false;
+        };
+        reference.arguments.as_ref() == self.resolved_arguments.as_slice()
+            && reference.id.len() == self.decl_key.file_name.len() + 1 + self.decl_key.name.len()
+            && reference.id.starts_with(self.decl_key.file_name.as_ref())
+            && reference.id.ends_with(self.decl_key.name.as_ref())
+    }
+}
+
 impl ResolveReference for LazyInstantiation {
     fn resolve(&self) -> Type {
         (*self.resolve_arc()).clone()
@@ -129,6 +144,10 @@ impl ResolveReference for LazyInstantiation {
         crate::program::record_lazy_reference_peel_start(&self.decl_key);
         if let Some(memoized) = self.memo.get().and_then(std::sync::Weak::upgrade) {
             crate::program::record_program_counter(|c| c.lazy_reference_memo_hit_count += 1);
+            if self.is_self_reference(&memoized) {
+                crate::program::note_expansion_degradation();
+                return Arc::new(Type::Unknown);
+            }
             return memoized;
         }
         let Some(ctx) = self.environment.checker_context() else {
@@ -140,6 +159,10 @@ impl ResolveReference for LazyInstantiation {
                 crate::program::record_program_counter(|c| {
                     c.lazy_reference_interner_hit_count += 1
                 });
+                if self.is_self_reference(&entry.resolved) {
+                    crate::program::note_expansion_degradation();
+                    return Arc::new(Type::Unknown);
+                }
                 let _ = self.memo.set(Arc::downgrade(&entry.resolved));
                 return entry.resolved;
             }
@@ -301,6 +324,11 @@ impl ResolveReference for LazyInstantiation {
             other => other,
         };
 
+        if self.is_self_reference(&resolved_ty) {
+            crate::program::note_expansion_degradation();
+            crate::program::record_degraded_resolution();
+            return Arc::new(Type::Unknown);
+        }
         let interned =
             intern_instantiation(&ctx, &self.decl_key, &self.resolved_arguments, resolved_ty);
         let _ = self.memo.set(Arc::downgrade(&interned));

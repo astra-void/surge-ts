@@ -1029,9 +1029,6 @@ fn sole_matching_sequence_member(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    if elements.is_empty() {
-        return None;
-    }
     let candidates: Vec<&Type> = members
         .iter()
         .filter(|member| match member {
@@ -1042,6 +1039,19 @@ fn sole_matching_sequence_member(
         .collect();
     if candidates.is_empty() {
         return None;
+    }
+    // `[]` writes nothing to tell members apart by, so it is the empty tuple
+    // when the union declares one and otherwise the lone array member;
+    // evaluated context-free it would be `any[]`, which fits no tuple.
+    if elements.is_empty() {
+        let mut empty_tuples = candidates
+            .iter()
+            .filter(|member| matches!(member, Type::Tuple(_)));
+        return match (empty_tuples.next(), empty_tuples.next()) {
+            (Some(member), None) => Some((*member).clone()),
+            (None, _) if candidates.len() == 1 => Some(candidates[0].clone()),
+            _ => None,
+        };
     }
 
     let diagnostics_before = ctx.diagnostics().len();
