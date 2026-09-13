@@ -102,7 +102,9 @@ fn merge_class_accessors(members: Vec<ParsedClassMember>) -> Vec<ParsedClassMemb
 fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
     match member {
         ClassElement::MethodDefinition(method) => {
-            if method.computed {
+            // A computed accessor is dropped; a computed method keeps the `[…]`
+            // name the type side uses (`[Symbol.iterator]()`, `[matcher]()`).
+            if method.computed && method.kind != MethodDefinitionKind::Method {
                 return None;
             }
 
@@ -141,8 +143,13 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     }))
                 }
                 MethodDefinitionKind::Method => {
-                    let PropertyKey::StaticIdentifier(key) = &method.key else {
-                        return None;
+                    let (name, name_span) = if method.computed {
+                        (super::types::computed_key_name(&method.key)?, method.key.span())
+                    } else {
+                        let PropertyKey::StaticIdentifier(key) = &method.key else {
+                            return None;
+                        };
+                        (key.name.to_string(), key.span)
                     };
                     let return_type = method
                         .value
@@ -154,8 +161,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     });
 
                     Some(ParsedClassMember::Method(ParsedClassMethod {
-                        name: key.name.to_string(),
-                        name_span: Some(text_span_from_oxc_span(key.span)),
+                        name,
+                        name_span: Some(text_span_from_oxc_span(name_span)),
                         is_static: method.r#static,
                         is_override: method.r#override,
                         is_abstract: matches!(
@@ -219,12 +226,13 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             }
         }
         ClassElement::PropertyDefinition(property) => {
-            if property.computed {
-                return None;
-            }
-
-            let PropertyKey::StaticIdentifier(key) = &property.key else {
-                return None;
+            let (name, name_span) = if property.computed {
+                (super::types::computed_key_name(&property.key)?, property.key.span())
+            } else {
+                let PropertyKey::StaticIdentifier(key) = &property.key else {
+                    return None;
+                };
+                (key.name.to_string(), key.span)
             };
 
             let declared_type = property
@@ -240,8 +248,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             };
 
             Some(ParsedClassMember::Property(ParsedClassProperty {
-                name: key.name.to_string(),
-                name_span: Some(text_span_from_oxc_span(key.span)),
+                name,
+                name_span: Some(text_span_from_oxc_span(name_span)),
                 is_static: property.r#static,
                 is_override: property.r#override,
                 is_abstract: matches!(

@@ -1166,11 +1166,25 @@ pub(crate) fn check_optional_call_like(
 
     let base_type = surge_ts_types::remove_undefined(&callee_type);
 
+    // A callee typed by an interface or type literal with a call signature
+    // (`declare const expectTypeOf: _ExpectTypeOf`) is as callable as a plain
+    // function type, and it may arrive as a lazy reference to that shape.
+    let callable = match &base_type {
+        Type::Function(function_type) => Some(function_type.clone()),
+        Type::Object(object) => object.call_signature().cloned(),
+        Type::Reference(_) => match base_type.peeled() {
+            Type::Function(function_type) => Some(function_type),
+            Type::Object(object) => object.call_signature().cloned(),
+            _ => None,
+        },
+        _ => None,
+    };
+
     match base_type {
         Type::Any => Some(Type::Any),
         Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
-        Type::Function(function_type) => check_function_type_call(
-            &function_type,
+        _ if callable.is_some() => check_function_type_call(
+            callable.as_ref().expect("checked above"),
             callee_span,
             call_span,
             type_arguments,

@@ -458,7 +458,16 @@ pub(crate) fn resolve_parsed_type(
             // Peel a nominal reference (`keyof User`) to read the named type's keys.
             match &resolved_inner.ty.peeled() {
                 Type::Object(object_type) => {
-                    for key in object_type.properties.keys() {
+                    // A computed-key member is kept under a `[…]` name so the
+                    // shape is not vacuous, but its key is a symbol tsc never
+                    // spells as a string: `keyof` must not enumerate it, or a
+                    // mapped type and `T[keyof T]` read a property that no
+                    // written key can name.
+                    for key in object_type
+                        .properties
+                        .keys()
+                        .filter(|key| !key.starts_with('['))
+                    {
                         keys.push(Type::StringLiteral(key.to_string()));
                     }
                 }

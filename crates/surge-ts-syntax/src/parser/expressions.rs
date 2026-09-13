@@ -1000,7 +1000,11 @@ pub(crate) fn parse_object_properties(
                 }
             };
 
-            if property.computed {
+            // A computed accessor or method shorthand is still dropped; a computed
+            // *init* property is kept under the same `[…]` name the type side
+            // uses, so `{ [matcher]: … }` satisfies `Matcher` instead of
+            // inferring as `{}` with the member reported missing.
+            if property.computed && property.kind != PropertyKind::Init {
                 return None;
             }
 
@@ -1022,10 +1026,16 @@ pub(crate) fn parse_object_properties(
                 return None;
             }
 
-            if let PropertyKey::StaticIdentifier(key) = &property.key
-                && property.method
-            {
-                return parse_object_method_shorthand(key, property);
+            if property.method {
+                let (name, key_span) = if property.computed {
+                    (super::types::computed_key_name(&property.key)?, property.key.span())
+                } else {
+                    let PropertyKey::StaticIdentifier(key) = &property.key else {
+                        return None;
+                    };
+                    (key.name.to_string(), key.span)
+                };
+                return parse_object_method_shorthand_named(name, key_span, property);
             }
 
             // A quoted or numeric key names a property like any other. Dropping
@@ -1033,6 +1043,10 @@ pub(crate) fn parse_object_properties(
             // fully-quoted literal (Prisma's generated client config) inferred as
             // `{}` and reported every required property as missing.
             let (name, key_span) = match &property.key {
+                _ if property.computed => (
+                    super::types::computed_key_name(&property.key)?,
+                    property.key.span(),
+                ),
                 PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
                 PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
                 PropertyKey::NumericLiteral(literal) => {
@@ -1077,6 +1091,14 @@ fn parse_object_method_shorthand(
     key: &oxc_ast::ast::IdentifierName<'_>,
     property: &oxc_ast::ast::ObjectProperty<'_>,
 ) -> Option<ParsedObjectProperty> {
+    parse_object_method_shorthand_named(key.name.to_string(), key.span, property)
+}
+
+fn parse_object_method_shorthand_named(
+    name: String,
+    key_span: oxc_span::Span,
+    property: &oxc_ast::ast::ObjectProperty<'_>,
+) -> Option<ParsedObjectProperty> {
     let Expression::FunctionExpression(function) = &property.value else {
         return None;
     };
@@ -1119,8 +1141,8 @@ fn parse_object_method_shorthand(
     };
 
     Some(ParsedObjectProperty {
-        name: key.name.to_string(),
-        name_span: Some(text_span_from_oxc_span(key.span)),
+        name,
+        name_span: Some(text_span_from_oxc_span(key_span)),
         value: ParsedExpression::ArrowFunction(Box::new(arrow)),
         value_span: Some(text_span_from_oxc_span(function.span)),
         span: Some(text_span_from_oxc_span(property.span)),

@@ -46,19 +46,32 @@ pub(crate) fn resolve_conditional_type(
     // which every type-level test suite is written with. surge resolves both
     // returns to the same `unknown` sentinel, so the plain assignability test
     // below answers `true` for every pair of types.
-    if let Some(identical) = deferred_conditional_identity(
+    match deferred_conditional_identity(
         &conditional.check_type,
         &extends_pattern,
         ctx,
         resolving,
         substitution,
     ) {
-        let branch = if identical {
-            (*conditional.true_type).clone()
-        } else {
-            (*conditional.false_type).clone()
-        };
-        return resolve_parsed_type(branch, ctx, resolving, substitution);
+        DeferredIdentity::Identical(identical) => {
+            let branch = if identical {
+                (*conditional.true_type).clone()
+            } else {
+                (*conditional.false_type).clone()
+            };
+            return resolve_parsed_type(branch, ctx, resolving, substitution);
+        }
+        // The shape is an identity test but one side is a modelling gap: falling
+        // through to the assignability test below would answer `true` (both
+        // deferred returns are the same sentinel), which is how every
+        // `Equal<Pattern<input>, p>` guard picked its `never` arm.
+        DeferredIdentity::Undecidable => {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: false,
+            };
+        }
+        DeferredIdentity::NotThisShape => {}
     }
 
     let resolved_extends =
@@ -313,7 +326,13 @@ pub(crate) fn resolve_conditional_type(
     // `unknown` is a decision, not a failure — `unknown extends (…) => infer e` is
     // plainly false — and that distinction is the whole reason the two are
     // separate variants.
+    // The same holds for a parameter *inside* the check type: `[Actual] extends
+    // [(...args: any[]) => any]` with `Actual` still a placeholder is deferred
+    // by tsc, not answered. Deciding it here answered `false` in a declaration
+    // pre-pass, and the concrete shape that answer built (a brand object where
+    // a method should be) was then reused for every real call.
     if (resolved_check.ty.is_unknown() && !matches!(resolved_check.ty, Type::GenuineUnknown))
+        || contains_unresolved_parameter(&resolved_check.ty, SENTINEL_WALK_DEPTH)
         || (resolved_extends.ty.is_unknown()
             && !matches!(resolved_extends.ty, Type::GenuineUnknown))
     {
@@ -629,24 +648,33 @@ fn tuple_infer_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("SURGE_VARIADIC_TUPLES").as_deref() != Ok("0"))
 }
 
+enum DeferredIdentity {
+    NotThisShape,
+    Identical(bool),
+    Undecidable,
+}
+
 /// Whether a conditional is comparing two *deferred* conditionals for identity,
-/// and if so whether they are identical. `Some(false)` selects the false branch,
-/// `None` means this is not that shape (or one side is a modelling gap, where
-/// answering either way would be a guess).
+/// and if so whether they are identical. A side that carries a modelling gap
+/// makes the test undecidable: answering either way would be a guess.
 fn deferred_conditional_identity(
     check: &ParsedType,
     extends: &ParsedType,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
-) -> Option<bool> {
+) -> DeferredIdentity {
     let (ParsedType::Function(left), ParsedType::Function(right)) = (check, extends) else {
-        return None;
+        return DeferredIdentity::NotThisShape;
     };
-    let left_body = deferred_parameter_conditional(left)?;
-    let right_body = deferred_parameter_conditional(right)?;
+    let (Some(left_body), Some(right_body)) = (
+        deferred_parameter_conditional(left),
+        deferred_parameter_conditional(right),
+    ) else {
+        return DeferredIdentity::NotThisShape;
+    };
     if left.parameters.len() != right.parameters.len() {
-        return None;
+        return DeferredIdentity::NotThisShape;
     }
 
     let mut identical = true;
@@ -663,12 +691,12 @@ fn deferred_conditional_identity(
             || contains_degradation_sentinel(&left_resolved.ty, SENTINEL_WALK_DEPTH)
             || contains_degradation_sentinel(&right_resolved.ty, SENTINEL_WALK_DEPTH)
         {
-            return None;
+            return DeferredIdentity::Undecidable;
         }
         identical &= left_resolved.ty == right_resolved.ty;
     }
 
-    Some(identical)
+    DeferredIdentity::Identical(identical)
 }
 
 /// How deep `contains_degradation_sentinel` looks before giving up and calling
@@ -676,6 +704,42 @@ fn deferred_conditional_identity(
 /// walked forever; four levels covers the handler-parameter shapes a type-level
 /// test compares (`{ type: 'some'; value: { list: … } }`).
 const SENTINEL_WALK_DEPTH: usize = 4;
+
+/// Whether an unresolved type parameter or the degradation sentinel sits
+/// anywhere inside `ty` (bounded like `contains_degradation_sentinel`; `any` is
+/// a decision of its own and is not counted here).
+fn contains_unresolved_parameter(ty: &Type, depth: usize) -> bool {
+    match ty {
+        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::Any | Type::GenuineUnknown => false,
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| contains_unresolved_parameter(member, depth)),
+        Type::Array(element) => contains_unresolved_parameter(element, depth),
+        Type::Tuple(elements) => elements
+            .iter()
+            .any(|element| contains_unresolved_parameter(element, depth)),
+        Type::OpenTuple(open) => {
+            open.leading
+                .iter()
+                .chain(open.trailing.iter())
+                .any(|element| contains_unresolved_parameter(element, depth))
+                || contains_unresolved_parameter(&open.rest, depth)
+        }
+        Type::Reference(_) => {
+            if depth == 0 {
+                return true;
+            }
+            let peeled = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::ConditionalType,
+                || ty.peeled(),
+            );
+            contains_unresolved_parameter(&peeled, depth - 1)
+        }
+        _ => false,
+    }
+}
 
 /// Whether the degradation sentinel — or `any` — sits anywhere inside `ty`. An
 /// identity comparison against such a type has no answer: the sentinel stands
@@ -731,16 +795,15 @@ fn contains_degradation_sentinel(ty: &Type, depth: usize) -> bool {
                             || contains_degradation_sentinel(signature.return_type(), depth)
                     })
         }
-        Type::Reference(_) => {
-            if depth == 0 {
-                return true;
-            }
-            let peeled = crate::program::with_dts_expansion_reason(
-                crate::program::DtsExpansionReason::ConditionalType,
-                || ty.peeled(),
-            );
-            contains_degradation_sentinel(&peeled, depth - 1)
-        }
+        // A reference is identical to another by declaration and arguments —
+        // tsc's identity for a type reference — so only the arguments decide
+        // whether the comparison is sound. Peeling the body would find the
+        // method's own type parameters (`match: <I>(value: I | input) => …`)
+        // and call every interface with a generic method undecidable.
+        Type::Reference(reference) => reference
+            .arguments
+            .iter()
+            .any(|argument| contains_degradation_sentinel(argument, depth)),
         _ => false,
     }
 }

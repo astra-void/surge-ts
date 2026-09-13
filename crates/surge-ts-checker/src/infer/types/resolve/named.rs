@@ -381,7 +381,33 @@ fn resolve_named_type_inner(
     } else {
         None
     };
-    let reference_arguments = resolved_arguments;
+    // A generic interface written with fewer arguments than parameters carries
+    // its *defaults* on the reference too, as tsc's type reference does:
+    // `Matcher<unknown, 'x'>` is `Matcher<unknown, 'x', 'default', None, 'x'>`.
+    // Positional `infer` binding against `Matcher<infer a, infer b, infer c, any,
+    // infer d>` and the same-generic argument comparison both read the reference
+    // arguments, and with only the written ones the tail captures stayed
+    // unbound. The completed list flows into the authoritative bind below as its
+    // pre-resolved arguments, so the defaults are still resolved once.
+    let reference_arguments = match (declaration, resolved_arguments) {
+        (TypeDeclarationInfo::Interface(interface), Some(arguments))
+            if complete_default_arguments_enabled()
+                && arguments.len() < interface.body.type_parameters.len()
+                && interface.body.type_parameters[arguments.len()..]
+                    .iter()
+                    .all(|parameter| parameter.default_type.is_some()) =>
+        {
+            complete_interface_default_arguments(
+                interface,
+                &named_type,
+                arguments,
+                ctx,
+                resolving,
+                substitution,
+            )
+        }
+        (_, arguments) => arguments,
+    };
 
     // tsc displays a generic instantiation by its alias form (`Box<string>`), not
     // the structural expansion. Build that display name from the resolved type
@@ -1117,6 +1143,71 @@ fn generic_instantiation_display_name(
     }
 
     Some(format!("{}<{}>", declaration_name, names.join(", ")))
+}
+
+/// Opt-in (`SURGE_COMPLETE_DEFAULT_ARGS=1`): carry an interface's resolved
+/// defaults on its reference. It is what tsc's reference holds, and positional
+/// `infer` binding needs it, but it moves zod (+2, `$ZodInternalIssue<T>` loses
+/// `path`) and tanstack-query (+1) — a default bound under the wrong
+/// substitution somewhere. Off until that is found.
+fn complete_default_arguments_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_COMPLETE_DEFAULT_ARGS").as_deref() == Ok("1"))
+}
+
+/// The written arguments followed by the declaration's resolved defaults, in
+/// parameter order. Falls back to the written list when a default cannot be
+/// bound; diagnostics the probe emits are rolled back because the authoritative
+/// bind reports them.
+fn complete_interface_default_arguments(
+    interface: &crate::symbols::InterfaceInfo,
+    named_type: &ParsedNamedType,
+    written: Vec<Type>,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> Option<Vec<Type>> {
+    let declaration_scope = interface.resolution_scope.clone().or_else(|| {
+        ctx.module_scope_for_file(&interface.file_name)
+            .filter(|scope| !scope.is_empty())
+    });
+    let default_prefix = crate::infer::types::utility::namespace_member_prefix(
+        interface.declared_name.as_deref(),
+        &interface.name,
+    );
+    if let Some(prefix) = default_prefix.clone() {
+        ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix);
+    }
+    let diagnostics_before = ctx.diagnostics().len();
+    let bound = bind_type_arguments(
+        &interface.body.type_parameters,
+        named_type.type_arguments.clone(),
+        &interface.name,
+        interface.name_span,
+        ctx,
+        resolving,
+        substitution,
+        Some(&written),
+        Some((&declaration_scope, &interface.file_name)),
+    );
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    if default_prefix.is_some() {
+        ctx.namespace_member_resolution_depth -= 1;
+        ctx.namespace_member_prefix_stack.pop();
+    }
+    let bound = match bound {
+        Some(bound) if !bound.had_error => bound,
+        _ => return Some(written),
+    };
+    let mut completed = Vec::with_capacity(interface.body.type_parameters.len());
+    for parameter in &interface.body.type_parameters {
+        match bound.substitution.get(&parameter.name) {
+            Some(ty) => completed.push(ty.clone()),
+            None => return Some(written),
+        }
+    }
+    Some(completed)
 }
 
 /// Tags a successfully-resolved generic object instantiation with its alias

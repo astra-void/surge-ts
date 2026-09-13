@@ -868,12 +868,19 @@ pub(crate) fn is_shadowed_setter(
 pub(crate) fn parse_type_method_signature(
     method_signature: &TSMethodSignature<'_>,
 ) -> Option<ParsedObjectTypeProperty> {
-    if method_signature.computed {
-        return None;
-    }
-
-    let PropertyKey::StaticIdentifier(key) = &method_signature.key else {
-        return None;
+    let (name, name_span) = if method_signature.computed {
+        // Only a plain method lowers here; a computed accessor pair is rare
+        // enough to keep dropping. `[matcher](): …` is the one member of
+        // ts-pattern's `Matcher`, and dropping it made every object a Matcher.
+        if method_signature.kind != TSMethodSignatureKind::Method {
+            return None;
+        }
+        (computed_key_name(&method_signature.key)?, None)
+    } else {
+        let PropertyKey::StaticIdentifier(key) = &method_signature.key else {
+            return None;
+        };
+        (key.name.to_string(), Some(text_span_from_oxc_span(key.span)))
     };
 
     // A `get`/`set` accessor lowers to a plain property: the getter's return
@@ -896,8 +903,8 @@ pub(crate) fn parse_type_method_signature(
         };
 
         return Some(ParsedObjectTypeProperty {
-            name: key.name.to_string(),
-            name_span: Some(text_span_from_oxc_span(key.span)),
+            name,
+            name_span,
             optional: false,
             is_method: false,
             ty: accessor_type,
@@ -921,8 +928,8 @@ pub(crate) fn parse_type_method_signature(
         .and_then(|annotation| parse_type_annotation(annotation.as_ref()))?;
 
     Some(ParsedObjectTypeProperty {
-        name: key.name.to_string(),
-        name_span: Some(text_span_from_oxc_span(key.span)),
+        name,
+        name_span,
         ty: ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
             parameters,
             return_type: Box::new(return_type),
@@ -972,15 +979,24 @@ pub(crate) fn parse_type_arguments(
     type_arguments.params.iter().map(parse_type).collect()
 }
 
-/// `[Symbol.iterator]` rendered as a name no written identifier can collide with.
-fn symbol_property_name(key: &PropertyKey<'_>) -> Option<String> {
-    let PropertyKey::StaticMemberExpression(member) = key else {
-        return None;
-    };
-    let Expression::Identifier(object) = &member.object else {
-        return None;
-    };
-    (object.name == "Symbol").then(|| format!("[Symbol.{}]", member.property.name))
+/// A computed member key (`[Symbol.iterator]`, `[matcher]`, `[symbols.select]`)
+/// rendered as a name no written identifier can collide with. Symbol keys
+/// themselves are not modelled; the name only keeps the member from vanishing,
+/// which turned every such type literal or interface into `{}`.
+pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
+    fn render(expression: &Expression<'_>) -> Option<String> {
+        match expression {
+            Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+            Expression::StaticMemberExpression(member) => {
+                Some(format!("{}.{}", render(&member.object)?, member.property.name))
+            }
+            _ => None,
+        }
+    }
+    match key {
+        PropertyKey::StaticIdentifier(_) | PropertyKey::PrivateIdentifier(_) => None,
+        other => render(other.to_expression()).map(|path| format!("[{path}]")),
+    }
 }
 
 pub(crate) fn parse_type_property_signature(
@@ -998,7 +1014,7 @@ pub(crate) fn parse_type_property_signature(
         // false arm became unreachable. Symbol keys are not modelled, but the
         // member is kept under a name no identifier can spell, which is enough to
         // stop the literal being vacuous.
-        return symbol_property_name(&property_signature.key).and_then(|name| {
+        return computed_key_name(&property_signature.key).and_then(|name| {
             let type_annotation = property_signature
                 .type_annotation
                 .as_ref()
