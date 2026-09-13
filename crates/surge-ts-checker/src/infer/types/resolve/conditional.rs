@@ -659,8 +659,8 @@ fn deferred_conditional_identity(
             resolve_parsed_type((**right_part).clone(), ctx, resolving, substitution);
         if left_resolved.had_error
             || right_resolved.had_error
-            || matches!(left_resolved.ty, Type::Unknown | Type::TypeParameter(_))
-            || matches!(right_resolved.ty, Type::Unknown | Type::TypeParameter(_))
+            || contains_degradation_sentinel(&left_resolved.ty, SENTINEL_WALK_DEPTH)
+            || contains_degradation_sentinel(&right_resolved.ty, SENTINEL_WALK_DEPTH)
         {
             return None;
         }
@@ -668,6 +668,73 @@ fn deferred_conditional_identity(
     }
 
     Some(identical)
+}
+
+/// How deep `contains_degradation_sentinel` looks before giving up and calling
+/// the type undecidable. Bounded so a lazy self-referential shape cannot be
+/// walked forever; four levels covers the handler-parameter shapes a type-level
+/// test compares (`{ type: 'some'; value: { list: … } }`).
+const SENTINEL_WALK_DEPTH: usize = 4;
+
+/// Whether the degradation sentinel — or `any` — sits anywhere inside `ty`. An
+/// identity comparison against such a type has no answer: the sentinel stands
+/// for a shape surge could not model, and `any` is far more often surge's
+/// answer for an inference it could not make (a `.with(pattern, (v) => …)`
+/// handler parameter through a sealed overload group) than a written one, so
+/// `false` there would report a difference that is surge's, not the program's.
+/// Past the depth bound the answer is "cannot tell", which is treated the same
+/// way.
+fn contains_degradation_sentinel(ty: &Type, depth: usize) -> bool {
+    match ty {
+        Type::Unknown | Type::TypeParameter(_) | Type::Any => true,
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| contains_degradation_sentinel(member, depth)),
+        Type::Array(element) => contains_degradation_sentinel(element, depth),
+        Type::Tuple(elements) => elements
+            .iter()
+            .any(|element| contains_degradation_sentinel(element, depth)),
+        Type::Function(function) => {
+            function
+                .parameters()
+                .iter()
+                .any(|parameter| contains_degradation_sentinel(parameter, depth))
+                || contains_degradation_sentinel(function.return_type(), depth)
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .any(|property| contains_degradation_sentinel(&property.ty, depth))
+                || object
+                    .string_index_type
+                    .as_deref()
+                    .is_some_and(|index| contains_degradation_sentinel(index, depth))
+                || object
+                    .call_signature()
+                    .into_iter()
+                    .chain(object.construct_signature())
+                    .any(|signature| {
+                        signature
+                            .parameters()
+                            .iter()
+                            .any(|parameter| contains_degradation_sentinel(parameter, depth))
+                            || contains_degradation_sentinel(signature.return_type(), depth)
+                    })
+        }
+        Type::Reference(_) => {
+            if depth == 0 {
+                return true;
+            }
+            let peeled = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::ConditionalType,
+                || ty.peeled(),
+            );
+            contains_degradation_sentinel(&peeled, depth - 1)
+        }
+        _ => false,
+    }
 }
 
 /// The signature's return conditional, when the signature is generic and that
