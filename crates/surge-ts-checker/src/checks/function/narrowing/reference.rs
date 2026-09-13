@@ -261,6 +261,12 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     {
                         narrowed_any = true;
                     }
+                    // The leaf narrowers answer `None` both for "nothing to
+                    // narrow" and for "this member cannot satisfy the guard at
+                    // all", and keeping the member was wrong in the second case.
+                    None if property_path_is_impossible(member, path, guard) => {
+                        narrowed_any = true;
+                    }
                     None => members.push(member.clone()),
                 }
             }
@@ -268,6 +274,57 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
         }
         _ => None,
     }
+}
+
+/// Whether `guard` can never hold for `member` at `path`, which makes the member
+/// an impossible shape of the narrowed value rather than an unchanged one.
+///
+/// The AWS SDK's union-member pattern is what needs this: every member of
+/// `Field` declares the other members' keys as `?: never`, so
+/// `field.arrayValue !== undefined` leaves exactly one member possible. At such
+/// a leaf `never | undefined` collapses to plain `undefined`, which has no union
+/// to split, so [`ReferenceGuard::narrow_leaf`] answers `None` — and `None` is
+/// also what an already-narrow leaf answers. Read as "keep it", the union never
+/// narrowed and every later `field.arrayValue` read stayed optional.
+///
+/// Only the not-nullish direction is decided here. The matching direction keeps
+/// such a member (it *is* the undefined one), and the truthy guard reaches its
+/// own arm above.
+fn property_path_is_impossible(member: &Type, path: &[String], guard: ReferenceGuard<'_>) -> bool {
+    if !matches!(
+        guard,
+        ReferenceGuard::Nullish {
+            keep_matching: false
+        }
+    ) {
+        return false;
+    }
+    let Some(leaf) = property_path_leaf_type(member, path) else {
+        return false;
+    };
+    match leaf {
+        Type::Undefined | Type::Void | Type::Never => true,
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .all(|member| matches!(member, Type::Undefined | Type::Void | Type::Never)),
+        _ => false,
+    }
+}
+
+/// The declared type at the end of `path`, with an optional slot's `undefined`
+/// put back. `None` when any link is missing or is not an object.
+fn property_path_leaf_type(ty: &Type, path: &[String]) -> Option<Type> {
+    let (head, rest) = path.split_first()?;
+    let Type::Object(object_type) = ty.peeled() else {
+        return None;
+    };
+    let property = object_type.properties.get(head.as_str())?;
+    let effective = ReferenceGuard::effective_leaf_type(&property.ty, property.optional);
+    if rest.is_empty() {
+        return Some(effective);
+    }
+    property_path_leaf_type(&property.ty, rest)
 }
 
 /// The narrowed type of `base` under `guard` applied at `path`, or `None` when

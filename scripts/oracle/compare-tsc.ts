@@ -395,6 +395,7 @@ export const fixturePresets: Record<string, string> = {
   'abstract-member-no-body-basic': path.join(workspaceRoot, 'tests/compat-projects/abstract-member-no-body-basic/tsconfig.json'),
   'string-keyword-indexed-access-basic': path.join(workspaceRoot, 'tests/compat-projects/string-keyword-indexed-access-basic/tsconfig.json'),
   'filter-arrow-predicate-self-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/filter-arrow-predicate-self-reference-basic/tsconfig.json'),
+  'property-path-impossible-union-member-basic': path.join(workspaceRoot, 'tests/compat-projects/property-path-impossible-union-member-basic/tsconfig.json'),
   'class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/class-static-inheritance-basic/tsconfig.json'),
   'declaration-flow-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/declaration-flow-narrowing-basic/tsconfig.json'),
   'lib-reference-index-and-signature-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-reference-index-and-signature-scope-basic/tsconfig.json'),
