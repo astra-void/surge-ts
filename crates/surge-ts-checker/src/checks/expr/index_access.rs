@@ -162,6 +162,19 @@ pub(super) fn evaluate_index_access(
     // indexes like the array it names; left unpeeled it fell through to the
     // object arm and reported the *receiver* as a missing property.
     let receiver_type = match &receiver_type {
+        // A reference to the library `Array<T>` interface itself (a `Array<string>`
+        // return annotation reaching the caller through a package re-export)
+        // peels to the interface's member object, which has no numeric index
+        // signature to answer `key[0]`; it indexes like `T[]` all the same.
+        Type::Reference(reference)
+            if reference.arguments.len() == 1
+                && matches!(
+                    reference.id.split('\u{0}').next_back(),
+                    Some("Array" | "ReadonlyArray")
+                ) =>
+        {
+            Type::Array(Box::new(reference.arguments[0].clone()))
+        }
         Type::Reference(_) => match receiver_type.peeled() {
             peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
             _ => receiver_type,

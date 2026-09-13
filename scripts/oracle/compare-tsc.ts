@@ -386,6 +386,7 @@ export const fixturePresets: Record<string, string> = {
   'overload-return-selection-basic': path.join(workspaceRoot, 'tests/compat-projects/overload-return-selection-basic/tsconfig.json'),
   'generic-object-candidate-union-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-object-candidate-union-basic/tsconfig.json'),
   'callback-rest-any-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/callback-rest-any-inference-basic/tsconfig.json'),
+  'package-reexport-array-index-basic': path.join(workspaceRoot, 'tests/compat-projects/package-reexport-array-index-basic/tsconfig.json'),
   'predicate-type-argument-from-arguments-basic': path.join(workspaceRoot, 'tests/compat-projects/predicate-type-argument-from-arguments-basic/tsconfig.json'),
   'class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/class-static-inheritance-basic/tsconfig.json'),
   'declaration-flow-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/declaration-flow-narrowing-basic/tsconfig.json'),
