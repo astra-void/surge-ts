@@ -387,6 +387,7 @@ export const fixturePresets: Record<string, string> = {
   'generic-object-candidate-union-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-object-candidate-union-basic/tsconfig.json'),
   'callback-rest-any-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/callback-rest-any-inference-basic/tsconfig.json'),
   'package-reexport-array-index-basic': path.join(workspaceRoot, 'tests/compat-projects/package-reexport-array-index-basic/tsconfig.json'),
+  'alias-double-negation-and-basic': path.join(workspaceRoot, 'tests/compat-projects/alias-double-negation-and-basic/tsconfig.json'),
   'predicate-type-argument-from-arguments-basic': path.join(workspaceRoot, 'tests/compat-projects/predicate-type-argument-from-arguments-basic/tsconfig.json'),
   'class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/class-static-inheritance-basic/tsconfig.json'),
   'declaration-flow-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/declaration-flow-narrowing-basic/tsconfig.json'),

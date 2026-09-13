@@ -80,3 +80,39 @@ fn an_unguarded_unknown_still_reports() {
     );
     assert_eq!(codes(&diagnostics), vec!["TS18046"]);
 }
+
+// `!!x` as an `&&` operand proves `x` the way the bare reference does, also
+// when it reaches the condition through a boolean `const` alias — tanstack's
+// `const isRefetch = !!query && query.isFetched(); if (isRefetch && mode ===
+// 'reset') { query.setState(…) }`. Only the reference-guard walk lacked the
+// unwrap: `!!query` on its own already narrowed.
+#[test]
+fn a_double_negation_inside_and_narrows_the_reference() {
+    let diagnostics = check(
+        "interface Query { isFetched(): boolean; setState(s: object): void }\n\
+         declare function find(): Query | undefined;\n\
+         export function inline(mode: string) {\n\
+             const query = find();\n\
+             if (!!query && mode === 'reset') { query.setState({}); }\n\
+         }\n\
+         export function aliased(mode: string) {\n\
+             const query = find();\n\
+             const isRefetch = !!query && query.isFetched();\n\
+             if (isRefetch && mode === 'reset') { query.setState({}); }\n\
+         }\n",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn a_single_negation_inside_and_still_reports() {
+    let diagnostics = check(
+        "interface Query { setState(s: object): void }\n\
+         declare function find(): Query | undefined;\n\
+         export function negated(mode: string) {\n\
+             const query = find();\n\
+             if (!query && mode === 'reset') { query.setState({}); }\n\
+         }\n",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS18048"]);
+}

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use surge_ts_syntax::ParsedUnaryOperator;
 use surge_ts_syntax::{ParsedExpression, ParsedLogicalOperator};
 use surge_ts_types::{Type, TypeCopyReason, union_type, with_type_copy_reason};
 
@@ -342,6 +343,24 @@ pub(super) fn collect_reference_guards<'a>(
             collect_reference_guards(left, true, guards);
             collect_reference_guards(right, true, guards);
         }
+        return;
+    }
+
+    // `!!x` is `x`'s truthiness spelled out; as an `&&` operand (`!!query &&
+    // query.isFetched()`, or an alias of it) it proves the same thing the bare
+    // reference does. Unwrapped here so every guard below sees the reference.
+    if let ParsedExpression::Unary {
+        operator: ParsedUnaryOperator::Not,
+        operand,
+        ..
+    } = condition
+        && let ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand: inner,
+            ..
+        } = operand.as_ref()
+    {
+        collect_reference_guards(inner, branch_is_true, guards);
         return;
     }
 
