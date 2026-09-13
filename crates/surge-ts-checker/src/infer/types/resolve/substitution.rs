@@ -335,6 +335,7 @@ fn check_type_argument_constraint(
     let Some(constraint) = parameter.constraint.clone() else {
         return;
     };
+    let constraint_for_display = constraint.clone();
     if argument_had_error || !constraint_judgeable(argument) {
         return;
     }
@@ -362,12 +363,42 @@ fn check_type_argument_constraint(
     }
 
     if !surge_ts_types::is_assignable_to(argument, &resolved_constraint.ty) {
+        let constraint_name = written_constraint_display(&constraint_for_display, &effective)
+            .unwrap_or_else(|| resolved_constraint.ty.name().to_string());
         crate::infer::types::diagnostics::emit_type_argument_constraint(
             argument,
-            &resolved_constraint.ty,
+            &constraint_name,
             name_span,
             ctx,
         );
+    }
+}
+
+/// The constraint as written, for the diagnostic. `keyof T` is spelled out
+/// rather than expanded because that is how tsc names it and how `Pick`'s own
+/// check in `utility.rs` already reports it — two spellings of one constraint
+/// are two dedup keys, and the same violation was reported twice. Kept local
+/// rather than added to `parsed_type_display`, whose output also prefixes
+/// rendered function types.
+fn written_constraint_display(
+    constraint: &ParsedType,
+    substitution: &TypeParameterSubstitution,
+) -> Option<String> {
+    match constraint {
+        ParsedType::KeyOf(inner) => Some(format!(
+            "keyof {}",
+            written_constraint_display(inner, substitution)?
+        )),
+        // A constraint names the declaration's *own* parameters (`Pick<T, K
+        // extends keyof T>`), and tsc renders them substituted — `keyof User`,
+        // not `keyof T`.
+        ParsedType::Named(named) if named.type_arguments.is_empty() => Some(
+            substitution
+                .get(&named.name)
+                .map(|bound| bound.name().to_string())
+                .unwrap_or_else(|| named.name.clone()),
+        ),
+        other => crate::driver::parsed_type_display(other),
     }
 }
 

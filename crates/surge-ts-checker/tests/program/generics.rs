@@ -506,13 +506,13 @@ fn generic_default_type_argument_partial_application_valid() {
 }
 
 #[test]
-fn generic_constraint_parsed_not_enforced() {
+fn generic_constraint_rejects_an_out_of_constraint_argument() {
     let diagnostics = program(&[
         ("box.ts", "type Named<T extends string> = { name: T };"),
         ("index.ts", "let value: Named<number> = { name: 1 };"),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2344"]);
 }
 
 #[test]
@@ -533,16 +533,6 @@ fn generic_constraint_default_combination_valid() {
             "type Named<T extends string = \"ok\"> = { name: T };",
         ),
         ("index.ts", "let value: Named = { name: \"ok\" };"),
-    ]);
-
-    assert!(diagnostics.is_empty());
-}
-
-#[test]
-fn generic_constraint_does_not_reject_out_of_constraint_yet() {
-    let diagnostics = program(&[
-        ("box.ts", "type Named<T extends string> = { name: T };"),
-        ("index.ts", "let value: Named<number> = { name: 1 };"),
     ]);
 
     assert!(diagnostics.is_empty());
