@@ -16,7 +16,7 @@
 
 // Wired into the analysis driver in a following increment; the graph/SCC core
 // is landed and tested first so the scheduling logic is validated before it
-// touches per-worker arena allocation.
+// touches per-worker checker state.
 #![allow(dead_code)]
 
 /// Index of a module (file) in the program's `parsed_files` slice.

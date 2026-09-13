@@ -12,7 +12,9 @@ use crate::symbols::{SymbolInfo, SymbolTable, TypeDeclarationTable};
 pub(crate) mod candidates;
 mod diagnostics;
 pub(crate) mod exports;
-pub(crate) use exports::{peel_exported_statement, statics_merged_into, statics_merged_into_symbol};
+pub(crate) use exports::{
+    peel_exported_statement, statics_merged_into, statics_merged_into_symbol,
+};
 pub(crate) mod imports;
 mod node_builtins;
 mod resolution;
@@ -128,8 +130,6 @@ impl ModuleImportBindings {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use crate::context::{CheckerContext, FileKind};
     use crate::program::ParsedProgramFile;

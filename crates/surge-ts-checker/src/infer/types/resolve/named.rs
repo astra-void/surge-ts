@@ -197,8 +197,8 @@ fn resolve_named_type_inner(
 
     // Look up the declaration through a context-independent handle so resolution
     // can read the (often large) interface/alias payload while `ctx` is borrowed
-    // mutably, without deep-cloning it. The handle keeps the backing arena alive;
-    // the borrowed declaration below is decoupled from `ctx`.
+    // mutably, without deep-cloning it. The handle owns its payload, so the
+    // borrowed declaration below is decoupled from `ctx`.
     let Some(handle) = ctx.lookup_type_declaration_handle(&named_type.name) else {
         if let Some(resolved) = resolve_value_heritage_base(&named_type, ctx) {
             return resolved;
@@ -215,7 +215,8 @@ fn resolve_named_type_inner(
                 "[had-error] lookup-miss '{}' scope_installed={} file_in_map={} map_len={} check_phase={} in file {}",
                 named_type.name,
                 ctx.type_declaration_scope.is_some(),
-                ctx.module_scope_by_file.contains_key(ctx.file_name.as_str()),
+                ctx.module_scope_by_file
+                    .contains_key(ctx.file_name.as_str()),
                 ctx.module_scope_by_file.len(),
                 crate::program::in_check_phase(),
                 ctx.file_name
@@ -319,7 +320,8 @@ fn resolve_named_type_inner(
         // the lowered literal-union body cannot express. Wrap it in a nominal
         // reference so the *display* carries the enum while the payload stays the
         // literal union assignability already understands.
-        let resolved = wrap_enum_member_reference(resolved, declaration, &alias_id, &cache_key, ctx);
+        let resolved =
+            wrap_enum_member_reference(resolved, declaration, &alias_id, &cache_key, ctx);
         // Wrap the named object in a lazy nominal reference. A non-generic
         // declaration is concrete and context-independent, so its expansion is
         // interned (the wrapped object keeps its `alias_id`/`alias_name`, so a
@@ -640,8 +642,7 @@ fn resolve_named_type_inner(
         && !awaited_may_be_undefined
         && let (Some(display), Some(arguments)) =
             (alias_display_name.as_ref(), reference_arguments.as_ref())
-        && (concrete_instantiation
-            || arguments.iter().all(|argument| !argument.is_unknown()))
+        && (concrete_instantiation || arguments.iter().all(|argument| !argument.is_unknown()))
     {
         return ResolvedType {
             ty: make_lazy_type_reference(
@@ -847,7 +848,9 @@ fn resolved_argument_display(
     decl_key: &DeclarationResolutionKey,
     arguments: &Option<Vec<Type>>,
 ) -> Option<String> {
-    let arguments = arguments.as_ref().filter(|arguments| !arguments.is_empty())?;
+    let arguments = arguments
+        .as_ref()
+        .filter(|arguments| !arguments.is_empty())?;
     let name = decl_key
         .name
         .rsplit_once('.')
@@ -1147,10 +1150,12 @@ fn wrap_enum_member_reference(
     let Some(enum_name) = alias.enum_name.as_deref() else {
         return resolved;
     };
-    if resolved.had_error || matches!(
-        resolved.ty,
-        Type::Reference(_) | Type::Unknown | Type::TypeParameter(_)
-    ) {
+    if resolved.had_error
+        || matches!(
+            resolved.ty,
+            Type::Reference(_) | Type::Unknown | Type::TypeParameter(_)
+        )
+    {
         return resolved;
     }
     // tsc qualifies an exported enum's type with the module it came from and

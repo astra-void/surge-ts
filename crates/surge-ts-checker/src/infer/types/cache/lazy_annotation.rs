@@ -2,15 +2,21 @@ use std::sync::Arc;
 
 use surge_ts_types::{ResolveReference, Type, TypeReference};
 
-use crate::context::{
-    CheckerContext, DeclarationEnvironmentHandle, DeclarationNamespace,
-    DeclarationResolutionKey,
-};
-use crate::infer::types::*;
 use super::{
     LazyMemberIdentity, intern_instantiation, intern_lazy_member_content, lazy_value_trace_filter,
     lazy_value_trace_shape, lookup_instantiation, parsed_annotation_display,
 };
+use crate::context::{
+    CheckerContext, DeclarationEnvironmentHandle, DeclarationNamespace, DeclarationResolutionKey,
+};
+use crate::infer::types::*;
+
+thread_local! {
+    /// Content ids of the lazy annotations being forced on this thread (see the
+    /// re-entry check in `resolve_arc_inner`).
+    static LAZY_VALUE_FORCES_IN_PROGRESS: std::cell::RefCell<Vec<Arc<str>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 
 /// The capture-site content of a lazy annotation reference, split out from the
 /// per-instance handle because none of it depends on WHICH context created the
@@ -19,13 +25,6 @@ use super::{
 /// references intern this by content, so an interface member reached from N
 /// consumer sites renders its display, formats its id and key, and clones its
 /// annotation and substitution once rather than N times.
-thread_local! {
-    /// Content ids of the lazy annotations being forced on this thread (see the
-    /// re-entry check in `resolve_arc_inner`).
-    static LAZY_VALUE_FORCES_IN_PROGRESS: std::cell::RefCell<Vec<Arc<str>>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
 pub(super) struct LazyAnnotationContent {
     pub(super) id: Arc<str>,
     pub(super) key: DeclarationResolutionKey,
@@ -321,7 +320,13 @@ impl LazyDeclarationAnnotation {
                 .diagnostics
                 .iter()
                 .take(4)
-                .map(|d| format!("{}:{}", d.code, d.message.chars().take(90).collect::<String>()))
+                .map(|d| {
+                    format!(
+                        "{}:{}",
+                        d.code,
+                        d.message.chars().take(90).collect::<String>()
+                    )
+                })
                 .collect();
             eprintln!(
                 "[lazy-value] FORCE {} had_error={had_error} diags={:?} ty={}",
@@ -419,7 +424,10 @@ pub(crate) fn make_lazy_signature_annotation_reference(
 /// Wraps one lazy annotation content in a fresh per-capture handle: the
 /// environment, the creation scope and the memo slots are the only parts that
 /// belong to a single capture site.
-pub(super) fn lazy_annotation_reference(content: Arc<LazyAnnotationContent>, ctx: &mut CheckerContext) -> Type {
+pub(super) fn lazy_annotation_reference(
+    content: Arc<LazyAnnotationContent>,
+    ctx: &mut CheckerContext,
+) -> Type {
     let environment = ctx.declaration_environment();
     let creation_scope = ctx.type_declaration_scope.clone();
     Type::Reference(TypeReference::new(
@@ -450,7 +458,13 @@ pub(crate) fn make_lazy_value_annotation_reference(
     declaration_start: usize,
     annotation: surge_ts_syntax::ParsedType,
 ) -> Type {
-    make_lazy_value_annotation_reference_under(ctx, declaration_name, declaration_start, annotation, None)
+    make_lazy_value_annotation_reference_under(
+        ctx,
+        declaration_name,
+        declaration_start,
+        annotation,
+        None,
+    )
 }
 
 /// [`make_lazy_value_annotation_reference`] for a `declare namespace` value

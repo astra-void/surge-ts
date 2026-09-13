@@ -5,23 +5,23 @@
 
 use surge_ts_syntax::ParsedExpression;
 
+mod arrayness;
+mod discriminant;
+mod instanceof;
 mod literal_equality;
 mod nullish;
-mod discriminant;
+mod predicate;
 mod property_presence;
 mod typeof_guard;
-mod instanceof;
-mod arrayness;
-mod predicate;
 
+pub(super) use arrayness::*;
+pub(super) use discriminant::*;
+pub(super) use instanceof::*;
 pub(super) use literal_equality::*;
 pub(super) use nullish::*;
-pub(super) use discriminant::*;
+pub(super) use predicate::*;
 pub(super) use property_presence::*;
 pub(super) use typeof_guard::*;
-pub(super) use instanceof::*;
-pub(super) use arrayness::*;
-pub(super) use predicate::*;
 
 /// The identifier a single type guard tests, if the guard is one we model over a
 /// bare identifier (`x instanceof C`, `typeof x === "s"`, `Array.isArray(x)`,

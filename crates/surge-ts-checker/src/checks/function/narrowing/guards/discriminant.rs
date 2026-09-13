@@ -1,17 +1,8 @@
 use surge_ts_syntax::ParsedExpression;
 use surge_ts_types::{Type, TypeCopyReason};
 
-use crate::symbols::{SymbolInfo, SymbolTable};
 use super::{const_member_literal_value, literal_expression_value, narrow_union_by_discriminant};
-
-/// Parses a `base.property === literal` (or `!==`) discriminant test. Returns the
-/// discriminant object expression, the property name, the literal type, and
-/// whether the operator is an equality (`===`/`==`) vs inequality test.
-pub(crate) fn parse_discriminant_condition(
-    condition: &ParsedExpression,
-) -> Option<(&ParsedExpression, &str, Type, bool)> {
-    parse_discriminant_condition_with(condition, &|_| None)
-}
+use crate::symbols::{SymbolInfo, SymbolTable};
 
 /// `x?.p === lit` holds only when `x` is not nullish (a nullish `x` reads
 /// `undefined`, which equals no literal), so the true branch drops `x`'s
@@ -29,7 +20,10 @@ pub(crate) fn narrow_optional_chain_base(
     let optional_access = matches!(
         left.as_ref(),
         ParsedExpression::OptionalPropertyAccess { .. }
-    ) || matches!(right.as_ref(), ParsedExpression::OptionalPropertyAccess { .. });
+    ) || matches!(
+        right.as_ref(),
+        ParsedExpression::OptionalPropertyAccess { .. }
+    );
     if !optional_access || !keep_matching || *literal == Type::Undefined {
         return None;
     }
@@ -107,10 +101,11 @@ pub(crate) fn narrow_discriminant_symbol_table(
     match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let symbol = symbols.get(name)?;
-            let narrowed = narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)
-                .or_else(|| {
-                    narrow_optional_chain_base(condition, &symbol.ty, &literal, keep_matching)
-                })?;
+            let narrowed =
+                narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)
+                    .or_else(|| {
+                        narrow_optional_chain_base(condition, &symbol.ty, &literal, keep_matching)
+                    })?;
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
             narrowed_symbols.insert_narrowed(
                 name.clone(),

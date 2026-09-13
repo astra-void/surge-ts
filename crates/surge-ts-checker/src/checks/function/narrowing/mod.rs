@@ -7,19 +7,19 @@ use surge_ts_types::{Type, TypeCopyReason, union_type};
 use crate::context::CheckerContext;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
 
-mod guards;
-mod truthy;
-mod reference;
-mod predicate;
 mod element_reference;
+mod guards;
+mod predicate;
+mod reference;
+mod truthy;
 mod type_guards;
 
-pub(crate) use truthy::*;
-pub(crate) use reference::*;
-pub(crate) use predicate::*;
 pub(crate) use element_reference::*;
-pub(crate) use type_guards::*;
 use guards::*;
+pub(crate) use predicate::*;
+pub(crate) use reference::*;
+pub(crate) use truthy::*;
+pub(crate) use type_guards::*;
 
 /// Narrows `ty` for variable `var_name` under `condition`, returning the narrowed
 /// type or `None` when the condition does not constrain `var_name` (or leaves it
@@ -148,10 +148,20 @@ fn narrow_single_guard_for_identifier(
         return narrow_union_by_arraybufferview(ty, branch_is_true);
     }
     if let Some(guard) = parse_type_predicate_condition(condition, &mut |callee| {
-        predicate_callee_signature(callee, |name| scopes.resolve(name), scopes.visible_symbols(), ctx)
+        predicate_callee_signature(
+            callee,
+            |name| scopes.resolve(name),
+            scopes.visible_symbols(),
+            ctx,
+        )
     }) && guard.subject == var_name
     {
-        return match resolve_predicate_guard_target(&guard, Some(ty), scopes.visible_symbols(), ctx)? {
+        return match resolve_predicate_guard_target(
+            &guard,
+            Some(ty),
+            scopes.visible_symbols(),
+            ctx,
+        )? {
             PredicateTarget::Resolved(predicate_ty) => {
                 narrow_by_predicate(ty, &predicate_ty, branch_is_true)
             }

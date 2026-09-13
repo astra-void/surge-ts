@@ -9,7 +9,7 @@ pub(crate) fn export_local_type_name(
     type_declarations: &mut TypeDeclarationTable,
     ctx: &mut CheckerContext,
 ) {
-    // Read the local declaration through an arena-backed handle so re-export
+    // Read the local declaration through an `Arc` handle so re-export
     // binding hands `export_local_type_declaration` a borrow instead of a deep
     // clone. The rename/scope rewrite there still takes one owned copy; this
     // removes the redundant second clone this path previously paid per

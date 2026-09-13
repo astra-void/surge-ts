@@ -1,16 +1,12 @@
-use surge_ts_checker::{
-    CheckerOptions, SourceFileInput, check_program,
-    check_source,
-};
+use surge_ts_checker::{CheckerOptions, SourceFileInput, check_program, check_source};
 
 use super::*;
 
 /// Regression coverage for the parallel check phase over script (non-module)
-/// files. Every worker builds its per-file declaration table from the prebuilt
-/// shared global+ambient table; rebuilding it inside workers previously
-/// bump-allocated into the shared arena concurrently. With the arena freeze in
-/// place, any reintroduced worker-side allocation panics deterministically,
-/// so this test failing (or panicking) flags the race instead of silent UB.
+/// files. Every worker builds its per-file declaration table by cloning the
+/// prebuilt shared global+ambient table; a worker that rebuilds it instead can
+/// observe a different global merge than its peers, which shows up here as a
+/// diagnostic difference from the serial run.
 #[test]
 fn parallel_script_files_match_serial_diagnostics() {
     use surge_ts_checker::check_program_with_stats_and_jobs;
@@ -546,7 +542,7 @@ fn distributive_conditional_concrete_map_member_binds_infer_captures() {
                  type RO = MakeRO<Map<string, number>>;\n\
                  declare const ro: RO;\n\
                  export const bad: string = ro.size;\n"
-            .to_string(),
+                .to_string(),
         },
     ];
     let diagnostics = check_program(files);
@@ -575,7 +571,7 @@ fn distributive_conditional_sentinel_member_stays_undecided() {
                  type Mystery = keyof 5;\n\
                  declare const m: MakeRO<Mystery>;\n\
                  export const ok: number = m;\n"
-            .to_string(),
+                .to_string(),
         },
     ];
     let diagnostics = check_program(files);
@@ -600,7 +596,7 @@ fn distributive_conditional_unresolved_member_still_reports_ts2304() {
             file_name: "use.ts".to_string(),
             source_text: "import { MakeRO } from \"./util\";\n\
                  export type Broken = MakeRO<Missing>;\n"
-            .to_string(),
+                .to_string(),
         },
     ];
     let diagnostics = check_program(files);
@@ -646,7 +642,7 @@ fn distributive_conditional_fixtures_deterministic_across_jobs() {
                  type RO = MakeRO<Map<string, number>>;\n\
                  declare const ro: RO;\n\
                  export const bad: string = ro.size;\n"
-            .to_string(),
+                .to_string(),
         },
     ];
     let serial =

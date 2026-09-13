@@ -44,23 +44,22 @@ use surge_ts_types::fx::{FxHashMap, FxHasher};
 use surge_ts_types::{FunctionType, Type, type_conflict_digest};
 
 use crate::context::{
-    DeclarationResolutionKey, GenericInstantiationCacheEntry,
-    InstantiationCacheEntry, InterfaceDeclarationTemplate, InterfaceInstantiationKey,
-    InterfaceMemberInstantiationKey, InterfaceOverloadInstantiationKey,
-    StableInterfaceDeclarationId,
+    DeclarationResolutionKey, GenericInstantiationCacheEntry, InstantiationCacheEntry,
+    InterfaceDeclarationTemplate, InterfaceInstantiationKey, InterfaceMemberInstantiationKey,
+    InterfaceOverloadInstantiationKey, StableInterfaceDeclarationId,
 };
 
+mod commit;
 mod file_log;
 mod fingerprint;
-mod session;
-mod commit;
 mod reservation;
+mod session;
 
+pub(crate) use commit::*;
 pub(crate) use file_log::*;
 pub(crate) use fingerprint::*;
-pub(crate) use session::*;
-pub(crate) use commit::*;
 pub(crate) use reservation::*;
+pub(crate) use session::*;
 
 type GenericMap = FxHashMap<DeclarationResolutionKey, Vec<GenericInstantiationCacheEntry>>;
 type InstantiationMap = FxHashMap<DeclarationResolutionKey, Vec<InstantiationCacheEntry>>;

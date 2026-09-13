@@ -8,7 +8,7 @@ mod type_exports;
 pub(crate) mod values;
 
 pub(crate) use namespace::*;
-pub(crate) use promise::*;
+use promise::*;
 pub(crate) use statements::*;
 pub(crate) use table::*;
 pub(crate) use type_exports::*;

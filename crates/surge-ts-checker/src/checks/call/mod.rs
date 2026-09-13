@@ -177,7 +177,9 @@ pub(crate) fn check_call_like_with_expected_type(
                 let function_type = instantiate_function_type(
                     function_type,
                     generic_signature
-                        .or(written_signature.as_ref().map(|written| &*written.signature))
+                        .or(written_signature
+                            .as_ref()
+                            .map(|written| &*written.signature))
                         .or(symbol.function_signature.as_deref()),
                     outer_type_arguments,
                     type_arguments,
@@ -216,8 +218,9 @@ pub(crate) fn check_call_like_with_expected_type(
                 // its collected generic signature still drives inference.
                 let call_signature = instantiate_function_type(
                     call_signature,
-                    generic_signature
-                        .or(written_signature.as_ref().map(|written| &*written.signature)),
+                    generic_signature.or(written_signature
+                        .as_ref()
+                        .map(|written| &*written.signature)),
                     outer_type_arguments,
                     type_arguments,
                     callee_span,
@@ -311,18 +314,14 @@ impl DeclaredMemberSignature {
             if own.contains(&name.as_ref()) {
                 continue;
             }
-            if merged.is_placeholder(name)
-                || matches!(ty, Type::Unknown | Type::TypeParameter(_))
-            {
+            if merged.is_placeholder(name) || matches!(ty, Type::Unknown | Type::TypeParameter(_)) {
                 return None;
             }
             outer_type_arguments.push((name.to_string(), ty.clone()));
         }
-        let mut signature = (*crate::checks::function::function_type_signature_info(
-            function_type,
-            &ctx.file_name,
-        ))
-        .clone();
+        let mut signature =
+            (*crate::checks::function::function_type_signature_info(function_type, &ctx.file_name))
+                .clone();
         signature.namespace_prefix = ctx
             .namespace_member_prefix_stack
             .last()
@@ -369,7 +368,8 @@ pub(crate) fn written_call_signature_info(
         declared = std::borrow::Cow::Owned(reference.resolve());
     }
     let declared = declared.as_ref();
-    if matches!(declared, Type::Reference(reference) if reference.id.contains("\0value-annotation\0")) {
+    if matches!(declared, Type::Reference(reference) if reference.id.contains("\0value-annotation\0"))
+    {
         return None;
     }
     let legacy = !written_call_signature_recovery_enabled();
@@ -925,10 +925,12 @@ pub(crate) fn generic_class_instance_type(
         .then(|| infer_generic_class_type_arguments(name, &declared, arguments, symbols, ctx))
         .flatten()
         .unwrap_or_default();
-    let use_declared_defaults = synthesize && declared.iter().all(|parameter| {
-        parameter.default_type.is_some()
-            && (inferred.get(&parameter.name).is_none() || inferred.is_placeholder(&parameter.name))
-    });
+    let use_declared_defaults = synthesize
+        && declared.iter().all(|parameter| {
+            parameter.default_type.is_some()
+                && (inferred.get(&parameter.name).is_none()
+                    || inferred.is_placeholder(&parameter.name))
+        });
     let arguments: Vec<ParsedType> = if use_declared_defaults {
         Vec::new()
     } else if synthesize {
@@ -1016,7 +1018,9 @@ fn reify_type_argument(ty: &Type) -> Option<ParsedType> {
         Type::StringLiteral(value) => ParsedType::StringLiteral(value.to_string()),
         Type::NumberLiteral(literal) => ParsedType::NumberLiteral(literal.value.to_string()),
         Type::BooleanLiteral(value) => ParsedType::BooleanLiteral(*value),
-        Type::Array(element) => ParsedType::Array(std::sync::Arc::new(reify_type_argument(element)?)),
+        Type::Array(element) => {
+            ParsedType::Array(std::sync::Arc::new(reify_type_argument(element)?))
+        }
         Type::Tuple(elements) => ParsedType::Tuple(std::sync::Arc::new(
             elements
                 .iter()
@@ -1325,13 +1329,15 @@ pub(crate) fn check_function_type_call(
         );
         ctx.suppressed_argument_mismatch_span = outer_suppressed;
         if !mismatch_reported
-            && ctx.diagnostics[diagnostics_before..].iter().any(|diagnostic| {
-                matches!(
-                    diagnostic.code,
-                    surge_ts_diagnostics::DiagnosticCode::TypeScript(2345)
-                ) && diagnostic.span.is_some()
-                    && diagnostic.span == argument_diagnostic_span
-            })
+            && ctx.diagnostics[diagnostics_before..]
+                .iter()
+                .any(|diagnostic| {
+                    matches!(
+                        diagnostic.code,
+                        surge_ts_diagnostics::DiagnosticCode::TypeScript(2345)
+                    ) && diagnostic.span.is_some()
+                        && diagnostic.span == argument_diagnostic_span
+                })
         {
             mismatch_reported = true;
         }
@@ -1405,9 +1411,10 @@ pub(crate) fn check_function_type_call(
     } else {
         select_overload_return_type(function_type, &argument_types)
     };
-    Some(with_type_copy_reason(TypeCopyReason::CallResolution, || {
-        return_type.unwrap_or_else(|| function_type.return_type().clone())
-    }))
+    Some(with_type_copy_reason(
+        TypeCopyReason::CallResolution,
+        || return_type.unwrap_or_else(|| function_type.return_type().clone()),
+    ))
 }
 
 /// What overload selection knows about one argument.
@@ -1654,7 +1661,10 @@ fn substituted_construct_signature(
             .iter()
             .map(|parameter| parameter.name.clone())
             .collect(),
-        rest: parsed.parameters.last().is_some_and(|parameter| parameter.rest),
+        rest: parsed
+            .parameters
+            .last()
+            .is_some_and(|parameter| parameter.rest),
         return_type: Some((*parsed.return_type).clone()),
         declaring_file: None,
         namespace_prefix: None,

@@ -16,25 +16,23 @@ use crate::symbols::{
 use crate::modules::ModuleExportTable;
 
 mod declaration_environment;
+mod interface_keys;
 mod options;
 mod resolution_keys;
 mod substitution;
-mod interface_keys;
 
 pub(crate) use declaration_environment::*;
+pub(crate) use interface_keys::*;
 pub use options::*;
 pub(crate) use resolution_keys::*;
 pub(crate) use substitution::*;
-pub(crate) use interface_keys::*;
 
 /// Temporary `SURGE_LV_PROBE=1` probe: which files' local-value tables are
 /// actually consulted (post-population). Answers how much of the
 /// module_local_values stage a lazy per-file build would skip.
-fn local_values_consult_probe()
--> Option<&'static Mutex<surge_ts_types::fx::FxHashSet<Arc<str>>>> {
-    static PROBE: std::sync::OnceLock<
-        Option<Mutex<surge_ts_types::fx::FxHashSet<Arc<str>>>>,
-    > = std::sync::OnceLock::new();
+fn local_values_consult_probe() -> Option<&'static Mutex<surge_ts_types::fx::FxHashSet<Arc<str>>>> {
+    static PROBE: std::sync::OnceLock<Option<Mutex<surge_ts_types::fx::FxHashSet<Arc<str>>>>> =
+        std::sync::OnceLock::new();
     PROBE
         .get_or_init(|| {
             std::env::var_os("SURGE_LV_PROBE")
@@ -172,7 +170,9 @@ impl CheckerContext {
                 // avoid.
                 surge_ts_types::Type::Any | surge_ts_types::Type::Unknown => true,
                 surge_ts_types::Type::Union(union) => union.types().iter().any(admits_undefined),
-                surge_ts_types::Type::Reference(reference) => admits_undefined(&reference.resolve()),
+                surge_ts_types::Type::Reference(reference) => {
+                    admits_undefined(&reference.resolve())
+                }
                 _ => false,
             }
         }
@@ -228,7 +228,6 @@ impl CheckerContext {
             frame.diagnostic_indices.push(index);
         }
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -834,7 +833,12 @@ impl CheckerContext {
         self.namespace_member_resolution_depth > 0
     }
 
-    pub(crate) fn register_import_type_namespace(&self, file_name: &str, specifier: &str, ty: Type) {
+    pub(crate) fn register_import_type_namespace(
+        &self,
+        file_name: &str,
+        specifier: &str,
+        ty: Type,
+    ) {
         if let Ok(mut namespaces) = self.import_type_namespaces.lock() {
             namespaces.insert((Arc::from(file_name), specifier.to_string()), ty);
         }
@@ -857,7 +861,11 @@ impl CheckerContext {
         self.import_type_namespaces
             .lock()
             .ok()
-            .and_then(|namespaces| namespaces.get(&(Arc::from(file_name), specifier.to_string())).cloned())
+            .and_then(|namespaces| {
+                namespaces
+                    .get(&(Arc::from(file_name), specifier.to_string()))
+                    .cloned()
+            })
     }
 
     /// Whether an enclosing declaration currently binds `name` as a type
@@ -1345,7 +1353,9 @@ impl CheckerContext {
         // See the `globalThis.` comment in `lookup_type_declaration`.
         if let Some(global_name) = name.strip_prefix("globalThis.") {
             crate::program::record_type_declaration_lookup(3);
-            return self.ambient_global_type_declarations.get_handle(global_name);
+            return self
+                .ambient_global_type_declarations
+                .get_handle(global_name);
         }
         for candidate in self.namespace_qualified_candidates(name) {
             if let Some(handle) = self.lookup_type_declaration_handle_exact(&candidate) {

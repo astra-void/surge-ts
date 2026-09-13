@@ -259,7 +259,8 @@ impl FunctionFlowState {
         source: String,
         index: usize,
     ) {
-        self.tuple_destructure_bindings.insert(name, (source, index));
+        self.tuple_destructure_bindings
+            .insert(name, (source, index));
     }
 
     pub(crate) fn tuple_destructure_binding(&self, name: &str) -> Option<(&str, usize)> {

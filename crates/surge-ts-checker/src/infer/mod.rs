@@ -2,8 +2,8 @@ pub(crate) mod expression;
 pub(crate) mod types;
 
 pub(crate) use expression::{
-    falsy_part, infer_expression, narrowed_element_read, narrowed_element_read_named,
-    tuple_index_value, unchecked_index_read,
+    falsy_part, infer_expression, narrowed_element_read_named, tuple_index_value,
+    unchecked_index_read,
 };
 pub(crate) use types::{
     LazySignatureComponent, LazySignatureEnvironment, TypeParameterSubstitution,

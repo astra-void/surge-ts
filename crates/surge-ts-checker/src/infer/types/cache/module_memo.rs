@@ -1,8 +1,7 @@
 use surge_ts_types::Type;
 
 use crate::context::{
-    CheckerContext, DeclarationNamespace,
-    DeclarationResolutionKey, DeclarationResolutionState,
+    CheckerContext, DeclarationNamespace, DeclarationResolutionKey, DeclarationResolutionState,
 };
 use crate::infer::types::*;
 
@@ -189,25 +188,6 @@ pub(super) fn module_instantiation_memo_cap() -> usize {
 /// declarations whose key's file name contains any listed substring out of the
 /// program-lifetime memo. Used to bisect which declarations a cross-consumer
 /// share is answering differently.
-/// Whether this expansion's shape depended on a heritage base the resolver
-/// could not pin down. `resolve_interface_declaration` sets `base_is_open` when
-/// a base resolves to `Any`/`Unknown`/`had_error`, and surfaces it on the result
-/// as `synthetic_open_index`.
-///
-/// Such an expansion is **consumer-dependent**: whether the base resolved at all
-/// depends on what the triggering module could see, so one consumer's answer is
-/// not another's. That is the case a cross-consumer share gets wrong —
-/// `@typescript-eslint`'s `Variable` (whose `defs`/`scope` come from
-/// `VariableBase` in another file) and `TSESTree.Identifier` (whose `parent`
-/// comes from its base node type) swap which of them is missing members
-/// depending on which module expanded first.
-pub(super) fn expansion_is_consumer_dependent(ty: &Type) -> bool {
-    match ty {
-        Type::Object(object) => object.synthetic_open_index,
-        _ => false,
-    }
-}
-
 pub(super) fn program_memo_excluded(key: &DeclarationResolutionKey) -> bool {
     static EXCLUDES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     let excludes = EXCLUDES.get_or_init(|| {
@@ -238,6 +218,12 @@ pub(crate) fn store_module_instantiation_memo(
     // A shadow context's environment store dies with the shadow, so a body
     // expanded there carries lazy references that peel to `Unknown` for every
     // later reader (observed as `Variable` losing its inherited `scope`).
+    //
+    // `base_is_open` (a heritage base that resolved to `Any`/`Unknown`/errored)
+    // makes the expansion consumer-dependent: whether the base resolved at all
+    // depends on what the triggering module could see, so sharing it across
+    // consumers swaps which of `@typescript-eslint`'s `Variable` /
+    // `TSESTree.Identifier` loses its inherited members.
     if program_module_memo_enabled()
         && ctx.declaration_environment_store.is_program_lifetime()
         && !resolved.had_error

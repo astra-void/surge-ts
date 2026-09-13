@@ -8,22 +8,21 @@ use std::sync::Arc;
 use surge_ts_types::{Type, TypeReference};
 
 use crate::context::{
-    CheckerContext, DeclarationNamespace,
-    DeclarationResolutionKey, DeclarationResolutionState, GenericInstantiationCacheEntry,
-    InstantiationCacheEntry,
+    CheckerContext, DeclarationNamespace, DeclarationResolutionKey, DeclarationResolutionState,
+    GenericInstantiationCacheEntry, InstantiationCacheEntry,
 };
 use crate::symbols::TypeDeclarationInfo;
 
-mod module_memo;
-mod lazy_instantiation;
 mod lazy_annotation;
+mod lazy_instantiation;
 mod lazy_member;
+mod module_memo;
 mod physical_interface;
 
-pub(crate) use module_memo::*;
-pub(crate) use lazy_instantiation::*;
 pub(crate) use lazy_annotation::*;
+pub(crate) use lazy_instantiation::*;
 pub(crate) use lazy_member::*;
+pub(crate) use module_memo::*;
 pub(crate) use physical_interface::*;
 
 pub(crate) fn type_declaration_resolution_key(

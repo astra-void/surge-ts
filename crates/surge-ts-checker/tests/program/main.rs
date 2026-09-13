@@ -2,16 +2,16 @@ use surge_ts_checker::{
     CheckerOptions, DiagnosticProfile, SourceFileInput, check_program, check_program_with_options,
 };
 
-mod dependency_declarations;
-mod cross_file_scripts;
-mod compiler_flags;
+mod ambient_modules;
 mod assorted_checks;
+mod caches_and_parallel;
+mod compiler_flags;
+mod cross_file_scripts;
+mod declaration_files;
+mod dependency_declarations;
+mod generics;
 mod modules_imports;
 mod modules_reexports;
-mod ambient_modules;
-mod declaration_files;
-mod generics;
-mod caches_and_parallel;
 mod trpc_burndown;
 
 fn codes(diagnostics: &[surge_ts_diagnostics::Diagnostic]) -> Vec<String> {
