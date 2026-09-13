@@ -48,15 +48,15 @@ level at this commit; the bisect and the before/after are in
 | --- | --- | ---: |
 | Workspace tests | `cargo nextest run --workspace` | **1900 / 1900 passed** |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **212 / 212 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **211 / 212 passed** — one message drift, see below |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **212 / 212 passed** |
-| Oracle preset sweep — both strict flags | same + both | **211 / 212 passed** — the same drift |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **214 / 214 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **213 / 214 passed** — one message drift, see below |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **214 / 214 passed** |
+| Oracle preset sweep — both strict flags | same + both | **213 / 214 passed** — the same drift |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
 | Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 212 presets the
+parity against the upstream TypeScript compiler. Across all 214 presets the
 sweep saw 342 `tsc` diagnostics and 342 `surge-ts` diagnostics, with
 `onlyTsc = 0` and `onlyRust = 0`.
 
@@ -166,9 +166,9 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 212 oracle presets under `tests/compat-projects/`, all green at the normal
+- 214 oracle presets under `tests/compat-projects/`, all green at the normal
   gate, and all but one at the strict gates (see the table above).
-- 434 compat-project fixtures in total; the ones not registered as oracle
+- 436 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
@@ -190,7 +190,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **zod** | `912f0f5` | 21 | 23 | **regressed by the `trpc-fn-80` merge (2026-09-13)** — 21 matched exactly plus 2 surge-only `TS18046` on a catch variable narrowed by `z.ZodError.assert`, whose generic class has an `any` value side (static modelling was measured and rejected, see the merge record); two further `$replace<Meta, S>` over-reports the merge introduced were closed the same day |
 | **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
-| **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 13 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
+| **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **newly provisioned, provisional** — 446 when first measured; the 1 that remains is surge-only and the 2 `tsc` reports are unmatched; dirty-tree measurement, not a gate (see note) |
 
 Notes that matter:
@@ -253,9 +253,12 @@ Notes that matter:
   nominal reference. With that the aggregate completes in about 0.6 s at about
   190 MB peak RSS, after the program-lifetime interface memo
   ([docs/perf/TANSTACK-QUERY-PROGRAM-MEMO-2026-09-12.md](docs/perf/TANSTACK-QUERY-PROGRAM-MEMO-2026-09-12.md)).
-  The over-report has been burned down since — **13** at the 2026-09-13
+  The over-report has been burned down since — **10** at the 2026-09-13
   measurement, from 133 when it first completed — and every one of them is a
-  false positive. After the `react-query` pass below, four more closed in
+  false positive. The last three closed after the `trpc-fn-80` merge: a package
+  re-export's `Array<string>` return indexed as a missing property
+  (`package-reexport-array-index-basic`), and `!!query` as an `&&` operand —
+  aliased or inline — proving nothing (`alias-double-negation-and-basic`). After the `react-query` pass below, four more closed in
   query-core: a type parameter bound from its first argument alone, later object
   candidates dropped and a fresh object literal never widened
   (`generic-object-candidate-union-basic`); and a `vi.fn()` callback that
@@ -551,7 +554,7 @@ Performance history, methodology, and the reproduction recipe live in
 - **No full TypeScript compatibility claim.** The oracle gate establishes
   parity on the covered fixtures and projects only.
 - **No general message-text or span/column parity claim.** The strict sweeps
-  are green across the 212 registered presets at this commit bar one message
+  are green across the 214 registered presets at this commit bar one message
   drift, which is a statement about those fixtures — not about arbitrary code.
   The strict flags stay non-gating so a preset can record a drift without
   failing CI.

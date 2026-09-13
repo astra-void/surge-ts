@@ -2023,3 +2023,45 @@ Cleanup with the merge: worktrees `surge-ts-fn80` and a stale scratch worktree
 removed; merged branches deleted; `recovery/overload-only` kept as the tag
 `archive/recovery-overload-only` (7cd5b23) for its `TS2769` and interface-member
 group work, which main still lacks.
+
+## tanstack-query after the merge: three more (2026-09-13)
+
+tanstack-query **13 → 10**, every other corpus byte-identical, sweep 214/214.
+Worked on a detached worktree (`surge-ts-verify`, branch `fp-burndown`) because
+the main checkout was being edited by another session throughout.
+
+- **A package re-export's `Array<string>` indexed as a missing property (2).**
+  `const key = queryKey()` where `queryKey` is a `const` arrow with an
+  `Array<string>` return annotation reaching the test through
+  `@tanstack/query-test-utils` (a pnpm-linked workspace package, `exports` →
+  `src/index.ts` → `export { queryKey } from './queryKey'`). The return arrives
+  as a nominal reference to the library `Array` interface, where the same
+  annotation written locally lowers to `T[]`; `key.length` resolved through the
+  interface members, but `key[0]` peeled to a member object with no numeric
+  index signature and the literal-key arm reported the *receiver* as the absent
+  property (`Property 'key' does not exist on type 'Array<string>'`). The
+  index-access dispatch now treats a one-argument `Array` / `ReadonlyArray`
+  reference as `T[]`, the same recognition the `Array.isArray` guard uses.
+  Reproduced only with the arrow-const + package-entry shape; a `declare
+  function` or a relative import never produced the reference.
+- **`!!x` as an `&&` operand proved nothing (1).** `streamedQuery`'s `const
+  isRefetch = !!query && query.isFetched(); if (isRefetch && refetchMode ===
+  'reset') { query.setState(…) }`. The alias expansion was already in place
+  (`resolved_alias_condition`), and `!!query` alone narrowed; the reference-guard
+  walk over `&&` operands had no case for a double negation, so neither the
+  aliased nor the inline form narrowed `query`. Unwrapped there. A single `!`
+  still proves the opposite, pinned as the preset's control.
+- **Also landed, corpus-neutral:** the declared-union narrowing by a plain
+  initializer (`let client: PersistedClient | undefined = persistedClient`) no
+  longer refuses a nominal reference because a member deep inside it resolved to
+  the sentinel; probed in the persister packages, it narrows in plain functions
+  now, but the aggregate's two persister hits sit inside
+  `asyncThrottle(async (persistedClient) => …)` as a `Persister` property, where
+  the callback parameter is typed only if `TArgs` is inferred back from the
+  contextual *return* type of an un-annotated generic — surge matches the
+  written return annotation there and `asyncThrottle` has none. Parked.
+
+Remaining 10: eslint-plugin-query 5 (typescript-eslint augmentation through
+heritage), MutationObserver `subscribe` 2 (blocked on generic-method call
+results being the sentinel), persister 2 (above), `vi.fn(impl)` `Mock<T>` 1
+(the merge's known residue).
