@@ -873,3 +873,915 @@ local_path = "tests/upstream/typescript-go/cases/widenedThisPropertyAssignment.t
 mode = "virtual_files"
 expected_diagnostics = []
 reason = "Covers a widened `this` property assignment in a checked JavaScript file (upstream issue 3642). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "circular-control-flow-narrowing-with-current-element-01"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/circularControlFlowNarrowingWithCurrentElement01.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/circularControlFlowNarrowingWithCurrentElement01.types"
+local_path = "tests/upstream/typescript-go/cases/circularControlFlowNarrowingWithCurrentElement01.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers a self-referential class narrowed through a loop over its own children. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "keyof-unresolved-base-members"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/keyofUnresolvedBaseMembers.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/keyofUnresolvedBaseMembers.types"
+local_path = "tests/upstream/typescript-go/cases/keyofUnresolvedBaseMembers.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers `keyof this` on a generic base whose members resolve through a mapped-type alias (upstream issue 3494). Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "legacy-decorators-enum-access-same-name-as-class"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/legacyDecoratorsEnumAccessSameNameAsClass.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/legacyDecoratorsEnumAccessSameNameAsClass.types"
+local_path = "tests/upstream/typescript-go/cases/legacyDecoratorsEnumAccessSameNameAsClass.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers legacy decorators on classes whose names collide with enum members and static properties. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "merged-enum-declaration-member-references"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/mergedEnumDeclarationMemberReferences.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/mergedEnumDeclarationMemberReferences.types"
+local_path = "tests/upstream/typescript-go/cases/mergedEnumDeclarationMemberReferences.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers unqualified member references across two merged `enum` declarations. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "protected-accessibility-check"
+status = "active"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/protectedAccessibilityCheck.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/protectedAccessibilityCheck.types"
+local_path = "tests/upstream/typescript-go/cases/protectedAccessibilityCheck.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Covers `new` on a derived class whose base chain declares a protected constructor. Upstream emits no errors baseline, so this pins the case as false-positive free."
+
+[[case]]
+name = "contextually-typed-jsx-children-2"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/contextuallyTypedJsxChildren2.tsx"
+upstream_baseline_path = "testdata/baselines/reference/compiler/contextuallyTypedJsxChildren2.types"
+local_path = "tests/upstream/typescript-go/cases/contextuallyTypedJsxChildren2.tsx"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2307."
+
+[[case]]
+name = "declaration-emit-no-crash-on-cross-file-node"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitNoCrashOnCrossFileNode.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitNoCrashOnCrossFileNode.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitNoCrashOnCrossFileNode.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2307."
+
+[[case]]
+name = "expando-contextual-types"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/expandoContextualTypes.tsx"
+upstream_baseline_path = "testdata/baselines/reference/compiler/expandoContextualTypes.types"
+local_path = "tests/upstream/typescript-go/cases/expandoContextualTypes.tsx"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2304,TS2307,TS2315."
+
+[[case]]
+name = "expando-function-as-assertion"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/expandoFunctionAsAssertion.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/expandoFunctionAsAssertion.types"
+local_path = "tests/upstream/typescript-go/cases/expandoFunctionAsAssertion.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2339."
+
+[[case]]
+name = "export-assignment-merging-1"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging1.types"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging1.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2339,TS2339."
+
+[[case]]
+name = "export-assignment-merging-5"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging5.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging5.types"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging5.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2304."
+
+[[case]]
+name = "fresh-object-literal-subtype"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/freshObjectLiteralSubtype.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/freshObjectLiteralSubtype.types"
+local_path = "tests/upstream/typescript-go/cases/freshObjectLiteralSubtype.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2304."
+
+[[case]]
+name = "import-attributes-with-value-comments"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/importAttributesWithValueComments.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/importAttributesWithValueComments.types"
+local_path = "tests/upstream/typescript-go/cases/importAttributesWithValueComments.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2307."
+
+[[case]]
+name = "incremental-concurrent-safe-alias-following"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/incrementalConcurrentSafeAliasFollowing.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/incrementalConcurrentSafeAliasFollowing.types"
+local_path = "tests/upstream/typescript-go/cases/incrementalConcurrentSafeAliasFollowing.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2304,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305,TS2305."
+
+[[case]]
+name = "jsx-function-type-children"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsxFunctionTypeChildren.tsx"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsxFunctionTypeChildren.types"
+local_path = "tests/upstream/typescript-go/cases/jsxFunctionTypeChildren.tsx"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2307."
+
+[[case]]
+name = "jsx-nested-indentation"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsxNestedIndentation.js"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsxNestedIndentation.types"
+local_path = "tests/upstream/typescript-go/cases/jsxNestedIndentation.js"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2304,TS2304,TS2304,TS2304,TS2304,TS2304."
+
+[[case]]
+name = "paths-entry-references-dts-via-ts-extension-no-crash"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/pathsEntryReferencesDtsViaTsExtensionNoCrash.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/pathsEntryReferencesDtsViaTsExtensionNoCrash.types"
+local_path = "tests/upstream/typescript-go/cases/pathsEntryReferencesDtsViaTsExtensionNoCrash.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2307."
+
+[[case]]
+name = "strict-best-common-supertype"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/strictBestCommonSupertype.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/strictBestCommonSupertype.types"
+local_path = "tests/upstream/typescript-go/cases/strictBestCommonSupertype.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2304."
+
+[[case]]
+name = "switch-exhaustive-narrowing"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/switchExhaustiveNarrowing.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/switchExhaustiveNarrowing.types"
+local_path = "tests/upstream/typescript-go/cases/switchExhaustiveNarrowing.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2304."
+
+[[case]]
+name = "symbol-link-declaration-emit-module-names-root-dir"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/symbolLinkDeclarationEmitModuleNamesRootDir.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/symbolLinkDeclarationEmitModuleNamesRootDir.types"
+local_path = "tests/upstream/typescript-go/cases/symbolLinkDeclarationEmitModuleNamesRootDir.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2307,TS2307,TS2315."
+
+[[case]]
+name = "template-literal-multi-byte-char-inference"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/templateLiteralMultiByteCharInference.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/templateLiteralMultiByteCharInference.types"
+local_path = "tests/upstream/typescript-go/cases/templateLiteralMultiByteCharInference.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "The checker reports diagnostics upstream does not. Upstream baseline: no diagnostics; surge: TS2304,TS2304,TS2304,TS2304."
+
+[[case]]
+name = "asserts-predicate-parameter-mismatch"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/assertsPredicateParameterMismatch.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/assertsPredicateParameterMismatch.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/assertsPredicateParameterMismatch.ts"
+mode = "single_source"
+expected_diagnostics = ["TS1225"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS1225; surge: no diagnostics."
+
+[[case]]
+name = "check-inherited-property"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/checkInheritedProperty.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/checkInheritedProperty.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/checkInheritedProperty.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2729"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2729; surge: no diagnostics."
+
+[[case]]
+name = "circular-destructuring"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/circularDestructuring.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/circularDestructuring.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/circularDestructuring.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2322", "TS2339", "TS2339", "TS7022", "TS2448"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2322,TS2339,TS2339,TS7022,TS2448; surge: no diagnostics."
+
+[[case]]
+name = "declaration-emit-for-mixins-with-static-accessors-1"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitForMixinsWithStaticAccessors1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitForMixinsWithStaticAccessors1.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitForMixinsWithStaticAccessors1.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2417", "TS2510"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2417,TS2510; surge: no diagnostics."
+
+[[case]]
+name = "duplicate-identifier-checks"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/duplicateIdentifierChecks.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/duplicateIdentifierChecks.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/duplicateIdentifierChecks.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS1118", "TS2300", "TS2300", "TS1118", "TS2300", "TS2300", "TS2300", "TS1118", "TS2300", "TS2300", "TS2300", "TS1118", "TS2300", "TS2300", "TS1119", "TS2300", "TS2300", "TS2300", "TS1119", "TS2300", "TS2300", "TS2300", "TS1119", "TS2300", "TS2300", "TS2300", "TS1119", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300", "TS2300"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS1118,TS2300,TS2300,TS1118,TS2300,TS2300,TS2300,TS1118,TS2300,TS2300,TS2300,TS1118,TS2300,TS2300,TS1119,TS2300,TS2300,TS2300,TS1119,TS2300,TS2300,TS2300,TS1119,TS2300,TS2300,TS2300,TS1119,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300,TS2300; surge: no diagnostics."
+
+[[case]]
+name = "erasable-syntax-only-js"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/erasableSyntaxOnlyJS.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/erasableSyntaxOnlyJS.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/erasableSyntaxOnlyJS.ts"
+mode = "single_source"
+expected_diagnostics = ["TS1202", "TS1294", "TS1202", "TS1294"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS1202,TS1294,TS1202,TS1294; surge: no diagnostics."
+
+[[case]]
+name = "error-in-unnamed-class-expression"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/errorInUnnamedClassExpression.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/errorInUnnamedClassExpression.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/errorInUnnamedClassExpression.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2715", "TS1253", "TS7008"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2715,TS1253,TS7008; surge: no diagnostics."
+
+[[case]]
+name = "export-assignment-merging-3"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging3.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging3.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging3.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2309"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2309; surge: no diagnostics."
+
+[[case]]
+name = "export-assignment-merging-7"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging7.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging7.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging7.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2309", "TS2305"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2309,TS2305; surge: no diagnostics."
+
+[[case]]
+name = "export-assignment-merging-9"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging9.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging9.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging9.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2309"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2309; surge: no diagnostics."
+
+[[case]]
+name = "generic-arrow-function-in-esm-extension-file"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/genericArrowFunctionInEsmExtensionFile.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/genericArrowFunctionInEsmExtensionFile.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/genericArrowFunctionInEsmExtensionFile.ts"
+mode = "single_source"
+expected_diagnostics = ["TS7060"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS7060; surge: no diagnostics."
+
+[[case]]
+name = "implicit-empty-object-type"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/implicitEmptyObjectType.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/implicitEmptyObjectType.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/implicitEmptyObjectType.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2345"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2345; surge: no diagnostics."
+
+[[case]]
+name = "import-alias-type-only-export"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/importAliasTypeOnlyExport.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/importAliasTypeOnlyExport.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/importAliasTypeOnlyExport.ts"
+mode = "single_source"
+expected_diagnostics = ["TS1379"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS1379; surge: no diagnostics."
+
+[[case]]
+name = "invalid-global-augmentation"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/invalidGlobalAugmentation.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/invalidGlobalAugmentation.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/invalidGlobalAugmentation.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2669", "TS2664"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2669,TS2664; surge: no diagnostics."
+
+[[case]]
+name = "invalid-jsdoc-type"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/invalidJsdocType.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/invalidJsdocType.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/invalidJsdocType.ts"
+mode = "single_source"
+expected_diagnostics = ["TS1110"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS1110; surge: no diagnostics."
+
+[[case]]
+name = "isolated-declarations-type-predicate"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/isolatedDeclarationsTypePredicate.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/isolatedDeclarationsTypePredicate.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/isolatedDeclarationsTypePredicate.ts"
+mode = "single_source"
+expected_diagnostics = ["TS9007"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS9007; surge: no diagnostics."
+
+[[case]]
+name = "iteration-error-over-not-iterable-unions-1"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/iterationErrorOverNotIterableUnions1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/iterationErrorOverNotIterableUnions1.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/iterationErrorOverNotIterableUnions1.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2488", "TS2488", "TS2488", "TS7053"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2488,TS2488,TS2488,TS7053; surge: no diagnostics."
+
+[[case]]
+name = "json-import-multiple-top-level-objects"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsonImportMultipleTopLevelObjects.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsonImportMultipleTopLevelObjects.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/jsonImportMultipleTopLevelObjects.ts"
+mode = "single_source"
+expected_diagnostics = ["TS1012"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS1012; surge: no diagnostics."
+
+[[case]]
+name = "jsx-multiline-attribute-string-values-2"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsxMultilineAttributeStringValues2.tsx"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsxMultilineAttributeStringValues2.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/jsxMultilineAttributeStringValues2.tsx"
+mode = "single_source"
+expected_diagnostics = ["TS7026", "TS7026", "TS7026", "TS7026"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS7026,TS7026,TS7026,TS7026; surge: no diagnostics."
+
+[[case]]
+name = "jsx-ternary-with-object-in-attribute"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsxTernaryWithObjectInAttribute.tsx"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsxTernaryWithObjectInAttribute.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/jsxTernaryWithObjectInAttribute.tsx"
+mode = "single_source"
+expected_diagnostics = ["TS7026", "TS7026", "TS7026", "TS7026", "TS7026", "TS7026", "TS7026", "TS7026"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS7026,TS7026,TS7026,TS7026,TS7026,TS7026,TS7026,TS7026; surge: no diagnostics."
+
+[[case]]
+name = "nested-js-doc-import-type"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/nestedJSDocImportType.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/nestedJSDocImportType.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/nestedJSDocImportType.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2306"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2306; surge: no diagnostics."
+
+[[case]]
+name = "no-crash-on-mixin-2"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/noCrashOnMixin2.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/noCrashOnMixin2.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/noCrashOnMixin2.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2370", "TS1047", "TS2545", "TS2674"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2370,TS1047,TS2545,TS2674; surge: no diagnostics."
+
+[[case]]
+name = "panic-for-in-empty-declaration-list"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/panicForInEmptyDeclarationList.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/panicForInEmptyDeclarationList.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/panicForInEmptyDeclarationList.ts"
+mode = "single_source"
+expected_diagnostics = ["TS1109"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS1109; surge: no diagnostics."
+
+[[case]]
+name = "reachability-checks-10"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/reachabilityChecks10.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/reachabilityChecks10.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/reachabilityChecks10.ts"
+mode = "single_source"
+expected_diagnostics = ["TS7027"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS7027; surge: no diagnostics."
+
+[[case]]
+name = "reachability-checks-11"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/reachabilityChecks11.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/reachabilityChecks11.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/reachabilityChecks11.ts"
+mode = "single_source"
+expected_diagnostics = ["TS7027", "TS7027", "TS7027", "TS7006", "TS7027", "TS7027", "TS7027"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS7027,TS7027,TS7027,TS7006,TS7027,TS7027,TS7027; surge: no diagnostics."
+
+[[case]]
+name = "reachability-checks-9"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/reachabilityChecks9.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/reachabilityChecks9.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/reachabilityChecks9.ts"
+mode = "single_source"
+expected_diagnostics = ["TS7027", "TS7027"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS7027,TS7027; surge: no diagnostics."
+
+[[case]]
+name = "readonly-default-export"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/readonlyDefaultExport.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/readonlyDefaultExport.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/readonlyDefaultExport.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2540"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2540; surge: no diagnostics."
+
+[[case]]
+name = "regular-expression-quantifier-bounds-1"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/regularExpressionQuantifierBounds1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/regularExpressionQuantifierBounds1.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/regularExpressionQuantifierBounds1.ts"
+mode = "single_source"
+expected_diagnostics = ["TS1506", "TS1506"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS1506,TS1506; surge: no diagnostics."
+
+[[case]]
+name = "subtype-reduction-with-any-function-type"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/subtypeReductionWithAnyFunctionType.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/subtypeReductionWithAnyFunctionType.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/subtypeReductionWithAnyFunctionType.ts"
+mode = "single_source"
+expected_diagnostics = ["TS7006"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS7006; surge: no diagnostics."
+
+[[case]]
+name = "type-parameter-comparable-relation"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/typeParameterComparableRelation.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/typeParameterComparableRelation.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/typeParameterComparableRelation.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2352"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2352; surge: no diagnostics."
+
+[[case]]
+name = "type-predicate-parameter-mismatch"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/typePredicateParameterMismatch.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/typePredicateParameterMismatch.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/typePredicateParameterMismatch.ts"
+mode = "single_source"
+expected_diagnostics = ["TS1225"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS1225; surge: no diagnostics."
+
+[[case]]
+name = "typedef-hoisting"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/typedefHoisting.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/typedefHoisting.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/typedefHoisting.ts"
+mode = "single_source"
+expected_diagnostics = ["TS5055", "TS5055", "TS5055", "TS5055", "TS5055", "TS5055"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS5055,TS5055,TS5055,TS5055,TS5055,TS5055; surge: no diagnostics."
+
+[[case]]
+name = "union-element-error-truncation"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/unionElementErrorTruncation.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/unionElementErrorTruncation.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/unionElementErrorTruncation.ts"
+mode = "single_source"
+expected_diagnostics = ["TS7053", "TS7053"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS7053,TS7053; surge: no diagnostics."
+
+[[case]]
+name = "unresolved-type-directive-error"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/unresolvedTypeDirectiveError.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/unresolvedTypeDirectiveError.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/unresolvedTypeDirectiveError.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2688", "TS2688", "TS2688", "TS2688"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS2688,TS2688,TS2688,TS2688; surge: no diagnostics."
+
+[[case]]
+name = "unused-locals-in-for-in-or-of-1"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/unusedLocalsInForInOrOf1.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/unusedLocalsInForInOrOf1.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/unusedLocalsInForInOrOf1.ts"
+mode = "single_source"
+expected_diagnostics = ["TS6133", "TS6133", "TS6133", "TS6133", "TS6133", "TS6133", "TS6133", "TS6133", "TS6133"]
+reason = "The checker does not report the diagnostics upstream reports. Upstream baseline: TS6133,TS6133,TS6133,TS6133,TS6133,TS6133,TS6133,TS6133,TS6133; surge: no diagnostics."
+
+[[case]]
+name = "allow-synthetic-default-imports-9"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/allowSyntheticDefaultImports9.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/allowSyntheticDefaultImports9.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/allowSyntheticDefaultImports9.ts"
+mode = "single_source"
+expected_diagnostics = ["TS7010", "TS7010"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS7010,TS7010; surge: TS2552,TS2552."
+
+[[case]]
+name = "excessively-deep-conditional-types"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/excessivelyDeepConditionalTypes.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/excessivelyDeepConditionalTypes.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/excessivelyDeepConditionalTypes.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2321", "TS2321", "TS2321", "TS2321", "TS2321", "TS2321", "TS2321", "TS2321"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS2321,TS2321,TS2321,TS2321,TS2321,TS2321,TS2321,TS2321; surge: TS2536,TS2538."
+
+[[case]]
+name = "export-assignment-merging-10"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging10.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging10.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging10.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2702", "TS2309"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS2702,TS2309; surge: TS2307."
+
+[[case]]
+name = "export-assignment-merging-4"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging4.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging4.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging4.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2309"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS2309; surge: TS2339,TS2339."
+
+[[case]]
+name = "export-assignment-merging-6"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/exportAssignmentMerging6.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/exportAssignmentMerging6.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/exportAssignmentMerging6.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2591", "TS2339", "TS2339"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS2591,TS2339,TS2339; surge: TS2304."
+
+[[case]]
+name = "js-promise-needs-js-doc-hint"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsPromiseNeedsJSDocHint.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsPromiseNeedsJSDocHint.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/jsPromiseNeedsJSDocHint.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2810"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS2810; surge: TS2554."
+
+[[case]]
+name = "missing-discriminants"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/missingDiscriminants.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/missingDiscriminants.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/missingDiscriminants.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2353", "TS2353"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS2353,TS2353; surge: TS2322,TS2322,TS2322,TS2322."
+
+[[case]]
+name = "missing-discriminants-2"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/missingDiscriminants2.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/missingDiscriminants2.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/missingDiscriminants2.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2353", "TS2353"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS2353,TS2353; surge: TS2322,TS2322,TS2322,TS2322."
+
+[[case]]
+name = "multiple-module-exports-assignments"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/multipleModuleExportsAssignments.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/multipleModuleExportsAssignments.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/multipleModuleExportsAssignments.ts"
+mode = "single_source"
+expected_diagnostics = ["TS6424", "TS6425", "TS6424", "TS6425"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS6424,TS6425,TS6424,TS6425; surge: TS2304."
+
+[[case]]
+name = "require-types-only"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/requireTypesOnly.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/requireTypesOnly.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/requireTypesOnly.ts"
+mode = "single_source"
+expected_diagnostics = ["TS18042"]
+reason = "The checker reports a different diagnostic code than upstream. Upstream baseline: TS18042; surge: TS2304."
+
+[[case]]
+name = "automatic-type-directive-resolution-bundler"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/automaticTypeDirectiveResolutionBundler.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/automaticTypeDirectiveResolutionBundler.types"
+local_path = "tests/upstream/typescript-go/cases/automaticTypeDirectiveResolutionBundler.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: no diagnostics; surge: TS2307."
+
+[[case]]
+name = "declaration-emit-augmentation-uses-correct-source-file"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitAugmentationUsesCorrectSourceFile.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitAugmentationUsesCorrectSourceFile.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitAugmentationUsesCorrectSourceFile.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: no diagnostics; surge: TS2882."
+
+[[case]]
+name = "declaration-emit-export-value-symbol-with-ts-ignore"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/declarationEmitExportValueSymbolWithTsIgnore.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitExportValueSymbolWithTsIgnore.types"
+local_path = "tests/upstream/typescript-go/cases/declarationEmitExportValueSymbolWithTsIgnore.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: no diagnostics; surge: TS2307,TS2307."
+
+[[case]]
+name = "js-exports-imported-into-tsx-loses-type-info"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/jsExportsImportedIntoTsxLosesTypeInfo.tsx"
+upstream_baseline_path = "testdata/baselines/reference/compiler/jsExportsImportedIntoTsxLosesTypeInfo.types"
+local_path = "tests/upstream/typescript-go/cases/jsExportsImportedIntoTsxLosesTypeInfo.tsx"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: no diagnostics; surge: TS2307,TS2307,TS2305,TS2305,TS2305."
+
+[[case]]
+name = "node-modules-package-imports-root-wildcard"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/nodeModulesPackageImportsRootWildcard.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/nodeModulesPackageImportsRootWildcard.types"
+local_path = "tests/upstream/typescript-go/cases/nodeModulesPackageImportsRootWildcard.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: no diagnostics; surge: TS2307,TS2307,TS2307,TS2307,TS2307,TS2307,TS2307,TS2307,TS2307."
+
+[[case]]
+name = "package-deduplication-duplicate-globals"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/packageDeduplicationDuplicateGlobals.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/packageDeduplicationDuplicateGlobals.types"
+local_path = "tests/upstream/typescript-go/cases/packageDeduplicationDuplicateGlobals.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: no diagnostics; surge: TS2882,TS2882,TS2307,TS2307,TS2307,TS2307,TS2304."
+
+[[case]]
+name = "package-json-imports-wildcard-ts-extension-error"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/packageJsonImportsWildcardTsExtensionError.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/packageJsonImportsWildcardTsExtensionError.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/packageJsonImportsWildcardTsExtensionError.ts"
+mode = "single_source"
+expected_diagnostics = ["TS5097"]
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: TS5097; surge: TS2307."
+
+[[case]]
+name = "processing-diagnostic"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/processingDiagnostic.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/processingDiagnostic.errors.txt"
+local_path = "tests/upstream/typescript-go/cases/processingDiagnostic.ts"
+mode = "single_source"
+expected_diagnostics = ["TS2688"]
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: TS2688; surge: TS2307."
+
+[[case]]
+name = "processing-diagnostic-skip-lib-check"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/processingDiagnosticSkipLibCheck.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/processingDiagnosticSkipLibCheck.types"
+local_path = "tests/upstream/typescript-go/cases/processingDiagnosticSkipLibCheck.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: no diagnostics; surge: TS2307."
+
+[[case]]
+name = "processing-diagnostic-ts-ignore"
+status = "pending"
+upstream_repo = "microsoft/typescript-go"
+upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
+upstream_path = "testdata/tests/cases/compiler/processingDiagnosticTsIgnore.ts"
+upstream_baseline_path = "testdata/baselines/reference/compiler/processingDiagnosticTsIgnore.types"
+local_path = "tests/upstream/typescript-go/cases/processingDiagnosticTsIgnore.ts"
+mode = "single_source"
+expected_diagnostics = []
+reason = "Upstream resolves this through `node_modules` or a package manifest; the compatibility harness performs no package resolution, so the gap is in the harness rather than in the checker. Upstream baseline: no diagnostics; surge: TS2307."

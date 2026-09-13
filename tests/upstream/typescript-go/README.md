@@ -47,6 +47,25 @@ Matching exactly is not the same as being run the way upstream runs it, and the
 So a green case is a pinned diagnostic-code match against that baseline, not a
 claim of upstream baseline compatibility.
 
+## Pending cases
+
+Every fixture in the pool that does *not* match its baseline is recorded with
+`status = "pending"`. Pending cases are not executed; they carry the upstream
+baseline's codes in `expected_diagnostics` and a `reason` naming both what
+upstream reports and what surge currently reports, so the gap is tracked rather
+than described. They fall in four groups:
+
+- **Checker false positive** — surge reports diagnostics upstream does not.
+- **Checker false negative** — surge misses diagnostics upstream reports; most
+  of these are checks that do not exist here yet.
+- **Checker wrong code** — both report, with a different code.
+- **Harness, package resolution** — the fixture resolves through `node_modules`
+  or a package manifest, which the harness does not do. These are not checker
+  defects and would move only with harness work.
+
+A pending case graduates by being measured against the baseline again and, when
+it matches, flipping to `status = "active"`.
+
 ## Current limitations
 
 Some upstream TypeScript compiler fixtures use `// @filename:` comments to describe virtual multi-file test cases.
