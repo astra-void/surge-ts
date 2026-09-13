@@ -511,6 +511,13 @@ pub(crate) struct CheckerContext {
     /// `resolve_interface`/`resolve_type_alias` for the duration of their body
     /// resolution.
     pub(crate) structural_resolution_frames: Vec<usize>,
+    /// The subset of `structural_resolution_frames` opened by an object *type
+    /// literal* (`Omit<{ optional(): Chainable<…> }, k>`), whose members tsc
+    /// resolves lazily. A generic alias re-entered through one of these is
+    /// handed a lazy self-reference instead of the sentinel; a re-entry through
+    /// an interface or alias body is not (forcing those exposed incomplete
+    /// shapes on tanstack-query).
+    pub(crate) type_literal_member_frames: Vec<usize>,
     file_kinds: Arc<FxHashMap<String, FileKind>>,
     /// All module-scope value bindings of the file currently being checked,
     /// inferred up front. Consulted only when a bare identifier misses the
@@ -611,6 +618,7 @@ impl CheckerContext {
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
+            type_literal_member_frames: Vec::new(),
             file_kinds: Arc::new(file_kinds),
             module_value_fallback: None,
         }
@@ -745,6 +753,7 @@ impl CheckerContext {
             namespace_member_prefix_stack: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
+            type_literal_member_frames: Vec::new(),
             file_kinds: data.file_kinds.clone(),
             module_value_fallback: data.module_value_fallback.clone(),
         }

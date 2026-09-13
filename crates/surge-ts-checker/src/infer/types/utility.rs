@@ -196,7 +196,19 @@ pub(crate) fn resolve_type_alias(
         // only reached when the arguments actually repeat — a genuinely
         // infinite type — and handing that back as a lazy self-reference is
         // what the intersection merge then peels forever.
-        if legal_recursion && alias.body.type_parameters.is_empty() {
+        // A generic back-edge written inside an object type literal's member
+        // (`Chainable<p> = p & Omit<{ optional(): Chainable<p, …> }, k>`) sits
+        // where tsc resolves lazily, so a nominal self-reference is what it
+        // sees there; the reference is only peeled on demand, bounded by the
+        // lazy peel stack. A back-edge at the top of the body (`type A<T> =
+        // A<T> & X`) opens no such frame and keeps degrading.
+        let literal_member_back_edge = !alias.body.type_parameters.is_empty()
+            && ctx
+                .type_literal_member_frames
+                .iter()
+                .any(|&frame| frame > index);
+        if legal_recursion && (alias.body.type_parameters.is_empty() || literal_member_back_edge)
+        {
             return ResolvedType {
                 ty: make_recursive_cycle_reference(
                     ctx,

@@ -426,6 +426,12 @@ pub(crate) fn resolve_object_type(
 ) -> ResolvedType {
     let mut properties = PropertyMap::default();
     let mut had_error = false;
+    // A member of a type literal is a structural crossing like an interface
+    // member: a declaration that re-enters itself through one is legal
+    // recursion (see `CheckerContext::type_literal_member_frames`).
+    let literal_frame = resolving.len();
+    ctx.structural_resolution_frames.push(literal_frame);
+    ctx.type_literal_member_frames.push(literal_frame);
 
     for property in &object_type.properties {
         let property_type = resolve_parsed_type(property.ty.clone(), ctx, resolving, substitution);
@@ -503,6 +509,8 @@ pub(crate) fn resolve_object_type(
             resolved_object = resolved_object.with_construct_signature(function_type);
         }
     }
+    ctx.type_literal_member_frames.pop();
+    ctx.structural_resolution_frames.pop();
 
     ResolvedType {
         ty: Type::Object(resolved_object),
