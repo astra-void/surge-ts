@@ -138,7 +138,15 @@ fn filtered_element_type(
             if predicate.asserts || !arrow.type_parameters.is_empty() {
                 return None;
             }
+            // Resolving the target here is a query the *call* makes; the arrow
+            // checks its own annotation at its own span. Reporting from here is
+            // therefore a second diagnostic, and it is made without the arrow's
+            // parameters in scope — a predicate written in terms of the tested
+            // parameter (`(c): c is Exclude<typeof c, undefined>`) has no `c` to
+            // find and reported a false TS2304 on it.
+            let diagnostics_before = ctx.diagnostics().len();
             let target = crate::infer::map_parsed_type(predicate.ty.clone()?, ctx);
+            ctx.truncate_diagnostics(diagnostics_before);
             (!target.is_unknown()).then_some(target)
         }
         _ => None,
