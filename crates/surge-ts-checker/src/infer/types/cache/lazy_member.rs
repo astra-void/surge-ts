@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use surge_ts_types::Type;
 
+use super::{LazyAnnotationContent, LazySignatureComponent, MODULE_INSTANTIATION_MEMO_TAG};
 use crate::context::CheckerContext;
 use crate::infer::types::*;
-use super::{LazyAnnotationContent, LazySignatureComponent, MODULE_INSTANTIATION_MEMO_TAG};
 
 /// Everything that identifies one deferred interface member: the declaring
 /// interface, the member's position in the merged member list (same-named
@@ -24,8 +24,9 @@ pub(crate) struct LazyMemberIdentity<'a> {
 
 impl LazyMemberIdentity<'_> {
     pub(super) fn component_identity(&self) -> String {
-        self.component
-            .map_or_else(String::new, |component| format!(":{}", component.identity()))
+        self.component.map_or_else(String::new, |component| {
+            format!(":{}", component.identity())
+        })
     }
 
     pub(super) fn key_name(&self, kind: &str) -> String {
@@ -185,6 +186,11 @@ pub(crate) fn parsed_method_has_contextual_typing_dependency(
             ParsedType::Tuple(elements) | ParsedType::Union(elements) => {
                 elements.iter().any(|e| contains_callable(e, depth + 1))
             }
+            ParsedType::VariadicTuple(elements) => elements.iter().any(|element| {
+                let (surge_ts_syntax::ParsedTupleElement::Fixed(ty)
+                | surge_ts_syntax::ParsedTupleElement::Rest(ty)) = element;
+                contains_callable(ty, depth + 1)
+            }),
             _ => false,
         }
     }
@@ -210,8 +216,7 @@ pub(crate) fn lazy_value_trace_shape(ty: &Type) -> String {
     fn describe(ty: &Type, force: bool) -> String {
         match ty {
             Type::Object(object) => {
-                let mut names: Vec<&str> =
-                    object.properties.keys().map(|k| k.as_ref()).collect();
+                let mut names: Vec<&str> = object.properties.keys().map(|k| k.as_ref()).collect();
                 names.sort_unstable();
                 format!(
                     "Object{{{} props: {}}} call={}",
@@ -290,6 +295,18 @@ pub(super) fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType
             elements
                 .iter()
                 .map(parsed_annotation_display)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        ParsedType::VariadicTuple(elements) => format!(
+            "[{}]",
+            elements
+                .iter()
+                .map(|element| match element {
+                    surge_ts_syntax::ParsedTupleElement::Fixed(ty) => parsed_annotation_display(ty),
+                    surge_ts_syntax::ParsedTupleElement::Rest(ty) =>
+                        format!("...{}", parsed_annotation_display(ty)),
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         ),

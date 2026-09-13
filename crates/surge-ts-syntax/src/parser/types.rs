@@ -11,8 +11,8 @@ use oxc_span::GetSpan;
 use crate::{
     ParsedConditionalType, ParsedFunctionType, ParsedIndexedAccessType, ParsedMappedType,
     ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedPredicateType,
-    ParsedTemplateLiteralType, ParsedType, ParsedTypeAliasDeclaration, ParsedTypeOfType,
-    ParsedTypeParameter,
+    ParsedTemplateLiteralType, ParsedTupleElement, ParsedType, ParsedTypeAliasDeclaration,
+    ParsedTypeOfType, ParsedTypeParameter,
 };
 
 use super::function_types::{
@@ -423,10 +423,8 @@ fn parse_intersection_type(intersection_type: &TSIntersectionType<'_>) -> Parsed
 }
 
 /// Tuple labels are display-only, so named members lower to their element type.
-/// Optional and rest members change tuple arity, which the fixed-length tuple
-/// model cannot express; degrade those tuples to `Unknown` so an alias like
-/// `type Args = [msg: string, extra?: any]` still resolves instead of dropping
-/// to TS2304 at every use site.
+/// A tuple carrying a rest element cannot state its length here, so it takes the
+/// [`parse_variadic_tuple`] path instead of the fixed-length shape.
 fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
     let mut elements = Vec::new();
 
@@ -434,7 +432,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
         match element {
             TSTupleElement::TSNamedTupleMember(member) => {
                 if matches!(member.element_type, TSTupleElement::TSRestType(_)) {
-                    return Some(homogeneous_variadic_tuple(tuple_type));
+                    return Some(parse_variadic_tuple(tuple_type));
                 }
                 let Some(inner) = member.element_type.as_ts_type() else {
                     return Some(ParsedType::Unknown);
@@ -455,7 +453,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
                 elements.push(optional_tuple_element(parsed_element, true));
             }
             TSTupleElement::TSRestType(_) => {
-                return Some(homogeneous_variadic_tuple(tuple_type));
+                return Some(parse_variadic_tuple(tuple_type));
             }
             _ => {
                 let Some(parsed_element) = parse_type(element.as_ts_type()?) else {
@@ -476,6 +474,68 @@ fn optional_tuple_element(element: ParsedType, optional: bool) -> ParsedType {
     } else {
         element
     }
+}
+
+/// A tuple with a rest element. The homogeneous lowerings below predate the
+/// element model and stay first: they turn `[T, ...T[]]` into `T[]` and `[...T]`
+/// into `T`, which every use site already consumes. Only the shapes that
+/// lowering cannot express — `[...a, ...b]`, `[infer head, ...infer tail]`,
+/// `[string, ...number[]]` — keep their elements, and those used to degrade to
+/// `Unknown` wholesale.
+fn parse_variadic_tuple(tuple_type: &TSTupleType<'_>) -> ParsedType {
+    match homogeneous_variadic_tuple(tuple_type) {
+        ParsedType::Unknown if variadic_tuple_elements_enabled() => {
+            match variadic_tuple_elements(tuple_type) {
+                Some(elements) => ParsedType::VariadicTuple(std::sync::Arc::new(elements)),
+                None => ParsedType::Unknown,
+            }
+        }
+        lowered => lowered,
+    }
+}
+
+/// `SURGE_VARIADIC_TUPLES=0` restores the pre-element behaviour: a tuple the
+/// homogeneous lowerings cannot express degrades to `Unknown` wholesale. Kept as
+/// the off switch for the A/B this change has to carry, since turning the shape
+/// on changes which conditional branches are reachable across every corpus.
+fn variadic_tuple_elements_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_VARIADIC_TUPLES").as_deref() != Ok("0"))
+}
+
+fn variadic_tuple_elements(tuple_type: &TSTupleType<'_>) -> Option<Vec<ParsedTupleElement>> {
+    let mut elements = Vec::with_capacity(tuple_type.element_types.len());
+
+    for element in &tuple_type.element_types {
+        match element {
+            TSTupleElement::TSRestType(rest) => {
+                elements.push(ParsedTupleElement::Rest(parse_type(&rest.type_annotation)?));
+            }
+            TSTupleElement::TSOptionalType(optional) => {
+                let parsed = parse_type(&optional.type_annotation)?;
+                elements.push(ParsedTupleElement::Fixed(optional_tuple_element(
+                    parsed, true,
+                )));
+            }
+            TSTupleElement::TSNamedTupleMember(member) => match &member.element_type {
+                TSTupleElement::TSRestType(rest) => {
+                    elements.push(ParsedTupleElement::Rest(parse_type(&rest.type_annotation)?));
+                }
+                other => {
+                    let parsed = parse_type(other.as_ts_type()?)?;
+                    elements.push(ParsedTupleElement::Fixed(optional_tuple_element(
+                        parsed,
+                        member.optional,
+                    )));
+                }
+            },
+            other => {
+                elements.push(ParsedTupleElement::Fixed(parse_type(other.as_ts_type()?)?));
+            }
+        }
+    }
+
+    Some(elements)
 }
 
 /// A variadic tuple whose fixed and rest elements are all the *same* type
@@ -610,6 +670,9 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 }
                 continue;
             }
+            // Exhaustive against today's oxc; kept so a new `TSSignature`
+            // variant degrades to `Unknown` instead of failing the build.
+            #[allow(unreachable_patterns)]
             _ => return ParsedType::Unknown,
         };
 

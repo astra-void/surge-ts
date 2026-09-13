@@ -21,9 +21,9 @@ use super::*;
 
 use indexed_access::resolve_indexed_access_type;
 
+use std::sync::Arc;
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::ParsedType;
-use std::sync::Arc;
 
 use surge_ts_types::{NumberLiteralType, Type, TypeCopyReason, union_type, with_type_copy_reason};
 
@@ -222,6 +222,12 @@ pub(crate) fn resolve_parsed_type(
             resolving,
             substitution,
         ),
+        ParsedType::VariadicTuple(elements) => resolve_variadic_tuple_type(
+            std::sync::Arc::unwrap_or_clone(elements),
+            ctx,
+            resolving,
+            substitution,
+        ),
         ParsedType::Union(types) => resolve_union_type(
             std::sync::Arc::unwrap_or_clone(types),
             ctx,
@@ -319,7 +325,10 @@ pub(crate) fn resolve_parsed_type(
                 // declares.
                 if let Some(handle) = ctx.lookup_type_declaration_handle(&type_of.name) {
                     if type_of.members.is_empty()
-                        && matches!(handle.get(), crate::symbols::TypeDeclarationInfo::Interface(_))
+                        && matches!(
+                            handle.get(),
+                            crate::symbols::TypeDeclarationInfo::Interface(_)
+                        )
                     {
                         let instance = resolve_named_type(
                             std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
@@ -489,30 +498,24 @@ pub(crate) fn resolve_parsed_type(
             resolving,
             substitution,
         ),
-        ParsedType::IndexedAccess(indexed_access) => {
-            resolve_indexed_access_type(
-                std::sync::Arc::unwrap_or_clone(indexed_access),
-                ctx,
-                resolving,
-                substitution,
-            )
-        }
-        ParsedType::Conditional(conditional) => {
-            resolve_conditional_type(
-                std::sync::Arc::unwrap_or_clone(conditional),
-                ctx,
-                resolving,
-                substitution,
-            )
-        }
-        ParsedType::TemplateLiteral(template) => {
-            resolve_template_literal_type(
-                std::sync::Arc::unwrap_or_clone(template),
-                ctx,
-                resolving,
-                substitution,
-            )
-        }
+        ParsedType::IndexedAccess(indexed_access) => resolve_indexed_access_type(
+            std::sync::Arc::unwrap_or_clone(indexed_access),
+            ctx,
+            resolving,
+            substitution,
+        ),
+        ParsedType::Conditional(conditional) => resolve_conditional_type(
+            std::sync::Arc::unwrap_or_clone(conditional),
+            ctx,
+            resolving,
+            substitution,
+        ),
+        ParsedType::TemplateLiteral(template) => resolve_template_literal_type(
+            std::sync::Arc::unwrap_or_clone(template),
+            ctx,
+            resolving,
+            substitution,
+        ),
         // An `infer X` capture resolves to a permissive `any`: with no real
         // inference, the enclosing `extends` pattern (e.g. `Ctor<infer P>`) stays a
         // concrete shape so a non-matching check type correctly falls through to

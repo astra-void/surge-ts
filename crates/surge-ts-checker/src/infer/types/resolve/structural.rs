@@ -28,6 +28,76 @@ pub(crate) fn resolve_tuple_type(
     }
 }
 
+/// A tuple written with a spread element (`[...a, ...b]`, `[head, ...tail]`).
+/// When every spread operand resolves to a known-length tuple the whole tuple
+/// has a known length, so the operands splice in place and the result is an
+/// ordinary fixed tuple — which is what makes `[...path, 0]` and the
+/// `[head, ...tail]` list idiom evaluate instead of degrading. A length-less
+/// operand (an array, an unresolved parameter) leaves the length unknown; the
+/// fixed-length model cannot state that, so it degrades as it did before this
+/// shape was modelled at all.
+pub(crate) fn resolve_variadic_tuple_type(
+    elements: Vec<ParsedTupleElement>,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let mut resolved = Vec::with_capacity(elements.len());
+    let mut had_error = false;
+
+    for element in elements {
+        let (is_rest, written) = match element {
+            ParsedTupleElement::Fixed(written) => (false, written),
+            ParsedTupleElement::Rest(written) => (true, written),
+        };
+        let resolved_element = resolve_parsed_type(written, ctx, resolving, substitution);
+        had_error |= resolved_element.had_error;
+        resolved.push((is_rest, resolved_element.ty));
+    }
+
+    match splice_spread_operands(&resolved) {
+        Some(members) => ResolvedType {
+            ty: Type::Tuple(members),
+            had_error,
+        },
+        None => ResolvedType {
+            ty: Type::Unknown,
+            had_error,
+        },
+    }
+}
+
+fn splice_spread_operands(elements: &[(bool, Type)]) -> Option<Vec<Type>> {
+    let mut members = Vec::with_capacity(elements.len());
+
+    for (is_rest, ty) in elements {
+        if !*is_rest {
+            members.push(ty.clone());
+            continue;
+        }
+        members.extend(spread_operand_members(ty)?);
+    }
+
+    Some(members)
+}
+
+/// The elements a `...T` operand contributes, or `None` when its length is not
+/// known. A deferred alias instantiation carries its tuple behind a lazy
+/// reference, so the operand is peeled before giving up.
+fn spread_operand_members(ty: &Type) -> Option<Vec<Type>> {
+    match ty {
+        Type::Tuple(members) => Some(members.clone()),
+        Type::Reference(_) => match crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::ConditionalType,
+            || ty.peeled(),
+        ) {
+            Type::Tuple(members) => Some(members),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub(crate) fn resolve_function_type(
     function_type: std::sync::Arc<ParsedFunctionType>,
     ctx: &mut CheckerContext,
@@ -94,11 +164,8 @@ pub(crate) fn resolve_function_type(
     // re-instantiates it from its arguments.
     if (!function_type.type_parameters.is_empty()
         || matches!(*function_type.return_type, ParsedType::Predicate(_)))
-        && let Some(declared) = crate::checks::call::DeclaredMemberSignature::capture(
-            &function_type,
-            substitution,
-            ctx,
-        )
+        && let Some(declared) =
+            crate::checks::call::DeclaredMemberSignature::capture(&function_type, substitution, ctx)
     {
         resolved_function = resolved_function.with_declaration(std::sync::Arc::new(declared));
     }
@@ -116,12 +183,7 @@ pub(crate) fn written_parameter_names(
 ) -> Vec<Option<std::sync::Arc<str>>> {
     parameters
         .iter()
-        .map(|parameter| {
-            parameter
-                .name
-                .as_deref()
-                .map(std::sync::Arc::<str>::from)
-        })
+        .map(|parameter| parameter.name.as_deref().map(std::sync::Arc::<str>::from))
         .collect()
 }
 
@@ -168,9 +230,7 @@ pub(crate) fn resolve_function_type_lazy_components(
     for parameter in function_type.parameters.iter() {
         let is_this = parameter.is_this;
         let is_rest = parameter.rest;
-        let defer = !is_this
-            && !is_rest
-            && defer_method_component_annotation(&parameter.ty);
+        let defer = !is_this && !is_rest && defer_method_component_annotation(&parameter.ty);
         if defer {
             let ty = super::super::cache::make_lazy_method_component_reference(
                 ctx,
@@ -191,12 +251,8 @@ pub(crate) fn resolve_function_type_lazy_components(
             value_index += 1;
             continue;
         }
-        let resolved_parameter = resolve_function_type_parameter(
-            parameter.clone(),
-            ctx,
-            resolving,
-            &local_substitution,
-        );
+        let resolved_parameter =
+            resolve_function_type_parameter(parameter.clone(), ctx, resolving, &local_substitution);
         had_error |= resolved_parameter.had_error;
         if is_this {
             continue;
@@ -242,9 +298,7 @@ fn defer_method_component_annotation(annotation: &ParsedType) -> bool {
         | ParsedType::IndexedAccess(_)
         | ParsedType::Mapped(_)
         | ParsedType::Conditional(_)
-        | ParsedType::TemplateLiteral(_) => {
-            !crate::modules::annotation_contains_typeof(annotation)
-        }
+        | ParsedType::TemplateLiteral(_) => !crate::modules::annotation_contains_typeof(annotation),
         ParsedType::Array(element) => defer_method_component_annotation(element),
         _ => false,
     }
@@ -307,10 +361,8 @@ pub(crate) fn resolve_object_type(
             && let Type::Function(existing_fn) = &existing.ty
             && let Type::Function(incoming) = &property_type.ty
         {
-            let merged = crate::infer::types::interface::merge_overload_signatures(
-                existing_fn,
-                incoming,
-            );
+            let merged =
+                crate::infer::types::interface::merge_overload_signatures(existing_fn, incoming);
             let optional = existing.optional && property.optional;
             let method = existing.method || property.is_method;
             properties.insert(
@@ -335,11 +387,14 @@ pub(crate) fn resolve_object_type(
         properties.insert(property.name.as_str().into(), object_property);
     }
 
-    let string_index_type = object_type.string_index_type.as_deref().and_then(|index_type| {
-        let resolved = resolve_parsed_type(index_type.clone(), ctx, resolving, substitution);
-        had_error |= resolved.had_error;
-        (!resolved.had_error).then_some(resolved.ty)
-    });
+    let string_index_type = object_type
+        .string_index_type
+        .as_deref()
+        .and_then(|index_type| {
+            let resolved = resolve_parsed_type(index_type.clone(), ctx, resolving, substitution);
+            had_error |= resolved.had_error;
+            (!resolved.had_error).then_some(resolved.ty)
+        });
 
     let mut resolved_object = alloc_object_type(properties, string_index_type);
     if let Some(call_signature) = object_type.call_signature.as_deref() {

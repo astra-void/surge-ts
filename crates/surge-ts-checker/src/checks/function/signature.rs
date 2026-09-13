@@ -490,7 +490,6 @@ pub(crate) fn written_binding_names(
         .collect()
 }
 
-
 pub(crate) fn map_lazy_dependency_function_signature(
     function: &surge_ts_syntax::ParsedFunctionDeclaration,
     ctx: &mut CheckerContext,
@@ -589,6 +588,7 @@ fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {
     match annotation {
         ParsedType::Object(_)
         | ParsedType::Tuple(_)
+        | ParsedType::VariadicTuple(_)
         | ParsedType::Union(_)
         | ParsedType::Intersection(_)
         | ParsedType::Function(_)
@@ -937,10 +937,8 @@ pub(crate) fn register_function_signature(
             // ts-pattern's `isMatching` declares its predicate on the *second*
             // overload, and without this the guard found none and narrowed
             // nothing.
-            let existing_signature = attach_predicate_overload(
-                existing_signature,
-                function_signature.as_ref(),
-            );
+            let existing_signature =
+                attach_predicate_overload(existing_signature, function_signature.as_ref());
             let existing_signature =
                 attach_overload_alternative(existing_signature, function_signature.as_ref());
             symbols.insert(

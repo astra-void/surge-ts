@@ -113,6 +113,12 @@ pub enum ParsedType {
     Object(std::sync::Arc<ParsedObjectType>),
     Array(std::sync::Arc<ParsedType>),
     Tuple(std::sync::Arc<Vec<ParsedType>>),
+    /// A tuple carrying a spread element (`[a, ...b]`, `[...a, ...b]`,
+    /// `[infer head, ...infer tail]`). Kept distinct from [`ParsedType::Tuple`]
+    /// because its length is only known once the spread operands resolve: a
+    /// spread of a concrete tuple flattens into a fixed one, and anything else
+    /// falls back to the length-less array lowering.
+    VariadicTuple(std::sync::Arc<Vec<ParsedTupleElement>>),
     Union(std::sync::Arc<Vec<ParsedType>>),
     Intersection(std::sync::Arc<Vec<ParsedType>>),
     Function(std::sync::Arc<ParsedFunctionType>),
@@ -131,6 +137,14 @@ pub enum ParsedType {
     /// `asserts x is T`). Resolves to `boolean` in type position; the guard
     /// narrowing consumes the payload to narrow the tested argument.
     Predicate(std::sync::Arc<ParsedPredicateType>),
+}
+
+/// One element of a [`ParsedType::VariadicTuple`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedTupleElement {
+    Fixed(ParsedType),
+    /// `...T` — spreads every element of another tuple or array type.
+    Rest(ParsedType),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +177,7 @@ impl Clone for ParsedType {
             Self::Object(payload) => Self::Object(payload.clone()),
             Self::Array(payload) => Self::Array(payload.clone()),
             Self::Tuple(payload) => Self::Tuple(payload.clone()),
+            Self::VariadicTuple(payload) => Self::VariadicTuple(payload.clone()),
             Self::Union(payload) => Self::Union(payload.clone()),
             Self::Intersection(payload) => Self::Intersection(payload.clone()),
             Self::Function(payload) => Self::Function(payload.clone()),
@@ -198,7 +213,10 @@ impl ParsedType {
             Self::NumberLiteral(_) => 2,
             Self::Object(_) => 3,
             Self::Array(_) | Self::KeyOf(_) => 4,
-            Self::Tuple(_) | Self::Union(_) | Self::Intersection(_) => 5,
+            Self::Tuple(_)
+            | Self::VariadicTuple(_)
+            | Self::Union(_)
+            | Self::Intersection(_) => 5,
             Self::Function(_) => 6,
             Self::Named(_) => 7,
             Self::TypeOf(_) => 8,

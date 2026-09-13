@@ -48,7 +48,11 @@ pub(crate) fn resolve_conditional_type(
     // `ComponentProps<"input">` from selecting its `JSX.IntrinsicElements[T]` branch.
     if resolved_extends.had_error && resolved_extends.ty.is_unknown() {
         if crate::infer::types::interface::had_error_trace_enabled() {
-            eprintln!("[had-error] conditional-extends cp={} in file {}", crate::program::in_check_phase(), ctx.file_name);
+            eprintln!(
+                "[had-error] conditional-extends cp={} in file {}",
+                crate::program::in_check_phase(),
+                ctx.file_name
+            );
         }
         return ResolvedType {
             ty: Type::Unknown,
@@ -64,7 +68,11 @@ pub(crate) fn resolve_conditional_type(
     );
     if resolved_check.had_error {
         if crate::infer::types::interface::had_error_trace_enabled() {
-            eprintln!("[had-error] conditional-check cp={} in file {}", crate::program::in_check_phase(), ctx.file_name);
+            eprintln!(
+                "[had-error] conditional-check cp={} in file {}",
+                crate::program::in_check_phase(),
+                ctx.file_name
+            );
         }
         return ResolvedType {
             ty: Type::Unknown,
@@ -160,31 +168,46 @@ pub(crate) fn resolve_conditional_type(
             // lets `ComponentProps<"input">` skip its `JSXElementConstructor<infer>`
             // branch (whose body resolves to `unknown` here) and reach the
             // `keyof JSX.IntrinsicElements` branch.
-            let branch = if !resolved_extends.ty.is_unknown()
-                && is_assignable_to(&member, &resolved_extends.ty)
-            {
-                seed_infer_placeholders(&extends_pattern, &mut member_substitution);
-                bind_infer_captures(
-                    &extends_pattern,
-                    &member,
-                    &mut member_substitution,
-                    ctx,
-                    resolving,
-                    0,
-                    true,
-                );
-                (*conditional.true_type).clone()
-            } else if let Some(matched) = try_function_infer_match(
+            let branch = match try_tuple_infer_match(
                 &extends_pattern,
                 &member,
                 &member_substitution,
                 ctx,
                 resolving,
             ) {
-                member_substitution = matched;
-                (*conditional.true_type).clone()
-            } else {
-                (*conditional.false_type).clone()
+                TuplePatternMatch::Matched(matched) => {
+                    member_substitution = matched;
+                    (*conditional.true_type).clone()
+                }
+                TuplePatternMatch::Rejected => (*conditional.false_type).clone(),
+                TuplePatternMatch::Undecided => {
+                    if !resolved_extends.ty.is_unknown()
+                        && is_assignable_to(&member, &resolved_extends.ty)
+                    {
+                        seed_infer_placeholders(&extends_pattern, &mut member_substitution);
+                        bind_infer_captures(
+                            &extends_pattern,
+                            &member,
+                            &mut member_substitution,
+                            ctx,
+                            resolving,
+                            0,
+                            true,
+                        );
+                        (*conditional.true_type).clone()
+                    } else if let Some(matched) = try_function_infer_match(
+                        &extends_pattern,
+                        &member,
+                        &member_substitution,
+                        ctx,
+                        resolving,
+                    ) {
+                        member_substitution = matched;
+                        (*conditional.true_type).clone()
+                    } else {
+                        (*conditional.false_type).clone()
+                    }
+                }
             };
 
             if crate::infer::types::interface::had_error_trace_enabled() {
@@ -223,6 +246,24 @@ pub(crate) fn resolve_conditional_type(
             },
             had_error,
         };
+    }
+
+    // A tuple pattern is decided by arity before the sentinel check below, because
+    // a spread pattern has no fixed length of its own to compare against.
+    match try_tuple_infer_match(
+        &extends_pattern,
+        &resolved_check.ty,
+        substitution,
+        ctx,
+        resolving,
+    ) {
+        TuplePatternMatch::Matched(matched) => {
+            return resolve_parsed_type(*conditional.true_type, ctx, resolving, &matched);
+        }
+        TuplePatternMatch::Rejected => {
+            return resolve_parsed_type(*conditional.false_type, ctx, resolving, substitution);
+        }
+        TuplePatternMatch::Undecided => {}
     }
 
     // Non-distributive: only evaluate when the check type is concrete enough for a
@@ -300,6 +341,29 @@ fn bind_infer_captures(
     match extends {
         ParsedType::Infer(name) => {
             substitution.insert(name.clone(), check.clone());
+        }
+        // `[infer head, ...infer tail]` / `[infer a, infer b]` against a tuple:
+        // line up the fixed slots positionally and hand the spread slot the
+        // middle as a tuple of its own. This is the list primitive every
+        // type-level recursion is written with.
+        ParsedType::Tuple(_) | ParsedType::VariadicTuple(_) if tuple_infer_enabled() => {
+            let peeled = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::ConditionalType,
+                || check.peeled(),
+            );
+            if let Some(pairs) = tuple_pattern_pairs(extends, &peeled) {
+                for (pattern_element, check_element) in pairs {
+                    bind_infer_captures(
+                        &pattern_element,
+                        &check_element,
+                        substitution,
+                        ctx,
+                        resolving,
+                        depth,
+                        reference_positional,
+                    );
+                }
+            }
         }
         ParsedType::Array(element) => {
             if let Type::Array(check_element) = check {
@@ -464,6 +528,187 @@ fn bind_infer_captures(
     }
 }
 
+/// `SURGE_VARIADIC_TUPLES=0` also turns off tuple `extends`-pattern inference, so
+/// one switch restores the whole pre-change behaviour: a fixed tuple pattern's
+/// captures stay unbound and the branch is chosen by plain assignability, as it
+/// was before tuple slots could be lined up at all.
+fn tuple_infer_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_VARIADIC_TUPLES").as_deref() != Ok("0"))
+}
+
+fn tuple_element_type(element: &surge_ts_syntax::ParsedTupleElement) -> &ParsedType {
+    let (surge_ts_syntax::ParsedTupleElement::Fixed(ty)
+    | surge_ts_syntax::ParsedTupleElement::Rest(ty)) = element;
+    ty
+}
+
+/// How a tuple `extends` pattern lines up against the check type.
+enum TuplePatternMatch {
+    /// The pattern is not a tuple one, or the check type's shape cannot decide
+    /// it — leave the existing branch test alone.
+    Undecided,
+    Matched(TypeParameterSubstitution),
+    /// The check type is a tuple the pattern cannot match: the false branch.
+    Rejected,
+}
+
+/// Branch test for a conditional whose `extends` pattern is a tuple carrying an
+/// `infer` capture. A spread pattern (`[infer head, ...infer tail]`) has no fixed
+/// length, so it resolves to the `unknown` sentinel and the assignability test
+/// cannot decide the branch at all — arity decides it here instead, which is what
+/// lets a recursive list walk terminate on the empty tuple rather than matching
+/// forever. Patterns with no capture keep the plain assignability test.
+fn try_tuple_infer_match(
+    extends: &ParsedType,
+    check: &Type,
+    base: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) -> TuplePatternMatch {
+    if !tuple_infer_enabled()
+        || !matches!(extends, ParsedType::Tuple(_) | ParsedType::VariadicTuple(_))
+        || !parsed_type_contains_infer(extends)
+    {
+        return TuplePatternMatch::Undecided;
+    }
+
+    let peeled = crate::program::with_dts_expansion_reason(
+        crate::program::DtsExpansionReason::ConditionalType,
+        || check.peeled(),
+    );
+    if !matches!(peeled, Type::Tuple(_) | Type::Array(_)) {
+        return TuplePatternMatch::Undecided;
+    }
+
+    let Some(pairs) = tuple_pattern_pairs(extends, &peeled) else {
+        return TuplePatternMatch::Rejected;
+    };
+
+    // A slot written as a concrete type still has to hold: `T extends [string,
+    // ...infer rest]` must not match `[number]` just because the arity lines up.
+    // A slot whose capture sits inside a generic reference the check member does
+    // not line up with (`[TResult] extends [MutationState<infer TData, …>]`) leaves
+    // that name unbound. Seed every capture first so it reads as unresolved in the
+    // true branch instead of reporting a false TS2304 for the capture name — the
+    // same reason `seed_infer_placeholders` exists on the assignability path.
+    let mut candidate = base.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+    seed_infer_placeholders(extends, &mut candidate);
+    for (pattern_element, check_element) in &pairs {
+        if parsed_type_contains_infer(pattern_element) {
+            continue;
+        }
+        let resolved_element = resolve_parsed_type(pattern_element.clone(), ctx, resolving, base);
+        if resolved_element.had_error || resolved_element.ty.is_unknown() {
+            return TuplePatternMatch::Undecided;
+        }
+        if !is_assignable_to(check_element, &resolved_element.ty) {
+            return TuplePatternMatch::Rejected;
+        }
+    }
+
+    for (pattern_element, check_element) in pairs {
+        bind_infer_captures(
+            &pattern_element,
+            &check_element,
+            &mut candidate,
+            ctx,
+            resolving,
+            0,
+            true,
+        );
+    }
+
+    TuplePatternMatch::Matched(candidate)
+}
+
+/// Pairs each slot of a tuple `extends` pattern with the part of the check tuple
+/// it captures. `None` when the pattern cannot match: a length mismatch against a
+/// fixed pattern, too few elements for a spread pattern's fixed slots, or a
+/// pattern shape with more than one spread (which is not inferable).
+fn tuple_pattern_pairs(extends: &ParsedType, check: &Type) -> Option<Vec<(ParsedType, Type)>> {
+    let elements = match extends {
+        ParsedType::Tuple(elements) => elements
+            .iter()
+            .cloned()
+            .map(surge_ts_syntax::ParsedTupleElement::Fixed)
+            .collect::<Vec<_>>(),
+        ParsedType::VariadicTuple(elements) => elements.as_ref().clone(),
+        _ => return None,
+    };
+
+    let rest_positions = elements
+        .iter()
+        .enumerate()
+        .filter(|(_, element)| matches!(element, surge_ts_syntax::ParsedTupleElement::Rest(_)))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if rest_positions.len() > 1 {
+        return None;
+    }
+
+    let members = match check {
+        Type::Tuple(members) => members.clone(),
+        // `T[] extends [...infer rest]` captures the array itself; any pattern
+        // with a fixed slot needs a length an array does not have.
+        Type::Array(_) if elements.len() == 1 && rest_positions.len() == 1 => {
+            let surge_ts_syntax::ParsedTupleElement::Rest(written) = &elements[0] else {
+                return None;
+            };
+            return Some(vec![(written.clone(), check.clone())]);
+        }
+        _ => return None,
+    };
+
+    let Some(&rest_index) = rest_positions.first() else {
+        if members.len() != elements.len() {
+            return None;
+        }
+        return Some(
+            elements
+                .into_iter()
+                .zip(members)
+                .map(|(element, member)| match element {
+                    surge_ts_syntax::ParsedTupleElement::Fixed(written) => (written, member),
+                    surge_ts_syntax::ParsedTupleElement::Rest(written) => (written, member),
+                })
+                .collect(),
+        );
+    };
+
+    let leading = &elements[..rest_index];
+    let trailing = &elements[rest_index + 1..];
+    if members.len() < leading.len() + trailing.len() {
+        return None;
+    }
+
+    let mut pairs = Vec::with_capacity(elements.len());
+    for (element, member) in leading.iter().zip(members.iter()) {
+        let surge_ts_syntax::ParsedTupleElement::Fixed(written) = element else {
+            return None;
+        };
+        pairs.push((written.clone(), member.clone()));
+    }
+
+    let middle_end = members.len() - trailing.len();
+    let surge_ts_syntax::ParsedTupleElement::Rest(rest_written) = &elements[rest_index] else {
+        return None;
+    };
+    pairs.push((
+        rest_written.clone(),
+        Type::Tuple(members[leading.len()..middle_end].to_vec()),
+    ));
+
+    for (offset, element) in trailing.iter().enumerate() {
+        let surge_ts_syntax::ParsedTupleElement::Fixed(written) = element else {
+            return None;
+        };
+        pairs.push((written.clone(), members[middle_end + offset].clone()));
+    }
+
+    Some(pairs)
+}
+
 /// Maximum alias-expansion depth while structurally matching an `extends` pattern
 /// against the check type. Bounds pathological self-referential aliases; real
 /// patterns (`JSXElementConstructor<infer P>`) need a single level.
@@ -585,7 +830,9 @@ fn remaining_parameters_type(check_function: &surge_ts_types::FunctionType, star
     if !check_function.is_variadic() {
         return crate::infer::types::utility::optional_parameter_tuple(
             remaining,
-            check_function.required_parameter_count().saturating_sub(start),
+            check_function
+                .required_parameter_count()
+                .saturating_sub(start),
             false,
         );
     }
@@ -642,6 +889,11 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
         | ParsedType::Tuple(members) => {
             for member in members.iter() {
                 collect_infer_names(member, names);
+            }
+        }
+        ParsedType::VariadicTuple(elements) => {
+            for element in elements.iter() {
+                collect_infer_names(tuple_element_type(element), names);
             }
         }
         ParsedType::Function(function) => {
@@ -711,6 +963,10 @@ fn parsed_type_contains_infer(ty: &ParsedType) -> bool {
         ParsedType::Union(members)
         | ParsedType::Intersection(members)
         | ParsedType::Tuple(members) => members.iter().any(parsed_type_contains_infer),
+        ParsedType::VariadicTuple(elements) => elements
+            .iter()
+            .map(tuple_element_type)
+            .any(parsed_type_contains_infer),
         ParsedType::Function(function) => {
             function
                 .parameters
@@ -738,7 +994,8 @@ fn expand_named_alias_pattern(named: &ParsedNamedType, ctx: &CheckerContext) -> 
         TypeDeclarationInfo::Interface(_) => return None,
     };
 
-    let mut map: surge_ts_types::fx::FxHashMap<String, ParsedType> = surge_ts_types::fx::FxHashMap::default();
+    let mut map: surge_ts_types::fx::FxHashMap<String, ParsedType> =
+        surge_ts_types::fx::FxHashMap::default();
     for (index, parameter) in body.type_parameters.iter().enumerate() {
         if let Some(argument) = named.type_arguments.get(index) {
             map.insert(parameter.name.clone(), argument.clone());
@@ -842,7 +1099,7 @@ mod distributive_member_guard_tests {
                  export function go<T>(seed: T, h: Holder<any>): string {\n\
                  \x20 return h.value;\n\
                  }\n"
-                .to_string(),
+            .to_string(),
         }]
     }
 
@@ -874,7 +1131,8 @@ mod distributive_member_guard_tests {
         );
         let counters = crate::metrics::snapshot_program_counters();
         assert_eq!(
-            counters.interface_resolution_degraded_count, 0,
+            counters.interface_resolution_degraded_count,
+            0,
             "an `any` member must not degrade any interface resolution \
              (got {} degraded of {} attempts)",
             counters.interface_resolution_degraded_count,
