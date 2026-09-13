@@ -47,9 +47,26 @@ pub(super) fn predicate_callee_signature<'a>(
     ctx: &mut CheckerContext,
 ) -> Option<PredicateSignature> {
     match callee {
-        PredicateCallee::Name(name) => resolve(name)
-            .and_then(|symbol| predicate_signature_of(symbol, ctx))
-            .map(PredicateSignature::plain),
+        PredicateCallee::Name(name) => {
+            let symbol = resolve(name)?;
+            if let Some(signature) = predicate_signature_of(symbol, ctx) {
+                return Some(PredicateSignature::plain(signature));
+            }
+            // A binding holding a function *value* whose signature was read
+            // off a declaration (`const isPost = isMatching(pattern)` returns
+            // `(value: unknown) => value is …`) carries that written signature
+            // on the handle, exactly like a member predicate does.
+            let Type::Function(function) = symbol.ty.peeled() else {
+                return None;
+            };
+            let declared = function
+                .declaration()?
+                .downcast_ref::<crate::checks::call::DeclaredMemberSignature>()?;
+            Some(PredicateSignature {
+                signature: declared.signature.clone(),
+                outer_type_arguments: declared.outer_type_arguments.clone(),
+            })
+        }
         PredicateCallee::Member { object, property } => {
             let diagnostics_before = ctx.diagnostics().len();
             let inferred = crate::infer::infer_expression(object, symbols, ctx);

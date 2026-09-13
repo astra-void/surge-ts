@@ -1538,11 +1538,43 @@ fn select_overload_return_type(
     // such disagreements to `any`) is the honest one. zod's
     // `registry.get(schema)?.id` came back as an unbound `$replace<Meta, S>`
     // without this.
-    if type_contains_unknown(picked.return_type()) {
+    if names_open_parameter(picked.return_type()) {
         return None;
     }
     crate::program::record_overload_selection_pick();
     Some(picked.return_type().clone())
+}
+
+/// `type_contains_unknown` without the written `unknown`: an overload taking
+/// `(pattern: unknown)` or returning `(value: unknown) => value is T` is fully
+/// instantiated, and treating the keyword as the sentinel declined every such
+/// member, handing the call the fold's `any` instead of the predicate.
+fn names_open_parameter(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::GenuineUnknown => false,
+        Type::Array(element) => names_open_parameter(element),
+        Type::Reference(reference) if reference.is_readonly_array() => {
+            reference.arguments.iter().any(names_open_parameter)
+        }
+        Type::Tuple(elements) => elements.iter().any(names_open_parameter),
+        Type::Function(function) => {
+            function.parameters().iter().any(names_open_parameter)
+                || names_open_parameter(function.return_type())
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .any(|property| names_open_parameter(&property.ty))
+                || object
+                    .string_index_type
+                    .as_deref()
+                    .is_some_and(names_open_parameter)
+        }
+        Type::Union(union) => union.types().iter().any(names_open_parameter),
+        _ => false,
+    }
 }
 
 fn signature_accepts_argument_types(
@@ -1585,7 +1617,7 @@ fn signature_accepts_argument_types(
         // A parameter standing at the degradation sentinel proves nothing about
         // this position; committing to such an overload would hand its (equally
         // degraded) return to every consumer.
-        !type_contains_unknown(&parameter_type)
+        !names_open_parameter(&parameter_type)
             && is_assignable_to(argument_type, &parameter_type)
             && !weak_type_rejects(argument_type, &parameter_type)
     })
