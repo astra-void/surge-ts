@@ -237,7 +237,7 @@
     "message": "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.",
     "source": "typescript",
     "arity": 0,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS2362",

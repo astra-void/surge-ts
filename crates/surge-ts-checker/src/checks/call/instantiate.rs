@@ -83,11 +83,21 @@ pub(crate) fn instantiate_function_type<'a>(
             return Cow::Borrowed(function_type);
         }
 
-        return instantiate_function_type_with_substitution(
+        let instantiated = instantiate_function_type_with_substitution(
             function_type,
             function_signature,
             &substitution,
             false,
+            ctx,
+        );
+        return fold_overload_alternative_parameters(
+            instantiated,
+            function_type,
+            function_signature,
+            outer_type_arguments,
+            type_arguments,
+            arguments,
+            symbols,
             ctx,
         );
     }
@@ -128,12 +138,123 @@ pub(crate) fn instantiate_function_type<'a>(
     }
 
     record_generic_call_inference_success();
-    instantiate_function_type_with_substitution(
+    let instantiated = instantiate_function_type_with_substitution(
         function_type,
         function_signature,
         &substitution,
         true,
         ctx,
+    );
+    fold_overload_alternative_parameters(
+        instantiated,
+        function_type,
+        function_signature,
+        outer_type_arguments,
+        type_arguments,
+        arguments,
+        symbols,
+        ctx,
+    )
+}
+
+/// Restores an overload group's parameter fold after instantiation.
+///
+/// The group's value type already holds the union of every overload's parameter
+/// at a position, but a generic call rebuilds each parameter from the *kept*
+/// signature's written annotation, which leaves only the first overload's shape
+/// behind: an argument written for a later overload
+/// (`useQuery({ queryKey, queryFn })`, whose first overload demands
+/// `initialData`) was then reported against the first. Each later overload is
+/// instantiated against the same call and its parameter unioned back in.
+///
+/// Return type, arity and variadic flag are untouched — which overload's return
+/// applies needs real overload resolution, and widening it here would degrade
+/// every generic group's result.
+fn fold_overload_alternative_parameters<'a>(
+    instantiated: Cow<'a, FunctionType>,
+    function_type: &FunctionType,
+    function_signature: &FunctionSignatureInfo,
+    outer_type_arguments: &[(String, Type)],
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Cow<'a, FunctionType> {
+    if function_signature.overload_alternatives.is_empty() {
+        return instantiated;
+    }
+
+    let mut parameters = instantiated.parameters().to_vec();
+    let mut folded = false;
+    // The kept signature first, then each alternative in declaration order:
+    // the same list a non-generic group carries, instantiated for this call.
+    let mut members = Vec::with_capacity(1 + function_signature.overload_alternatives.len());
+    members.push(instantiated.clone().into_owned());
+    // An alternative's own annotations are resolved here only to read their
+    // shape; a constraint violation or an unresolved name in an overload this
+    // call did not pick is not the call's error.
+    let diagnostics_before = ctx.diagnostics.len();
+
+    for alternative in &function_signature.overload_alternatives {
+        let mut substitution = if type_arguments.is_empty() {
+            let mut substitution =
+                infer_type_argument_substitution(alternative, arguments, None, symbols, ctx);
+            apply_uninferred_type_parameter_defaults(
+                alternative,
+                arguments.len(),
+                false,
+                &mut substitution,
+                ctx,
+            );
+            substitution
+        } else {
+            let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+            let substitution =
+                explicit_type_argument_substitution(alternative, type_arguments, ctx);
+            ctx.symbols = saved_symbols;
+            substitution
+        };
+        seed_outer_type_arguments(&mut substitution, outer_type_arguments);
+
+        let alternative_type = instantiate_function_type_with_substitution(
+            function_type,
+            alternative,
+            &substitution,
+            false,
+            ctx,
+        );
+
+        members.push(alternative_type.clone().into_owned());
+
+        for (index, parameter) in parameters.iter_mut().enumerate() {
+            let Some(candidate) = alternative_type.parameters().get(index) else {
+                continue;
+            };
+            // A candidate standing at the degradation sentinel says nothing about
+            // what this position accepts, and folding it in would make the
+            // position permissive enough to swallow a real mismatch.
+            if candidate == parameter || candidate.is_unknown() {
+                continue;
+            }
+            *parameter = surge_ts_types::union_type(vec![parameter.clone(), candidate.clone()]);
+            folded = true;
+        }
+    }
+
+    ctx.diagnostics.truncate(diagnostics_before);
+
+    if !folded {
+        return Cow::Owned(instantiated.into_owned().with_overloads(members));
+    }
+
+    Cow::Owned(
+        alloc_function_type(
+            parameters,
+            instantiated.return_type().clone(),
+            instantiated.is_variadic(),
+            instantiated.required_parameter_count(),
+        )
+        .with_overloads(members),
     )
 }
 
@@ -324,6 +445,14 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
         ctx.namespace_member_prefix_stack.push(prefix.to_string());
     }
 
+    // Re-resolving a written annotation under a substitution is not a fresh
+    // declaration check: the declaration was already checked where it was
+    // written, against the type parameter's *constraint*. Anything raised here
+    // is raised at the declaration's span from a call site that cannot see it —
+    // `(o: K[1])` under `K = [""]` reported a false TS2493 on the parameter
+    // list of a generic the call never looked at.
+    let diagnostics_before = ctx.diagnostics.len();
+
     let instantiated = with_type_copy_reason(TypeCopyReason::CallResolution, || {
         let mut instantiated_parameters = Vec::with_capacity(function_type.parameters().len());
         for (index, parameter) in function_type.parameters().iter().enumerate() {
@@ -363,6 +492,8 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
             function_type.required_parameter_count(),
         ))
     });
+
+    ctx.diagnostics.truncate(diagnostics_before);
 
     if namespace_prefix.is_some() {
         ctx.namespace_member_prefix_stack.pop();
@@ -900,11 +1031,16 @@ fn widens_a_fresh_literal_argument(
     argument: &surge_ts_syntax::ParsedExpression,
     type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
 ) -> bool {
+    // A fresh literal: a primitive literal, or an object/array literal whose
+    // property and element literals widen the same way (`subject({ n: 1 })`
+    // binds `T` to `{ n: number }`). A `const` assertion is not fresh.
     if !matches!(
         argument,
         surge_ts_syntax::ParsedExpression::StringLiteral(_)
             | surge_ts_syntax::ParsedExpression::NumberLiteral(_)
             | surge_ts_syntax::ParsedExpression::BooleanLiteral(_)
+            | surge_ts_syntax::ParsedExpression::ObjectLiteral { .. }
+            | surge_ts_syntax::ParsedExpression::ArrayLiteral { .. }
     ) {
         return false;
     }
@@ -1208,19 +1344,47 @@ pub(crate) fn collect_inferred_type_argument(
         // match the argument's own signature so the type parameter is inferred
         // from what the callback takes and returns.
         ParsedType::Function(expected_function) => {
-            let Type::Function(actual_function) = argument_type else {
-                return;
+            // A callable object (vitest's `Mock<…>`, an interface with a call
+            // signature) infers through its signature the way a function does.
+            let actual_function = match argument_type.peeled() {
+                Type::Function(function) => function,
+                Type::Object(object) => match object.call_signature() {
+                    Some(signature) => signature.clone(),
+                    None => return,
+                },
+                _ => return,
             };
-            for (expected_parameter, actual_parameter) in expected_function
-                .parameters
-                .iter()
-                .zip(actual_function.parameters().iter())
-            {
-                // `any` here is the sketch's placeholder for an *un-annotated*
-                // callback parameter, which is what the signature is about to
-                // type — inferring from it would bind the type parameter to
-                // `any` and silence the callback body's own errors.
-                if matches!(actual_parameter, Type::Any) {
+            let actual_parameters = actual_function.parameters();
+            let rest_index = actual_function
+                .is_variadic()
+                .then(|| actual_parameters.len().checked_sub(1))
+                .flatten();
+            for (index, expected_parameter) in expected_function.parameters.iter().enumerate() {
+                // A rest parameter stands for every position from its own on,
+                // and it is its *element* the expected parameter there lines up
+                // with: `(...args: any[]) => any` — vitest's `vi.fn()` — binds
+                // each of `(data: TData, variables: TVariables)` to `any`, as
+                // tsc does, rather than the first to `any[]` and the rest to
+                // nothing (which left `TVariables` at its `void` default and
+                // rejected every `mutate(1)`).
+                let rest_element = match rest_index {
+                    Some(rest_index) if index >= rest_index => Some(
+                        rest_parameter_element_type(&actual_parameters[rest_index], index - rest_index),
+                    ),
+                    _ => None,
+                };
+                let Some(actual_parameter) = rest_element
+                    .as_ref()
+                    .or_else(|| actual_parameters.get(index))
+                else {
+                    break;
+                };
+                // A bare `any` on a non-rest position is the sketch's placeholder
+                // for an *un-annotated* callback parameter, which is what the
+                // signature is about to type — inferring from it would bind the
+                // type parameter to `any` and silence the callback body's own
+                // errors. A rest element is written, never sketched.
+                if rest_element.is_none() && matches!(actual_parameter, Type::Any) {
                     continue;
                 }
                 collect_inferred_type_argument(
@@ -1310,8 +1474,8 @@ pub(crate) fn collect_inferred_type_argument(
             }
             // Nothing shaped matched and there is no naked member to take the
             // rest: no evidence. With a naked member, an argument none of the
-            // shapes fit (`A | B` against `TOut | Promise<TOut>`) is what it
-            // stands for, in full.
+            // shapes fit (`A | B` against `TOut | Promise<TOut>`, or `{ a: 2 }`
+            // against `T | undefined`) is what it stands for, in full.
             if matches.is_empty() && naked.is_empty() {
                 return;
             }
@@ -1776,6 +1940,20 @@ pub(crate) fn record_type_argument_candidate(
 
     if let Some(common_primitive) = common_primitive_candidate(&existing, &candidate) {
         substitution.set(type_parameter_name.to_string(), common_primitive, false);
+        return;
+    }
+
+    // Two object candidates for one parameter: tsc infers the union of them,
+    // so `eq({ a: 1 }, { a: 2 })` binds `T` to both shapes and the second
+    // argument is not checked against the first. Dropping the later candidate
+    // — the previous behavior — fixed `T` from the first argument alone.
+    if matches!(existing.peeled(), Type::Object(_)) && matches!(candidate.peeled(), Type::Object(_))
+    {
+        substitution.set(
+            type_parameter_name.to_string(),
+            surge_ts_types::union_type(vec![existing, candidate]),
+            false,
+        );
     }
 }
 

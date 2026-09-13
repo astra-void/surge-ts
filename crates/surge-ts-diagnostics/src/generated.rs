@@ -302,7 +302,7 @@ pub const TS2356: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.",
     argument_count: 0,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS2362: DiagnosticDescriptor = DiagnosticDescriptor {

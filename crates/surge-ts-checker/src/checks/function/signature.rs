@@ -695,6 +695,7 @@ pub(crate) fn function_signature_info(
         declaring_file: Some(Arc::from(declaring_file)),
         namespace_prefix: None,
         predicate_overload: None,
+        overload_alternatives: Vec::new(),
     })
 }
 
@@ -730,6 +731,7 @@ pub(crate) fn function_type_signature_info(
         declaring_file: Some(Arc::from(declaring_file)),
         namespace_prefix: None,
         predicate_overload: None,
+        overload_alternatives: Vec::new(),
     })
 }
 
@@ -798,6 +800,13 @@ pub(crate) fn merge_overload_group_signatures(a: &FunctionType, b: &FunctionType
         Type::Any
     };
 
+    // The fold is the *shape* a call is checked against; the members are what
+    // decide its return type once the arguments are known. `a` is the group so
+    // far and `b` the newest declaration, so the list stays in declaration order.
+    let mut members = Vec::with_capacity(2);
+    a.push_overload_members(&mut members);
+    b.push_overload_members(&mut members);
+
     alloc_function_type(
         parameters,
         return_type,
@@ -805,6 +814,7 @@ pub(crate) fn merge_overload_group_signatures(a: &FunctionType, b: &FunctionType
         a.required_parameter_count()
             .min(b.required_parameter_count()),
     )
+    .with_overloads(members)
 }
 
 /// Whether a signature's return is a `x is T` type predicate (an `asserts`
@@ -837,6 +847,28 @@ fn attach_predicate_overload(
     }
     let mut carried = (*kept).clone();
     carried.predicate_overload = Some(incoming.clone());
+    Some(Arc::new(carried))
+}
+
+/// Records a later overload of the group on the signature the group keeps, so a
+/// generic call can re-resolve every overload's parameter annotations instead of
+/// only the first's. See `FunctionSignatureInfo::overload_alternatives`.
+///
+/// Bounded: a group declaring more overloads than this contributes only its
+/// first few, since every one folded in costs an inference run per call.
+fn attach_overload_alternative(
+    kept: Option<Arc<FunctionSignatureInfo>>,
+    incoming: Option<&Arc<FunctionSignatureInfo>>,
+) -> Option<Arc<FunctionSignatureInfo>> {
+    const MAX_ALTERNATIVES: usize = 6;
+
+    let kept = kept?;
+    let incoming = incoming?;
+    if kept.overload_alternatives.len() >= MAX_ALTERNATIVES {
+        return Some(kept);
+    }
+    let mut carried = (*kept).clone();
+    carried.overload_alternatives.push(Arc::clone(incoming));
     Some(Arc::new(carried))
 }
 
@@ -909,6 +941,8 @@ pub(crate) fn register_function_signature(
                 existing_signature,
                 function_signature.as_ref(),
             );
+            let existing_signature =
+                attach_overload_alternative(existing_signature, function_signature.as_ref());
             symbols.insert(
                 name,
                 SymbolInfo {

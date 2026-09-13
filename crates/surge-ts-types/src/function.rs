@@ -109,6 +109,14 @@ pub struct FunctionType {
     /// metadata like the names above — never part of the payload, identity, or
     /// equality.
     declaration: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// The overload group (declaration order) this merged signature stands for,
+    /// when it was folded from more than one overload. Call resolution reads it
+    /// to pick the return type of the first overload the evaluated arguments
+    /// satisfy. Handle metadata: the payload stays the permissive fold, so
+    /// identity, interning and equality are unchanged, and two groups folding to
+    /// one shape still share a payload. Thin pointer on purpose — a fat one
+    /// would grow every `Type`.
+    overloads: Option<Arc<Vec<FunctionType>>>,
 }
 
 impl FunctionType {
@@ -123,6 +131,7 @@ impl FunctionType {
             type_parameter_head: None,
             alias_name: None,
             declaration: None,
+            overloads: None,
         }
     }
 
@@ -149,6 +158,7 @@ impl FunctionType {
                         type_parameter_head: None,
                         alias_name: None,
                         declaration: None,
+                        overloads: None,
                     };
                 }
                 Err((parameters, return_type)) => {
@@ -168,6 +178,7 @@ impl FunctionType {
                         type_parameter_head: None,
                         alias_name: None,
                         declaration: None,
+                        overloads: None,
                     };
                 }
             }
@@ -187,6 +198,7 @@ impl FunctionType {
             type_parameter_head: None,
             alias_name: None,
             declaration: None,
+            overloads: None,
         }
     }
 
@@ -226,6 +238,26 @@ impl FunctionType {
     pub fn with_declaration(mut self, declaration: Arc<dyn std::any::Any + Send + Sync>) -> Self {
         self.declaration = Some(declaration);
         self
+    }
+
+    /// This signature carrying `overloads` as its group. Fewer than two members
+    /// carries nothing: a single signature is its own resolution candidate.
+    pub fn with_overloads(mut self, overloads: Vec<FunctionType>) -> Self {
+        self.overloads = (overloads.len() >= 2).then(|| Arc::new(overloads));
+        self
+    }
+
+    pub fn overloads(&self) -> Option<&[FunctionType]> {
+        self.overloads.as_deref().map(Vec::as_slice)
+    }
+
+    /// The group members in declaration order, or the signature itself when it
+    /// is not a group, appended to `out`.
+    pub fn push_overload_members(&self, out: &mut Vec<FunctionType>) {
+        match self.overloads() {
+            Some(members) => out.extend(members.iter().cloned()),
+            None => out.push(self.clone()),
+        }
     }
 
     pub fn declaration(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
@@ -341,6 +373,7 @@ impl Clone for FunctionType {
             type_parameter_head: self.type_parameter_head.clone(),
             alias_name: self.alias_name.clone(),
             declaration: self.declaration.clone(),
+            overloads: self.overloads.clone(),
         }
     }
 }

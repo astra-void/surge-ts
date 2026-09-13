@@ -1723,3 +1723,268 @@ spread operand itself.
 Degrading around the first gap was tried and reverted; see
 `undecidable-conditional-never-branch-basic`. Representing rest elements is the
 repair, and it subsumes both gaps.
+
+## tanstack-query react-query burn-down (2026-09-13)
+
+The `react-query` type tests held eleven of the aggregate's twenty-eight false
+positives. Ten are closed, by four root causes, and the aggregate went **28 →
+18**. ky (0/0), unnamed (0/0), ofetch (1/1), zod (21/21), ts-pattern (1) and
+trpc (1128, surge-only 0) are byte-identical before and after, and the preset
+sweep is 209/209 on the normal gate. Measured on a dirty working tree on top of
+`7780246`, TypeScript 7.0.2 oracle, against a binary copied straight after the
+build and pointed at with `SURGE_TS_BIN`.
+
+### A generic overload group discarded its parameter fold at instantiation
+
+Six of the ten. An overload group's value type is the permissive fold of every
+overload — a position declared differently across them becomes the union of what
+they accept — and `register_function_signature` has built that union since the
+`cacheLife` fix. A *generic* group never saw it. `instantiate_function_type`
+rebuilds every parameter from `function_signature.parameter_types`, and a group
+keeps exactly one parsed signature (the first declaration's), so the union was
+overwritten by the first overload's shape at every call.
+
+`useQuery({ queryKey, queryFn })` is the shape: the first overload takes
+`DefinedInitialDataOptions`, which requires `initialData`, so the call reported
+`TS2345` against a parameter type the call had never been meant to match — and
+reported it with the type parameters unsubstituted, because inference against
+the wrong shape found nothing. `useInfiniteQuery` and `mutationOptions` are the
+same cause.
+
+The group now carries its later overloads (`overload_alternatives`, bounded at
+six, the way `predicate_overload` is already carried), and each is instantiated
+against the same call with its own inference and its parameter unioned back in.
+Diagnostics raised while resolving an overload the call did not pick are
+discarded: a constraint violation in an unrelated overload is not the call's
+error.
+
+Parameters only, at first. The kept signature's return type survived the fold,
+because widening it to the group's union — or to `any`, the way the non-generic
+fold does — would degrade every generic group's result, and picking the matching
+overload's return was the blocked overload-resolution program. That left the
+eleventh false positive open: `useQuery<string, Error>(...)` was typed by the
+*first* overload's `DefinedUseQueryResult`, whose two members are the
+refetch-error and success results, so `state.isLoadingError` was `false` in both,
+narrowing on it collapsed, and `state.error` read as possibly `undefined` where
+tsc, having picked the second overload's five-member `QueryObserverResult`, has
+`Error`. Overload return selection, below, closed it the same day.
+
+Pinned by `overload-group-generic-parameter-fold-basic` and five tests in
+`crates/surge-ts-checker/tests/function_overloads.rs`.
+
+### TS2356 was applied to unary `+`/`-`, which coerce
+
+`TS2356` ("An arithmetic operand must be of type 'any', 'number', 'bigint' or an
+enum type") is the `++`/`--` operand rule. Unary `+`/`-` coerce: tsc accepts any
+operand and types the result `number`. surge reported every non-numeric operand
+and returned `unknown` for the result on top of it, which silently disabled the
+downstream checks too.
+
+Measured against the oracle, `+s` / `-s` / `~s` on a `string`, `+o` on an
+`object` and `+b` on a `boolean` are all accepted by tsc; `s++`, `s--` and `++s`
+report `TS2356`; and `+(u as unknown)` reports `TS2571`. surge had the rule
+exactly inverted — it reported the accepted forms and reports nothing for the
+three `++`/`--` forms tsc rejects. **Only the false-positive half is closed
+here.** The `++`/`--` half and the `unknown` operand are new checks with their
+own false-positive surface and are recorded, not smuggled in.
+
+`useQueries.test-d.tsx` writes `(data) => [data, +data]` against a
+`(data: string) => [string, number]` contextual type, which is the corpus hit.
+Pinned by `unary-arithmetic-coercion-basic` and
+`crates/surge-ts-checker/tests/unary_arithmetic_operand.rs`.
+
+Seven smoke fixtures and one span test encoded the old behavior. Each was
+re-verified against the pinned oracle on its own — `-"hello"`, `+true`,
+`const value: number = -"hello"`, `+value` on a `string | number`, and the two
+literal cases all report nothing in tsc — then renamed from `…-invalid` to
+`…-coerces` and set to expect nothing. (One of them turned out to be listed
+twice in the smoke manifest, under the same name and path.) `TS2356` has no
+emission path left, so the catalog and the emitted-diagnostics manifest now
+carry it as `catalog-only` with the reason attached; the `++`/`--` rule needs a
+parser node for update expressions, which surge does not have.
+
+### A declaration's annotation was re-checked under the call's substitution
+
+A generic call re-resolves the callee's written annotations under its
+substitution. That is not a fresh declaration check — the declaration was
+checked where it was written, against the type parameter's *constraint* — so
+anything raised during re-resolution lands on the declaration's span from a call
+site that can neither see nor fix it.
+
+`useWrappedQuery`'s `fetcher: (obj: TQueryKey[1], …)` under
+`TQueryKey extends [string, Record<string, unknown>?]` is the corpus hit: called
+with `['']`, the re-resolution read `TQueryKey` as `[""]` and reported a false
+`TS2493` on the arrow's parameter list. tsc does not check a type parameter's
+indexed access against the arity of its tuple constraint at all — `K[1]` under
+`K extends [string]` resolves rather than reporting — so the suppression costs
+nothing. A written out-of-range index on a *concrete* tuple is unaffected.
+
+`instantiate_function_type_with_substitution` now discards what it raises.
+Pinned by `instantiated-annotation-span-basic` and
+`crates/surge-ts-checker/tests/instantiation_annotation_diagnostics.rs`.
+
+### A missing-property report was made on a literal that could not be compared
+
+tsc reports **one** error per object literal: a written property that fails is
+reported at that property, and the missing-required-property report never
+happens. surge already had that order. The gap was the degraded case — when the
+expected member is surge's degradation sentinel the comparison passes
+permissively, so the missing-property report fired *instead of* the property
+error tsc reports.
+
+Which matters beyond the message: `useSuspenseInfiniteQuery.test-d.tsx` writes
+`@ts-expect-error` over the `queryFn: skipToken` property, covering the
+property's line and not the literal's. tsc's single error is the property's and
+is suppressed; surge's was the literal's `TS2741` for the missing
+`initialPageParam`, two lines up and unsuppressed. The member behind it is
+`queryFn?: Exclude<UseInfiniteQueryOptions<…>['queryFn'], SkipToken>`, which
+surge resolves to the sentinel.
+
+The report is now withheld when a property the literal writes was compared
+against a sentinel member. The check is deliberately **shallow** — sentinel at
+the top level of the member type, or of its optionality union. The deep walk
+(`type_contains_degradation_sentinel`) resolves lazy references, and calling it
+per property of every checked literal hung the tanstack aggregate: ten minutes
+at 0% CPU and 151 MB, a deadlock rather than a slowdown, since the resolution
+re-enters while the literal is mid-check.
+
+No preset: the premise is a surge-internal degradation, so a project pinning it
+would be green for the wrong reason, and would flip the moment `Exclude` over
+that member resolves. `crates/surge-ts-checker/tests/object_literal_report_order.rs`
+pins the ordering rule the fix depends on instead.
+
+## Overload return selection (2026-09-13)
+
+The overload-resolution program had been blocked since 2026-07-17 on a measured
+regression: the `recovery/overload-only` branch tried each overload as a full
+call and rolled its diagnostics back, which re-evaluated every argument per
+candidate and re-inferred arguments on the inference path — **+79% user CPU and
++42% peak footprint on tRPC**. That branch is one commit, 294 commits behind
+main, and was not rebased. The selection half of it is re-done here on a design
+that adds no argument evaluation.
+
+**The arguments are checked once, against the permissive fold, exactly as
+before. With their evaluated types in hand, the return type is the first
+overload's that accepts them, in declaration order; when none does, the fold's
+return stays, so a no-match call reports exactly what it did before.** A group
+carries its members on the `FunctionType` *handle* — `overloads`, next to the
+display-only metadata — never on the payload, so identity, interning and
+equality are unchanged. It is a thin `Arc<Vec<_>>` on purpose: a fat pointer
+would have grown every `Type` from 96 to 104 bytes; the handle grows 88 → 96 and
+`Type` stays at 96. Non-generic groups attach the list where the fold is built
+(`merge_overload_group_signatures`); generic groups attach the per-call
+instantiations the parameter fold already computes.
+
+Selection is stricter than the fold's assignability where tsc is, because a
+wrong pick is worse than no pick — the memo's own warning, "selection precision
+is bounded by assignability precision", bit on the first run:
+
+- **Weak types.** `fs.readFileSync(path, 'utf8')` picked the `Buffer` overload
+  on both zod (+2) and trpc (+3), because surge's assignability lets `'utf8'`
+  pass against `{ encoding?: null; flag?: string } | null`. tsc's weak-type rule
+  is applied to selection only: an object type whose properties are all
+  optional accepts nothing that shares no property with it. Assignability
+  proper is untouched.
+- **Written keys.** The tanstack call's option literal has a member surge
+  cannot model (`queryFn`'s `Exclude` over `SkipToken`), so its evaluated type
+  is a wildcard — and a wildcard would have accepted the `initialData` overload
+  first. The property names an object literal writes are known from the syntax
+  alone, so an overload requiring a property the literal never writes is
+  rejected before its type is consulted.
+- **Callbacks** are wildcards: typed by whichever overload is picked, so they
+  cannot pick. **Spread** disables selection for the call.
+- A parameter standing at the degradation sentinel rejects its candidate:
+  committing to it would hand an equally degraded return to every consumer.
+
+Measured, interleaved pairs against the pre-change binary, dirty tree on
+`7780246`:
+
+| corpus | diagnostics | user CPU (3 pairs) | peak RSS |
+| --- | ---: | --- | --- |
+| tanstack-query | 18 → **17** | 0.56 / 0.56 s | — |
+| trpc | 1128, byte-identical | 5.38 / 5.42 s | 932 → 928 MB |
+| zod | 21, byte-identical | 2.40 / 2.41 s | 388/389, 391/384, 382/370 MB (3 pairs, noise) |
+| ky / ofetch / ts-pattern / unnamed | byte-identical | | |
+
+Not done, deliberately: **`TS2769` is still not emitted**, so a call matching no
+overload keeps its fold-shaped `TS2345`/`TS2322` and a preset cannot contain a
+failing overloaded call. **Interface and type-literal method groups** still
+resolve through the fold alone — the group list rides free-function and ambient
+module-function groups only, which is where `register_function_signature` folds;
+attaching lists to every `.d.ts` interface member was the other half of the old
+branch's cost and needs its own measurement. **Expression inference**
+(`infer_expression` on a call) reads the fold's return without selecting; a
+binding still sees the selected type because declarations are typed through the
+check path.
+
+Pinned by `overload-return-selection-basic` and seven tests in
+`crates/surge-ts-checker/tests/function_overloads.rs`.
+
+## query-core: type-parameter candidates from every argument (2026-09-13)
+
+tanstack-query **17 → 15**, every other corpus byte-identical, sweep 211/211.
+`shallowEqualObjects({ a: 1 }, { a: 2 })` reported `Type '2' is not assignable
+to type '1'`, and the `{ a: 1, b: 2 }` variant an excess property — reduced to
+three lines: `declare function eq<T extends Record<string, any>>(a: T, b: T |
+undefined)`.
+
+Three layers, each pinned by `generic-object-candidate-union-basic` and
+`crates/surge-ts-checker/tests/generic_literal_widening.rs`:
+
+- **Later object candidates were dropped.** `record_type_argument_candidate`
+  kept the first candidate and could only meet two *primitives* at their base
+  type; two object shapes fell through, so `T` was fixed from the first
+  argument. tsc infers the union of object-literal candidates; so does surge
+  now.
+- **A union parameter never reached the naked member.** The union arm of
+  `collect_inferred_type_argument` returned as soon as an argument matched none
+  of the structured members — `{ a: 2 }` against `undefined` — and the
+  leftover-to-naked-parameter step after it was dead code for that case. The
+  guard is gone; the leftover is handed to the naked type parameter, which is
+  what tsc does with an unmatched source against a union target holding one.
+- **Fresh object literals did not widen.** `widens_a_fresh_literal_argument`
+  only knew primitive literal *expressions*, so `subject({ n: 1 })` bound `T` to
+  `{ n: 1 }` where tsc widens to `{ n: number }`. Object and array literals now
+  count as fresh; a `const` assertion still keeps its literals; a constrained
+  `T` still keeps them too (the existing rule, unchanged).
+
+## query-core: MutationObserver constructor inference (2026-09-13)
+
+tanstack-query **15 → 13**, every other corpus byte-identical. Four false
+positives sat on `new MutationObserver(client, options)`; two are closed and the
+other two are blocked one layer down.
+
+**Closed — `observer.mutate(1)` against `void` (2).** The options carry
+`onSuccess: vi.fn()`, and tsc infers `TVariables = any` from it: the mock's call
+signature is `(...args: any[]) => any`, and a rest parameter's *element* lines
+up with every expected parameter from its position on. surge's callback arm
+zipped positionally — the first expected parameter got `any[]`, the rest got
+nothing — and only accepted a `Type::Function`, which a `Mock<…>` interface is
+not. Both fixed in `collect_inferred_type_argument`; the bare-`any` skip that
+protects an un-annotated arrow parameter stays, since a rest element is written,
+never sketched. Pinned by `callback-rest-any-inference-basic` and two tests in
+`generic_literal_widening.rs`.
+
+**Also landed — inferred class type arguments are written back concretely.**
+`generic_class_instance_type` used to synthesize `Named(param)` arguments and
+resolve them through the inference substitution. That binds the argument, but a
+member's lazy alias reference (`subscribe(listener: Listener<A, B, C>)`)
+re-reads its parsed arguments later, past the substitution, and came out with
+the class's own parameters unbound — reduced with a two-module `Obs extends
+Subscribable<Listener<A, B, C>>`. Inferred arguments the syntax can spell
+(primitives, literals, arrays, tuples, unions of those) are now reified into
+parsed types, so the instance is built exactly as an explicit `new C<string,
+…>()` is; anything nominal keeps the name route. Corpora byte-identical.
+
+**Blocked — `mutation.subscribe((state) => states.push(state))` (2).** The
+listener's `TData` must come from `mutationFn: (text: string) =>
+sleep(10).then(() => text)`, and the value of a *generic method call* on an
+interface receiver is the degradation sentinel in this program: probed in the
+corpus itself, `Promise.resolve(1)`, `sleep(10).then(() => 'x')` and a user
+`Box<string>.map(v => v.length)` all assign to `string` without a diagnostic,
+while `[1, 2].map(...)` (the array special case) reports. Property calls do not
+instantiate a method's own type parameters, so a method whose parameter has no
+default (`map<U>`, `resolve<T>`, `then<TResult1>`) yields `unknown`. That is a
+false-negative class of its own, well beyond these two lines; the
+`trpc-fn-80` branch carries a written-signature attachment for generic methods
+that is the likely repair, and this pair should be re-measured after it lands.

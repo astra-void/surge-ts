@@ -625,6 +625,14 @@ fn render_check_counters(counters: &ProgramCounters) {
         counters.generic_call_inference_success_count
     );
     eprintln!(
+        "    overload_selection_attempt_count: {}",
+        counters.overload_selection_attempt_count
+    );
+    eprintln!(
+        "    overload_selection_pick_count: {}",
+        counters.overload_selection_pick_count
+    );
+    eprintln!(
         "    generic_call_inference_failed_count: {}",
         counters.generic_call_inference_failed_count
     );
