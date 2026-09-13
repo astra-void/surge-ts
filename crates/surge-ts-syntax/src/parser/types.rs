@@ -963,6 +963,17 @@ pub(crate) fn parse_type_arguments(
     type_arguments.params.iter().map(parse_type).collect()
 }
 
+/// `[Symbol.iterator]` rendered as a name no written identifier can collide with.
+fn symbol_property_name(key: &PropertyKey<'_>) -> Option<String> {
+    let PropertyKey::StaticMemberExpression(member) = key else {
+        return None;
+    };
+    let Expression::Identifier(object) = &member.object else {
+        return None;
+    };
+    (object.name == "Symbol").then(|| format!("[Symbol.{}]", member.property.name))
+}
+
 pub(crate) fn parse_type_property_signature(
     property_signature: &TSPropertySignature<'_>,
 ) -> Option<ParsedObjectTypeProperty> {
@@ -971,7 +982,26 @@ pub(crate) fn parse_type_property_signature(
     // `URL`, etc.) rely heavily on `readonly` members, so parse them as ordinary
     // properties rather than dropping them.
     if property_signature.computed {
-        return None;
+        // A well-known-symbol member (`{ readonly [Symbol.toStringTag]: string }`)
+        // is the whole content of some type literals. Dropping it left an *empty*
+        // object, which every object satisfies — so a guard written as
+        // `o extends { [Symbol.toStringTag]: string }` matched everything and its
+        // false arm became unreachable. Symbol keys are not modelled, but the
+        // member is kept under a name no identifier can spell, which is enough to
+        // stop the literal being vacuous.
+        return symbol_property_name(&property_signature.key).and_then(|name| {
+            let type_annotation = property_signature
+                .type_annotation
+                .as_ref()
+                .and_then(|annotation| parse_type_annotation(annotation))?;
+            Some(ParsedObjectTypeProperty {
+                name,
+                name_span: None,
+                ty: type_annotation,
+                optional: property_signature.optional,
+                is_method: false,
+            })
+        });
     }
 
     // A numeric key is a property name like any other: numeric-key tables
