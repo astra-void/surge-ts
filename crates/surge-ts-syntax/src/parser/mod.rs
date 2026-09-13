@@ -91,6 +91,10 @@ fn parse_module_declaration(
 }
 
 fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatement>> {
+    // Exhaustive against today's oxc, but the fallback arm stays: a new oxc
+    // `Declaration` variant must degrade to `UnsupportedDeclaration`, not fail
+    // the build.
+    #[allow(unreachable_patterns)]
     match declaration {
         Declaration::VariableDeclaration(declaration) => {
             Some(parse_variable_declaration(declaration))

@@ -1,5 +1,5 @@
 use oxc_ast::ast::{
-    AssignmentOperator, AssignmentTarget, BindingPattern, BindingProperty, BlockStatement,
+    AssignmentTarget, BindingPattern, BindingProperty, BlockStatement,
     CatchClause, Declaration, Expression, ExpressionStatement, ForOfStatement, ForStatementLeft,
     FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey, Statement, SwitchCase,
     SwitchStatement, ThrowStatement, TryStatement, VariableDeclaration, WhileStatement,

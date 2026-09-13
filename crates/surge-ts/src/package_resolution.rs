@@ -133,20 +133,9 @@ pub fn select_export_targets(
     }
 }
 
-/// Resolve a package `imports` field (`#alias`) for `specifier` to a target
-/// template string. Only `#`-prefixed specifiers are valid here.
-pub fn select_import_target(
-    imports: &Value,
-    specifier: &str,
-    conditions: &[String],
-) -> Option<String> {
-    select_import_targets(imports, specifier, conditions)
-        .into_iter()
-        .next()
-}
-
-/// Like [`select_import_target`], but returns every reachable target in
-/// priority order (see [`select_export_targets`]).
+/// Resolve a package `imports` field (`#alias`) for `specifier` to every
+/// reachable target template string, in priority order (see
+/// [`select_export_targets`]). Only `#`-prefixed specifiers are valid here.
 pub fn select_import_targets(
     imports: &Value,
     specifier: &str,
@@ -403,6 +392,16 @@ mod tests {
         ResolverOptions::default().active_conditions(true)
     }
 
+    fn first_import_target(
+        imports: &Value,
+        specifier: &str,
+        conditions: &[String],
+    ) -> Option<String> {
+        select_import_targets(imports, specifier, conditions)
+            .into_iter()
+            .next()
+    }
+
     #[test]
     fn active_conditions_bundler_prefers_import_no_node() {
         let opts = ResolverOptions::default();
@@ -567,15 +566,15 @@ mod tests {
             "#features/*": { "types": "./dist/features/*.d.ts" }
         });
         assert_eq!(
-            select_import_target(&imports, "#internal", &bundler_conditions()),
+            first_import_target(&imports, "#internal", &bundler_conditions()),
             Some("./dist/internal.d.ts".to_string())
         );
         assert_eq!(
-            select_import_target(&imports, "#features/auth", &bundler_conditions()),
+            first_import_target(&imports, "#features/auth", &bundler_conditions()),
             Some("./dist/features/auth.d.ts".to_string())
         );
         assert_eq!(
-            select_import_target(&imports, "#missing", &bundler_conditions()),
+            first_import_target(&imports, "#missing", &bundler_conditions()),
             None
         );
     }

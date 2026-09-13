@@ -72,6 +72,11 @@ pub(crate) struct PipelineConfig {
 /// of the coordinator, so it never contends with the pool's look-ahead work.
 pub(crate) enum CommitOutcome {
     Committed,
+    /// The production coordinator never returns this: relocating the recompute
+    /// onto the pool measured ~2x slower than recomputing inline (see
+    /// `program/check_files.rs`). The orchestrator still implements it and the
+    /// module's tests exercise it, so the measured alternative stays available.
+    #[allow(dead_code)]
     NeedsReplay,
 }
 

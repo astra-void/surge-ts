@@ -2,15 +2,16 @@ use std::sync::Arc;
 
 use surge_ts_types::{FunctionType, Type};
 
+use super::canonical_declaration_file_name;
 use crate::context::{
-    CanonicalTypeIdentity, CheckerContext, InterfaceDeclarationTemplate, InterfaceEnvironmentIdentity,
-    InterfaceInstantiationKey, InterfaceMemberDeclarationKind, InterfaceMemberDeclarationTemplate,
-    InterfaceMemberInstantiationKey, InterfaceMethodOverloadGroupTemplate,
-    InterfaceOverloadInstantiationKey, StableInterfaceDeclarationFragmentId,
-    StableInterfaceDeclarationId, StableInterfaceMemberDeclarationId,
+    CanonicalTypeIdentity, CheckerContext, InterfaceDeclarationTemplate,
+    InterfaceEnvironmentIdentity, InterfaceInstantiationKey, InterfaceMemberDeclarationKind,
+    InterfaceMemberDeclarationTemplate, InterfaceMemberInstantiationKey,
+    InterfaceMethodOverloadGroupTemplate, InterfaceOverloadInstantiationKey,
+    StableInterfaceDeclarationFragmentId, StableInterfaceDeclarationId,
+    StableInterfaceMemberDeclarationId,
 };
 use crate::infer::types::*;
-use super::canonical_declaration_file_name;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterfaceCacheSkipReason {
@@ -280,7 +281,8 @@ pub(super) fn interface_function_value_shallow_bytes(function: &FunctionType) ->
         + function.parameters().len() * std::mem::size_of::<Type>()
 }
 
-pub(crate) fn canonical_physical_interface_key(
+#[cfg(test)]
+fn canonical_physical_interface_key(
     interface: &crate::symbols::InterfaceInfo,
     substitution: &TypeParameterSubstitution,
     ctx: &CheckerContext,
@@ -428,9 +430,9 @@ pub(super) fn canonical_type_identity(
             value.value.as_str(),
         ))),
         Type::BooleanLiteral(value) => Some(CanonicalTypeIdentity::BooleanLiteral(*value)),
-        Type::TypeParameter(parameter) => Some(CanonicalTypeIdentity::TypeParameter(
-            parameter.name.clone(),
-        )),
+        Type::TypeParameter(parameter) => {
+            Some(CanonicalTypeIdentity::TypeParameter(parameter.name.clone()))
+        }
         _ => None,
     };
     if let Some(identity) = primitive {
@@ -444,14 +446,24 @@ pub(super) fn canonical_type_identity(
         Type::Tuple(elements) => {
             let mut identities = Vec::with_capacity(elements.len());
             for element in elements {
-                identities.push(canonical_type_identity(element, depth + 1, budget, widened)?);
+                identities.push(canonical_type_identity(
+                    element,
+                    depth + 1,
+                    budget,
+                    widened,
+                )?);
             }
             Ok(CanonicalTypeIdentity::Tuple(Arc::from(identities)))
         }
         Type::Reference(reference) => {
             let mut arguments = Vec::with_capacity(reference.arguments.len());
             for argument in reference.arguments.iter() {
-                arguments.push(canonical_type_identity(argument, depth + 1, budget, widened)?);
+                arguments.push(canonical_type_identity(
+                    argument,
+                    depth + 1,
+                    budget,
+                    widened,
+                )?);
             }
             Ok(CanonicalTypeIdentity::Reference {
                 declaration: reference.id.clone(),
@@ -509,7 +521,12 @@ pub(super) fn canonical_type_identity(
         Type::Function(function) if widened => {
             let mut parameters = Vec::with_capacity(function.parameters().len());
             for parameter in function.parameters() {
-                parameters.push(canonical_type_identity(parameter, depth + 1, budget, widened)?);
+                parameters.push(canonical_type_identity(
+                    parameter,
+                    depth + 1,
+                    budget,
+                    widened,
+                )?);
             }
             Ok(CanonicalTypeIdentity::FunctionArg {
                 parameter_list_id: function.parameter_list_id(),
@@ -717,7 +734,6 @@ pub(super) fn interface_value_shallow_bytes(resolved: &Type) -> u64 {
 
 #[cfg(test)]
 mod physical_interface_cache_tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use surge_ts_syntax::{
@@ -806,9 +822,13 @@ mod physical_interface_cache_tests {
     fn physical_lib_interface_cache_basic() {
         let interface = interface("Body", 100, &[]);
         let ctx = context(CheckerOptions::default());
-        let key =
-            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx, false)
-                .unwrap();
+        let key = canonical_physical_interface_key(
+            &interface,
+            &TypeParameterSubstitution::new(),
+            &ctx,
+            false,
+        )
+        .unwrap();
 
         assert_eq!(ctx.substitution_store.stats().stored_arguments, 0);
         assert_eq!(key.declaration.declaration_start, 100);
@@ -841,8 +861,10 @@ mod physical_interface_cache_tests {
         let mut numbers = TypeParameterSubstitution::new();
         numbers.insert("T".to_string(), Type::Number);
 
-        let string_key = canonical_physical_interface_key(&interface, &strings, &ctx, false).unwrap();
-        let number_key = canonical_physical_interface_key(&interface, &numbers, &ctx, false).unwrap();
+        let string_key =
+            canonical_physical_interface_key(&interface, &strings, &ctx, false).unwrap();
+        let number_key =
+            canonical_physical_interface_key(&interface, &numbers, &ctx, false).unwrap();
 
         assert_ne!(string_key, number_key);
     }
@@ -957,9 +979,13 @@ mod physical_interface_cache_tests {
     fn physical_lib_interface_cache_preserves_overloads_and_signatures() {
         let interface = interface("Callable", 1_000, &[]);
         let ctx = context(CheckerOptions::default());
-        let key =
-            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx, false)
-                .unwrap();
+        let key = canonical_physical_interface_key(
+            &interface,
+            &TypeParameterSubstitution::new(),
+            &ctx,
+            false,
+        )
+        .unwrap();
         let first_overload = Type::Function(FunctionType::new(
             vec![Type::String],
             Type::Number,
@@ -1026,7 +1052,8 @@ mod physical_interface_cache_tests {
         let ctx = context(CheckerOptions::default());
         let mut substitution = TypeParameterSubstitution::new();
         substitution.insert("T".to_string(), recursive);
-        let _key = canonical_physical_interface_key(&interface, &substitution, &ctx, false).unwrap();
+        let _key =
+            canonical_physical_interface_key(&interface, &substitution, &ctx, false).unwrap();
 
         assert_eq!(ctx.substitution_store.stats().stored_arguments, 1);
     }
@@ -1066,7 +1093,8 @@ mod physical_interface_cache_tests {
         let mut number_substitution = TypeParameterSubstitution::new();
         number_substitution.insert("T".to_string(), Type::Number);
         let number_interface_key =
-            canonical_physical_interface_key(&interface, &number_substitution, &ctx, false).unwrap();
+            canonical_physical_interface_key(&interface, &number_substitution, &ctx, false)
+                .unwrap();
         let number_key = interface_member_instantiation_key(
             &template.members[0].declaration,
             &number_interface_key,
@@ -1084,9 +1112,13 @@ mod physical_interface_cache_tests {
             &[("append", 3_010), ("append", 3_020), ("append", 3_030)],
         );
         let ctx = context(CheckerOptions::default());
-        let interface_key =
-            canonical_physical_interface_key(&interface, &TypeParameterSubstitution::new(), &ctx, false)
-                .unwrap();
+        let interface_key = canonical_physical_interface_key(
+            &interface,
+            &TypeParameterSubstitution::new(),
+            &ctx,
+            false,
+        )
+        .unwrap();
         let template =
             physical_interface_declaration_template(&ctx, &interface, &interface_key.declaration)
                 .unwrap();

@@ -414,7 +414,9 @@ pub(crate) fn evaluate_expression(
             ctx,
         ),
         ParsedExpression::ElementAccess {
-            object, object_span, ..
+            object,
+            object_span,
+            ..
         } => {
             let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
             check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
@@ -533,39 +535,31 @@ fn evaluate_logical(
         surge_ts_syntax::ParsedLogicalOperator::Or => {
             crate::checks::function::narrow_falsy_operand_symbol_table(left, symbols)
         }
-        _ => None,
     };
     // A user-defined predicate in the chain narrows its subject for the
     // right operand too (`ts.isImportDeclaration(n) && n.moduleSpecifier`).
     // `a || b` only evaluates `b` when `a` is falsy, so a negated
     // predicate narrows there the same way (`!isA(x) || x.av`).
     let predicate_branch = match operator {
-        surge_ts_syntax::ParsedLogicalOperator::And => Some(true),
-        surge_ts_syntax::ParsedLogicalOperator::Or => Some(false),
-        _ => None,
+        surge_ts_syntax::ParsedLogicalOperator::And => true,
+        surge_ts_syntax::ParsedLogicalOperator::Or => false,
     };
-    let narrowed = predicate_branch
-        .and_then(|branch_is_true| {
-            crate::checks::function::narrow_predicate_guards_symbol_table(
-                left,
-                narrowed.as_ref().unwrap_or(symbols),
-                branch_is_true,
-                ctx,
-            )
-        })
-        .or(narrowed);
+    let narrowed = crate::checks::function::narrow_predicate_guards_symbol_table(
+        left,
+        narrowed.as_ref().unwrap_or(symbols),
+        predicate_branch,
+        ctx,
+    )
+    .or(narrowed);
     // A guard on an element access (`xs[i] && xs[i].x`) narrows the
     // access itself rather than any binding.
-    let narrowed = predicate_branch
-        .and_then(|branch_is_true| {
-            crate::checks::function::narrow_element_reference_guards_symbol_table(
-                left,
-                branch_is_true,
-                narrowed.as_ref().unwrap_or(symbols),
-                ctx,
-            )
-        })
-        .or(narrowed);
+    let narrowed = crate::checks::function::narrow_element_reference_guards_symbol_table(
+        left,
+        predicate_branch,
+        narrowed.as_ref().unwrap_or(symbols),
+        ctx,
+    )
+    .or(narrowed);
     let right_symbols = narrowed.as_ref().unwrap_or(symbols);
     // `a || b` hands `b` the same contextual type `a ?? b` does.
     let right_contextual = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::Or)
@@ -583,9 +577,7 @@ fn evaluate_logical(
                 ctx,
             ),
         },
-        None => {
-            evaluate_expression(right, right_span.or(fallback_span), right_symbols, ctx)
-        }
+        None => evaluate_expression(right, right_span.or(fallback_span), right_symbols, ctx),
     };
 
     ops::evaluate_logical_expression(*operator, left_result, right_result)
@@ -687,12 +679,8 @@ fn evaluate_optional_property_access(
         span,
     } = &inferred_expression
     {
-        let diagnostic = missing_property_diagnostic(
-            property_name,
-            object_type,
-            symbols,
-            ctx.file_name.clone(),
-        );
+        let diagnostic =
+            missing_property_diagnostic(property_name, object_type, symbols, ctx.file_name.clone());
         ctx.push(diagnostic_with_syntax_span(
             diagnostic,
             choose_span(*span, fallback_span),
@@ -721,30 +709,27 @@ fn evaluate_satisfies_expression(
 ) -> InferredExpression {
     let temp_symbols = symbols.clone_with_reason(TypeCopyReason::ExpressionInference);
     let saved_symbols = std::mem::replace(&mut ctx.symbols, temp_symbols);
-    let resolved_target_type =
-        with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
-            crate::infer::map_parsed_type(target_type.clone(), ctx)
-        });
+    let resolved_target_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+        crate::infer::map_parsed_type(target_type.clone(), ctx)
+    });
     ctx.symbols = saved_symbols;
 
     // Evaluate the left expression contextually against the target type
     // This pushes contextual diagnostics (like excess properties, missing properties).
-    let contextual_inferred =
-        crate::checks::expected::evaluate_expression_with_expected_type(
-            satisfied_expression,
-            span.or(fallback_span),
-            Some(&resolved_target_type),
-            crate::checks::expected::ExpectedTypeDiagnostic::SatisfiesNotAssignable,
-            symbols,
-            ctx,
-        );
+    let contextual_inferred = crate::checks::expected::evaluate_expression_with_expected_type(
+        satisfied_expression,
+        span.or(fallback_span),
+        Some(&resolved_target_type),
+        crate::checks::expected::ExpectedTypeDiagnostic::SatisfiesNotAssignable,
+        symbols,
+        ctx,
+    );
 
     // We must also perform a top-level assignability check for things that don't do it
     // contextually (e.g. primitives, identifiers). However, if contextual checking already
     // failed and returned Unknown, we might get false cascades. Let's do a clean check
     // against the original inferred type.
-    let original_inferred =
-        crate::infer::infer_expression(satisfied_expression, symbols, ctx);
+    let original_inferred = crate::infer::infer_expression(satisfied_expression, symbols, ctx);
 
     // Check if contextual check already failed (meaning it returned Unknown when actual wasn't Unknown).
     let contextual_failed = matches!(
@@ -841,9 +826,7 @@ fn evaluate_satisfies_expression(
     } else if top_level_failed {
         match ctx.options.diagnostic_profile {
             crate::context::DiagnosticProfile::Tsc => final_inferred,
-            crate::context::DiagnosticProfile::Native => {
-                crate::infer::InferredExpression::Unknown
-            }
+            crate::context::DiagnosticProfile::Native => crate::infer::InferredExpression::Unknown,
         }
     } else {
         final_inferred
@@ -1060,9 +1043,9 @@ pub(crate) fn empty_object_fallback_type(
     }
     // tsc subtype-reduces `x ?? {}` to `x`'s type, so an index signature on it
     // survives: `(schema.properties ?? {})['data']` still reads the element.
-    let string_index_type = contextual_object
-        .string_index_type
-        .as_deref()
-        .cloned();
-    Some(Type::Object(surge_ts_types::ObjectType::new(absent, string_index_type)))
+    let string_index_type = contextual_object.string_index_type.as_deref().cloned();
+    Some(Type::Object(surge_ts_types::ObjectType::new(
+        absent,
+        string_index_type,
+    )))
 }
