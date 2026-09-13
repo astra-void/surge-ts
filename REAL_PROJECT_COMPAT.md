@@ -1047,7 +1047,8 @@ What is identified so far:
   (`this.dialect = is(dialect, PgDialect) ? dialect : undefined`) are confirmed
   by reading the source. A minimal 18-line reproduction of the guard shape
   *passes* on surge, so an additional ingredient in the real shape is still
-  unaccounted for.
+  unaccounted for. (It was the class being **generic**; see the burn-down pass
+  below.)
 - **`/// <reference types="…" />` is not honoured** — 19 `TS2304`, all of them
   ambient globals the referencing file pulls in that way: `D1Database`,
   `D1PreparedStatement`, `D1Response`, `D1Result` from
@@ -1071,8 +1072,74 @@ What is identified so far:
   assignable to type 'string'` across `src/libsql/`, and the 10 `TS18048` in
   `src/aws-data-api/common/index.ts` on a repeated `field.arrayValue` access.
 
-No fix has been attempted against this corpus yet; the list above is the
-starting inventory, not a burn-down record.
+### First burn-down pass (2026-09-13): 134 → 82
+
+**52 closed, nothing new, every other corpus byte-identical.** Measured from an
+isolated worktree at `1978841` — the surrounding tree carried another session's
+uncommitted edits, and an A/B across them produced a phantom trpc regression
+that vanished once both binaries were built from the same tree. ky (0), zod
+(23), ofetch (1), ts-pattern (1), tanstack-query (10) and trpc (1155) are
+byte-identical before and after.
+
+| Code | Before | After |
+| --- | ---: | ---: |
+| TS2339 property does not exist | 42 | 8 |
+| TS18048 possibly 'undefined' | 27 | 11 |
+| TS2304 cannot find name | 19 | 19 |
+| TS2322 not assignable | 17 | 17 |
+| TS2349 not callable | 11 | 11 |
+| TS2351 not constructable | 7 | 7 |
+| TS7006 implicit any parameter | 5 | 5 |
+| TS2355 / TS2538 / TS2345 | 2 / 2 / 2 | 2 / 2 / 0 |
+
+What closed, and why it was one thing:
+
+- **`is()`'s type argument came from a class value, and a generic class's value
+  side is `any`.** `build_class_value_symbol_with_scope` deliberately models a
+  generic class's value as `any` — a real static object over it was measured on
+  2026-09-12 to open TS2351/TS2554 across zod, trpc and ofetch, and that
+  measurement is not reopened here. But the identity that `any` erases is the
+  entire content of `is<T extends DrizzleEntityClass<any>>(value: any, type: T):
+  value is InstanceType<T>`: `T` binds to the *class*, and the predicate is
+  `InstanceType<T>`. With `T` bound to `any`, `InstanceType<any>` came back
+  `any`, and the guard then did one of two wrong things — inside a function body
+  it replaced the subject with `any`, silently swallowing every later error in
+  the branch, and in a conditional expression it proved nothing and left the
+  whole union standing, which is where the 42 `TS2339` came from. Predicate
+  type-argument inference now stands a constructor surface (`{ prototype:
+  Instance }` plus a construct signature returning `Instance`) over the class
+  the argument names, with each of the class's type parameters filled by `any`.
+  It runs for inference only; the value's own type is untouched. Pinned by
+  `generic-class-entity-guard-basic`.
+- **The same gap reached a namespace-merged class from the other side.** `class
+  SQL` merged with `namespace SQL { class Aliased }` has a *value*: the
+  namespace object. It carries `Aliased` but no construct signature, so `T`
+  bound to a shape `InstanceType` could not peel either. The recovery is gated
+  on "no construct signature" rather than on `any` for that reason, and the
+  argument expression is read as a dotted path so `is(entry, SQL.Aliased)`
+  resolves the namespace member.
+- **Closing it exposed one new over-report, closed in the same pass.** `readonly
+  encoder: DriverValueEncoder<…> = noopEncoder` in `Param`'s constructor is a
+  parameter property with a default. The parser folds a default into the
+  parameter's `optional` flag so call arity accepts the omitted argument, and
+  the class's instance side read that same flag — so the *property* came out
+  optional and `p.encoder.mapToDriverValue(…)` reported `TS18048`. It had been
+  invisible because `is(p, Param)` narrowed to `any` and hid it. A parameter
+  property is optional only when written with `?`. Pinned by
+  `parameter-property-default-required-basic`.
+
+The minimal reproduction is three lines of declaration and one of use: a
+*generic* class passed by value to a guard whose predicate is `InstanceType<T>`.
+The same shape with a non-generic class was always correct, which is what made
+the first several reductions come back clean — the class in the probe has to be
+generic.
+
+The 82 that remain are the inventory above minus the `TS2339` and `TS18048` the
+guard was producing. The next levers, in size order, are the 19 `TS2304` from
+unhonoured `/// <reference types="…" />`, the 17 `TS2322` (7 of them one
+`Config | undefined` shape across `src/libsql/`), and the 11 `TS2349` on
+`drizzle(new Client())`.
+
 
 ## Compatibility fixture matrix
 

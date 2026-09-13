@@ -46,17 +46,17 @@ level at this commit; the bisect and the before/after are in
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1900 / 1900 passed** |
+| Workspace tests | `cargo nextest run --workspace` | **1932 / 1932 passed** |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **214 / 214 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **213 / 214 passed** — one message drift, see below |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **214 / 214 passed** |
-| Oracle preset sweep — both strict flags | same + both | **213 / 214 passed** — the same drift |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **216 / 216 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **215 / 216 passed** — one message drift, see below |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **216 / 216 passed** |
+| Oracle preset sweep — both strict flags | same + both | **215 / 216 passed** — the same drift |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
 | Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 214 presets the
+parity against the upstream TypeScript compiler. Across all 216 presets the
 sweep saw 342 `tsc` diagnostics and 342 `surge-ts` diagnostics, with
 `onlyTsc = 0` and `onlyRust = 0`.
 
@@ -166,9 +166,9 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 214 oracle presets under `tests/compat-projects/`, all green at the normal
+- 216 oracle presets under `tests/compat-projects/`, all green at the normal
   gate, and all but one at the strict gates (see the table above).
-- 436 compat-project fixtures in total; the ones not registered as oracle
+- 438 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
@@ -192,7 +192,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; dirty-tree measurement, not a gate (see note) |
-| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 134 | **newly provisioned, provisional** — first measurement, all 134 surge-only and the 16 `tsc` reports unmatched; dirty-tree measurement, not a gate (see note) |
+| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 82 | **newly provisioned, provisional** — 134 when first measured; all 82 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
 
 Notes that matter:
 
@@ -212,20 +212,30 @@ Notes that matter:
   corpus: the pinned TypeScript 7.0.2 oracle reports 16 diagnostics of its own,
   eight `@ts-expect-error` directives drizzle wrote against TypeScript 5.6 that
   TypeScript 7 no longer satisfies at that line, each paired with the `TS2769`
-  that landed one construct over. surge matches none of them. surge reports
-  **134** on the first measurement, every one surge-only, and finishes in about
+  that landed one construct over. surge matches none of them. surge reported
+  **134** on the first measurement, every one surge-only, and finished in about
   2.4 s at about 480 MB peak RSS (`tsc` 12.8 s / 1.22 GB, `tsgo` 2.6 s /
   1.66 GB on the same target) — no hang and no unbounded expansion, so the
-  corpus is usable as-is. The dominant cluster is drizzle's `is(value, Klass)`
-  entity guard, a generic predicate narrowing to `InstanceType<T>` with `T`
-  inferred from a class value: 70 of the 134 sit within eight lines of an
-  `is(...)` call, which is a proximity count rather than an attribution. Two
-  smaller causes are confirmed by reading the source:
-  `/// <reference types="…" />` is not honoured (19 `TS2304` on
+  corpus was usable as-is. **52 of those closed in one pass** and the corpus
+  stands at **82**: drizzle's `is(value, Klass)` entity guard is a generic
+  predicate narrowing to `InstanceType<T>` with `T` inferred from the *class
+  value* passed alongside, and a generic class's value side is deliberately
+  `any`, so `T` bound to `any` and the guard either replaced the subject with
+  `any` or proved nothing. A constructor surface over the class's instance type
+  is now stood up for type-argument inference only — the value's own type is
+  untouched, so the measurement that sealed the `any` is not reopened. Closing
+  it exposed one new over-report, a constructor parameter property written with
+  a default read as optional, which was closed in the same pass. Both are pinned
+  (`generic-class-entity-guard-basic`,
+  `parameter-property-default-required-basic`) and every other corpus — ky, zod,
+  ofetch, trpc, tanstack-query, ts-pattern — is byte-identical across the
+  change. Two further causes are confirmed by reading the source and not yet
+  fixed: `/// <reference types="…" />` is not honoured (19 `TS2304` on
   `@cloudflare/workers-types` globals) and `abstract` members are checked as if
-  they had bodies (2 `TS2355`). No fix has been attempted yet. Measured on a
-  **dirty working tree** on top of `6641008`; re-measure from a clean worktree
-  before treating any of it as a baseline. Full inventory in
+  they had bodies (2 `TS2355`). Measured from an isolated worktree at `1978841`
+  with the surrounding tree's concurrent edits excluded, but not from a clean
+  checkout of a commit that contains this change; re-measure before treating it
+  as a baseline. Full inventory in
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#drizzle-orm-corpus-provisioned-2026-09-13).
 - **ts-pattern is newly provisioned and is not a gate.** The aggregate target
   `tsconfig.surge.json` (18 `src/` files plus the 48-file type-level test suite,
