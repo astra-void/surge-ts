@@ -38,7 +38,9 @@ test('oracle source stays raw and classifier-free', () => {
     path.join(scriptDir, 'README.md'),
   ];
 
-  const source = files.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+  const source = files
+    .map((file) => withoutPresetRegistryEntries(fs.readFileSync(file, 'utf8')))
+    .join('\n');
 
   for (const term of bannedTerms) {
     assert.equal(
@@ -81,6 +83,29 @@ test('oracle output stays raw on a tiny unresolved project', () => {
     );
   }
 });
+
+// Preset-registry entries name compat-project fixtures, not diagnostic
+// classifiers: a fixture may legitimately be called e.g. `...-candidate-...`
+// after the type-system concept it pins. Only lines matching the exact
+// `'preset': path.join(workspaceRoot, '...')` shape are exempt, and when the
+// registry cannot be located the whole file is scanned as before.
+const presetRegistryStart = /^export const fixturePresets: Record<string, string> = \{$/;
+const presetRegistryEntry = /^\s*'[^']+': path\.join\(workspaceRoot, '[^']+'\),$/;
+
+function withoutPresetRegistryEntries(source: string): string {
+  const lines = source.split('\n');
+  const start = lines.findIndex((line) => presetRegistryStart.test(line));
+  const end = start === -1 ? -1 : lines.indexOf('};', start);
+  if (end === -1) {
+    return source;
+  }
+
+  return lines
+    .map((line, index) =>
+      index > start && index < end && presetRegistryEntry.test(line) ? '' : line,
+    )
+    .join('\n');
+}
 
 function containsWholeTerm(source: string, term: string): boolean {
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
