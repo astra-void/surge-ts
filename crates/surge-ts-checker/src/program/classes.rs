@@ -183,55 +183,13 @@ fn generic_class_constructor_signature(
     ))
 }
 
-/// Builds the constructor/static-side value symbol: a `Type::Object` whose
-/// properties are the static members and whose construct signature yields the
-/// instance type.
-pub(crate) fn build_class_value_symbol(
+/// Writes `class`'s own static properties, methods and accessors into
+/// `properties`.
+fn collect_static_members(
     class: &ParsedClassDeclaration,
+    properties: &mut PropertyMap,
     ctx: &mut CheckerContext,
-) -> SymbolInfo {
-    build_class_value_symbol_with_scope(class, None, ctx)
-}
-
-/// [`build_class_value_symbol`] with the in-progress value table the class is
-/// being bound into, which is where a base class declared earlier in the same
-/// scope lives — `ctx.symbols` does not have it yet at binding time.
-pub(crate) fn build_class_value_symbol_with_scope(
-    class: &ParsedClassDeclaration,
-    scope: Option<&SymbolTable>,
-    ctx: &mut CheckerContext,
-) -> SymbolInfo {
-    // Generic classes are out of scope for this slice. Model their value side as
-    // `any` so `new C<T>(...)` and `C.member` stay non-cascading rather than
-    // resolving the self type without type arguments (which would mis-report).
-    // A static object over them was measured to open TS2351/TS2554 across zod,
-    // trpc and ofetch (2026-09-12), so the `any` stays.
-    if !class.type_parameters.is_empty() {
-        return SymbolInfo {
-            ty: Type::Any,
-            kind: SymbolKind::Const,
-            function_signature: generic_class_constructor_signature(class, ctx),
-        };
-    }
-
-    let instance_type = class_instance_type(class, ctx);
-    let construct_signature = class_construct_signature(class, instance_type.clone(), ctx);
-
-    // Statics are inherited: `class D extends B {}` makes every static of `B`
-    // reachable as `D.x`. The base's static side is a value, not part of the
-    // instance-side interface classes are bound as, so it is read from the
-    // value environment — which means an unbound base simply contributes
-    // nothing rather than being wrong.
-    let mut properties = inherited_static_properties(class, scope, ctx);
-    // Every class value carries `prototype`, typed as the instance — the shape
-    // `Object.setPrototypeOf(this, C.prototype)` reads. A static member named
-    // `prototype` is illegal in TypeScript, so nothing below can overwrite it.
-    // It is also the one inherited entry that must not survive: `D.prototype`
-    // is a `D`, not a `B`.
-    properties.insert(
-        "prototype".into(),
-        ObjectProperty::required(instance_type),
-    );
+) {
     for member in &class.members {
         match member {
             ParsedClassMember::Property(property) if property.is_static => {
@@ -284,6 +242,99 @@ pub(crate) fn build_class_value_symbol_with_scope(
             _ => {}
         }
     }
+}
+
+/// Whether `class` declares a static whose return type narrows its argument
+/// (`static assert(v): asserts v is E`, `static is(v): v is E`). Every other
+/// static survives the `any` value side intact — a call site reads `any` and
+/// carries on — but a predicate one does not: the narrowing is the whole point
+/// of the call, and `any` silently drops it.
+fn declares_narrowing_static(class: &ParsedClassDeclaration) -> bool {
+    class.members.iter().any(|member| match member {
+        ParsedClassMember::Method(method) => {
+            method.is_static && matches!(method.return_type, Some(ParsedType::Predicate(_)))
+        }
+        _ => false,
+    })
+}
+
+/// A generic class's static side. The instance type is unavailable without type
+/// arguments, so the surface stays deliberately permissive: an injected open
+/// index answers anything not written as a static with `any`, and the construct
+/// signature accepts any arguments and yields `any`. That leaves `new C(...)`
+/// and unknown-member reads exactly where the earlier plain `any` value left
+/// them — a static object *without* the openness was measured to open
+/// TS2351/TS2554 across zod, trpc and ofetch (2026-09-12) — while letting a
+/// written static resolve, which a predicate or assertion one
+/// (`static assert(v): asserts v is E`) needs to narrow at all.
+fn generic_class_value_symbol(
+    class: &ParsedClassDeclaration,
+    ctx: &mut CheckerContext,
+) -> SymbolInfo {
+    if !declares_narrowing_static(class) {
+        return SymbolInfo {
+            ty: Type::Any,
+            kind: SymbolKind::Const,
+            function_signature: generic_class_constructor_signature(class, ctx),
+        };
+    }
+
+    let mut properties = PropertyMap::default();
+    collect_static_members(class, &mut properties, ctx);
+
+    let static_type = ObjectType::new(properties, Some(Type::Any))
+        .with_construct_signature(FunctionType::new(vec![Type::Any], Type::Any, true, 0))
+        .with_alias_name(format!("typeof {}", class.name))
+        .with_open_index_marker();
+
+    SymbolInfo {
+        ty: Type::Object(static_type),
+        kind: SymbolKind::Const,
+        function_signature: generic_class_constructor_signature(class, ctx),
+    }
+}
+
+/// Builds the constructor/static-side value symbol: a `Type::Object` whose
+/// properties are the static members and whose construct signature yields the
+/// instance type.
+pub(crate) fn build_class_value_symbol(
+    class: &ParsedClassDeclaration,
+    ctx: &mut CheckerContext,
+) -> SymbolInfo {
+    build_class_value_symbol_with_scope(class, None, ctx)
+}
+
+/// [`build_class_value_symbol`] with the in-progress value table the class is
+/// being bound into, which is where a base class declared earlier in the same
+/// scope lives — `ctx.symbols` does not have it yet at binding time.
+pub(crate) fn build_class_value_symbol_with_scope(
+    class: &ParsedClassDeclaration,
+    scope: Option<&SymbolTable>,
+    ctx: &mut CheckerContext,
+) -> SymbolInfo {
+    if !class.type_parameters.is_empty() {
+        return generic_class_value_symbol(class, ctx);
+    }
+
+    let instance_type = class_instance_type(class, ctx);
+    let construct_signature = class_construct_signature(class, instance_type.clone(), ctx);
+
+    // Statics are inherited: `class D extends B {}` makes every static of `B`
+    // reachable as `D.x`. The base's static side is a value, not part of the
+    // instance-side interface classes are bound as, so it is read from the
+    // value environment — which means an unbound base simply contributes
+    // nothing rather than being wrong.
+    let mut properties = inherited_static_properties(class, scope, ctx);
+    // Every class value carries `prototype`, typed as the instance — the shape
+    // `Object.setPrototypeOf(this, C.prototype)` reads. A static member named
+    // `prototype` is illegal in TypeScript, so nothing below can overwrite it.
+    // It is also the one inherited entry that must not survive: `D.prototype`
+    // is a `D`, not a `B`.
+    properties.insert(
+        "prototype".into(),
+        ObjectProperty::required(instance_type),
+    );
+    collect_static_members(class, &mut properties, ctx);
 
     let static_type = ObjectType::new(properties, None)
         .with_construct_signature(construct_signature)
