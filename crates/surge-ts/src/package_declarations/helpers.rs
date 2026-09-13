@@ -175,9 +175,43 @@ pub(super) fn resolve_type_directive_in_node_modules(
 
     let resolution = resolve_package_entrypoint(&req, opts, true, cache, root_dir)?;
     match resolution.kind {
-        PackageEntrypointKind::Declaration => Some(resolution.path),
+        PackageEntrypointKind::Declaration => Some(prefer_declaration_sibling(resolution.path)),
         PackageEntrypointKind::RuntimeOnly => None,
     }
+}
+
+/// The `.d.ts` beside a TypeScript source entrypoint, when one exists.
+///
+/// An extensionless entrypoint probes `.ts` before `.d.ts`, which is right for
+/// module resolution — tsc prefers a shipped source there. A *type directive* is
+/// resolved with `Extensions.Declaration` instead, and the difference is
+/// load-bearing for a package shipping both flavors of one surface:
+/// `@cloudflare/workers-types` writes `declare abstract class D1Database` in
+/// `index.d.ts` — a script, so the class is a global — and the same declaration
+/// with `export` in `index.ts`, a module, where it is not. Taking the source
+/// resolved the directive and then contributed no globals at all.
+fn prefer_declaration_sibling(path: PathBuf) -> PathBuf {
+    if !is_typescript_source_file(&path) {
+        return path;
+    }
+    for (extension, declaration) in [
+        (".ts", "d.ts"),
+        (".tsx", "d.ts"),
+        (".mts", "d.mts"),
+        (".cts", "d.cts"),
+    ] {
+        if !path_ends_with_ignore_ascii_case(&path, extension) {
+            continue;
+        }
+        let Some(base) = strip_trailing_extension(&path, extension) else {
+            break;
+        };
+        let sibling = append_extension(&base, declaration);
+        if sibling.is_file() {
+            return sibling;
+        }
+    }
+    path
 }
 
 /// Add a resolved type-package declaration file to the project file set unless it
