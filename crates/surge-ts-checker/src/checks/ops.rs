@@ -134,8 +134,6 @@ pub(crate) fn evaluate_conditional_expression(
 pub(crate) fn evaluate_unary_expression(
     operator: ParsedUnaryOperator,
     operand_result: InferredExpression,
-    operand_span: Option<SyntaxTextSpan>,
-    ctx: &mut CheckerContext,
 ) -> InferredExpression {
     match operator {
         ParsedUnaryOperator::Not => {
@@ -149,6 +147,10 @@ pub(crate) fn evaluate_unary_expression(
         // `void` / `delete` / `~`: the operand has already been walked, and the
         // result stays unmodelled rather than guessing `undefined`/`boolean`/`number`.
         ParsedUnaryOperator::Discard => InferredExpression::Unknown,
+        // Unary `+`/`-` coerce: tsc accepts any operand and types the result
+        // `number` (`bigint` for a bigint operand). TS2356 is the `++`/`--`
+        // operand rule, not this one — reporting it here made `+data` on a
+        // contextually-typed `string` parameter a false positive.
         ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus => {
             let Some(operand_type) = inferred_type(&operand_result) else {
                 return InferredExpression::Unknown;
@@ -162,13 +164,11 @@ pub(crate) fn evaluate_unary_expression(
                 return InferredExpression::Known(Type::Any);
             }
 
-            if matches!(operand_type.base_primitive(), Some(Type::Number)) {
-                return InferredExpression::Known(Type::Number);
+            if matches!(operand_type.base_primitive(), Some(Type::BigInt)) {
+                return InferredExpression::Known(Type::BigInt);
             }
 
-            let file_name = ctx.file_name.clone();
-            push_diagnostic(ctx, Diagnostic::ts2356(file_name), operand_span);
-            InferredExpression::Unknown
+            InferredExpression::Known(Type::Number)
         }
     }
 }

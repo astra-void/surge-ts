@@ -1832,37 +1832,11 @@ fn span_ts2367_equality_operator() {
     assert_single_span(source, diagnostics, "TS2367", span(source, "\"a\" === 1"));
 }
 
-#[test]
-fn span_ts2356_unary_operand() {
-    let source = "let value = -\"a\";";
-    let diagnostics = check_source_with_options(
-        source,
-        "example.ts",
-        CheckerOptions {
-            diagnostic_profile: Default::default(),
-            resolve_json_module: true,
-            resolved_modules: Default::default(),
-            resolved_modules_by_importer: Default::default(),
-            stub_external_modules: false,
-            no_implicit_any: false,
-            no_implicit_returns: false,
-            no_fallthrough_cases_in_switch: false,
-            no_implicit_override: false,
-            no_property_access_from_index_signature: false,
-            no_unchecked_indexed_access: false,
-            allow_importing_ts_extensions: false,
-            no_unused_locals: false,
-            no_unused_parameters: false,
-            no_lib: false,
-            skip_lib_check: false,
-            jsx_automatic_runtime: false,
-            jsx_classic_react: false,
-            allow_umd_global_access: false,
-            types: Vec::new(),
-        },
-    );
-    assert_single_span(source, diagnostics, "TS2356", span(source, "\"a\""));
-}
+// There is no TS2356 span test. The code belongs to the `++`/`--` operand rule,
+// which surge does not implement yet; it used to be emitted for unary `+`/`-`,
+// where the pinned oracle reports nothing for `-"a"` at all. The coercion rule
+// is covered by `unary_arithmetic_operand.rs` and the
+// `unary-arithmetic-coercion-basic` preset.
 
 #[test]
 fn span_ts2872_truthy_literal() {

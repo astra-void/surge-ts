@@ -244,12 +244,7 @@ pub(crate) fn evaluate_expression(
             let operand_result =
                 evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx);
 
-            ops::evaluate_unary_expression(
-                *operator,
-                operand_result,
-                operand_span.or(fallback_span),
-                ctx,
-            )
+            ops::evaluate_unary_expression(*operator, operand_result)
         }
         ParsedExpression::Conditional {
             condition,

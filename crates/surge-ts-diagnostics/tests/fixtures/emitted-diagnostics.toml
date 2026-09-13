@@ -231,13 +231,8 @@ fixtures = [
 ]
 
 [TS2356]
-status = "emitted"
-fixtures = [
-  "tests/smoke/manifest.toml",
-]
-span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-]
+status = "catalog-only"
+reason = "The `++`/`--` operand rule is not implemented. It was emitted for unary `+`/`-`, which coerce in tsc, and that was a false positive"
 
 [TS2362]
 status = "emitted"

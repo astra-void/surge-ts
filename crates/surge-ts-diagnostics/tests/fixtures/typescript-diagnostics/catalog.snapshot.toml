@@ -236,7 +236,7 @@ arity = 0
 code = "TS2356"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type."
 arity = 0
 

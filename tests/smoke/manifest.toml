@@ -1800,19 +1800,19 @@ path = "tests/smoke/unary_plus_number_valid.ts"
 expected_diagnostics = []
 
 [[case]]
-name = "unary-minus-string-invalid"
-path = "tests/smoke/unary_minus_string_invalid.ts"
-expected_diagnostics = ["TS2356"]
+name = "unary-minus-string-coerces"
+path = "tests/smoke/unary_minus_string_coerces.ts"
+expected_diagnostics = []
 
 [[case]]
-name = "unary-plus-boolean-invalid"
-path = "tests/smoke/unary_plus_boolean_invalid.ts"
-expected_diagnostics = ["TS2356"]
+name = "unary-plus-boolean-coerces"
+path = "tests/smoke/unary_plus_boolean_coerces.ts"
+expected_diagnostics = []
 
 [[case]]
-name = "unary-invalid-no-assignment-cascade"
-path = "tests/smoke/unary_invalid_no_assignment_cascade.ts"
-expected_diagnostics = ["TS2356"]
+name = "unary-coercion-no-assignment-cascade"
+path = "tests/smoke/unary_coercion_no_assignment_cascade.ts"
+expected_diagnostics = []
 
 [[case]]
 name = "unary-unresolved-no-cascade"
@@ -2416,9 +2416,9 @@ path = "tests/smoke/union_operator_arithmetic_string_or_number_invalid.ts"
 expected_diagnostics = ["TS2362"]
 
 [[case]]
-name = "union-operator-unary-plus-string-or-number-invalid"
-path = "tests/smoke/union_operator_unary_plus_string_or_number_invalid.ts"
-expected_diagnostics = ["TS2356"]
+name = "union-operator-unary-plus-string-or-number-coerces"
+path = "tests/smoke/union_operator_unary_plus_string_or_number_coerces.ts"
+expected_diagnostics = []
 
 [[case]]
 name = "union-operator-no-cascade-unresolved-union-operand"
@@ -4768,9 +4768,9 @@ path = "tests/smoke/literal_operator_unary_number_valid.ts"
 expected_diagnostics = []
 
 [[case]]
-name = "literal-operator-unary-string-invalid"
-path = "tests/smoke/literal_operator_unary_string_invalid.ts"
-expected_diagnostics = ["TS2356"]
+name = "literal-operator-unary-string-coerces"
+path = "tests/smoke/literal_operator_unary_string_coerces.ts"
+expected_diagnostics = []
 
 [[case]]
 name = "literal-no-cascade-unresolved-initializer"
@@ -4938,14 +4938,14 @@ path = "tests/smoke/literal_operator_unary_number_literal_valid.ts"
 expected_diagnostics = []
 
 [[case]]
-name = "literal-operator-unary-boolean-invalid"
-path = "tests/smoke/literal_operator_unary_boolean_invalid.ts"
-expected_diagnostics = ["TS2356"]
+name = "literal-operator-unary-boolean-coerces"
+path = "tests/smoke/literal_operator_unary_boolean_coerces.ts"
+expected_diagnostics = []
 
 [[case]]
-name = "literal-operator-unary-string-invalid"
-path = "tests/smoke/literal_operator_unary_string_invalid.ts"
-expected_diagnostics = ["TS2356"]
+name = "literal-operator-unary-string-coerces"
+path = "tests/smoke/literal_operator_unary_string_coerces.ts"
+expected_diagnostics = []
 
 [[case]]
 name = "literal-object-property-const-source-valid"
