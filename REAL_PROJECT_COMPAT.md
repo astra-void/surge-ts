@@ -1140,6 +1140,67 @@ unhonoured `/// <reference types="…" />`, the 17 `TS2322` (7 of them one
 `Config | undefined` shape across `src/libsql/`), and the 11 `TS2349` on
 `drizzle(new Client())`.
 
+### Second burn-down pass (2026-09-13): 82 → 49
+
+Five causes, **33 closed, nothing new**, every other corpus byte-identical
+throughout. Same isolated worktree at `1978841`.
+
+| Cause | Closed | Preset |
+| --- | ---: | --- |
+| A type directive resolved to a package's `index.ts`, not its `index.d.ts` | 17 | `reference-types-declaration-sibling-basic` |
+| A union member a property-path guard rules out was kept | 10 | `property-path-impossible-union-member-basic` |
+| A bodyless class member's absent body was checked | 2 | `abstract-member-no-body-basic` |
+| `T[string]` rejected instead of reading the index signature | 2 | `string-keyword-indexed-access-basic` |
+| The `filter`-arrow predicate query reported out of scope | 2 | `filter-arrow-predicate-self-reference-basic` |
+
+- **`/// <reference types="pkg" />` took the source flavor.** An extensionless
+  entrypoint probes `.ts` before `.d.ts`, which is right for *module* resolution;
+  a type reference directive is resolved with `Extensions.Declaration` and never
+  reaches a `.ts`. `@cloudflare/workers-types` ships both flavors of one surface
+  — `declare abstract class D1Database` in `index.d.ts`, a script, so the class
+  is a global, and the same declaration with `export` in `index.ts`, a module,
+  where it is not. Taking the source resolved the directive, reported no
+  `TS2688`, and contributed no globals at all. That was every remaining
+  `TS2304` bar two.
+- **A union member the guard rules out was kept.** The leaf narrowers answer
+  `None` both for "nothing to narrow" and for "this member cannot satisfy the
+  guard at all", and the union walk read both as "keep it". Every member of the
+  AWS SDK's `Field` declares the other members' keys as `?: never`, so
+  `field.arrayValue !== undefined` leaves exactly one member possible — but at a
+  `?: never` leaf the effective `never | undefined` collapses to plain
+  `undefined`, which has no union to split. Ten `TS18048` in one function.
+- **A bodyless class member was run through the function-body check**, which
+  reported the missing return of a body that is not there. The identical guard
+  had always been on the function-declaration path; class members never had it.
+  Fixing it exposed that `ParsedClassMethod` carried no return-type span either,
+  so a class method's `TS2355` always landed on the name where tsc puts it on
+  the written return type; both are in the same commit.
+- **`T[string]` was rejected outright.** The `string` keyword as an index reads
+  the receiver's string index signature — `Record<string, V>[string]` is `V`,
+  the normal way to name a record's value type. A receiver *without* an index
+  signature is left degrading silently: tsc answers `TS2537` there, which surge
+  does not have.
+- **The `filter`-arrow predicate query reported.** Reading an inline
+  `(c): c is T =>` arrow's target to narrow the filtered element type resolved
+  the written type with neither the arrow's parameters in scope nor diagnostics
+  dropped, so `(c): c is Exclude<typeof c, undefined>` reported a false
+  `TS2304` on `c`. Only the reporting is dropped; an unresolvable target still
+  yields no narrowing.
+
+**One cluster was investigated and abandoned.** The 10 `TS2322` in the five
+`*-core/query-builders/query-builder.ts` files (`is(dialect, PgDialect) ?
+dialect : undefined`) are *not* a guard problem: `PgDialect`'s own instance
+resolution comes back `had_error`, so its static object is refused as a
+type-argument candidate (`type_argument_is_unresolved`) and the guard is
+abandoned before it narrows. Extending the entity-guard recovery to fire on a
+degraded value was implemented and **rejected by measurement** — drizzle went
+65 → 67. What degrades inside `PgDialect` is a separate investigation.
+
+The 49 that remain: `TS2322` ×17 (the 10 above plus 7 `Config | undefined` in
+`src/libsql/`), `TS2349` ×11 on `drizzle(new Client())` — a function merged with
+a namespace, re-exported through the package entry — `TS2339` ×8, `TS2351` ×7 on
+`new SQL(…)`, `TS7006` ×5, `TS18048` ×1.
+
 
 ## Compatibility fixture matrix
 

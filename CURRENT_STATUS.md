@@ -48,15 +48,15 @@ level at this commit; the bisect and the before/after are in
 | --- | --- | ---: |
 | Workspace tests | `cargo nextest run --workspace` | **1932 / 1932 passed** |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **216 / 216 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **215 / 216 passed** — one message drift, see below |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **216 / 216 passed** |
-| Oracle preset sweep — both strict flags | same + both | **215 / 216 passed** — the same drift |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **221 / 221 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **220 / 221 passed** — one message drift, see below |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **221 / 221 passed** |
+| Oracle preset sweep — both strict flags | same + both | **220 / 221 passed** — the same drift |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
 | Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 216 presets the
+parity against the upstream TypeScript compiler. Across all 221 presets the
 sweep saw 342 `tsc` diagnostics and 342 `surge-ts` diagnostics, with
 `onlyTsc = 0` and `onlyRust = 0`.
 
@@ -166,9 +166,9 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 216 oracle presets under `tests/compat-projects/`, all green at the normal
+- 221 oracle presets under `tests/compat-projects/`, all green at the normal
   gate, and all but one at the strict gates (see the table above).
-- 438 compat-project fixtures in total; the ones not registered as oracle
+- 443 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
@@ -192,7 +192,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; dirty-tree measurement, not a gate (see note) |
-| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 82 | **newly provisioned, provisional** — 134 when first measured; all 82 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
+| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 49 | **newly provisioned, provisional** — 134 when first measured; all 49 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
 
 Notes that matter:
 
@@ -229,13 +229,20 @@ Notes that matter:
   (`generic-class-entity-guard-basic`,
   `parameter-property-default-required-basic`) and every other corpus — ky, zod,
   ofetch, trpc, tanstack-query, ts-pattern — is byte-identical across the
-  change. Two further causes are confirmed by reading the source and not yet
-  fixed: `/// <reference types="…" />` is not honoured (19 `TS2304` on
-  `@cloudflare/workers-types` globals) and `abstract` members are checked as if
-  they had bodies (2 `TS2355`). Measured from an isolated worktree at `1978841`
-  with the surrounding tree's concurrent edits excluded, but not from a clean
-  checkout of a commit that contains this change; re-measure before treating it
-  as a baseline. Full inventory in
+  change. **A second pass took it to 49**, five more causes, each pinned by a
+  preset and each leaving every other corpus byte-identical: a
+  `/// <reference types="pkg" />` resolved to a package's `index.ts` instead of
+  its `index.d.ts`, so `@cloudflare/workers-types` contributed no globals at all
+  (−17); a bodyless class member — `abstract`, an overload signature, an ambient
+  class's — was run through the function-body check and reported a missing
+  return (−2); `T[string]` was rejected outright instead of reading the
+  receiver's string index signature (−2); the inline-arrow predicate a `filter`
+  call reads was resolved with reporting on, out of the arrow's own scope (−2);
+  and a union member a property-path guard rules out was kept rather than
+  dropped, which is the AWS SDK `?: never` member pattern (−10). Measured from an
+  isolated worktree at `1978841` with the surrounding tree's concurrent edits
+  excluded, but not from a clean checkout of a commit that contains these
+  changes; re-measure before treating any of it as a baseline. Full inventory in
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#drizzle-orm-corpus-provisioned-2026-09-13).
 - **ts-pattern is newly provisioned and is not a gate.** The aggregate target
   `tsconfig.surge.json` (18 `src/` files plus the 48-file type-level test suite,
