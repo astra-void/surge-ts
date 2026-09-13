@@ -177,14 +177,20 @@ pub(super) fn evaluate_index_access(
         }
         Type::Reference(_) => match receiver_type.peeled() {
             peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
+            Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
             _ => receiver_type,
         },
+        // An open tuple has no fixed length to index by, so a read off it is a
+        // read off the array of everything it can hold.
+        Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
         _ => receiver_type,
     };
 
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+        // Lowered to its element array above.
+        Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Tuple(elements) => {
             let index_result =
                 evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);

@@ -269,7 +269,7 @@ pub fn union_type(types: Vec<Type>) -> Type {
     let had_members = !flattened.is_empty();
     flattened.retain(|ty| !matches!(ty, Type::Never));
 
-    let unique = order_tuple_members(dedup_members(flattened));
+    let unique = order_tuple_members(fold_boolean_literals(dedup_members(flattened)));
 
     match unique.len() {
         0 if had_members => Type::Never,
@@ -277,6 +277,34 @@ pub fn union_type(types: Vec<Type>) -> Type {
         1 => unique[0].clone(),
         _ => Type::Union(UnionType::from_borrowed_members(&unique)),
     }
+}
+
+/// `true | false` is `boolean` — tsc folds the pair back into the primitive, so
+/// `Equal<boolean, false | true>` holds and the union prints as `boolean`. The
+/// primitive takes the first literal's position; a `boolean` member already
+/// present absorbs both literals.
+fn fold_boolean_literals(members: Vec<&Type>) -> Vec<&Type> {
+    static BOOLEAN: Type = Type::Boolean;
+    let has_true = members.iter().any(|ty| matches!(ty, Type::BooleanLiteral(true)));
+    let has_false = members.iter().any(|ty| matches!(ty, Type::BooleanLiteral(false)));
+    let has_boolean = members.iter().any(|ty| matches!(ty, Type::Boolean));
+    if !(has_boolean || (has_true && has_false)) {
+        return members;
+    }
+    let mut folded = Vec::with_capacity(members.len());
+    let mut placed = false;
+    for ty in members {
+        match ty {
+            Type::BooleanLiteral(_) | Type::Boolean => {
+                if !placed {
+                    folded.push(&BOOLEAN);
+                    placed = true;
+                }
+            }
+            other => folded.push(other),
+        }
+    }
+    folded
 }
 
 /// TypeScript 7 orders a union's tuple constituents after everything else and
@@ -290,21 +318,22 @@ pub fn union_type(types: Vec<Type>) -> Type {
 fn order_tuple_members(members: Vec<&Type>) -> Vec<&Type> {
     if members
         .iter()
-        .filter(|ty| matches!(ty, Type::Tuple(_)))
+        .filter(|ty| matches!(ty, Type::Tuple(_) | Type::OpenTuple(_)))
         .count()
         < 2
         && !members
             .iter()
-            .any(|ty| matches!(ty, Type::Tuple(_)))
+            .any(|ty| matches!(ty, Type::Tuple(_) | Type::OpenTuple(_)))
     {
         return members;
     }
     let (mut tuples, mut others): (Vec<&Type>, Vec<&Type>) = members
         .into_iter()
-        .partition(|ty| matches!(ty, Type::Tuple(_)));
+        .partition(|ty| matches!(ty, Type::Tuple(_) | Type::OpenTuple(_)));
     tuples.sort_by_key(|ty| match ty {
-        Type::Tuple(elements) => elements.len(),
-        _ => 0,
+        Type::Tuple(elements) => (elements.len(), 0),
+        Type::OpenTuple(tuple) => (tuple.fixed_len(), 1),
+        _ => (0, 0),
     });
     others.append(&mut tuples);
     others
@@ -498,6 +527,14 @@ fn dedup_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8) {
             }
         }
         Type::Array(element) => dedup_key_into(element, hasher, depth + 1),
+        Type::OpenTuple(tuple) => {
+            tuple.leading.len().hash(hasher);
+            tuple.trailing.len().hash(hasher);
+            for element in tuple.leading.iter().chain(tuple.trailing.iter()) {
+                dedup_key_into(element, hasher, depth + 1);
+            }
+            dedup_key_into(&tuple.rest, hasher, depth + 1);
+        }
         Type::Tuple(elements) => {
             elements.len().hash(hasher);
             for element in elements {

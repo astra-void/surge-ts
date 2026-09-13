@@ -59,6 +59,12 @@ impl TypeGraphCensus {
                     self.walk_type(element);
                 }
             }
+            Type::OpenTuple(tuple) => {
+                for element in tuple.leading.iter().chain(tuple.trailing.iter()) {
+                    self.walk_type(element);
+                }
+                self.walk_type(&tuple.rest);
+            }
             Type::Union(union) => {
                 if self.union_payloads.insert(union.payload_address()) {
                     self.union_payload_bytes += size_of::<UnionTypePayload>() as u64;

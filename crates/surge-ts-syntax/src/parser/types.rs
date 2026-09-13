@@ -479,13 +479,22 @@ fn optional_tuple_element(element: ParsedType, optional: bool) -> ParsedType {
     }
 }
 
-/// A tuple with a rest element. The homogeneous lowerings below predate the
-/// element model and stay first: they turn `[T, ...T[]]` into `T[]` and `[...T]`
-/// into `T`, which every use site already consumes. Only the shapes that
-/// lowering cannot express — `[...a, ...b]`, `[infer head, ...infer tail]`,
-/// `[string, ...number[]]` — keep their elements, and those used to degrade to
-/// `Unknown` wholesale.
+/// A tuple with a rest element. `[...T]` is `T`; the homogeneous idiom is the
+/// array it always was (see below); everything else — `[...a, ...b]`,
+/// `[infer head, ...infer tail]`, `['x', ...number[]]` — keeps its elements and
+/// resolves to a fixed or open tuple.
 fn parse_variadic_tuple(tuple_type: &TSTupleType<'_>) -> ParsedType {
+    // `[...T]` spreads a tuple *type parameter*: it is `T` itself, not `T[]`.
+    if let [TSTupleElement::TSRestType(rest)] = tuple_type.element_types.as_slice()
+        && !matches!(rest.type_annotation, TSType::TSArrayType(_))
+    {
+        return parse_type(&rest.type_annotation).unwrap_or(ParsedType::Unknown);
+    }
+    // The homogeneous idiom (`[T, ...T[]]`, the non-empty array every enum and
+    // union builder takes) stays the array it always lowered to: the checker
+    // infers an array literal as `T[]` where tsc contextually types it as a
+    // tuple, and every consumer of that idiom is written against the array.
+    // Only the shapes the array cannot express keep their elements.
     match homogeneous_variadic_tuple(tuple_type) {
         ParsedType::Unknown if variadic_tuple_elements_enabled() => {
             match variadic_tuple_elements(tuple_type) {

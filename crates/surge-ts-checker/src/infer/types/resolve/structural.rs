@@ -55,16 +55,61 @@ pub(crate) fn resolve_variadic_tuple_type(
         resolved.push((is_rest, resolved_element.ty));
     }
 
-    match splice_spread_operands(&resolved) {
-        Some(members) => ResolvedType {
+    if let Some(members) = splice_spread_operands(&resolved) {
+        return ResolvedType {
             ty: Type::Tuple(members),
             had_error,
-        },
-        None => ResolvedType {
-            ty: Type::Unknown,
-            had_error,
-        },
+        };
     }
+    ResolvedType {
+        ty: open_tuple_from_operands(&resolved).unwrap_or(Type::Unknown),
+        had_error,
+    }
+}
+
+/// `[a, ...b[], c]` with exactly one length-less spread — an array, or an open
+/// tuple whose own fixed slots join the outer ones — is an open tuple. A spread
+/// of an unresolved operand, or a second length-less one, still has no shape.
+fn open_tuple_from_operands(elements: &[(bool, Type)]) -> Option<Type> {
+    let mut leading = Vec::new();
+    let mut rest: Option<Type> = None;
+    let mut trailing = Vec::new();
+    for (is_rest, ty) in elements {
+        let slots = if rest.is_none() { &mut leading } else { &mut trailing };
+        if !*is_rest {
+            slots.push(ty.clone());
+            continue;
+        }
+        if let Some(members) = spread_operand_members(ty) {
+            slots.extend(members);
+            continue;
+        }
+        if rest.is_some() {
+            return None;
+        }
+        let peeled = match ty {
+            Type::Reference(_) => crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::ConditionalType,
+                || ty.peeled(),
+            ),
+            other => other.clone(),
+        };
+        match peeled {
+            Type::Array(element) => rest = Some(*element),
+            Type::OpenTuple(inner) => {
+                leading.extend(inner.leading);
+                rest = Some(*inner.rest);
+                trailing.extend(inner.trailing);
+            }
+            _ => return None,
+        }
+    }
+    let rest = rest?;
+    Some(Type::OpenTuple(surge_ts_types::OpenTupleType {
+        leading,
+        rest: Box::new(rest),
+        trailing,
+    }))
 }
 
 fn splice_spread_operands(elements: &[(bool, Type)]) -> Option<Vec<Type>> {

@@ -19,6 +19,32 @@ pub struct TypeParameterType {
     pub name: std::sync::Arc<str>,
 }
 
+/// A tuple with a rest slot: `[1, ...number[]]`, `[...string[], 'end']`,
+/// `[a, ...b[], c]`. `leading` and `trailing` are the fixed slots on either
+/// side of the rest, `rest` the rest slot's *element* type. Kept distinct from
+/// [`Type::Tuple`] because its length is unknown, and from [`Type::Array`]
+/// because it is not: `number[]` does not satisfy `[number, ...number[]]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenTupleType {
+    pub leading: Vec<Type>,
+    pub rest: Box<Type>,
+    pub trailing: Vec<Type>,
+}
+
+impl OpenTupleType {
+    /// Every element type the tuple can hold, as one union.
+    pub fn element_union(&self) -> Type {
+        let mut members = self.leading.clone();
+        members.push(self.rest.as_ref().clone());
+        members.extend(self.trailing.iter().cloned());
+        crate::union_type(members)
+    }
+
+    pub fn fixed_len(&self) -> usize {
+        self.leading.len() + self.trailing.len()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     String,
@@ -63,6 +89,7 @@ pub enum Type {
     Object(ObjectType),
     Array(Box<Type>),
     Tuple(Vec<Type>),
+    OpenTuple(OpenTupleType),
     Union(UnionType),
     /// A lazy, nominal reference to a named type instantiation (`Box<string>`,
     /// `User`, …). The structural shape is resolved on demand and memoized,
@@ -244,6 +271,12 @@ impl Type {
             // (`includes`, `map`, …) over the union of its element types — not just
             // `length`. `["get","post"] as const` must answer `.includes`.
             Type::Tuple(elements) => tuple_property_access_type(name, elements),
+            Type::OpenTuple(tuple) => {
+                if name == "length" {
+                    return Some(Type::Number);
+                }
+                array_property_access_type(name, &tuple.element_union())
+            }
             Type::String | Type::StringLiteral(_) => string_property_access_type(name),
             Type::Number | Type::NumberLiteral(_) => number_property_access_type(name),
             Type::BigInt => bigint_property_access_type(name),
@@ -370,6 +403,12 @@ impl Type {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{elements}]")
+            }
+            Type::OpenTuple(tuple) => {
+                let mut parts = tuple.leading.iter().map(Type::name).collect::<Vec<_>>();
+                parts.push(format!("...{}[]", array_element_name(&tuple.rest)));
+                parts.extend(tuple.trailing.iter().map(Type::name));
+                format!("[{}]", parts.join(", "))
             }
             Type::Union(union) => union.name(),
             Type::Reference(reference) if reference.render_structurally => {

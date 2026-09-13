@@ -71,6 +71,8 @@ fn select_indexed_property_no_cascade(object: &Type, index: &Type) -> Option<Typ
         (Type::Tuple(elements), Type::StringLiteral(key)) if key == "length" => Some(
             Type::NumberLiteral(surge_ts_types::NumberLiteralType { value: elements.len().to_string() }),
         ),
+        (Type::OpenTuple(_), Type::StringLiteral(key)) if key == "length" => Some(Type::Number),
+        (Type::OpenTuple(open), Type::Number | Type::NumberLiteral(_)) => Some(open.element_union()),
         _ => None,
     }
 }
@@ -475,6 +477,24 @@ pub(super) fn resolve_indexed_access_type(
             }
             ResolvedType {
                 ty: Type::NumberLiteral(surge_ts_types::NumberLiteralType { value: elements.len().to_string() }),
+                had_error: false,
+            }
+        }
+        (Type::OpenTuple(open), Type::Number | Type::NumberLiteral(_)) => {
+            if generic_indexed_access {
+                record_generic_indexed_access_success();
+            }
+            ResolvedType {
+                ty: open.element_union(),
+                had_error: false,
+            }
+        }
+        (Type::OpenTuple(_), Type::StringLiteral(key)) if key == "length" => {
+            if generic_indexed_access {
+                record_generic_indexed_access_success();
+            }
+            ResolvedType {
+                ty: Type::Number,
                 had_error: false,
             }
         }

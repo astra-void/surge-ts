@@ -717,6 +717,11 @@ fn fingerprint_type(ty: &Type, budget: &mut FingerprintBudget) -> Option<u64> {
         }
         Type::Array(element) => fingerprint_type(element, budget)?.hash(&mut hasher),
         Type::Tuple(elements) => fingerprint_types(elements, budget)?.hash(&mut hasher),
+        Type::OpenTuple(tuple) => {
+            fingerprint_types(&tuple.leading, budget)?.hash(&mut hasher);
+            fingerprint_type(&tuple.rest, budget)?.hash(&mut hasher);
+            fingerprint_types(&tuple.trailing, budget)?.hash(&mut hasher);
+        }
         Type::Union(union) => fingerprint_types(union.types(), budget)?.hash(&mut hasher),
         Type::Reference(reference) => {
             if reference.retains_resolution_context()
@@ -827,6 +832,12 @@ fn fingerprint_property_type(ty: &Type, budget: &mut FingerprintBudget) -> Optio
             for element in elements {
                 fingerprint_property_type(element, budget)?.hash(&mut hasher);
             }
+        }
+        Type::OpenTuple(tuple) => {
+            for element in tuple.leading.iter().chain(tuple.trailing.iter()) {
+                fingerprint_property_type(element, budget)?.hash(&mut hasher);
+            }
+            fingerprint_property_type(&tuple.rest, budget)?.hash(&mut hasher);
         }
         Type::Union(union) => {
             for member in union.types() {

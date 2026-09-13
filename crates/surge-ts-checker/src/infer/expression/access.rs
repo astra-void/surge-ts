@@ -36,11 +36,14 @@ pub(crate) fn infer_index_access(
             peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
             _ => symbol.ty.clone(),
         },
+        Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
         other => other.clone(),
     };
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+        // Lowered to its element array above.
+        Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in union_type.types() {

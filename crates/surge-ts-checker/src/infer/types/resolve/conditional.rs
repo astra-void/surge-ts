@@ -424,6 +424,7 @@ fn bind_infer_captures(
             // degraded one step later.
             let element_check = match &peeled {
                 Type::Array(check_element) => Some(check_element.as_ref().clone()),
+                Type::OpenTuple(open) => Some(open.element_union()),
                 // The empty tuple has no element, and its element type is `never`
                 // — which is what stops a list walk at its last step. An empty
                 // union is not that: it is the degradation sentinel.
@@ -695,6 +696,13 @@ fn contains_degradation_sentinel(ty: &Type, depth: usize) -> bool {
         Type::Tuple(elements) => elements
             .iter()
             .any(|element| contains_degradation_sentinel(element, depth)),
+        Type::OpenTuple(open) => {
+            open.leading
+                .iter()
+                .chain(open.trailing.iter())
+                .any(|element| contains_degradation_sentinel(element, depth))
+                || contains_degradation_sentinel(&open.rest, depth)
+        }
         Type::Function(function) => {
             function
                 .parameters()
@@ -799,7 +807,7 @@ fn try_tuple_infer_match(
         crate::program::DtsExpansionReason::ConditionalType,
         || check.peeled(),
     );
-    if !matches!(peeled, Type::Tuple(_) | Type::Array(_)) {
+    if !matches!(peeled, Type::Tuple(_) | Type::Array(_) | Type::OpenTuple(_)) {
         return TuplePatternMatch::Undecided;
     }
 
@@ -883,6 +891,49 @@ fn tuple_pattern_pairs(extends: &ParsedType, check: &Type) -> Option<Vec<(Parsed
                 return None;
             };
             return Some(vec![(written.clone(), check.clone())]);
+        }
+        // An open tuple lines its fixed slots up with the pattern's; the spread
+        // slot receives whatever is left, which is again an open tuple (or the
+        // bare array once no fixed slot remains).
+        Type::OpenTuple(open) => {
+            let Some(&rest_index) = rest_positions.first() else {
+                return None;
+            };
+            let leading = &elements[..rest_index];
+            let trailing = &elements[rest_index + 1..];
+            if open.leading.len() < leading.len() || open.trailing.len() < trailing.len() {
+                return None;
+            }
+            let mut pairs = Vec::with_capacity(elements.len());
+            for (element, member) in leading.iter().zip(open.leading.iter()) {
+                let surge_ts_syntax::ParsedTupleElement::Fixed(written) = element else {
+                    return None;
+                };
+                pairs.push((written.clone(), member.clone()));
+            }
+            let surge_ts_syntax::ParsedTupleElement::Rest(rest_written) = &elements[rest_index]
+            else {
+                return None;
+            };
+            let kept_trailing = open.trailing.len() - trailing.len();
+            let remainder = surge_ts_types::OpenTupleType {
+                leading: open.leading[leading.len()..].to_vec(),
+                rest: open.rest.clone(),
+                trailing: open.trailing[..kept_trailing].to_vec(),
+            };
+            let remainder = if remainder.fixed_len() == 0 {
+                Type::Array(remainder.rest)
+            } else {
+                Type::OpenTuple(remainder)
+            };
+            pairs.push((rest_written.clone(), remainder));
+            for (element, member) in trailing.iter().zip(open.trailing[kept_trailing..].iter()) {
+                let surge_ts_syntax::ParsedTupleElement::Fixed(written) = element else {
+                    return None;
+                };
+                pairs.push((written.clone(), member.clone()));
+            }
+            return Some(pairs);
         }
         _ => return None,
     };

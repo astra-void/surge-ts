@@ -422,6 +422,59 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         (Type::Tuple(source), Type::Array(target)) => source
             .iter()
             .all(|source_ty| is_assignable_to(source_ty, target)),
+        // A fixed tuple satisfies an open one when it covers the fixed slots on
+        // both sides and everything in between fits the rest element.
+        (Type::Tuple(source), Type::OpenTuple(target)) => {
+            source.len() >= target.fixed_len()
+                && source
+                    .iter()
+                    .zip(target.leading.iter())
+                    .all(|(s, t)| is_assignable_to(s, t))
+                && source[source.len() - target.trailing.len()..]
+                    .iter()
+                    .zip(target.trailing.iter())
+                    .all(|(s, t)| is_assignable_to(s, t))
+                && source[target.leading.len()..source.len() - target.trailing.len()]
+                    .iter()
+                    .all(|s| is_assignable_to(s, &target.rest))
+        }
+        (Type::OpenTuple(source), Type::OpenTuple(target)) => {
+            source.leading.len() >= target.leading.len()
+                && source.trailing.len() >= target.trailing.len()
+                && source
+                    .leading
+                    .iter()
+                    .zip(target.leading.iter())
+                    .all(|(s, t)| is_assignable_to(s, t))
+                && source.leading[target.leading.len()..]
+                    .iter()
+                    .all(|s| is_assignable_to(s, &target.rest))
+                && is_assignable_to(&source.rest, &target.rest)
+                && source.trailing[..source.trailing.len() - target.trailing.len()]
+                    .iter()
+                    .all(|s| is_assignable_to(s, &target.rest))
+                && source.trailing[source.trailing.len() - target.trailing.len()..]
+                    .iter()
+                    .zip(target.trailing.iter())
+                    .all(|(s, t)| is_assignable_to(s, t))
+        }
+        (Type::OpenTuple(source), Type::Array(target)) => {
+            is_assignable_to(&source.element_union(), target)
+        }
+        // tsc refuses an array here (no guaranteed slots), but surge infers an
+        // array literal as `T[]` wherever tsc would contextually type it as a
+        // tuple, so refusing reports every `f([a, b])` against a `[T, ...T[]]`
+        // parameter. Accept the array when its element fits every slot: the
+        // arity check is deferred to the day literals are tuple-typed, and the
+        // identity relation (`Equal`) still tells the two apart.
+        (Type::Array(source), Type::OpenTuple(target)) => {
+            target
+                .leading
+                .iter()
+                .chain(target.trailing.iter())
+                .chain(std::iter::once(target.rest.as_ref()))
+                .all(|slot| is_assignable_to(source, slot))
+        }
         (Type::Union(from_union), Type::Union(_)) => {
             // Check each source member against the whole target union rather
             // than `any` single target member: a source member that is itself a
@@ -503,7 +556,8 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Array(_)
-            | Type::Tuple(_),
+            | Type::Tuple(_)
+            | Type::OpenTuple(_),
             Type::Object(target),
         ) => {
             target

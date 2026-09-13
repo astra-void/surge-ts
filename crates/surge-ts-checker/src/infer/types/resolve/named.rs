@@ -72,6 +72,12 @@ fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) ->
         Type::Tuple(elements) => elements
             .iter()
             .all(|element| signature_cache_safe_argument(element, depth + 1, budget)),
+        Type::OpenTuple(tuple) => tuple
+            .leading
+            .iter()
+            .chain(std::iter::once(tuple.rest.as_ref()))
+            .chain(tuple.trailing.iter())
+            .all(|element| signature_cache_safe_argument(element, depth + 1, budget)),
         Type::Union(union) => union
             .types()
             .iter()
