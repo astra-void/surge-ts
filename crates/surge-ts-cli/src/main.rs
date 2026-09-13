@@ -246,7 +246,25 @@ struct Cli {
     rss: bool,
 }
 
+/// Checking recurses with the program (nested lazy annotation forces, deep
+/// member chains); the main thread's default 8 MB stack overflowed on tRPC once
+/// `typeof import("…")` queries resolved. The reservation is virtual, so a
+/// large stack costs nothing until it is used.
+const CHECK_THREAD_STACK_BYTES: usize = 512 << 20;
+
 fn main() -> ExitCode {
+    let handle = std::thread::Builder::new()
+        .name("surge-check".into())
+        .stack_size(CHECK_THREAD_STACK_BYTES)
+        .spawn(main_on_check_thread)
+        .expect("spawn the checking thread");
+    match handle.join() {
+        Ok(code) => code,
+        Err(_) => ExitCode::FAILURE,
+    }
+}
+
+fn main_on_check_thread() -> ExitCode {
     // Benchmark-harness self-check: report the compiled-in global allocator and
     // exit without checking anything. Env-var gated so the CLI surface is
     // unchanged.
@@ -473,6 +491,7 @@ fn run_single_file_mode(
     let diagnostics = Checker::new()
         .options(CheckerOptions {
             no_implicit_any,
+            use_unknown_in_catch_variables: no_implicit_any,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,

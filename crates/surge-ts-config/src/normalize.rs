@@ -22,6 +22,7 @@ pub(crate) fn normalize_compiler_options(
     };
 
     let mut explicit_no_implicit_any = None;
+    let mut explicit_use_unknown_in_catch_variables = None;
     let mut explicit_resolve_json_module = None;
 
     for (key, value) in compiler_options {
@@ -35,6 +36,13 @@ pub(crate) fn normalize_compiler_options(
                 explicit_no_implicit_any = parse_bool_option(key, value, config_dir, diagnostics);
                 if let Some(no_implicit_any) = explicit_no_implicit_any {
                     normalized.no_implicit_any = no_implicit_any;
+                }
+            }
+            "useUnknownInCatchVariables" => {
+                explicit_use_unknown_in_catch_variables =
+                    parse_bool_option(key, value, config_dir, diagnostics);
+                if let Some(value) = explicit_use_unknown_in_catch_variables {
+                    normalized.use_unknown_in_catch_variables = value;
                 }
             }
             "noImplicitReturns" => {
@@ -186,6 +194,8 @@ pub(crate) fn normalize_compiler_options(
     }
 
     normalized.no_implicit_any = explicit_no_implicit_any.unwrap_or(normalized.strict);
+    normalized.use_unknown_in_catch_variables =
+        explicit_use_unknown_in_catch_variables.unwrap_or(normalized.strict);
     // tsc turns `.json` resolution on by default for every resolver it still
     // accepts except `node16`, and the flag is read after the whole option map
     // so `moduleResolution` has already landed whatever order they appear in.

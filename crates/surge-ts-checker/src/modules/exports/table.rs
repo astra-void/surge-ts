@@ -617,8 +617,8 @@ pub(crate) fn resolve_module_export_table(
                 ..
             } => {
                 for specifier in specifiers {
-                    let Some(namespace_module_specifier) =
-                        namespace_import_module_specifier(parsed_file, &specifier.local_name)
+                    let Some((namespace_module_specifier, imported_name)) =
+                        reexported_import_source(parsed_file, &specifier.local_name)
                     else {
                         continue;
                     };
@@ -636,11 +636,36 @@ pub(crate) fn resolve_module_export_table(
                         continue;
                     };
                     ctx.set_file_name(parsed_file.file_name.clone());
-                    copy_namespace_member_type_exports(
-                        &target_export_table,
-                        &specifier.exported_name,
-                        &mut resolved_export_table,
-                    );
+                    if let Some(imported_name) = imported_name {
+                        copy_qualified_type_exports(
+                            &target_export_table,
+                            &imported_name,
+                            &specifier.exported_name,
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
+                        );
+                        // The value side was bound from the preliminary table,
+                        // where a namespace object carries permissive members;
+                        // the target's final symbol is what the consumer reads.
+                        if let Some(symbol) = target_export_table
+                            .symbols
+                            .get_shared(&imported_name)
+                            .filter(|symbol| {
+                                matches!(&symbol.ty, Type::Object(object)
+                                    if object.call_signature().is_none()
+                                        && object.construct_signature().is_none())
+                            })
+                        {
+                            resolved_export_table
+                                .symbols
+                                .insert_shared(specifier.exported_name.clone(), symbol);
+                        }
+                    } else {
+                        copy_namespace_member_type_exports(
+                            &target_export_table,
+                            &specifier.exported_name,
+                            &mut resolved_export_table,
+                        );
+                    }
                 }
             }
             _ => {}

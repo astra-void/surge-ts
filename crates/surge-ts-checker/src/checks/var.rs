@@ -158,6 +158,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
                 if !inferred_initializer_type.is_unknown()
                     && !type_contains_unknown(declared_type)
                     && !type_contains_unknown(inferred_initializer_type)
+                    && !crate::checks::call::is_open_instantiation(inferred_initializer_type)
                     && !is_assignable_to(inferred_initializer_type, declared_type)
                 {
                     let inferred_type_name =

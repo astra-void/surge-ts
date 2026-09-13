@@ -242,6 +242,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
             "const transport: AuthenticatorTransport = \"usb\"; const n = Math.max(1, 2);",
         )],
         CheckerOptions {
+            use_unknown_in_catch_variables: false,
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
             resolved_modules: Default::default(),
@@ -665,6 +666,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
     let program_diagnostics = program_with_options(
         &[("example.ts", source)],
         CheckerOptions {
+            use_unknown_in_catch_variables: false,
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
             resolved_modules: Default::default(),
@@ -691,6 +693,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
         source,
         "example.ts",
         CheckerOptions {
+            use_unknown_in_catch_variables: false,
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
             resolved_modules: Default::default(),
@@ -751,6 +754,7 @@ fn program_order_parser_before_type_prepass() {
             ("c.ts", "function f(value): string { return 123; }"),
         ],
         CheckerOptions {
+            use_unknown_in_catch_variables: false,
             diagnostic_profile: DiagnosticProfile::Native,
             resolve_json_module: true,
             resolved_modules: Default::default(),

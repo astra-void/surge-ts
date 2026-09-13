@@ -19,6 +19,13 @@ use super::{
 /// references intern this by content, so an interface member reached from N
 /// consumer sites renders its display, formats its id and key, and clones its
 /// annotation and substitution once rather than N times.
+thread_local! {
+    /// Content ids of the lazy annotations being forced on this thread (see the
+    /// re-entry check in `resolve_arc_inner`).
+    static LAZY_VALUE_FORCES_IN_PROGRESS: std::cell::RefCell<Vec<Arc<str>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub(super) struct LazyAnnotationContent {
     pub(super) id: Arc<str>,
     pub(super) key: DeclarationResolutionKey,
@@ -209,6 +216,31 @@ impl LazyDeclarationAnnotation {
             crate::program::record_program_counter(|c| c.lazy_reference_memo_hit_count += 1);
             return degraded.clone();
         }
+        // A value annotation that reads back into itself while forcing — a
+        // `typeof import("m")` namespace whose member is this very annotation
+        // (`export declare const x: typeof import("./self").x`) — is a true
+        // cycle; the re-entry answers the sentinel and is not memoized, so the
+        // outer force completes with its own answer.
+        let re_entered = LAZY_VALUE_FORCES_IN_PROGRESS.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.iter().any(|id| **id == *content.id) {
+                return true;
+            }
+            stack.push(content.id.clone());
+            false
+        });
+        if re_entered {
+            return Arc::new(Type::Unknown);
+        }
+        struct PopInProgress;
+        impl Drop for PopInProgress {
+            fn drop(&mut self) {
+                LAZY_VALUE_FORCES_IN_PROGRESS.with(|stack| {
+                    stack.borrow_mut().pop();
+                });
+            }
+        }
+        let _pop_in_progress = PopInProgress;
         let Some(ctx) = self.environment.checker_context() else {
             return Arc::new(Type::Unknown);
         };
@@ -275,6 +307,11 @@ impl LazyDeclarationAnnotation {
             Type::Reference(reference) if content.signature_component.is_some() => {
                 reference.resolve().peeled()
             }
+            // An annotation that resolves to a reference to itself — a global
+            // `let vitest: typeof import("vitest")["vitest"]` whose module
+            // export was bound to that same global — would memoize a self-loop
+            // that every later member read follows forever.
+            Type::Reference(reference) if *reference.id == *content.id => Type::Unknown,
             ty => ty,
         });
         if let Some(filter) = lazy_value_trace_filter()
@@ -413,6 +450,20 @@ pub(crate) fn make_lazy_value_annotation_reference(
     declaration_start: usize,
     annotation: surge_ts_syntax::ParsedType,
 ) -> Type {
+    make_lazy_value_annotation_reference_under(ctx, declaration_name, declaration_start, annotation, None)
+}
+
+/// [`make_lazy_value_annotation_reference`] for a `declare namespace` value
+/// member: the force re-installs `namespace_prefix_stack`, so a bare sibling
+/// name in the annotation (`let VariableDeclaration: Type<VariableDeclaration>`)
+/// resolves under the namespace it was written in.
+pub(crate) fn make_lazy_value_annotation_reference_under(
+    ctx: &mut CheckerContext,
+    declaration_name: &str,
+    declaration_start: usize,
+    annotation: surge_ts_syntax::ParsedType,
+    namespace_prefix_stack: Option<Arc<[String]>>,
+) -> Type {
     let display: Arc<str> = Arc::from(parsed_annotation_display(&annotation));
     let key = DeclarationResolutionKey {
         file_name: ctx.canonical_file_name_arc(),
@@ -438,7 +489,7 @@ pub(crate) fn make_lazy_value_annotation_reference(
             annotation,
             signature_component: None,
             signature_environment: None,
-            namespace_prefix_stack: None,
+            namespace_prefix_stack,
         }),
         ctx,
     )

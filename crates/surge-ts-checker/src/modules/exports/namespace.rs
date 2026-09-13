@@ -1,11 +1,10 @@
 use super::*;
 
-/// The module specifier of a `import * as <local_name>` declaration in this
-/// file, if any — the binding a `export { <local_name> }` re-export refers to.
-pub(super) fn namespace_import_module_specifier(
+/// A re-exported import's source module and, for a named import, its original name.
+pub(super) fn reexported_import_source(
     parsed_file: &ParsedProgramFile,
     local_name: &str,
-) -> Option<String> {
+) -> Option<(String, Option<String>)> {
     parsed_file.statements.iter().find_map(|statement| {
         let ParsedStatement::ImportDeclaration(import) = statement else {
             return None;
@@ -14,7 +13,12 @@ pub(super) fn namespace_import_module_specifier(
             ParsedImportKind::Namespace {
                 local_name: import_local_name,
                 ..
-            } if import_local_name == local_name => Some(import.module_specifier.clone()),
+            } if import_local_name == local_name => Some((import.module_specifier.clone(), None)),
+            ParsedImportKind::Named { specifiers, .. }
+            | ParsedImportKind::DefaultAndNamed { specifiers, .. } => specifiers
+                .iter()
+                .find(|specifier| specifier.local_name == local_name)
+                .map(|specifier| (import.module_specifier.clone(), Some(specifier.imported_name.clone()))),
             _ => None,
         }
     })

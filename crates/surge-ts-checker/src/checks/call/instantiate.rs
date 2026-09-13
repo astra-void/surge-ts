@@ -60,11 +60,17 @@ pub(crate) fn instantiate_function_type<'a>(
             substitution
         };
 
+        // The enclosing bindings (`T` of the interface a `<K extends keyof T>`
+        // member was read off) are seeded first: the constraint checks below
+        // resolve `keyof T` against them.
+        let mut substitution = substitution;
+        seed_outer_type_arguments(&mut substitution, outer_type_arguments);
         // A type argument that failed to resolve, or one that violates a
         // `K extends keyof T` constraint, must not cascade into the `T[K]`
         // return type; fall back to the declared (generic) return type instead.
         let has_unresolved_argument = substitution
             .iter()
+            .filter(|(name, _)| !outer_type_arguments.iter().any(|(outer, _)| outer == name.as_ref()))
             .any(|(_, candidate)| type_argument_is_unresolved(candidate));
         let constraint_violation = enforce_explicit_keyof_constraints(
             function_signature,
@@ -77,8 +83,6 @@ pub(crate) fn instantiate_function_type<'a>(
             return Cow::Borrowed(function_type);
         }
 
-        let mut substitution = substitution;
-        seed_outer_type_arguments(&mut substitution, outer_type_arguments);
         return instantiate_function_type_with_substitution(
             function_type,
             function_signature,
@@ -95,6 +99,7 @@ pub(crate) fn instantiate_function_type<'a>(
         symbols,
         ctx,
     );
+    seed_outer_type_arguments(&mut substitution, outer_type_arguments);
     enforce_inferred_constraints(function_signature, &mut substitution, ctx);
     apply_uninferred_type_parameter_defaults(
         function_signature,
@@ -106,8 +111,8 @@ pub(crate) fn instantiate_function_type<'a>(
 
     let inferred_nothing = substitution
         .iter()
+        .filter(|(name, _)| !outer_type_arguments.iter().any(|(outer, _)| outer == name.as_ref()))
         .all(|(_, candidate)| candidate.is_unknown());
-    seed_outer_type_arguments(&mut substitution, outer_type_arguments);
     if inferred_nothing {
         record_generic_call_inference_failed();
         if is_declaration_backed_lazy_signature(function_type) || !outer_type_arguments.is_empty() {
@@ -137,6 +142,95 @@ pub(crate) fn instantiate_function_type<'a>(
 /// "inference found nothing" test, but the written annotation mentions them, so
 /// re-resolution needs them present. A name the signature already bound wins:
 /// an inner type parameter shadows an outer one of the same name.
+/// The written element a call argument lands in when the signature's last
+/// parameter is a rest tuple (`...params: [TClient] | [TClient, Config<T>]`):
+/// the tuple arm with the call's arity is selected and its element at the
+/// argument's offset is the inference target. `None` when the last parameter
+/// is not such a tuple, or no arm has that arity.
+fn rest_tuple_parameter_element(
+    function_signature: &FunctionSignatureInfo,
+    arity: usize,
+    index: usize,
+) -> Option<&ParsedType> {
+    let last = function_signature.parameter_types.len().checked_sub(1)?;
+    if index < last {
+        return None;
+    }
+    let rest_type = function_signature.parameter_types.get(last)?.as_ref()?;
+    let offset = index - last;
+    let tuple_arity = arity - last;
+    let arms: Vec<&std::sync::Arc<Vec<ParsedType>>> = match rest_type {
+        ParsedType::Tuple(elements) => vec![elements],
+        ParsedType::Union(members) => members
+            .iter()
+            .filter_map(|member| match member {
+                ParsedType::Tuple(elements) => Some(elements),
+                _ => None,
+            })
+            .collect(),
+        _ => return None,
+    };
+    arms.iter()
+        .find(|elements| elements.len() == tuple_arity)
+        .and_then(|elements| elements.get(offset))
+}
+
+enum RestInferenceTarget<'a> {
+    Whole(&'a ParsedType),
+    Element(&'a ParsedType),
+}
+
+/// What a rest argument infers against. A rest written as one of the
+/// signature's own type parameters (`<E extends any[]>(...args: E)`) is bound
+/// to the tuple of all rest arguments; `f(1, [1, 2])` binds `E` to
+/// `[number[]]`, not `number[]` as matching the first argument alone did (which
+/// then rejected that very argument against the element `number`). A rest
+/// written as an array (`...args: T[]`) infers its element from each argument.
+/// A tuple-shaped rest keeps the positional path.
+fn rest_parameter_inference_target<'a>(
+    written: &'a ParsedType,
+    function_signature: &FunctionSignatureInfo,
+) -> Option<RestInferenceTarget<'a>> {
+    match written {
+        ParsedType::Array(element) => Some(RestInferenceTarget::Element(element)),
+        ParsedType::Named(named)
+            if named.type_arguments.is_empty()
+                && function_signature
+                    .type_parameters
+                    .iter()
+                    .any(|type_parameter| type_parameter.name == named.name) =>
+        {
+            Some(RestInferenceTarget::Whole(written))
+        }
+        _ => None,
+    }
+}
+
+/// The tuple of the rest arguments' (widened) types, or `None` when any of
+/// them is unresolved — a partial tuple would bind the wrong arity.
+fn rest_arguments_tuple(
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let mut elements = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+        let diagnostics_before = ctx.diagnostics().len();
+        let inferred = infer_expression(&argument.expression, symbols, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
+        let InferredExpression::Known(argument_type) = inferred else {
+            return None;
+        };
+        if argument_type.is_unknown()
+            || crate::checks::expr::carries_leaked_type_parameter(&argument_type, ctx)
+        {
+            return None;
+        }
+        elements.push(crate::checks::expr::widen_type(&argument_type));
+    }
+    Some(Type::Tuple(elements))
+}
+
 fn seed_outer_type_arguments(
     substitution: &mut TypeParameterSubstitution,
     outer_type_arguments: &[(String, Type)],
@@ -677,13 +771,55 @@ pub(crate) fn infer_type_argument_substitution(
         }
     }
 
+    let rest_index = function_signature
+        .rest
+        .then(|| function_signature.parameter_types.len().checked_sub(1))
+        .flatten();
+    let mut rest_tuple_bound = false;
     for (index, argument) in arguments.iter().enumerate() {
-        let Some(parameter_type) = function_signature
-            .parameter_types
-            .get(index)
-            .and_then(|ty| ty.as_ref())
-        else {
-            continue;
+        let rest_target = rest_index
+            .filter(|rest_index| index >= *rest_index)
+            .and_then(|rest_index| function_signature.parameter_types[rest_index].as_ref())
+            .and_then(|written| rest_parameter_inference_target(written, function_signature));
+        let parameter_type = match rest_target {
+            // `...args: E` binds `E` to the tuple of every rest argument, once.
+            Some(RestInferenceTarget::Whole(parameter_type)) => {
+                if !rest_tuple_bound {
+                    rest_tuple_bound = true;
+                    if let Some(tuple) = rest_arguments_tuple(&arguments[index..], symbols, ctx) {
+                        with_declaring_scope(function_signature, ctx, |ctx| {
+                            collect_inferred_type_argument(
+                                parameter_type,
+                                &tuple,
+                                &mut substitution,
+                                false,
+                                ctx,
+                                0,
+                            );
+                        });
+                    }
+                }
+                continue;
+            }
+            Some(RestInferenceTarget::Element(element)) => element,
+            None => {
+                let Some(parameter_type) = function_signature
+                    .parameter_types
+                    .get(index)
+                    .and_then(|ty| ty.as_ref())
+                    .or_else(|| {
+                        rest_tuple_parameter_element(function_signature, arguments.len(), index)
+                    })
+                    .map(|ty| {
+                        rest_tuple_parameter_element(function_signature, arguments.len(), index)
+                            .filter(|_| index + 1 == function_signature.parameter_types.len())
+                            .unwrap_or(ty)
+                    })
+                else {
+                    continue;
+                };
+                parameter_type
+            }
         };
 
         // This is an inference *probe*: the argument is evaluated only to infer the
@@ -712,7 +848,12 @@ pub(crate) fn infer_type_argument_substitution(
             continue;
         };
 
-        if argument_type.is_unknown() {
+        // A leaked placeholder (`Mock<T>` off a `vi.fn()` whose `T` no scope
+        // binds) infers garbage — `TData` as the mock's own call signature —
+        // so the argument contributes nothing, as an unresolved one does.
+        if argument_type.is_unknown()
+            || crate::checks::expr::carries_leaked_type_parameter(&argument_type, ctx)
+        {
             record_generic_call_inference_unresolved_argument_skip();
             continue;
         }
@@ -1108,12 +1249,16 @@ pub(crate) fn collect_inferred_type_argument(
             // union lines up by accident: tanstack's `resolveQueryValue` bound
             // `TValue` to the callback arm and made every `!== false` on the
             // result a false TS2367. Fall through to the shape-matching path.
+            let stands_for_the_rest = |member: &ParsedType, ctx: &CheckerContext| {
+                is_naked_type_parameter(member, substitution)
+                    || is_conditional_alias_reference(member, ctx)
+            };
             let mixes_naked_and_structured = expected_types
                 .iter()
-                .any(|member| is_naked_type_parameter(member, substitution))
+                .any(|member| stands_for_the_rest(member, ctx))
                 && expected_types
                     .iter()
-                    .any(|member| !is_naked_type_parameter(member, substitution));
+                    .any(|member| !stands_for_the_rest(member, ctx));
             if let Type::Union(actual_union) = argument_type
                 && !mixes_naked_and_structured
                 && expected_types.len() == actual_union.types().len()
@@ -1139,9 +1284,12 @@ pub(crate) fn collect_inferred_type_argument(
             // one is recorded first: candidates are first-wins, and a direct
             // member (`resultOf(value)` binding `T` to the value itself) is a
             // better answer than one read back out of a callback's return type.
+            // A conditional-bodied alias member (`MaybePromise<DefaultValue<In,
+            // $Output>>`) has no shape of its own either; what fits no shaped
+            // member is what it, like a naked parameter, stands for.
             let (naked, structured): (Vec<&ParsedType>, Vec<&ParsedType>) = expected_types
                 .iter()
-                .partition(|member| is_naked_type_parameter(member, substitution));
+                .partition(|member| stands_for_the_rest(member, ctx));
             if structured.is_empty() {
                 return;
             }
@@ -1160,7 +1308,11 @@ pub(crate) fn collect_inferred_type_argument(
                     None => unmatched.push(member.clone()),
                 }
             }
-            if matches.is_empty() {
+            // Nothing shaped matched and there is no naked member to take the
+            // rest: no evidence. With a naked member, an argument none of the
+            // shapes fit (`A | B` against `TOut | Promise<TOut>`) is what it
+            // stands for, in full.
+            if matches.is_empty() && naked.is_empty() {
                 return;
             }
             if !unmatched.is_empty() {
@@ -1180,10 +1332,25 @@ pub(crate) fn collect_inferred_type_argument(
                     );
                 }
             }
+            // Several argument members fitting the same shape are one candidate
+            // (tsc unions the candidates): matched one at a time, the first-wins
+            // rule kept a single member of a union return.
+            let mut grouped: Vec<(&ParsedType, Vec<Type>)> = Vec::new();
             for (target, member) in matches {
+                match grouped.iter_mut().find(|(seen, _)| std::ptr::eq(*seen, target)) {
+                    Some((_, members)) => members.push(member.clone()),
+                    None => grouped.push((target, vec![member.clone()])),
+                }
+            }
+            for (target, mut members) in grouped {
+                let member = if members.len() == 1 {
+                    members.remove(0)
+                } else {
+                    surge_ts_types::union_type(members)
+                };
                 collect_inferred_type_argument(
                     target,
-                    member,
+                    &member,
                     substitution,
                     widen_literals,
                     ctx,
@@ -1197,6 +1364,19 @@ pub(crate) fn collect_inferred_type_argument(
 
 /// A union member that names a type parameter directly (`S` in `S | (() => S)`),
 /// as opposed to one that gives the argument a shape to match against.
+fn is_conditional_alias_reference(member: &ParsedType, ctx: &CheckerContext) -> bool {
+    let ParsedType::Named(named) = member else {
+        return false;
+    };
+    if named.type_arguments.is_empty() {
+        return false;
+    }
+    lookup_declaration_for_inference(&named.name, ctx).is_some_and(|handle| {
+        matches!(handle.get(), TypeDeclarationInfo::Alias(info)
+            if matches!(info.body.ty, ParsedType::Conditional(_)))
+    })
+}
+
 fn is_naked_type_parameter(member: &ParsedType, substitution: &TypeParameterSubstitution) -> bool {
     let ParsedType::Named(named) = member else {
         return false;
@@ -1254,6 +1434,25 @@ fn infer_through_generic_reference(
         return;
     }
 
+    // A reference that is not an instantiation (a deferred value annotation,
+    // `let VariableDeclaration: Type<VariableDeclaration>` read off a namespace
+    // object) carries no arguments to zip; what it resolves to does.
+    if let Type::Reference(reference) = argument_type
+        && reference.arguments.is_empty()
+        && !named_type.type_arguments.is_empty()
+    {
+        let resolved = argument_type.peeled();
+        if !matches!(&resolved, Type::Reference(_)) && !resolved.is_unknown() {
+            return infer_through_generic_reference(
+                named_type,
+                &resolved,
+                substitution,
+                ctx,
+                depth + 1,
+            );
+        }
+    }
+
     if let Type::Reference(reference) = argument_type {
         for (pattern_argument, actual_argument) in named_type
             .type_arguments
@@ -1292,6 +1491,9 @@ fn infer_through_generic_reference(
                 // is left alone — matching one bound tRPC's `TRouter` from a
                 // link argument and collapsed `inferClientTypes<TRouter>`.
                 let shape_matches = matches!(argument_type, Type::Object(_))
+                    || matches!(info.body.ty, ParsedType::Conditional(_))
+                    || (matches!(argument_type, Type::Union(_))
+                        && matches!(info.body.ty, ParsedType::Union(_)))
                     || (matches!(argument_type, Type::Function(_))
                         && alias_parameters_carry_type_parameters(info));
                 if !shape_matches {
@@ -1447,10 +1649,26 @@ fn infer_through_generic_alias(
             conditional.check_type.as_ref(),
             ParsedType::Named(check) if parameter_map.contains_key(&check.name)
         );
-        if !check_is_own_parameter {
+        if check_is_own_parameter {
+            body = conditional.true_type.as_ref();
+        } else {
+            // The branch is not decided by the argument, so the argument infers
+            // into both, as tsc does (`DefaultValue<In, $Output> = Unset extends
+            // In ? $Output : In` binds `$Output` from a resolver's return).
+            for branch in [&conditional.true_type, &conditional.false_type] {
+                let substituted =
+                    crate::infer::substitute_parsed_type_parameters_deep(branch, &parameter_map);
+                collect_inferred_type_argument(
+                    &substituted,
+                    argument_type,
+                    substitution,
+                    true,
+                    ctx,
+                    depth + 1,
+                );
+            }
             return;
         }
-        body = conditional.true_type.as_ref();
     }
 
     let substituted = crate::infer::substitute_parsed_type_parameters_deep(body, &parameter_map);

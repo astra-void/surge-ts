@@ -147,15 +147,16 @@ fn narrow_single_guard_for_identifier(
     {
         return narrow_union_by_arraybufferview(ty, branch_is_true);
     }
-    if let Some(guard) = parse_type_predicate_condition(condition, &mut |name| {
-        scopes
-            .resolve(name)
-            .and_then(|symbol| symbol.function_signature.clone())
+    if let Some(guard) = parse_type_predicate_condition(condition, &mut |callee| {
+        predicate_callee_signature(callee, |name| scopes.resolve(name), scopes.visible_symbols(), ctx)
     }) && guard.subject == var_name
     {
-        let predicate_ty =
-            resolve_predicate_guard_type(&guard, Some(ty), scopes.visible_symbols(), ctx)?;
-        return narrow_by_predicate(ty, &predicate_ty, branch_is_true);
+        return match resolve_predicate_guard_target(&guard, Some(ty), scopes.visible_symbols(), ctx)? {
+            PredicateTarget::Resolved(predicate_ty) => {
+                narrow_by_predicate(ty, &predicate_ty, branch_is_true)
+            }
+            PredicateTarget::Degraded => degraded_predicate_subject(branch_is_true),
+        };
     }
     if let Some((subject, path, method)) = parse_this_predicate_call(condition)
         && path.is_empty()
@@ -214,7 +215,7 @@ fn narrow_logical_guard_in_scope(
 
     let mut operand_names = Vec::new();
     collect_guard_operand_identifiers(condition, &mut operand_names);
-    collect_predicate_guard_subjects(condition, scopes, &mut operand_names);
+    collect_predicate_guard_subjects(condition, scopes, &mut operand_names, ctx);
     collect_equality_guard_subjects(condition, scopes, &mut operand_names);
 
     for name in operand_names {

@@ -12,6 +12,7 @@ mod ambient_modules;
 mod declaration_files;
 mod generics;
 mod caches_and_parallel;
+mod trpc_burndown;
 
 fn codes(diagnostics: &[surge_ts_diagnostics::Diagnostic]) -> Vec<String> {
     diagnostics

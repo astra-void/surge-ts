@@ -203,6 +203,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name: identifier.name.to_string(),
                 name_span: Some(text_span_from_oxc_span(identifier.span)),
                 members: Vec::new(),
+                import_specifier: None,
             })))
         }
         TSTypeQueryExprName::QualifiedName(qualified_name) => {
@@ -212,10 +213,41 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name: base,
                 name_span: Some(text_span_from_oxc_span(base_span)),
                 members,
+                import_specifier: None,
             })))
         }
-        // `typeof import('foo')` and `typeof this` are not modelled.
+        // `typeof import("vitest")['assert']` reads the module's namespace value;
+        // a qualifier after the call (`typeof import("m").ns.x`) walks it.
+        TSTypeQueryExprName::TSImportType(import_type) => {
+            let mut members = Vec::new();
+            if let Some(qualifier) = &import_type.qualifier {
+                flatten_import_type_qualifier(qualifier, &mut members);
+            }
+            let specifier = import_type.source.value.to_string();
+            Some(ParsedType::TypeOf(std::sync::Arc::new(ParsedTypeOfType {
+                name: format!("import(\"{specifier}\")"),
+                name_span: Some(text_span_from_oxc_span(import_type.source.span)),
+                members,
+                import_specifier: Some(specifier),
+            })))
+        }
+        // `typeof this` is not modelled.
         _ => None,
+    }
+}
+
+fn flatten_import_type_qualifier(
+    qualifier: &oxc_ast::ast::TSImportTypeQualifier<'_>,
+    members: &mut Vec<String>,
+) {
+    match qualifier {
+        oxc_ast::ast::TSImportTypeQualifier::Identifier(identifier) => {
+            members.push(identifier.name.to_string());
+        }
+        oxc_ast::ast::TSImportTypeQualifier::QualifiedName(qualified) => {
+            flatten_import_type_qualifier(&qualified.left, members);
+            members.push(qualified.right.name.to_string());
+        }
     }
 }
 

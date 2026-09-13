@@ -208,7 +208,11 @@ pub(crate) fn infer_property_access(
                         // Same rule as the single-receiver arm below: a member
                         // whose reference peels to the sentinel is a shape surge
                         // could not reconstruct, not a type without the member.
-                        None if ty.peeled().is_unknown() => return InferredExpression::Unknown,
+                        None if ty.peeled().is_unknown()
+                            || crate::checks::expr::carries_leaked_type_parameter(ty, ctx) =>
+                        {
+                            return InferredExpression::Unknown;
+                        }
                         None => {
                             return InferredExpression::MissingProperty {
                                 property_name: property_name.to_string(),
@@ -237,7 +241,9 @@ pub(crate) fn infer_property_access(
                     // surge could not reconstruct (a cross-module `Set<string>`
                     // annotation whose lazy environment is gone), not a type
                     // without the member.
-                    } else if object_type.peeled().is_unknown() {
+                    } else if object_type.peeled().is_unknown()
+                        || crate::checks::expr::carries_leaked_type_parameter(&object_type, ctx)
+                    {
                         InferredExpression::Unknown
                     } else {
                         InferredExpression::MissingProperty {

@@ -257,6 +257,16 @@ pub(super) fn resolve_indexed_access_type(
         };
     }
 
+    // `never[K]` is `never`: a conditional that reduced to `never` under
+    // instantiation (`inferClientTypes<never>['errorShape']`) selects nothing,
+    // and tsc reports nothing at the alias for it.
+    if matches!(resolved_object.ty, Type::Never) && substitution.iter().next().is_some() {
+        return ResolvedType {
+            ty: Type::Never,
+            had_error: false,
+        };
+    }
+
     match (&resolved_object.ty, &resolved_index.ty) {
         (Type::Object(object_type), Type::StringLiteral(key)) => {
             if let Some(property_ty) = object_type.get_property_access_type(&key) {

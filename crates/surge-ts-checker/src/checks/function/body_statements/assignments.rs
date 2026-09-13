@@ -2,6 +2,7 @@
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedAssignment, ParsedExpression, ParsedMemberAssignment, ParsedThisPropertyAssignment,
+    ParsedType,
 };
 use surge_ts_types::{Type, TypeCopyReason, is_assignable_to, union_type, with_type_copy_reason};
 
@@ -13,7 +14,7 @@ use crate::flow::{
     FlowCheck, FunctionFlowState, check_assignment_target_flow, check_expression_flow, mark_assignment_state,
 };
 use crate::infer::InferredExpression;
-use crate::symbols::{ScopeStack, SymbolInfo};
+use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
 use super::super::visible_symbols;
 
 pub(crate) fn check_function_assignment(
@@ -67,6 +68,60 @@ pub(crate) fn check_function_assignment(
 /// and narrows the target for the code that follows. Nothing is reported when
 /// either side carries the degradation sentinel, and the narrowing is
 /// block-scoped exactly like the identifier-assignment one above.
+/// The declared (un-narrowed) type of an `a.b.c` reference: the base symbol's
+/// declared type walked through the written members, so a write to
+/// `spec.imported.name` after `spec.imported.name === "x"` narrowed the read
+/// is still checked against the property's declaration.
+fn declared_reference_type(object: &ParsedExpression, symbols: &SymbolTable) -> Option<Type> {
+    match object {
+        ParsedExpression::Identifier { name, .. } => symbols.declared_type(name).cloned(),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => declared_reference_type(object, symbols)?.get_property_access_type(property_name),
+        _ => None,
+    }
+}
+
+/// The declaration behind a narrowed object (`Identifier` with `name` read as
+/// `"x"` after `=== "x"`), re-resolved so a write sees the declared member.
+/// Only a non-generic named declaration can be recovered from the display name.
+fn declared_object_type_by_name(object_type: &Type, ctx: &mut CheckerContext) -> Option<Type> {
+    let Type::Object(object) = object_type.peeled() else {
+        return None;
+    };
+    let name = object.alias_name.as_deref()?;
+    if name.contains(['<', ' ', '|', '&', '{']) {
+        return None;
+    }
+    ctx.lookup_type_declaration(name)?;
+    let declared = crate::infer::map_parsed_type(
+        ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: name.to_string(),
+            span: None,
+            type_arguments: Vec::new(),
+        })),
+        ctx,
+    );
+    (!declared.is_unknown()).then_some(declared)
+}
+
+/// A read narrowed to a literal (`o.kind === "a"`) still writes against the
+/// declared primitive; when the declaration itself is out of reach, the
+/// literal is widened to its base so the write is not held to the narrowing.
+fn widen_narrowed_literals(ty: &Type) -> Type {
+    match ty {
+        Type::StringLiteral(_) => Type::String,
+        Type::NumberLiteral(_) => Type::Number,
+        Type::BooleanLiteral(_) => Type::Boolean,
+        Type::Union(union) => {
+            union_type(union.types().iter().map(widen_narrowed_literals).collect())
+        }
+        other => other.clone(),
+    }
+}
+
 pub(crate) fn check_member_assignment(
     assignment: ParsedMemberAssignment,
     scopes: &mut ScopeStack,
@@ -76,6 +131,7 @@ pub(crate) fn check_member_assignment(
         object,
         object_span,
         property_name,
+        property_span,
         ..
     } = &assignment.target
     else {
@@ -84,28 +140,68 @@ pub(crate) fn check_member_assignment(
 
     let visible_symbols = visible_symbols(scopes);
 
-    // An assignment target is written, not read: it is resolved through the
-    // *inference* layer, which answers without reporting, so a receiver surge
-    // models incompletely (`Component.getInitialProps = …`, `X.prototype.m = …`)
-    // does not turn into a false TS2339 here.
-    let object_type = match crate::infer::infer_expression(object, &visible_symbols, ctx) {
+    // The receiver of the write is still read: `decl.init.callee = x` reports
+    // a possibly-undefined `decl` and a missing `init` on it exactly as a read
+    // would. The written member itself is only reported below on a union
+    // receiver, so a value surge models incompletely
+    // (`Component.getInitialProps = …`) is not a false TS2339 here.
+    let object_type = match evaluate_expression(
+        object,
+        object_span.or(assignment.target_span),
+        &visible_symbols,
+        ctx,
+    ) {
         InferredExpression::Known(ty) => ty,
         _ => return,
     };
+    // A write through a possibly-undefined receiver (`decl.id = x` with
+    // `decl` from an indexed read) is the same TS18048 a read reports.
+    let object_type = crate::checks::expr::strip_reported_undefined_receiver(
+        object,
+        object_type,
+        *object_span,
+        assignment.target_span,
+        &visible_symbols,
+        ctx,
+    );
     let _ = object_span;
 
     // A write checks against the property's *declared* type: after
     // `if (o.flag === undefined)` the read type is narrowed to `undefined`, but
     // `o.flag = true` is still an assignment to `boolean | undefined`.
-    let declared_object_type = match object.as_ref() {
-        ParsedExpression::Identifier { name, .. } => visible_symbols.declared_type(name).cloned(),
-        _ => None,
-    };
+    let declared_object_type = declared_reference_type(object, &visible_symbols)
+        .or_else(|| declared_object_type_by_name(&object_type, ctx));
     let Some(target_type) = declared_object_type
         .as_ref()
         .and_then(|declared| declared.get_property_access_type(property_name))
-        .or_else(|| object_type.get_property_access_type(property_name))
+        .or_else(|| {
+            object_type
+                .get_property_access_type(property_name)
+                .map(|narrowed| widen_narrowed_literals(&narrowed))
+        })
     else {
+        // `decl.id = x` on `A | B` where `B` has no `id`: tsc reports the
+        // member on the union. Only a union of fully modelled objects is
+        // reported, so an incompletely modelled receiver stays silent.
+        let receiver = declared_object_type.as_ref().unwrap_or(&object_type);
+        if let Type::Union(union) = receiver.peeled()
+            && union.types().iter().all(|member| {
+                matches!(member.peeled(), Type::Object(_))
+                    && !crate::checks::expr::carries_leaked_type_parameter(member, ctx)
+            })
+        {
+            let diagnostic = crate::checks::expr::missing_property_diagnostic(
+                property_name,
+                receiver,
+                &visible_symbols,
+                ctx.file_name.clone(),
+            );
+            let span = property_span.or(assignment.target_span);
+            ctx.push(match span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            });
+        }
         return;
     };
 

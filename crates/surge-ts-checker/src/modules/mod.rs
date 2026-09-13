@@ -146,6 +146,7 @@ mod tests {
                     statements: parsed.statements,
                     parser_errors: parsed.parser_errors,
                     is_module: parsed.is_module,
+                    import_call_specifiers: parsed.import_call_specifiers,
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
                     suppressed_ranges: parsed.suppressed_ranges,

@@ -427,6 +427,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             "export function f(value): string { return \"ok\"; }",
         )],
         CheckerOptions {
+            use_unknown_in_catch_variables: false,
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
             resolved_modules: Default::default(),
@@ -462,6 +463,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             "export function f({ id: userId }) { return userId; }",
         )],
         CheckerOptions {
+            use_unknown_in_catch_variables: false,
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
             resolved_modules: Default::default(),
@@ -494,6 +496,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
     let diagnostics = program_with_options(
         &[("a.ts", "const fn = ({ id: userId }) => userId;")],
         CheckerOptions {
+            use_unknown_in_catch_variables: false,
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
             resolved_modules: Default::default(),

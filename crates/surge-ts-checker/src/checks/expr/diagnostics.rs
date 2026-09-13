@@ -24,7 +24,22 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
                     },
                 );
             }
-            Type::Object(alloc_object_type(new_props, None))
+            // Widening only touches fresh literals; the index signature, the
+            // openness marker and the signatures still describe the value.
+            let mut widened = alloc_object_type(
+                new_props,
+                obj.string_index_type.as_deref().map(widen_type),
+            );
+            if obj.synthetic_open_index {
+                widened = widened.with_open_index_marker();
+            }
+            if let Some(call_signature) = obj.call_signature() {
+                widened = widened.with_call_signature(call_signature.clone());
+            }
+            if let Some(construct_signature) = obj.construct_signature() {
+                widened = widened.with_construct_signature(construct_signature.clone());
+            }
+            Type::Object(widened)
         }
         Type::Array(inner) => Type::Array(Box::new(widen_type(inner))),
         Type::Union(types) => {
@@ -49,6 +64,28 @@ fn type_contains_literal(ty: &Type) -> bool {
 /// tsc: a fresh literal source is widened (`g(1)` to `string` -> `'number'`)
 /// unless the target is literal-like, where tsc keeps the literal (`f("b")` to
 /// `"a"` -> `'"b"'`).
+/// Whether a nominal reference carries a type parameter that no enclosing
+/// declaration binds — an alias parameter that leaked out of an instantiation
+/// surge could not complete (`Setdown<MergeC<A, B>>` reading as
+/// `Partial<C1>`). tsc has the real type there; a member miss on the leaked
+/// shape describes the gap, not the source, so it is treated as the sentinel.
+pub(crate) fn carries_leaked_type_parameter(ty: &Type, ctx: &CheckerContext) -> bool {
+    fn walk(ty: &Type, ctx: &CheckerContext, depth: usize) -> bool {
+        if depth > 3 {
+            return false;
+        }
+        match ty {
+            Type::TypeParameter(parameter) => !ctx.type_parameter_in_scope(parameter.name.as_ref()),
+            Type::Reference(reference) => reference
+                .arguments
+                .iter()
+                .any(|argument| walk(argument, ctx, depth + 1)),
+            _ => false,
+        }
+    }
+    walk(ty, ctx, 0)
+}
+
 /// Builds the diagnostic for a missing property access. When the object is a
 /// class instance whose static side declares the property, tsc emits TS2576
 /// ("Did you mean to access the static member ...") instead of the plain TS2339.

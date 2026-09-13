@@ -48,6 +48,20 @@ pub(crate) fn resolve_mapped_type(
         ParsedType::KeyOf(inner) => Some(inner.as_ref().clone()),
         _ => None,
     };
+    // `Partial<C1>` with `C1` a type parameter no enclosing declaration binds
+    // is an instantiation surge could not complete (the alias argument was
+    // lost on the way in); mapping over it would produce an empty object that
+    // then reports every member. tsc has the real keys, so the shape is open.
+    if let Some(ParsedType::Named(named)) = keyof_operand.as_ref()
+        && named.type_arguments.is_empty()
+        && let Some(Type::TypeParameter(parameter)) = substitution.get(&named.name)
+        && !ctx.type_parameter_in_scope(parameter.name.as_ref())
+    {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    }
     let resolved_constraint = resolve_parsed_type(*mapped.constraint, ctx, resolving, substitution);
 
     if resolved_constraint.had_error {
@@ -144,9 +158,19 @@ pub(crate) fn resolve_mapped_type(
     let index_type = homomorphic_source
         .as_ref()
         .and_then(|object| object.string_index_type.as_deref().cloned());
+    // A source the checker had to leave open (a spread of a value it could
+    // not model) stays open through the mapping: `Partial<{ x, ...degraded }>`
+    // still admits the members tsc sees through the spread.
+    let source_is_open = homomorphic_source
+        .as_ref()
+        .is_some_and(|object| object.synthetic_open_index);
+    let mut mapped_object = alloc_object_type(properties, index_type);
+    if source_is_open {
+        mapped_object = mapped_object.with_open_index_marker();
+    }
 
     ResolvedType {
-        ty: Type::Object(alloc_object_type(properties, index_type)),
+        ty: Type::Object(mapped_object),
         had_error,
     }
 }

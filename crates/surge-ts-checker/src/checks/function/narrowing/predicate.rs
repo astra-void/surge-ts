@@ -1,13 +1,87 @@
 use surge_ts_syntax::{ParsedExpression, ParsedLogicalOperator, ParsedUnaryOperator};
 use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
 
+use std::sync::Arc;
+
 use crate::context::CheckerContext;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
 use super::guards::*;
+use super::narrow_discriminant_in_scope;
 use super::{
     ReferenceGuard, narrow_instanceof_heritage_symbol_table, narrow_reference_in_scope,
     narrowed_reference_type, reference_path,
 };
+
+/// The signature a predicate guard reads for a callee: the declaration's own
+/// collected signature, else the written call signature of the callable type
+/// a value is declared with (`declare const isE: { (v: unknown): v is E }`).
+fn predicate_signature_of(
+    symbol: &SymbolInfo,
+    ctx: &CheckerContext,
+) -> Option<Arc<crate::symbols::FunctionSignatureInfo>> {
+    symbol.function_signature.clone().or_else(|| {
+        crate::checks::call::written_call_signature_info(&symbol.ty, ctx, false)
+            .map(|written| written.signature)
+    })
+}
+
+/// A substitution carrying the enclosing bindings a member predicate was read
+/// under, so `v is T` on `Type<Identifier>.check` resolves `T` to `Identifier`.
+fn seeded_predicate_substitution(guard: &PredicateGuardInfo) -> crate::infer::TypeParameterSubstitution {
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    for (name, ty) in &guard.outer_type_arguments {
+        substitution.insert(name.clone(), ty.clone());
+    }
+    substitution
+}
+
+/// Resolves what a guard site asked for: a named callee through `resolve`,
+/// a member callee through the receiver expression's type. A member's
+/// predicate rides on the written signature attached at resolution (see
+/// `DeclaredMemberSignature`); a union receiver (`Type<T>` is a union of
+/// classes sharing `check`) reads the first callable member.
+pub(super) fn predicate_callee_signature<'a>(
+    callee: PredicateCallee<'_>,
+    resolve: impl Fn(&str) -> Option<&'a SymbolInfo>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<PredicateSignature> {
+    match callee {
+        PredicateCallee::Name(name) => resolve(name)
+            .and_then(|symbol| predicate_signature_of(symbol, ctx))
+            .map(PredicateSignature::plain),
+        PredicateCallee::Member { object, property } => {
+            let diagnostics_before = ctx.diagnostics().len();
+            let inferred = crate::infer::infer_expression(object, symbols, ctx);
+            ctx.truncate_diagnostics(diagnostics_before);
+            let crate::infer::InferredExpression::Known(object_ty) = inferred else {
+                return None;
+            };
+            let member = match object_ty.peeled() {
+                Type::Union(union) => union
+                    .types()
+                    .iter()
+                    .find_map(|member| member.get_property_access_type(property))?,
+                other => other.get_property_access_type(property)?,
+            };
+            let function = match member.peeled() {
+                Type::Function(function) => function,
+                Type::Union(union) => union.types().iter().find_map(|member| match member.peeled() {
+                    Type::Function(function) => Some(function),
+                    _ => None,
+                })?,
+                _ => return None,
+            };
+            let declared = function
+                .declaration()?
+                .downcast_ref::<crate::checks::call::DeclaredMemberSignature>()?;
+            Some(PredicateSignature {
+                signature: declared.signature.clone(),
+                outer_type_arguments: declared.outer_type_arguments.clone(),
+            })
+        }
+    }
+}
 
 /// Binds a generic predicate's type parameters for the guard site. A
 /// non-generic predicate needs none.
@@ -17,9 +91,12 @@ pub(super) fn predicate_type_argument_substitution(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<crate::infer::TypeParameterSubstitution> {
-    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    let mut substitution = seeded_predicate_substitution(guard);
     if guard.signature.type_parameters.is_empty() {
         return Some(substitution);
+    }
+    if !guard.explicit_type_arguments.is_empty() {
+        return Some(explicit_predicate_type_argument_substitution(guard, ctx));
     }
     // A property path means the tested value is not the whole argument, so the
     // parameter annotation cannot be matched against the subject's type.
@@ -162,8 +239,117 @@ pub(crate) fn predicate_target_of_value(
         namespace_prefix: signature.namespace_prefix.clone(),
         parameter_index: 0,
         signature,
+        explicit_type_arguments: Vec::new(),
+        outer_type_arguments: Vec::new(),
     };
     resolve_predicate_type_in_declaring_scope(&guard, &crate::infer::TypeParameterSubstitution::new(), ctx)
+}
+
+/// Binds a generic predicate's type parameters from the type arguments written
+/// at the call, resolved in the call site's scope. A parameter the call leaves
+/// out takes its default, and a written argument surge cannot resolve binds
+/// the degradation sentinel and marks the parameter degraded, so the filled
+/// predicate is treated as degraded rather than narrowed to.
+fn explicit_predicate_type_argument_substitution(
+    guard: &PredicateGuardInfo,
+    ctx: &mut CheckerContext,
+) -> crate::infer::TypeParameterSubstitution {
+    let mut substitution = seeded_predicate_substitution(guard);
+    let scope = crate::infer::types::merged_type_parameter_substitution(ctx, &substitution);
+    for (type_parameter, argument) in guard
+        .signature
+        .type_parameters
+        .iter()
+        .zip(guard.explicit_type_arguments.iter())
+    {
+        let resolved = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+            crate::infer::types::resolve_parsed_type(
+                argument.clone(),
+                ctx,
+                &mut Vec::new(),
+                &scope,
+            )
+        });
+        let degraded = resolved.had_error();
+        let ty = resolved.into_ty();
+        let degraded = degraded || matches!(ty, Type::Unknown | Type::TypeParameter(_));
+        substitution.insert(type_parameter.name.clone(), if degraded { Type::Unknown } else { ty });
+        if degraded {
+            substitution.mark_degraded(&type_parameter.name);
+        }
+    }
+    for type_parameter in guard
+        .signature
+        .type_parameters
+        .iter()
+        .skip(guard.explicit_type_arguments.len())
+    {
+        match &type_parameter.default_type {
+            Some(default_type) => {
+                let resolved = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                    crate::infer::types::resolve_parsed_type(
+                        default_type.clone(),
+                        ctx,
+                        &mut Vec::new(),
+                        &substitution,
+                    )
+                });
+                let degraded = resolved.had_error();
+                let ty = resolved.into_ty();
+                substitution.insert(type_parameter.name.clone(), if degraded { Type::Unknown } else { ty });
+                if degraded {
+                    substitution.mark_degraded(&type_parameter.name);
+                }
+            }
+            None => {
+                substitution.insert(type_parameter.name.clone(), Type::Unknown);
+                substitution.mark_degraded(&type_parameter.name);
+            }
+        }
+    }
+    substitution
+}
+
+/// What a predicate guard proves at its site.
+pub(super) enum PredicateTarget {
+    Resolved(Type),
+    /// The target could not be modelled — a degraded resolution or a type
+    /// argument surge could not reconstruct. tsc narrows the subject to a type
+    /// surge does not have, so the holding branch must not keep reasoning from
+    /// the declared type: it reads the subject as the degradation sentinel.
+    Degraded,
+}
+
+/// [`resolve_predicate_guard_type`], but keeping apart a target that degraded
+/// from a guard that cannot be evaluated at all (no subject type, unbound
+/// generic), so a caller can open the subject in the holding branch.
+pub(super) fn resolve_predicate_guard_target(
+    guard: &PredicateGuardInfo,
+    subject_ty: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<PredicateTarget> {
+    let substitution = predicate_type_argument_substitution(guard, subject_ty, symbols, ctx)?;
+    let explicit_degraded = guard
+        .signature
+        .type_parameters
+        .iter()
+        .any(|type_parameter| substitution.is_degraded(&type_parameter.name));
+    if explicit_degraded {
+        return Some(PredicateTarget::Degraded);
+    }
+    let has_explicit = !guard.explicit_type_arguments.is_empty();
+    match resolve_predicate_type_in_declaring_scope(guard, &substitution, ctx) {
+        Some(ty) => Some(PredicateTarget::Resolved(ty)),
+        None if has_explicit => Some(PredicateTarget::Degraded),
+        None => None,
+    }
+}
+
+/// The narrowed subject for a degraded target: the holding branch opens it,
+/// the other branch keeps it.
+pub(super) fn degraded_predicate_subject(branch_is_true: bool) -> Option<Type> {
+    branch_is_true.then_some(Type::Unknown)
 }
 
 /// Resolves a predicate guard's target type under the predicate's declaring
@@ -408,10 +594,8 @@ pub(super) fn narrow_predicate_call_in_scope(
     branch_is_true: bool,
     ctx: &mut CheckerContext,
 ) -> bool {
-    let Some(guard) = parse_type_predicate_condition(condition, &mut |name| {
-        scopes
-            .resolve(name)
-            .and_then(|symbol| symbol.function_signature.clone())
+    let Some(guard) = parse_type_predicate_condition(condition, &mut |callee| {
+        predicate_callee_signature(callee, |name| scopes.resolve(name), scopes.visible_symbols(), ctx)
     }) else {
         return false;
     };
@@ -421,14 +605,23 @@ pub(super) fn narrow_predicate_call_in_scope(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let Some(predicate_ty) =
-        resolve_predicate_guard_type(&guard, Some(&subject_ty), scopes.visible_symbols(), ctx)
-    else {
-        return true;
+    let narrowed = match resolve_predicate_guard_target(
+        &guard,
+        Some(&subject_ty),
+        scopes.visible_symbols(),
+        ctx,
+    ) {
+        Some(PredicateTarget::Resolved(predicate_ty)) => {
+            with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
+            })
+        }
+        Some(PredicateTarget::Degraded) if guard.path.is_empty() => {
+            degraded_predicate_subject(branch_is_true)
+        }
+        _ => None,
     };
-    let Some(narrowed) = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
-    }) else {
+    let Some(narrowed) = narrowed else {
         return true;
     };
     let _ = scopes.insert_current_narrowed(
@@ -452,24 +645,73 @@ pub(crate) fn narrow_assertion_call_in_scope(
     scopes: &mut ScopeStack,
     ctx: &mut CheckerContext,
 ) {
-    let ParsedExpression::Call {
-        callee_name,
-        type_arguments,
-        arguments,
-        ..
-    } = expression
-    else {
-        return;
+    // A value declared with a callable interface type (`declare const assert:
+    // Chai.Assert`) carries no collected signature of its own; the written call
+    // signature is read off the declaration instead. A static assertion
+    // (`ZodError.assert(err)`) is a member call and reads its signature off
+    // the receiver's type the way a member predicate guard does.
+    let (found, type_arguments, arguments) = match expression {
+        ParsedExpression::Call {
+            callee_name,
+            type_arguments,
+            arguments,
+            ..
+        } => {
+            let Some(found) = predicate_callee_signature(
+                PredicateCallee::Name(callee_name),
+                |name| scopes.resolve(name),
+                scopes.visible_symbols(),
+                ctx,
+            ) else {
+                return;
+            };
+            (found, type_arguments, arguments)
+        }
+        ParsedExpression::PropertyCall {
+            object,
+            property_name,
+            type_arguments,
+            arguments,
+            ..
+        } => {
+            let qualified = if let ParsedExpression::Identifier { name, .. } = object.as_ref() {
+                predicate_callee_signature(
+                    PredicateCallee::Name(&format!("{name}.{property_name}")),
+                    |name| scopes.resolve(name),
+                    scopes.visible_symbols(),
+                    ctx,
+                )
+            } else {
+                None
+            };
+            let found = match qualified {
+                Some(found) => found,
+                None => {
+                    let Some(found) = predicate_callee_signature(
+                        PredicateCallee::Member {
+                            object,
+                            property: property_name,
+                        },
+                        |name| scopes.resolve(name),
+                        scopes.visible_symbols(),
+                        ctx,
+                    ) else {
+                        return;
+                    };
+                    found
+                }
+            };
+            (found, type_arguments, arguments)
+        }
+        _ => return,
     };
     if !type_arguments.is_empty() {
         return;
     }
-    let Some(signature) = scopes
-        .resolve(callee_name)
-        .and_then(|symbol| symbol.function_signature.clone())
-    else {
-        return;
-    };
+    let PredicateSignature {
+        signature,
+        outer_type_arguments,
+    } = found;
     // A generic assertion needs its `T` bound at the call site, which this path
     // has no inference for; leaving it alone keeps the declared type.
     if !signature.type_parameters.is_empty() {
@@ -493,6 +735,11 @@ pub(crate) fn narrow_assertion_call_in_scope(
         return;
     };
     let Some((subject, path)) = reference_path(&argument.expression) else {
+        // `asserts condition` over an arbitrary expression holds from the
+        // statement on, exactly as the true branch of `if (condition)` does.
+        if predicate.ty.is_none() {
+            narrow_discriminant_in_scope(&argument.expression, scopes, true, ctx);
+        }
         return;
     };
     let Some(symbol) = scopes.resolve(&subject) else {
@@ -504,7 +751,9 @@ pub(crate) fn narrow_assertion_call_in_scope(
 
     // `asserts x` with no target proves only that `x` is truthy.
     let Some(predicate_type) = predicate.ty.clone() else {
-        if path.is_empty() {
+        if !path.is_empty() {
+            narrow_discriminant_in_scope(&argument.expression, scopes, true, ctx);
+        } else {
             let narrowed = surge_ts_types::remove_nullish(&subject_ty);
             if narrowed != subject_ty {
                 let _ = scopes.insert_current_narrowed(
@@ -520,11 +769,15 @@ pub(crate) fn narrow_assertion_call_in_scope(
         }
         return;
     };
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    for (name, ty) in &outer_type_arguments {
+        substitution.insert(name.clone(), ty.clone());
+    }
     let Some(target) = resolve_predicate_type_under(
         predicate_type,
         signature.declaring_file.as_deref(),
         signature.namespace_prefix.as_deref(),
-        &crate::infer::TypeParameterSubstitution::new(),
+        &substitution,
         ctx,
     ) else {
         return;
@@ -554,28 +807,32 @@ pub(super) fn collect_predicate_guard_subjects(
     condition: &ParsedExpression,
     scopes: &ScopeStack,
     names: &mut Vec<String>,
+    ctx: &mut CheckerContext,
 ) {
     match condition {
         ParsedExpression::Unary {
             operator: ParsedUnaryOperator::Not,
             operand,
             ..
-        } => collect_predicate_guard_subjects(operand, scopes, names),
+        } => collect_predicate_guard_subjects(operand, scopes, names, ctx),
         ParsedExpression::Logical {
             left,
             operator: ParsedLogicalOperator::Or | ParsedLogicalOperator::And,
             right,
             ..
         } => {
-            collect_predicate_guard_subjects(left, scopes, names);
-            collect_predicate_guard_subjects(right, scopes, names);
+            collect_predicate_guard_subjects(left, scopes, names, ctx);
+            collect_predicate_guard_subjects(right, scopes, names, ctx);
         }
         _ => {
-            if let Some(guard) = parse_type_predicate_condition(condition, &mut |name| {
-                scopes
-                    .resolve(name)
-                    .and_then(|symbol| symbol.function_signature.clone())
-            }) && !names.iter().any(|existing| existing == &guard.subject)
+            if let Some(guard) = parse_type_predicate_condition(condition, &mut |callee| {
+                predicate_callee_signature(callee, |name| scopes.resolve(name), scopes.visible_symbols(), ctx)
+            })
+                // A predicate over a member (`isX(decl.id)`) proves something
+                // about that member, not that the base is non-nullish; only a
+                // guard over the identifier itself joins the operand set.
+                && guard.path.is_empty()
+                && !names.iter().any(|existing| existing == &guard.subject)
             {
                 names.push(guard.subject);
             }
@@ -667,19 +924,24 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
         return Some(narrowed);
     }
 
-    let guard = parse_type_predicate_condition(condition, &mut |name| {
-        symbols
-            .get(name)
-            .and_then(|symbol| symbol.function_signature.clone())
+    let guard = parse_type_predicate_condition(condition, &mut |callee| {
+        predicate_callee_signature(callee, |name| symbols.get(name), symbols, ctx)
     })?;
     let symbol = symbols.get(&guard.subject)?;
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let predicate_ty = resolve_predicate_guard_type(&guard, Some(&subject_ty), symbols, ctx)?;
-    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
-    })?;
+    let narrowed = match resolve_predicate_guard_target(&guard, Some(&subject_ty), symbols, ctx)? {
+        PredicateTarget::Resolved(predicate_ty) => {
+            with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
+            })?
+        }
+        PredicateTarget::Degraded if guard.path.is_empty() => {
+            degraded_predicate_subject(branch_is_true)?
+        }
+        PredicateTarget::Degraded => return None,
+    };
     if narrowed == subject_ty {
         return None;
     }
@@ -734,10 +996,8 @@ pub(super) fn narrow_predicate_reference_guards_in_scope(
         return;
     }
 
-    let Some(guard) = parse_type_predicate_condition(condition, &mut |name| {
-        scopes
-            .resolve(name)
-            .and_then(|symbol| symbol.function_signature.clone())
+    let Some(guard) = parse_type_predicate_condition(condition, &mut |callee| {
+        predicate_callee_signature(callee, |name| scopes.resolve(name), scopes.visible_symbols(), ctx)
     }) else {
         return;
     };

@@ -235,6 +235,22 @@ pub(crate) fn resolve_conditional_type(
         };
     }
 
+    // A type parameter bound to `any` on the extends side (`Inferrable extends
+    // TInferrable`, called as `hook<typeof instance>()` where surge could not
+    // model `instance`) would make every check type pass the constraint and
+    // pick the true branch — the `TypeError<…>` arm such signatures reserve for
+    // a *missing* argument. surge's `any` there is a modelling gap far more
+    // often than a written `any`, so the branch is indeterminate.
+    if matches!(resolved_extends.ty, Type::Any)
+        && matches!(extends_pattern, ParsedType::Named(ref named)
+            if named.type_arguments.is_empty() && substitution.get(&named.name).is_some())
+    {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    }
+
     // An `any` check type makes the branch indeterminate: tsc yields the union of
     // both branches, which with `any` in play collapses to an open `any` rather
     // than deterministically picking the true branch. Degrade to `any` so the
@@ -523,10 +539,9 @@ fn bind_signature_infer_captures(
         .filter(|parameter| !parameter.is_this);
     for (index, pattern_parameter) in pattern_parameters.enumerate() {
         if pattern_parameter.rest {
-            let remaining = &check_parameters[index.min(check_parameters.len())..];
             bind_infer_captures(
                 &pattern_parameter.ty,
-                &remaining_parameters_type(remaining, check_function.is_variadic()),
+                &remaining_parameters_type(check_function, index),
                 substitution,
                 ctx,
                 resolving,
@@ -563,9 +578,16 @@ fn bind_signature_infer_captures(
 /// capture itself rather than a one-element tuple around it (`Parameters<(...a:
 /// any[]) => R>` is `any[]`). Fixed parameters ahead of a rest have no variadic
 /// tuple to land in here; they widen into the element union instead.
-fn remaining_parameters_type(remaining: &[Type], check_is_variadic: bool) -> Type {
-    if !check_is_variadic {
-        return Type::Tuple(remaining.to_vec());
+fn remaining_parameters_type(check_function: &surge_ts_types::FunctionType, start: usize) -> Type {
+    let parameters = check_function.parameters();
+    let start = start.min(parameters.len());
+    let remaining = &parameters[start..];
+    if !check_function.is_variadic() {
+        return crate::infer::types::utility::optional_parameter_tuple(
+            remaining,
+            check_function.required_parameter_count().saturating_sub(start),
+            false,
+        );
     }
     match remaining {
         [] => Type::Tuple(Vec::new()),

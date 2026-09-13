@@ -105,8 +105,12 @@ pub(crate) fn check_function_return_statement(
             ctx,
         );
         ctx.degraded_expected_type_depth -= 1;
-        if let InferredExpression::Known(source_type) = inferred {
-            ctx.note_contextual_return_type(&source_type);
+        match inferred {
+            InferredExpression::Known(source_type) => ctx.note_contextual_return_type(&source_type),
+            // A value surge could not type still counts as returned: tsc knows
+            // its type and decides TS7030 from it, so the sentinel must suppress
+            // the report the same way a known `unknown` result does.
+            _ => ctx.note_contextual_return_type(&Type::Unknown),
         }
         return;
     };
@@ -189,11 +193,16 @@ pub(crate) fn check_function_return_statement(
         InferredExpression::UnresolvedIdentifier { .. }
         | InferredExpression::MissingProperty { .. }
         | InferredExpression::Unknown => {
+            let mut noted = false;
             if ctx.in_contextual_return_body()
                 && let InferredExpression::Known(source_type) =
                     crate::infer::infer_expression(expression, symbols, ctx)
             {
                 ctx.note_contextual_return_type(&source_type);
+                noted = true;
+            }
+            if !noted {
+                ctx.note_contextual_return_type(&Type::Unknown);
             }
         }
     }

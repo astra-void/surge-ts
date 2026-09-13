@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use surge_ts_syntax::ParsedType;
-use surge_ts_types::fx::FxHashMap;
+use surge_ts_types::fx::{FxHashMap, FxHashSet};
 use surge_ts_types::{FunctionType, ProgramTypeStore, Type};
 
 use crate::infer::types::LazyMemberTemplateTable;
@@ -202,6 +202,8 @@ pub(super) struct DeclarationEnvironmentData {
         Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
     pub(super) lazy_member_annotation_templates: Arc<Mutex<LazyMemberTemplateTable>>,
     pub(super) ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
+    pub(super) import_type_namespaces: Arc<Mutex<FxHashMap<(Arc<str>, String), Type>>>,
+    pub(super) import_type_globals: Arc<Mutex<FxHashSet<String>>>,
     pub(super) ambient_file_type_scopes: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     pub(super) module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,
     pub(super) ambient_global_symbols: SymbolTable,
@@ -483,6 +485,8 @@ impl DeclarationEnvironmentData {
                 .physical_interface_overload_instantiations
                 .clone(),
             ambient_modules: ctx.ambient_modules.clone(),
+            import_type_namespaces: ctx.import_type_namespaces.clone(),
+            import_type_globals: ctx.import_type_globals.clone(),
             ambient_file_type_scopes: ctx.ambient_file_type_scopes.clone(),
             module_augmentations: ctx.module_augmentations.clone(),
             ambient_global_symbols: ctx.ambient_global_symbols.clone_for_environment_capture(),

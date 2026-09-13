@@ -89,10 +89,64 @@ pub(crate) fn resolve_module_imports(
         );
     }
 
+    register_import_type_namespaces(
+        parsed_file,
+        program_files,
+        module_export_tables,
+        module_resolution_scopes,
+        ctx,
+    );
+
     ModuleImportBindings {
         type_declarations: Arc::new(type_declarations),
         symbols,
         namespace_alias_layers,
+    }
+}
+
+/// `typeof import("spec")` in this file's type positions reads the module
+/// namespace value exactly as `import * as ns` would; the loader already
+/// resolved these specifiers, so the namespace shape is registered here and
+/// read back when the query resolves under this file's name. A script file
+/// (no import/export of its own) can still write the query, so this runs for
+/// every file, not only the ones whose imports are bound.
+pub(crate) fn register_import_type_namespaces(
+    parsed_file: &ParsedProgramFile,
+    program_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+    ctx: &mut CheckerContext,
+) {
+    let mut registered: Vec<&str> = Vec::new();
+    for specifier in &parsed_file.import_call_specifiers {
+        if registered.iter().any(|seen| *seen == specifier.as_str()) {
+            continue;
+        }
+        registered.push(specifier);
+        let resolved = try_resolve_module(
+            specifier,
+            ctx,
+            program_files,
+            module_export_tables,
+            module_resolution_scopes,
+        );
+        let Some((export_table, _scope, resolved_index)) = resolved else {
+            continue;
+        };
+        let namespace_type = namespace_export_object_type(&export_table);
+        let namespace_type = match resolved_index.and_then(|index| program_files.get(index)) {
+            Some(resolved_file) => {
+                tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
+            }
+            None => namespace_type,
+        };
+        let canonical = crate::paths::canonicalize_if_exists_arc(std::path::Path::new(
+            &parsed_file.file_name,
+        ));
+        if *canonical != *parsed_file.file_name {
+            ctx.register_import_type_namespace(&canonical, specifier, namespace_type.clone());
+        }
+        ctx.register_import_type_namespace(&parsed_file.file_name, specifier, namespace_type);
     }
 }
 

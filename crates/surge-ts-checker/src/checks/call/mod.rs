@@ -66,6 +66,33 @@ pub(crate) fn check_call_like(
 /// `check_call_like` with the call's contextual type, so a type parameter that
 /// occurs only in the return type (`const c: Ctor<MyZ> = make("x", (inst) => …)`)
 /// can be inferred from it instead of degrading every callback parameter it types.
+/// The callee binding degraded to `unknown`, but the arguments are still code:
+/// a missing member or an unresolved name inside a callback body is reported by
+/// tsc whatever the callee is. Implicit-any stays gated the way the
+/// property-call path gates it: a binding that is `any` because its import
+/// failed has no contextual type in tsc either, so its callbacks report their
+/// parameters; a builder chain surge could not model does not.
+fn evaluate_arguments_under_degraded_callee(
+    callee_name: &str,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let genuine = symbols
+        .get(callee_name)
+        .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::ErrorImport));
+    let saved_depth = ctx.degraded_expected_type_depth;
+    if genuine {
+        ctx.degraded_expected_type_depth = 0;
+    } else {
+        ctx.degraded_expected_type_depth += 1;
+    }
+    for argument in arguments {
+        let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+    }
+    ctx.degraded_expected_type_depth = saved_depth;
+}
+
 pub(crate) fn check_call_like_with_expected_type(
     callee_name: &str,
     callee_span: Option<SyntaxTextSpan>,
@@ -102,6 +129,7 @@ pub(crate) fn check_call_like_with_expected_type(
     };
 
     if symbol.ty.is_unknown() {
+        evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
         return None;
     }
 
@@ -123,6 +151,7 @@ pub(crate) fn check_call_like_with_expected_type(
     let callee_ty =
         with_dts_expansion_reason(DtsExpansionReason::CallResolution, || symbol.ty.peeled());
     if callee_ty.is_unknown() {
+        evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
         return None;
     }
 
@@ -182,9 +211,13 @@ pub(crate) fn check_call_like_with_expected_type(
         Type::Object(object_type) if object_type.call_signature().is_some() => {
             let call_signature = object_type.call_signature().unwrap();
             with_type_copy_reason(TypeCopyReason::CallResolution, || {
+                // A function merged with its namespace (`drizzle` + `namespace
+                // drizzle { mock }`) is an object carrying the call signature;
+                // its collected generic signature still drives inference.
                 let call_signature = instantiate_function_type(
                     call_signature,
-                    written_signature.as_ref().map(|written| &*written.signature),
+                    generic_signature
+                        .or(written_signature.as_ref().map(|written| &*written.signature)),
                     outer_type_arguments,
                     type_arguments,
                     callee_span,
@@ -247,6 +280,60 @@ pub(crate) struct WrittenCallSignature {
 /// current lookup.
 /// A/B switch for the written-call-signature recovery, so one binary measures
 /// both sides on one tree. Measurement only; the recovery is on by default.
+/// The written signature of a generic function type, attached to the resolved
+/// handle at resolution time so a call through a member can re-instantiate it
+/// (see `resolve_function_type`). `outer_type_arguments` are the bindings the
+/// body was resolved under — the enclosing interface's own parameters — so a
+/// signature that names them (`filter<S extends N>`) still resolves at the call.
+pub(crate) struct DeclaredMemberSignature {
+    pub(crate) signature: std::sync::Arc<crate::symbols::FunctionSignatureInfo>,
+    pub(crate) outer_type_arguments: Vec<(String, Type)>,
+}
+
+impl DeclaredMemberSignature {
+    /// `None` when an enclosing binding is still open (the body was resolved
+    /// for the uninstantiated declaration, or under a placeholder): a call
+    /// re-instantiating such a signature would read `Partial<C1>` with `C1`
+    /// bare and report members tsc binds through the enclosing generic.
+    pub(crate) fn capture(
+        function_type: &surge_ts_syntax::ParsedFunctionType,
+        substitution: &crate::infer::TypeParameterSubstitution,
+        ctx: &CheckerContext,
+    ) -> Option<Self> {
+        let own: Vec<&str> = function_type
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect();
+        let merged = crate::infer::types::merged_type_parameter_substitution(ctx, substitution);
+        let mut outer_type_arguments = Vec::new();
+        for (name, ty) in merged.iter() {
+            if own.contains(&name.as_ref()) {
+                continue;
+            }
+            if merged.is_placeholder(name)
+                || matches!(ty, Type::Unknown | Type::TypeParameter(_))
+            {
+                return None;
+            }
+            outer_type_arguments.push((name.to_string(), ty.clone()));
+        }
+        let mut signature = (*crate::checks::function::function_type_signature_info(
+            function_type,
+            &ctx.file_name,
+        ))
+        .clone();
+        signature.namespace_prefix = ctx
+            .namespace_member_prefix_stack
+            .last()
+            .map(|prefix| std::sync::Arc::from(prefix.as_str()));
+        Some(Self {
+            signature: std::sync::Arc::new(signature),
+            outer_type_arguments,
+        })
+    }
+}
+
 pub(crate) fn written_call_signature_recovery_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("SURGE_WRITTEN_CALL_SIGNATURE").as_deref() != Ok("0"))
@@ -256,7 +343,35 @@ pub(crate) fn interface_call_signature_info(
     declared: &Type,
     ctx: &CheckerContext,
 ) -> Option<WrittenCallSignature> {
+    written_call_signature_info(declared, ctx, true)
+}
 
+/// [`interface_call_signature_info`] without the generic requirement when
+/// `require_generic` is false: a predicate guard reads the written signature of
+/// a non-generic callable declaration too (`declare const assert: Chai.Assert`
+/// declares `asserts` on its call signature, not on a function).
+pub(crate) fn written_call_signature_info(
+    declared: &Type,
+    ctx: &CheckerContext,
+    require_generic: bool,
+) -> Option<WrittenCallSignature> {
+    // A deferred value annotation (`let assert: typeof import("vitest")["assert"]`)
+    // is a reference to the *annotation*, not to a declaration; what it resolves
+    // to is the declared type this lookup wants.
+    let mut declared = std::borrow::Cow::Borrowed(declared);
+    for _ in 0..4 {
+        let Type::Reference(reference) = declared.as_ref() else {
+            break;
+        };
+        if !reference.id.contains("\0value-annotation\0") {
+            break;
+        }
+        declared = std::borrow::Cow::Owned(reference.resolve());
+    }
+    let declared = declared.as_ref();
+    if matches!(declared, Type::Reference(reference) if reference.id.contains("\0value-annotation\0")) {
+        return None;
+    }
     let legacy = !written_call_signature_recovery_enabled();
     let mut outer_type_arguments: Vec<Type> = Vec::new();
     let info = match declared {
@@ -268,11 +383,13 @@ pub(crate) fn interface_call_signature_info(
             let id = reference.id.as_ref();
             let separator = id.rfind('\u{0}')?;
             let (declaring_file, declaration_name) = (&id[..separator], &id[separator + 1..]);
-            match ctx.module_scope_by_file.get(declaring_file) {
-                Some(scope) => scope.get(declaration_name),
-                None => ctx.lookup_type_declaration(declaration_name),
-            }
-            .filter(|info| declaration_file_name(info) == declaring_file)
+            // A global namespace member (`Chai.Assert`) is keyed by its
+            // qualified name in the global table, not in its file's scope.
+            ctx.module_scope_by_file
+                .get(declaring_file)
+                .and_then(|scope| scope.get(declaration_name))
+                .or_else(|| ctx.lookup_type_declaration(declaration_name))
+                .filter(|info| declaration_file_name(info) == declaring_file)
         }
         // An import binding carries the resolved object, named after its
         // interface; the declaration is whichever module scope declares that
@@ -293,7 +410,7 @@ pub(crate) fn interface_call_signature_info(
                     .find(|info| {
                         matches!(info, crate::symbols::TypeDeclarationInfo::Interface(info)
                             if info.body.call_signature.as_ref()
-                                .is_some_and(|signature| !signature.type_parameters.is_empty()))
+                                .is_some_and(|signature| !require_generic || !signature.type_parameters.is_empty()))
                     })
             })
         }
@@ -328,7 +445,7 @@ pub(crate) fn interface_call_signature_info(
             )
         }
     };
-    if parsed.type_parameters.is_empty() {
+    if require_generic && parsed.type_parameters.is_empty() {
         return None;
     }
     // A declaration's own type parameters are bound by the reference that named
@@ -734,6 +851,20 @@ fn parsed_type_mentions_any(ty: &ParsedType, names: &[&str]) -> bool {
                 .iter()
                 .any(|member| parsed_type_mentions_any(member, names))
         }
+        // The `object` keyword lowers to an empty object type; a written object
+        // type mentions a name only through its members.
+        ParsedType::Object(object) => {
+            object.call_signature.is_some()
+                || object.construct_signature.is_some()
+                || object
+                    .string_index_type
+                    .as_ref()
+                    .is_some_and(|index| parsed_type_mentions_any(index, names))
+                || object
+                    .properties
+                    .iter()
+                    .any(|property| parsed_type_mentions_any(&property.ty, names))
+        }
         ParsedType::String
         | ParsedType::Number
         | ParsedType::Boolean
@@ -752,7 +883,7 @@ fn parsed_type_mentions_any(ty: &ParsedType, names: &[&str]) -> bool {
     }
 }
 
-fn generic_class_instance_type(
+pub(crate) fn generic_class_instance_type(
     callee: &ParsedExpression,
     type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
@@ -794,7 +925,13 @@ fn generic_class_instance_type(
         .then(|| infer_generic_class_type_arguments(name, &declared, arguments, symbols, ctx))
         .flatten()
         .unwrap_or_default();
-    let arguments: Vec<ParsedType> = if synthesize {
+    let use_declared_defaults = synthesize && declared.iter().all(|parameter| {
+        parameter.default_type.is_some()
+            && (inferred.get(&parameter.name).is_none() || inferred.is_placeholder(&parameter.name))
+    });
+    let arguments: Vec<ParsedType> = if use_declared_defaults {
+        Vec::new()
+    } else if synthesize {
         let names: Vec<&str> = declared.iter().map(|p| p.name.as_str()).collect();
         let mut synthesized = Vec::with_capacity(declared.len());
         for parameter in declared.iter() {
@@ -1149,9 +1286,15 @@ pub(crate) fn check_function_type_call(
 
         match inferred_argument {
             InferredExpression::Known(argument_type) => {
-                if argument_type.is_unknown() || mismatch_reported {
+                // The sentinel and an open type parameter say nothing about
+                // the source; the `unknown` keyword does — tsc rejects it for
+                // every parameter that is not `unknown`/`any`.
+                if matches!(argument_type, Type::Unknown | Type::TypeParameter(_))
+                    || mismatch_reported
+                {
                     continue;
                 }
+                let genuine_unknown_argument = matches!(argument_type, Type::GenuineUnknown);
 
                 // A `never` parameter is an exhaustiveness assertion
                 // (`util.assertNever(check)`): reporting it requires having
@@ -1160,7 +1303,8 @@ pub(crate) fn check_function_type_call(
                 // would read as a false positive.
                 if !matches!(parameter_type, Type::Never)
                     && !type_contains_unknown(&parameter_type)
-                    && !type_contains_unknown(&argument_type)
+                    && (genuine_unknown_argument || !type_contains_unknown(&argument_type))
+                    && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {
                     let argument_type_name = source_display_name(&argument_type, &parameter_type);
@@ -1253,6 +1397,7 @@ fn substituted_construct_signature(
             .iter()
             .map(|parameter| parameter.name.clone())
             .collect(),
+        rest: parsed.parameters.last().is_some_and(|parameter| parameter.rest),
         return_type: Some((*parsed.return_type).clone()),
         declaring_file: None,
         namespace_prefix: None,
@@ -1322,7 +1467,23 @@ pub(crate) fn type_argument_is_unresolved(ty: &Type) -> bool {
     }
 }
 
-fn type_contains_unknown(ty: &Type) -> bool {
+/// `Mock<T>` with `T` bare, `FetchQueryOptions<TQueryFnData>` inside a generic
+/// body: an instantiation over an open argument is not settled enough to reject
+/// on either side of a check. Only the type itself is asked — a generic
+/// function *value* whose parameter names its own `T` is still a concrete
+/// value (`const n: number = Controller` is a real mismatch).
+pub(crate) fn is_open_instantiation(ty: &Type) -> bool {
+    fn argument_is_open(ty: &Type) -> bool {
+        match ty {
+            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => true,
+            Type::Reference(reference) => reference.arguments.iter().any(argument_is_open),
+            _ => false,
+        }
+    }
+    matches!(ty, Type::Reference(reference) if reference.arguments.iter().any(argument_is_open))
+}
+
+pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
         Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => true,
         Type::Array(element) => type_contains_unknown(element),

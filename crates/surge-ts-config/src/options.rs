@@ -33,6 +33,11 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
+        name: "useUnknownInCatchVariables",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
         name: "target",
         value_kind: TsConfigOptionValueKind::String,
         support: TsConfigOptionSupport::Supported,

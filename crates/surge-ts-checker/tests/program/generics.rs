@@ -1061,6 +1061,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
     let diagnostics = source_with_options(
         "function identity<T>(value): T { return value; }",
         CheckerOptions {
+            use_unknown_in_catch_variables: false,
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
             resolved_modules: Default::default(),

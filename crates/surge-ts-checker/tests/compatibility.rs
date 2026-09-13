@@ -178,6 +178,7 @@ fn smoke_checker_options(no_implicit_any: bool, use_native_profile: bool) -> Che
         resolved_modules_by_importer: Default::default(),
         stub_external_modules: false,
         no_implicit_any,
+        use_unknown_in_catch_variables: false,
         no_lib: false,
         diagnostic_profile: if use_native_profile {
             DiagnosticProfile::Native

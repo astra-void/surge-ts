@@ -437,6 +437,8 @@ pub(crate) fn collect_exportable_value_symbols(
         .clone_with_reason(TypeCopyReason::ModuleExport);
     shadow_ctx.module_scope_by_file = ctx.module_scope_by_file.clone();
     shadow_ctx.module_local_values_by_file = ctx.module_local_values_by_file.clone();
+    shadow_ctx.import_type_namespaces = ctx.import_type_namespaces.clone();
+    shadow_ctx.import_type_globals = ctx.import_type_globals.clone();
     // The file's import bindings back `typeof <importedValue>` in annotations
     // (radix's `ComponentPropsWithoutRef<typeof Primitive.button>`); they are a
     // resolution fallback only, never inserted into the exportable set.
@@ -635,6 +637,33 @@ fn defer_value_annotation(annotation: &surge_ts_syntax::ParsedType) -> bool {
     }
 }
 
+/// Whether an annotation reads a module through `typeof import("spec")`. The
+/// namespace behind it is registered when the file's imports are bound, which
+/// runs after global collection, so such an annotation must be deferred.
+pub(crate) fn annotation_contains_import_type_query(annotation: &surge_ts_syntax::ParsedType) -> bool {
+    use surge_ts_syntax::ParsedType;
+    match annotation {
+        ParsedType::TypeOf(type_of) => type_of.import_specifier.is_some(),
+        ParsedType::Array(element) | ParsedType::KeyOf(element) => {
+            annotation_contains_import_type_query(element)
+        }
+        ParsedType::Tuple(elements)
+        | ParsedType::Union(elements)
+        | ParsedType::Intersection(elements) => {
+            elements.iter().any(annotation_contains_import_type_query)
+        }
+        ParsedType::Named(named) => named
+            .type_arguments
+            .iter()
+            .any(annotation_contains_import_type_query),
+        ParsedType::IndexedAccess(indexed) => {
+            annotation_contains_import_type_query(&indexed.object_type)
+                || annotation_contains_import_type_query(&indexed.index_type)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn annotation_contains_typeof(annotation: &surge_ts_syntax::ParsedType) -> bool {
     use surge_ts_syntax::ParsedType;
     match annotation {
@@ -719,7 +748,17 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                 // TS2339 on `path.join`) with no offsetting win, so the lazy
                 // annotation path depends on seeing the global. Tracked
                 // separately from the same-name clobber the other guards fix.
-                if exportable_values.get_shared(&variable.name).is_none() {
+                // An ambient global declared as `typeof import("m")[name]` is
+                // derived from this very export; letting it shadow the module's
+                // own declaration would bind the export to the global and the
+                // global to itself.
+                let shadowed_by_import_type_global = exportable_values
+                    .get_own_shared(&variable.name)
+                    .is_none()
+                    && ctx.is_import_type_global(&variable.name);
+                if exportable_values.get_shared(&variable.name).is_none()
+                    || shadowed_by_import_type_global
+                {
                     let kind = match variable.kind {
                         surge_ts_syntax::ParsedVariableKind::Var => SymbolKind::Var,
                         surge_ts_syntax::ParsedVariableKind::Let => SymbolKind::Let,
@@ -1179,6 +1218,26 @@ fn resolve_namespace_value_annotations(
                 let Some(annotation) = variable.declared_type.clone() else {
                     continue;
                 };
+                // A library member's annotation names imports the collection
+                // scope does not hold (`Type` from "../types" in ast-types), so
+                // it is deferred the way a library variable's annotation is and
+                // maps on first read under the declaring file's environment.
+                if ctx.lazy_library_value_annotations && defer_value_annotation(&annotation) {
+                    let mut stack = ctx.namespace_member_prefix_stack.clone();
+                    stack.push(prefix.to_string());
+                    let ty = crate::infer::types::cache::make_lazy_value_annotation_reference_under(
+                        ctx,
+                        &format!("{prefix}.{}", variable.name),
+                        variable.name_span.map_or(0, |span| span.start),
+                        annotation,
+                        Some(Arc::from(stack)),
+                    );
+                    properties.insert(
+                        variable.name.as_str().into(),
+                        surge_ts_types::ObjectProperty::required(ty),
+                    );
+                    continue;
+                }
                 ctx.namespace_member_resolution_depth += 1;
                 ctx.namespace_member_prefix_stack.push(prefix.to_string());
                 let resolved = crate::infer::map_parsed_type(annotation, ctx);

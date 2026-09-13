@@ -23,6 +23,7 @@ pub struct LoadedTsConfig {
 pub struct NormalizedCompilerOptions {
     pub strict: bool,
     pub no_implicit_any: bool,
+    pub use_unknown_in_catch_variables: bool,
     /// `compilerOptions.noImplicitReturns`. Independent of `strict`; defaults off.
     pub no_implicit_returns: bool,
     /// `compilerOptions.noFallthroughCasesInSwitch`. Independent of `strict`; defaults off.
@@ -88,6 +89,7 @@ impl Default for NormalizedCompilerOptions {
         Self {
             strict: true,
             no_implicit_any: true,
+            use_unknown_in_catch_variables: true,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,

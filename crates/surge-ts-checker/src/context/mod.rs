@@ -349,6 +349,14 @@ pub(crate) struct CheckerContext {
     /// across environments the way the parsed AST is.
     pub(crate) lazy_member_annotation_templates: Arc<Mutex<LazyMemberTemplateTable>>,
     pub(crate) ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
+    /// Namespace value types behind `typeof import("spec")`, keyed by the
+    /// querying file and the specifier; registered when that file's imports
+    /// are bound, read when the query resolves under that file's name.
+    pub(crate) import_type_namespaces: Arc<Mutex<FxHashMap<(Arc<str>, String), Type>>>,
+    /// Ambient globals declared through `typeof import("spec")…`: they are
+    /// derived from a module's export, so that module's own declaration of the
+    /// same name must bind ahead of the global (see `collect_exportable_value_symbols_from_statement`).
+    pub(crate) import_type_globals: Arc<Mutex<FxHashSet<String>>>,
     /// Per-file resolution scopes for files whose declarations live in ambient
     /// `declare module "…"` blocks: the blocks' own type declarations plus
     /// their block-internal import bindings. Merged into `module_scope_by_file`
@@ -570,6 +578,8 @@ impl CheckerContext {
             physical_interface_overload_instantiations: Arc::new(Mutex::new(FxHashMap::default())),
             lazy_member_annotation_templates: Arc::new(Mutex::new(FxHashMap::default())),
             ambient_modules: Arc::new(FxHashMap::default()),
+            import_type_namespaces: Arc::new(Mutex::new(FxHashMap::default())),
+            import_type_globals: Arc::new(Mutex::new(FxHashSet::default())),
             ambient_file_type_scopes: Arc::new(FxHashMap::default()),
             module_augmentations: Arc::new(FxHashMap::default()),
             ambient_global_symbols: SymbolTable::new(),
@@ -700,6 +710,8 @@ impl CheckerContext {
                 .physical_interface_overload_instantiations
                 .clone(),
             ambient_modules: data.ambient_modules.clone(),
+            import_type_namespaces: data.import_type_namespaces.clone(),
+            import_type_globals: data.import_type_globals.clone(),
             ambient_file_type_scopes: data.ambient_file_type_scopes.clone(),
             module_augmentations: data.module_augmentations.clone(),
             ambient_global_symbols: data.ambient_global_symbols.clone(),
@@ -780,6 +792,9 @@ impl CheckerContext {
         if let Ok(mut cache) = self.resolved_named_types.lock() {
             cache.clear();
         }
+        if let Ok(mut namespaces) = self.import_type_namespaces.lock() {
+            namespaces.clear();
+        }
         if let Ok(mut cache) = self.program_resolved_generic_types.lock() {
             cache.clear();
         }
@@ -817,6 +832,41 @@ impl CheckerContext {
     /// member body. See [`Self::namespace_member_resolution_depth`].
     pub(crate) fn suppress_unknown_type_name(&self) -> bool {
         self.namespace_member_resolution_depth > 0
+    }
+
+    pub(crate) fn register_import_type_namespace(&self, file_name: &str, specifier: &str, ty: Type) {
+        if let Ok(mut namespaces) = self.import_type_namespaces.lock() {
+            namespaces.insert((Arc::from(file_name), specifier.to_string()), ty);
+        }
+    }
+
+    pub(crate) fn register_import_type_global(&self, name: &str) {
+        if let Ok(mut globals) = self.import_type_globals.lock() {
+            globals.insert(name.to_string());
+        }
+    }
+
+    pub(crate) fn is_import_type_global(&self, name: &str) -> bool {
+        self.import_type_globals
+            .lock()
+            .ok()
+            .is_some_and(|globals| globals.contains(name))
+    }
+
+    pub(crate) fn import_type_namespace(&self, file_name: &str, specifier: &str) -> Option<Type> {
+        self.import_type_namespaces
+            .lock()
+            .ok()
+            .and_then(|namespaces| namespaces.get(&(Arc::from(file_name), specifier.to_string())).cloned())
+    }
+
+    /// Whether an enclosing declaration currently binds `name` as a type
+    /// parameter; a `Type::TypeParameter` that none does is one that leaked
+    /// out of an instantiation.
+    pub(crate) fn type_parameter_in_scope(&self, name: &str) -> bool {
+        self.type_parameter_scopes
+            .iter()
+            .any(|scope| scope.contains_key(name))
     }
 
     pub(crate) fn push_type_parameter_scope(

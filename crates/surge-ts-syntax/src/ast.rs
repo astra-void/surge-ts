@@ -256,6 +256,10 @@ pub struct ParsedTypeOfType {
     /// Dotted member path following the base `name` for qualified queries such
     /// as `typeof NS.Root` (`members == ["Root"]`). Empty for a plain `typeof x`.
     pub members: Vec<String>,
+    /// `typeof import("spec")`: the module specifier the query reads the
+    /// namespace value of. `name` then carries the rendered `import("spec")`
+    /// and `members` the qualifier written after it.
+    pub import_specifier: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

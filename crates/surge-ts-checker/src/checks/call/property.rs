@@ -353,15 +353,14 @@ pub(crate) fn check_property_call_like(
                 let Some(property_type) = ty.get_property_access_type(property_name) else {
                     // A member whose reference peels to the sentinel is a shape
                     // surge could not reconstruct, not a type without the member.
-                    if ty.peeled().is_unknown() {
+                    if ty.peeled().is_unknown()
+                        || crate::checks::expr::carries_leaked_type_parameter(ty, ctx)
+                    {
                         return None;
                     }
                     if no_lib_array_member(ty, ctx) {
                         result_types.push(Type::Any);
                         continue;
-                    }
-                    if ty.peeled().is_unknown() {
-                        return None;
                     }
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone()),
@@ -447,7 +446,9 @@ pub(crate) fn check_property_call_like(
                 // See the matching guard in the property-access path: a nominal
                 // reference peeling to the sentinel is an unreconstructed shape,
                 // not a type without the member.
-                if object_ty.peeled().is_unknown() {
+                if object_ty.peeled().is_unknown()
+                    || crate::checks::expr::carries_leaked_type_parameter(&object_ty, ctx)
+                {
                     return None;
                 }
                 let diagnostic =
@@ -688,7 +689,9 @@ pub(crate) fn check_optional_property_call(
                 let Some(property_type) = ty.get_property_access_type(property_name) else {
                     // A member whose reference peels to the sentinel is a shape
                     // surge could not reconstruct, not a type without the member.
-                    if ty.peeled().is_unknown() {
+                    if ty.peeled().is_unknown()
+                        || crate::checks::expr::carries_leaked_type_parameter(ty, ctx)
+                    {
                         return None;
                     }
                     if no_lib_array_member(ty, ctx) {
@@ -782,6 +785,14 @@ pub(crate) fn check_optional_property_call(
                 if no_lib_array_member(&base_type, ctx) {
                     return Some(surge_ts_types::union_type(vec![Type::Any, Type::Undefined]));
                 }
+                // Same rule as the plain-call arms: a reference that peels to the
+                // sentinel is a shape surge could not reconstruct, not a type
+                // without the member.
+                if base_type.peeled().is_unknown()
+                    || crate::checks::expr::carries_leaked_type_parameter(&base_type, ctx)
+                {
+                    return None;
+                }
                 let diagnostic =
                     Diagnostic::ts2339(property_name, &base_type_name, ctx.file_name.clone());
                 ctx.push(diagnostic_with_syntax_span(
@@ -851,6 +862,38 @@ fn instantiate_declared_member_signature<'a>(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> std::borrow::Cow<'a, surge_ts_types::FunctionType> {
+    if let Some(member) = function_type
+        .declaration()
+        .and_then(|declaration| declaration.downcast_ref::<super::DeclaredMemberSignature>())
+    {
+        // A written signature that names something the capture did not bind
+        // (an enclosing parameter the body was resolved under by scope, not by
+        // substitution) reports it here as an unresolved name. That report is
+        // about the recovery, not the source: drop it and keep the resolved
+        // handle, exactly as an unattached signature behaves.
+        let diagnostics_before = ctx.diagnostics().len();
+        let instantiated = surge_ts_types::with_type_copy_reason(
+            surge_ts_types::TypeCopyReason::CallResolution,
+            || {
+                super::instantiate::instantiate_function_type(
+                    function_type,
+                    Some(&member.signature),
+                    &member.outer_type_arguments,
+                    type_arguments,
+                    type_argument_span,
+                    arguments,
+                    None,
+                    symbols,
+                    ctx,
+                )
+            },
+        );
+        if ctx.diagnostics().len() != diagnostics_before {
+            ctx.truncate_diagnostics(diagnostics_before);
+            return std::borrow::Cow::Borrowed(function_type);
+        }
+        return instantiated;
+    }
     let declared_signature = function_type
         .declaration()
         .and_then(|declaration| declaration.downcast_ref::<crate::symbols::FunctionSignatureInfo>())

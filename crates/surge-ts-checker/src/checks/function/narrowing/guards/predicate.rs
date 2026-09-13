@@ -31,6 +31,40 @@ pub(crate) struct PredicateGuardInfo {
     pub(crate) other_arguments: Vec<(usize, ParsedExpression)>,
     /// Position of the tested parameter in `signature.parameter_types`.
     pub(crate) parameter_index: usize,
+    /// Type arguments written at the call (`isTRPCClientError<typeof
+    /// appRouter>(err)`); they bind the signature's type parameters by
+    /// position instead of inference from the arguments.
+    pub(crate) explicit_type_arguments: Vec<surge_ts_syntax::ParsedType>,
+    /// Bindings of the enclosing declaration's type parameters for a predicate
+    /// read off a member (`j.Identifier.check(x)` is `Type<T>.check(v): v is
+    /// T` with `T` already `Identifier`); seeded into the resolution.
+    pub(crate) outer_type_arguments: Vec<(String, Type)>,
+}
+
+/// What a guard site is asked to look up for a predicate call.
+pub(crate) enum PredicateCallee<'a> {
+    /// A bare or namespace-qualified callee name (`isFoo`, `ts.isFoo`).
+    Name(&'a str),
+    /// A method call on an arbitrary receiver expression.
+    Member {
+        object: &'a ParsedExpression,
+        property: &'a str,
+    },
+}
+
+/// A predicate callee's signature plus the enclosing bindings it was read under.
+pub(crate) struct PredicateSignature {
+    pub(crate) signature: std::sync::Arc<crate::symbols::FunctionSignatureInfo>,
+    pub(crate) outer_type_arguments: Vec<(String, Type)>,
+}
+
+impl PredicateSignature {
+    pub(crate) fn plain(signature: std::sync::Arc<crate::symbols::FunctionSignatureInfo>) -> Self {
+        Self {
+            signature,
+            outer_type_arguments: Vec::new(),
+        }
+    }
 }
 
 /// Extracts a user-defined type-predicate guard from a call condition. The
@@ -41,22 +75,23 @@ pub(crate) struct PredicateGuardInfo {
 /// from the tested argument's own type when the guard is resolved.
 pub(crate) fn parse_type_predicate_condition(
     condition: &ParsedExpression,
-    signature_of: &mut dyn FnMut(
-        &str,
-    )
-        -> Option<std::sync::Arc<crate::symbols::FunctionSignatureInfo>>,
+    signature_of: &mut dyn FnMut(PredicateCallee<'_>) -> Option<PredicateSignature>,
 ) -> Option<PredicateGuardInfo> {
     // A guard reached through a namespace (`ts.isImportDeclaration(node)`) parses
     // as a property call; its signature is registered under the qualified
-    // `<alias>.<member>` key.
-    let qualified_callee;
-    let (callee_name, type_arguments, arguments) = match condition {
+    // `<alias>.<member>` key. Any other receiver is a method predicate read off
+    // the receiver's type (`j.Identifier.check(node)`).
+    let (found, type_arguments, arguments) = match condition {
         ParsedExpression::Call {
             callee_name,
             type_arguments,
             arguments,
             ..
-        } => (callee_name.as_str(), type_arguments, arguments),
+        } => (
+            signature_of(PredicateCallee::Name(callee_name.as_str()))?,
+            type_arguments,
+            arguments,
+        ),
         ParsedExpression::PropertyCall {
             object,
             property_name,
@@ -64,18 +99,26 @@ pub(crate) fn parse_type_predicate_condition(
             arguments,
             ..
         } => {
-            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
-                return None;
+            let qualified = if let ParsedExpression::Identifier { name, .. } = object.as_ref() {
+                signature_of(PredicateCallee::Name(&format!("{name}.{property_name}")))
+            } else {
+                None
             };
-            qualified_callee = format!("{name}.{property_name}");
-            (qualified_callee.as_str(), type_arguments, arguments)
+            let found = match qualified {
+                Some(found) => found,
+                None => signature_of(PredicateCallee::Member {
+                    object,
+                    property: property_name,
+                })?,
+            };
+            (found, type_arguments, arguments)
         }
         _ => return None,
     };
-    if !type_arguments.is_empty() {
-        return None;
-    }
-    let signature = signature_of(callee_name)?;
+    let PredicateSignature {
+        signature,
+        outer_type_arguments,
+    } = found;
     // An overload group keeps one declaration's parsed signature, which need not
     // be the one that declared the predicate; the fold records that overload
     // alongside. `arguments.get(index)` below still decides whether this call
@@ -97,7 +140,7 @@ pub(crate) fn parse_type_predicate_condition(
         .iter()
         .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))?;
     let (subject, path) = super::super::reference_path(&arguments.get(index)?.expression)?;
-    let other_arguments = if signature.type_parameters.is_empty() {
+    let other_arguments = if signature.type_parameters.is_empty() || !type_arguments.is_empty() {
         Vec::new()
     } else {
         arguments
@@ -116,6 +159,8 @@ pub(crate) fn parse_type_predicate_condition(
         namespace_prefix: signature.namespace_prefix.clone(),
         parameter_index: index,
         signature,
+        explicit_type_arguments: type_arguments.clone(),
+        outer_type_arguments,
     })
 }
 
@@ -180,6 +225,18 @@ pub(crate) fn narrow_by_predicate(
         && surge_ts_types::is_assignable_to(predicate, &peeled)
     {
         return Some(predicate.clone());
+    }
+    // tsc narrows a non-union subject the predicate does not refine to the
+    // intersection of the two (`err: Error` under `x is E` reads as `Error & E`).
+    // Surge has no intersection type, so the holding branch reads the subject
+    // as the degradation sentinel rather than keep a declared type the
+    // predicate has just widened past.
+    if keep_matching
+        && matches!(peeled, Type::Object(_))
+        && matches!(predicate.peeled(), Type::Object(_))
+        && !surge_ts_types::is_assignable_to(&peeled, predicate)
+    {
+        return Some(Type::Unknown);
     }
     None
 }

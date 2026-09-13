@@ -690,6 +690,7 @@ pub(crate) fn function_signature_info(
                 _ => None,
             })
             .collect(),
+        rest: parameters.last().is_some_and(|parameter| parameter.rest),
         return_type: return_type.cloned(),
         declaring_file: Some(Arc::from(declaring_file)),
         namespace_prefix: None,
@@ -721,6 +722,10 @@ pub(crate) fn function_type_signature_info(
         parameter_names: value_parameters
             .map(|parameter| parameter.name.clone())
             .collect(),
+        rest: function_type
+            .parameters
+            .last()
+            .is_some_and(|parameter| parameter.rest),
         return_type: Some((*function_type.return_type).clone()),
         declaring_file: Some(Arc::from(declaring_file)),
         namespace_prefix: None,

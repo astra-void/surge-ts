@@ -558,6 +558,7 @@ fn function_property_access_type(function: &FunctionType, name: &str) -> Option<
         )),
         "length" => Some(Type::Number),
         "name" => Some(Type::String),
+        "prototype" => Some(Type::Any),
         "toString" | "toLocaleString" => Some(function_type(vec![], Type::String, false, 0)),
         _ => None,
     }

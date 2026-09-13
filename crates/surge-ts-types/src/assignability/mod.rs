@@ -53,9 +53,19 @@ thread_local! {
     /// must not be memoized as definitive — mirroring tsc's `Ternary.Maybe`
     /// handling in its relation cache.
     static ASSIGNABILITY_ASSUMPTION_EVENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+
+    /// Comparisons made under the current outermost `is_assignable_to` query.
+    /// The depth bound alone does not bound *work*: a union of generic classes
+    /// whose members reference the union again (ast-types' `Type<T>`) fans out
+    /// at every level, and every assumption on the way voids the relation memo,
+    /// so the comparison is exponential below the cap. Past the budget the
+    /// remaining comparisons are answered by assumption, the same coinductive
+    /// answer the cap gives.
+    static ASSIGNABILITY_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 const MAX_ASSIGNABILITY_DEPTH: u32 = 200;
+const MAX_ASSIGNABILITY_STEPS: u64 = 250_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RelationKey {
@@ -211,6 +221,7 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
                 if next == 0 {
                     OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().clear());
                     ASSIGNABILITY_RELATION_CACHE.with(|cache| cache.borrow_mut().clear());
+                    ASSIGNABILITY_STEPS.with(|steps| steps.set(0));
                 }
             });
         }
@@ -222,6 +233,15 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     });
     let _guard = DepthGuard;
     if depth > MAX_ASSIGNABILITY_DEPTH {
+        record_assignability_assumption();
+        return true;
+    }
+    let steps = ASSIGNABILITY_STEPS.with(|steps| {
+        let next = steps.get() + 1;
+        steps.set(next);
+        next
+    });
+    if steps > MAX_ASSIGNABILITY_STEPS {
         record_assignability_assumption();
         return true;
     }

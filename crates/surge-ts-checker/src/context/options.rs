@@ -50,6 +50,7 @@ pub struct CompatibilityStats {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
+    pub use_unknown_in_catch_variables: bool,
     pub no_implicit_returns: bool,
     pub no_fallthrough_cases_in_switch: bool,
     pub no_implicit_override: bool,
@@ -133,6 +134,7 @@ impl Default for CheckerOptions {
     fn default() -> Self {
         Self {
             no_implicit_any: false,
+            use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,

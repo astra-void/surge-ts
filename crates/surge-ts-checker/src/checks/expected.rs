@@ -397,6 +397,34 @@ fn evaluate_expression_with_expected_type_inner(
         );
     }
 
+    // An object literal against a tuple target is checked against the tuple's
+    // apparent members (indices, `length`, the array methods): tsc reports the
+    // first property that is none of them as excess, at the property, rather
+    // than the whole literal as unassignable.
+    if let (Type::Tuple(_), ParsedExpression::ObjectLiteral { properties, span }) =
+        (expected_type, expression)
+        && let Some(property) = properties.iter().find(|property| {
+            !property.is_spread
+                && expected_type
+                    .get_property_access_type(&property.name)
+                    .is_none()
+        })
+    {
+        let diagnostic = Diagnostic::ts2353(
+            &property.name,
+            &expected_type.name(),
+            ctx.file_name.clone(),
+        );
+        ctx.push(diagnostic_with_syntax_span(
+            diagnostic,
+            choose_span(
+                property.name_span,
+                choose_span(property.span, choose_span(*span, fallback_span)),
+            ),
+        ));
+        return InferredExpression::Unknown;
+    }
+
     if let (
         Type::Object(expected_object_type),
         ParsedExpression::ObjectLiteral { properties, span },
@@ -539,10 +567,25 @@ fn evaluate_expression_with_expected_type_inner(
 
         // Several members declare the written properties (an overload group's
         // merged parameter, where every member extends the same base). tsc types
-        // the literal by the union of each property across those members; surge
-        // cannot pick a member, so it evaluates context-free — but an
-        // implicit-any report there would describe that gap, not the source.
+        // the literal by the union of each property across those members, so
+        // that is tried first: each property under the union of what the
+        // candidates declare for it, accepted when the result fits the union.
+        // Failing that, surge cannot pick a member and evaluates context-free —
+        // but an implicit-any report there would describe that gap, not the
+        // source.
         if union_members_are_all_objects(union) {
+            if let Some(result) = object_literal_under_property_unions(
+                expected_type,
+                union.types(),
+                properties,
+                fallback_span,
+                target_span,
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            ) {
+                return result;
+            }
             ctx.degraded_expected_type_depth += 1;
             let result = evaluate_expression(expression, fallback_span, symbols, ctx);
             ctx.degraded_expected_type_depth -= 1;
@@ -711,6 +754,73 @@ fn union_member_for_object_literal(
     }
 }
 
+/// An object literal typed the way tsc types it against a union none of whose
+/// members can be singled out: every property is evaluated under the union of
+/// what the candidate members declare for it, and the literal is accepted only
+/// when the shape that produces fits the union. `None` leaves the existing
+/// context-free path to report; nothing is emitted here.
+#[allow(clippy::too_many_arguments)]
+fn object_literal_under_property_unions(
+    expected_type: &Type,
+    members: &[Type],
+    properties: &[ParsedObjectProperty],
+    fallback_span: Option<SyntaxTextSpan>,
+    target_span: Option<SyntaxTextSpan>,
+    expected_diagnostic: ExpectedTypeDiagnostic,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<InferredExpression> {
+    if properties.is_empty() || properties.iter().any(|property| property.is_spread) {
+        return None;
+    }
+    let candidates: Vec<&Type> = members
+        .iter()
+        .filter(|member| {
+            properties
+                .iter()
+                .all(|property| member_declares_property(member, &property.name))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut inferred = surge_ts_types::PropertyMap::default();
+    for property in properties {
+        let per_property: Vec<Type> = candidates
+            .iter()
+            .filter_map(|member| member.get_property_access_type(&property.name))
+            .collect();
+        let evaluated = evaluate_expression_with_expected_type_anchored(
+            &property.value,
+            property.value_span.or(fallback_span),
+            target_span,
+            Some(&surge_ts_types::union_type(per_property)),
+            expected_diagnostic,
+            symbols,
+            ctx,
+        );
+        let InferredExpression::Known(ty) = evaluated else {
+            ctx.truncate_diagnostics(diagnostics_before);
+            return None;
+        };
+        if ty.is_unknown() {
+            ctx.truncate_diagnostics(diagnostics_before);
+            return None;
+        }
+        inferred.insert(
+            property.name.as_str().into(),
+            surge_ts_types::ObjectProperty::required(ty),
+        );
+    }
+    let literal = Type::Object(alloc_object_type(inferred, None));
+    if ctx.diagnostics().len() != diagnostics_before || !is_assignable_to(&literal, expected_type) {
+        ctx.truncate_diagnostics(diagnostics_before);
+        return None;
+    }
+    Some(InferredExpression::Known(literal))
+}
+
 /// A property written as a primitive literal, as the type that literal has. The
 /// discriminant of a discriminated union is always one of these, and reading it
 /// costs no evaluation.
@@ -863,7 +973,9 @@ fn evaluate_array_literal_with_expected_type(
 
         match inferred_element {
             InferredExpression::Known(actual_type) => {
-                if actual_type.is_unknown() {
+                if actual_type.is_unknown()
+                    || crate::checks::call::is_open_instantiation(&actual_type)
+                {
                     continue;
                 }
 
@@ -1043,7 +1155,9 @@ fn evaluate_tuple_literal_with_expected_type(
 
         match inferred_element {
             InferredExpression::Known(actual_type) => {
-                if actual_type.is_unknown() {
+                if actual_type.is_unknown()
+                    || crate::checks::call::is_open_instantiation(&actual_type)
+                {
                     continue;
                 }
 
@@ -1223,7 +1337,9 @@ fn evaluate_object_literal_with_expected_type(
 
         match inferred_property {
             InferredExpression::Known(actual_type) => {
-                if actual_type.is_unknown() {
+                if actual_type.is_unknown()
+                    || crate::checks::call::is_open_instantiation(&actual_type)
+                {
                     inferred_property_types.insert(property.name.clone(), Type::Unknown);
                     continue;
                 }
@@ -1555,6 +1671,11 @@ fn push_expected_type_mismatch(
     diagnostic_kind: ExpectedTypeDiagnostic,
     ctx: &mut CheckerContext,
 ) {
+    // An instantiation over an open argument (`Mock<T>` with `T` bare) is not
+    // settled enough to reject; the argument path already declines it.
+    if crate::checks::call::is_open_instantiation(source_type) {
+        return;
+    }
     let (source_type_name, expected_type_name) = crate::checks::expr::disambiguated_pair(
         source_type,
         source_display_name(source_type, expected_type),

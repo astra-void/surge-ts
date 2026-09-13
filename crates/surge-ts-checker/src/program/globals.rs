@@ -228,11 +228,28 @@ pub(crate) fn collect_global_variables(
 
             if let Some(var) = var {
                 if var.is_declare || parsed_file.file_kind.is_declaration() {
-                    let ty = var
-                        .declared_type
-                        .as_ref()
-                        .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
-                        .unwrap_or(surge_ts_types::Type::Unknown);
+                    // `let assert: typeof import("vitest")["assert"]` reads a
+                    // module namespace that only exists once imports are bound,
+                    // after this pass; the annotation maps on first read instead.
+                    let ty = match var.declared_type.as_ref() {
+                        Some(annotation)
+                            if crate::modules::exports::annotation_contains_import_type_query(
+                                annotation,
+                            ) =>
+                        {
+                            {
+                            ctx.register_import_type_global(&var.name);
+                            crate::infer::make_lazy_value_annotation_reference(
+                                ctx,
+                                &var.name,
+                                var.name_span.map_or(0, |span| span.start),
+                                annotation.clone(),
+                            )
+                        }
+                        }
+                        Some(annotation) => crate::infer::map_parsed_type(annotation.clone(), ctx),
+                        None => surge_ts_types::Type::Unknown,
+                    };
                     if !parsed_file.file_kind.is_declaration()
                         || global_symbols.get(&var.name).is_none()
                     {

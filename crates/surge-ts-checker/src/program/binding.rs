@@ -131,6 +131,16 @@ pub(crate) fn collect_preliminary_module_type_bindings(
     let preliminary_import_resolution_start = Instant::now();
     for (_file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !parsed_file.is_module && parsed_file.file_kind != FileKind::DependencyDeclaration {
+            if !parsed_file.import_call_specifiers.is_empty() {
+                ctx.set_file_name(parsed_file.file_name.clone());
+                crate::modules::register_import_type_namespaces(
+                    parsed_file,
+                    parsed_files,
+                    &preliminary_module_export_tables,
+                    &preliminary_module_resolution_scopes,
+                    ctx,
+                );
+            }
             preliminary_module_import_bindings.push(None);
             continue;
         }
@@ -1923,6 +1933,16 @@ pub(crate) fn collect_module_import_bindings(
 
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !parsed_file.is_module && parsed_file.file_kind != FileKind::DependencyDeclaration {
+            if !parsed_file.import_call_specifiers.is_empty() {
+                ctx.set_file_name(parsed_file.file_name.clone());
+                crate::modules::register_import_type_namespaces(
+                    parsed_file,
+                    parsed_files,
+                    module_export_tables,
+                    module_resolution_scopes,
+                    ctx,
+                );
+            }
             module_import_bindings.push(None);
             continue;
         }

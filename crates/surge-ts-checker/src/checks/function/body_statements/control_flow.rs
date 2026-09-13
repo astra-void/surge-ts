@@ -596,16 +596,17 @@ pub(crate) fn check_function_try_statement(
                 }
 
                 // tsc types an unannotated catch variable `unknown` under
-                // `strict`. surge keeps the degradation sentinel until an
-                // `unknown` *source* is rejected by assignability at all —
-                // today it is not, so the genuine `unknown` only added TS18046
-                // where an `asserts` static method (`ZodError.assert(err)`)
-                // would have narrowed it.
+                // `strict` (`useUnknownInCatchVariables`), and rejects it as a
+                // source for any parameter that is not `unknown`/`any`.
                 let catch_type = handler_clause
                     .declared_type
                     .clone()
                     .map(|ty| map_parsed_type(ty, ctx))
-                    .unwrap_or(Type::Unknown);
+                    .unwrap_or(if ctx.options.use_unknown_in_catch_variables {
+                        Type::GenuineUnknown
+                    } else {
+                        Type::Any
+                    });
                 insert_binding_name(binding_name, catch_type, scopes);
             }
             flow_state.begin_branch_capture();
@@ -666,16 +667,17 @@ pub(crate) fn check_function_try_statement(
                 }
 
                 // tsc types an unannotated catch variable `unknown` under
-                // `strict`. surge keeps the degradation sentinel until an
-                // `unknown` *source* is rejected by assignability at all —
-                // today it is not, so the genuine `unknown` only added TS18046
-                // where an `asserts` static method (`ZodError.assert(err)`)
-                // would have narrowed it.
+                // `strict` (`useUnknownInCatchVariables`), and rejects it as a
+                // source for any parameter that is not `unknown`/`any`.
                 let catch_type = handler_clause
                     .declared_type
                     .clone()
                     .map(|ty| map_parsed_type(ty, ctx))
-                    .unwrap_or(Type::Unknown);
+                    .unwrap_or(if ctx.options.use_unknown_in_catch_variables {
+                        Type::GenuineUnknown
+                    } else {
+                        Type::Any
+                    });
                 insert_binding_name(binding_name, catch_type, scopes);
             }
             check_function_body(

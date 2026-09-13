@@ -1063,5 +1063,11 @@ pub(crate) fn empty_object_fallback_type(
             surge_ts_types::ObjectProperty::optional(Type::Undefined),
         );
     }
-    Some(Type::Object(surge_ts_types::ObjectType::new(absent, None)))
+    // tsc subtype-reduces `x ?? {}` to `x`'s type, so an index signature on it
+    // survives: `(schema.properties ?? {})['data']` still reads the element.
+    let string_index_type = contextual_object
+        .string_index_type
+        .as_deref()
+        .cloned();
+    Some(Type::Object(surge_ts_types::ObjectType::new(absent, string_index_type)))
 }

@@ -13,6 +13,7 @@ fn check(source_text: &str) -> Vec<surge_ts_diagnostics::Diagnostic> {
         "example.ts",
         CheckerOptions {
             no_implicit_any: true,
+            use_unknown_in_catch_variables: false,
             ..Default::default()
         },
     )

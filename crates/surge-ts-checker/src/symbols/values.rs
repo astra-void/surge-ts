@@ -51,6 +51,10 @@ pub(crate) struct FunctionSignatureInfo {
     /// parameter, so guard narrowing maps that name back to a call-argument
     /// position through this list.
     pub(crate) parameter_names: Vec<Option<String>>,
+    /// The last parameter is a `...rest`. Its written type is what the rest
+    /// arguments are inferred against as a whole (a tuple for a bare `E`, the
+    /// element for `T[]`), not what each argument is matched to by position.
+    pub(crate) rest: bool,
     pub(crate) return_type: Option<ParsedType>,
     /// File the signature was declared in. Instantiation re-resolves the parsed
     /// parameter/return annotations, whose names (an imported generic's

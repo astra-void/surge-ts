@@ -215,6 +215,7 @@ pub(super) fn parse_program_file(
         statements: parsed.statements,
         parser_errors: parsed.parser_errors,
         is_module: parsed.is_module,
+        import_call_specifiers: parsed.import_call_specifiers,
         file_kind,
         module_reads: parsed.module_reads,
         suppressed_ranges: parsed.suppressed_ranges,

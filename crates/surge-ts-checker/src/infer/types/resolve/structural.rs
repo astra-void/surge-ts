@@ -74,19 +74,34 @@ pub(crate) fn resolve_function_type(
         &local_substitution,
     );
     had_error |= return_type.had_error;
+    let mut resolved_function = alloc_function_type(
+        parameters,
+        return_type.ty,
+        is_variadic,
+        required_parameter_count,
+    )
+    .with_parameter_names(written_parameter_names(&value_parameters))
+    .with_type_parameter_head(crate::checks::function::type_parameter_head(
+        &function_type.type_parameters,
+    ));
+    // A generic signature's own type parameters are erased above (`T` maps to
+    // the sentinel), so a call through the resolved handle could not infer
+    // them — every `find<T>(type: Type<T>): Collection<T>` on an interface
+    // returned `unknown`. The written signature rides on the handle, with the
+    // enclosing bindings the body was resolved under, so the call site
+    // re-instantiates it from its arguments.
+    if (!function_type.type_parameters.is_empty()
+        || matches!(*function_type.return_type, ParsedType::Predicate(_)))
+        && let Some(declared) = crate::checks::call::DeclaredMemberSignature::capture(
+            &function_type,
+            substitution,
+            ctx,
+        )
+    {
+        resolved_function = resolved_function.with_declaration(std::sync::Arc::new(declared));
+    }
     ResolvedType {
-        ty: Type::Function(
-            alloc_function_type(
-                parameters,
-                return_type.ty,
-                is_variadic,
-                required_parameter_count,
-            )
-            .with_parameter_names(written_parameter_names(&value_parameters))
-            .with_type_parameter_head(
-                crate::checks::function::type_parameter_head(&function_type.type_parameters),
-            ),
-        ),
+        ty: Type::Function(resolved_function),
         had_error,
     }
 }

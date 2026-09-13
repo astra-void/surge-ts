@@ -78,6 +78,66 @@ pub(crate) fn try_consume_type_expansion_step() -> bool {
     })
 }
 
+thread_local! {
+    /// `typeof import("spec")` queries on the current resolution stack. A
+    /// module whose namespace member is itself annotated through the module
+    /// (`export declare const x: typeof import("./self").y`) re-enters the
+    /// query while its namespace is being read; the re-entry answers the
+    /// sentinel instead of recursing.
+    static IMPORT_TYPE_QUERIES_IN_PROGRESS: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn resolve_import_type_query(
+    specifier: &str,
+    members: &[String],
+    ctx: &mut CheckerContext,
+) -> ResolvedType {
+    let unknown = ResolvedType {
+        ty: Type::Unknown,
+        had_error: false,
+    };
+    let file_name = ctx.file_name.clone();
+    let key = (file_name.clone(), specifier.to_string());
+    let re_entered = IMPORT_TYPE_QUERIES_IN_PROGRESS.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        if stack.iter().any(|entry| *entry == key) || stack.len() > 16 {
+            return true;
+        }
+        stack.push(key.clone());
+        false
+    });
+    if re_entered {
+        return unknown;
+    }
+    struct Pop;
+    impl Drop for Pop {
+        fn drop(&mut self) {
+            IMPORT_TYPE_QUERIES_IN_PROGRESS.with(|stack| {
+                stack.borrow_mut().pop();
+            });
+        }
+    }
+    let _pop = Pop;
+    let canonical = ctx.canonical_file_name_arc();
+    let found = ctx
+        .import_type_namespace(&file_name, specifier)
+        .or_else(|| ctx.import_type_namespace(&canonical, specifier));
+    let Some(mut ty) = found else {
+        return unknown;
+    };
+    for member in members {
+        match ty.get_property_access_type(member) {
+            Some(member_ty) => ty = member_ty,
+            None => return unknown,
+        }
+    }
+    ResolvedType {
+        ty,
+        had_error: false,
+    }
+}
+
 pub(crate) fn resolve_parsed_type(
     parsed_type: ParsedType,
     ctx: &mut CheckerContext,
@@ -181,6 +241,9 @@ pub(crate) fn resolve_parsed_type(
             resolve_named_type(named_type, ctx, resolving, substitution)
         }
         ParsedType::TypeOf(type_of) => {
+            if let Some(specifier) = &type_of.import_specifier {
+                return resolve_import_type_query(specifier, &type_of.members, ctx);
+            }
             // A type query reads the value, so a UMD-global name reports here the
             // same way it would in an expression.
             let umd_global = crate::checks::emit_umd_global_reference_diagnostic(

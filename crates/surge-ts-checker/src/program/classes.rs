@@ -204,6 +204,8 @@ pub(crate) fn build_class_value_symbol_with_scope(
     // Generic classes are out of scope for this slice. Model their value side as
     // `any` so `new C<T>(...)` and `C.member` stay non-cascading rather than
     // resolving the self type without type arguments (which would mis-report).
+    // A static object over them was measured to open TS2351/TS2554 across zod,
+    // trpc and ofetch (2026-09-12), so the `any` stays.
     if !class.type_parameters.is_empty() {
         return SymbolInfo {
             ty: Type::Any,
@@ -242,13 +244,31 @@ pub(crate) fn build_class_value_symbol_with_scope(
                 properties.insert(property.name.as_str().into(), object_property);
             }
             ParsedClassMember::Method(method) if method.is_static => {
-                let function_type = map_function_signature(
+                let mut function_type = map_function_signature(
                     &method.parameters,
                     method.return_type.as_ref(),
                     &method.type_parameters,
                     None,
                     ctx,
                 );
+                // A generic or predicate static (`static assert(v): asserts v is
+                // E`) keeps its written signature on the handle, so a call can
+                // instantiate it and a guard can read the predicate.
+                if !method.type_parameters.is_empty()
+                    || matches!(method.return_type, Some(ParsedType::Predicate(_)))
+                {
+                    function_type = function_type.with_declaration(Arc::new(
+                        crate::checks::call::DeclaredMemberSignature {
+                            signature: crate::checks::function::function_signature_info(
+                                &method.type_parameters,
+                                &method.parameters,
+                                method.return_type.as_ref(),
+                                &ctx.file_name,
+                            ),
+                            outer_type_arguments: Vec::new(),
+                        },
+                    ));
+                }
                 properties.insert(
                     method.name.as_str().into(),
                     ObjectProperty::required(Type::Function(function_type)),
@@ -531,7 +551,25 @@ fn collect_inherited_instance_member_names(
 /// table. Mirrors `collect_interface` for first-wins / duplicate behaviour.
 pub(crate) fn collect_class(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     let info = class_instance_interface_info(class, ctx.file_name_arc());
-    let _ = ctx
-        .type_declarations
-        .insert(class.name.clone(), TypeDeclarationInfo::Interface(info));
+    // A class declaration-merges with a same-named interface of its file
+    // (`declare interface Emitter<T> { on(…): this }` + `class Emitter<T>
+    // extends EventEmitter {}`): the interface's members and the class's
+    // heritage both belong to the instance. The class-first order already
+    // merges through `collect_interface`; this is the interface-first order.
+    let merged = match ctx.type_declarations.get(&class.name) {
+        Some(TypeDeclarationInfo::Interface(existing)) if existing.file_name == info.file_name => {
+            Some(crate::symbols::merge_interface_infos(existing, &info))
+        }
+        _ => None,
+    };
+    match merged {
+        Some(merged) => ctx
+            .type_declarations
+            .upsert(&class.name, TypeDeclarationInfo::Interface(merged)),
+        None => {
+            let _ = ctx
+                .type_declarations
+                .insert(class.name.clone(), TypeDeclarationInfo::Interface(info));
+        }
+    }
 }
