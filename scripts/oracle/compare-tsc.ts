@@ -389,6 +389,7 @@ export const fixturePresets: Record<string, string> = {
   'package-reexport-array-index-basic': path.join(workspaceRoot, 'tests/compat-projects/package-reexport-array-index-basic/tsconfig.json'),
   'alias-double-negation-and-basic': path.join(workspaceRoot, 'tests/compat-projects/alias-double-negation-and-basic/tsconfig.json'),
   'predicate-type-argument-from-arguments-basic': path.join(workspaceRoot, 'tests/compat-projects/predicate-type-argument-from-arguments-basic/tsconfig.json'),
+  'generic-class-entity-guard-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-class-entity-guard-basic/tsconfig.json'),
   'class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/class-static-inheritance-basic/tsconfig.json'),
   'declaration-flow-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/declaration-flow-narrowing-basic/tsconfig.json'),
   'lib-reference-index-and-signature-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-reference-index-and-signature-scope-basic/tsconfig.json'),

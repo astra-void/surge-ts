@@ -151,6 +151,8 @@ pub(super) fn predicate_type_argument_substitution(
         if argument_ty.is_unknown() {
             continue;
         }
+        let argument_ty = generic_class_value_surface(argument, &argument_ty, ctx)
+            .unwrap_or(argument_ty);
         crate::checks::call::collect_inferred_type_argument(
             parameter_type,
             &argument_ty,
@@ -182,6 +184,106 @@ pub(super) fn predicate_type_argument_substitution(
             .then_some(filled);
     }
     Some(substitution)
+}
+
+/// A constructor surface over the instance type of the class `argument` names,
+/// for an argument whose own type cannot say which class it is.
+///
+/// A generic class's value side is deliberately `any` (see
+/// [`crate::program::classes::build_class_value_symbol_with_scope`]): a real
+/// static object over it was measured to open TS2351/TS2554 across zod, trpc and
+/// ofetch. That `any` also erases the class identity, which is the whole content
+/// of a guard written as `value is InstanceType<T>` with `T` inferred from the
+/// class passed alongside — every such call bound `T` to something with no
+/// construct signature, and the guard then either replaced the subject with
+/// `Any` or proved nothing at all. A generic class merged with a namespace
+/// (`class SQL` + `namespace SQL { class Aliased }`) lands in the same place
+/// from the other side: its value is the namespace object, which carries the
+/// members but no way to construct. Standing a constructor over the instance
+/// type here recovers the identity for inference only; the value's own type is
+/// untouched.
+fn generic_class_value_surface(
+    argument: &ParsedExpression,
+    argument_ty: &Type,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let already_constructable = match argument_ty.peeled() {
+        Type::Object(ref object) => object.construct_signature().is_some(),
+        _ => !matches!(argument_ty, Type::Any),
+    };
+    if already_constructable {
+        return None;
+    }
+    let name = class_reference_name(argument)?;
+    // Only a *generic* class reaches here without a constructor; a non-generic
+    // one already carries its static object, and requiring type parameters keeps
+    // an unrelated value that happens to share a name with a type declaration
+    // out.
+    let handle = ctx.lookup_type_declaration_handle(&name)?;
+    let crate::symbols::TypeDeclarationInfo::Interface(interface) = handle.get() else {
+        return None;
+    };
+    if interface.body.type_parameters.is_empty() {
+        return None;
+    }
+    // Each type parameter is filled with `any` rather than left off: the class
+    // is being named for its identity, not its arguments, so `SQL<any>` selects
+    // `SQL<number>` out of the subject's union while claiming nothing about the
+    // argument. Leaving them off resolves the same shape but reports TS2314 at
+    // the reference, which is why the resolution runs with diagnostics dropped.
+    let type_arguments =
+        vec![surge_ts_syntax::ParsedType::Any; interface.body.type_parameters.len()];
+    let diagnostics_before = ctx.diagnostics().len();
+    let instance = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        crate::infer::types::resolve_parsed_type(
+            surge_ts_syntax::ParsedType::Named(Arc::new(surge_ts_syntax::ParsedNamedType {
+                name,
+                span: None,
+                type_arguments,
+            })),
+            ctx,
+            &mut Vec::new(),
+            &crate::infer::TypeParameterSubstitution::new(),
+        )
+    });
+    ctx.truncate_diagnostics(diagnostics_before);
+    if instance.had_error() {
+        return None;
+    }
+    let instance = instance.into_ty();
+    if instance.is_unknown() {
+        return None;
+    }
+    let mut properties = surge_ts_types::PropertyMap::default();
+    properties.insert(
+        "prototype".into(),
+        surge_ts_types::ObjectProperty::required(instance.clone()),
+    );
+    let constructor = surge_ts_types::FunctionType::new(vec![Type::Any], instance, true, 0);
+    Some(Type::Object(
+        surge_ts_types::ObjectType::new(properties, None)
+            .with_open_index_marker()
+            .with_construct_signature(constructor),
+    ))
+}
+
+/// The dotted type name an expression references, for a bare identifier or a
+/// path of them (`SQL.Aliased` names the class inside the namespace `SQL` is
+/// merged with). Anything else is not a class reference.
+fn class_reference_name(expression: &ParsedExpression) -> Option<String> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => Some(name.clone()),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            is_bracketed: false,
+            ..
+        } => Some(format!(
+            "{}.{property_name}",
+            class_reference_name(object)?
+        )),
+        _ => None,
+    }
 }
 
 /// Whether an `Any`-filled predicate would narrow `subject_ty` by *selecting*
