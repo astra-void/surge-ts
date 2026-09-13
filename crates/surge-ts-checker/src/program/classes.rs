@@ -111,7 +111,14 @@ fn constructor_parameter_property_members(
                     Some(ParsedInterfaceMember {
                         name: name.clone(),
                         name_span: *span,
-                        optional: parameter.optional,
+                        // A parameter property written with a default
+                        // (`readonly encoder: E = noopEncoder`) declares a
+                        // *required* member: the parameter is optional at the
+                        // call, the property never is. The parser folds a
+                        // default into `optional` so arity accepts the omitted
+                        // argument, so the initializer is what tells the two
+                        // apart here.
+                        optional: parameter.optional && parameter.initializer.is_none(),
                         is_abstract: false,
                         is_method: false,
                         ty: parameter.declared_type.clone().unwrap_or(ParsedType::Any),
