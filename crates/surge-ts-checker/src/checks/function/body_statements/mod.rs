@@ -220,15 +220,28 @@ fn assigned_initializer_type(
     let checkpoint = ctx.diagnostics().len();
     let inferred = crate::infer::infer_expression(initializer, visible_symbols, ctx);
     ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    // Shallow on purpose: a nominal reference to an imported interface is a
+    // clean answer even when a member deep inside it resolved to the sentinel,
+    // and the deep walk refused every `let client: PersistedClient | undefined
+    // = persistedClient` in the persister packages, leaving the binding at its
+    // annotation.
     match inferred {
         InferredExpression::Known(ty)
             if !ty.is_unknown()
                 && !matches!(ty, Type::Any)
-                && !super::body::type_contains_degradation_sentinel(&ty) =>
+                && !initializer_type_is_degraded(&ty) =>
         {
             Some(ty)
         }
         _ => None,
+    }
+}
+
+fn initializer_type_is_degraded(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::Union(union) => union.types().iter().any(initializer_type_is_degraded),
+        _ => false,
     }
 }
 
