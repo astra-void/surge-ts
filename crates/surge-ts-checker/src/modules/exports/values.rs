@@ -209,9 +209,12 @@ fn collect_exportable_value_symbols_thin(
 /// `namespace path { interface PlatformPath … } const path: path.PlatformPath`
 /// bound `path` to the namespace's *empty* value object and collapsed every
 /// `path.resolve(…)` to a missing property on `{}`.
+/// Each merging namespace's value members, with whether the name it merges into
+/// is declared by a *function* — which decides whether the fallback object in
+/// [`apply_merging_namespace_value_members`] stays callable.
 fn merging_namespace_value_members(
     statements: &[ParsedStatement],
-) -> Vec<(String, surge_ts_types::PropertyMap)> {
+) -> Vec<(String, surge_ts_types::PropertyMap, bool)> {
     let declares_namespace = statements.iter().any(|statement| {
         matches!(
             peel_exported_statement(statement),
@@ -223,6 +226,7 @@ fn merging_namespace_value_members(
     }
 
     let mut value_names = surge_ts_types::fx::FxHashSet::default();
+    let mut function_names = surge_ts_types::fx::FxHashSet::default();
     for statement in statements {
         match peel_exported_statement(statement) {
             ParsedStatement::VariableDeclaration(variable) => {
@@ -230,6 +234,7 @@ fn merging_namespace_value_members(
             }
             ParsedStatement::FunctionDeclaration(function) => {
                 value_names.insert(function.name.as_str());
+                function_names.insert(function.name.as_str());
             }
             ParsedStatement::ClassDeclaration(class) => {
                 value_names.insert(class.name.as_str());
@@ -242,7 +247,7 @@ fn merging_namespace_value_members(
         return Vec::new();
     }
 
-    let mut merged: Vec<(String, surge_ts_types::PropertyMap)> = Vec::new();
+    let mut merged: Vec<(String, surge_ts_types::PropertyMap, bool)> = Vec::new();
     for statement in statements {
         let ParsedStatement::NamespaceDeclaration(namespace) = peel_exported_statement(statement)
         else {
@@ -251,12 +256,13 @@ fn merging_namespace_value_members(
         if !value_names.contains(namespace.name.as_str()) {
             continue;
         }
-        let index = match merged.iter().position(|(name, _)| name == &namespace.name) {
+        let index = match merged.iter().position(|(name, ..)| name == &namespace.name) {
             Some(index) => index,
             None => {
                 merged.push((
                     namespace.name.clone(),
                     surge_ts_types::PropertyMap::default(),
+                    function_names.contains(namespace.name.as_str()),
                 ));
                 merged.len() - 1
             }
@@ -281,7 +287,7 @@ pub(crate) fn peel_exported_statement(statement: &ParsedStatement) -> &ParsedSta
 
 fn is_merging_namespace_statement(
     statement: &ParsedStatement,
-    merging_namespaces: &[(String, surge_ts_types::PropertyMap)],
+    merging_namespaces: &[(String, surge_ts_types::PropertyMap, bool)],
 ) -> bool {
     if merging_namespaces.is_empty() {
         return false;
@@ -292,7 +298,7 @@ fn is_merging_namespace_statement(
     };
     merging_namespaces
         .iter()
-        .any(|(name, _)| name == &namespace.name)
+        .any(|(name, ..)| name == &namespace.name)
 }
 
 /// Overlays each merging namespace's value members onto the value symbol the
@@ -300,17 +306,34 @@ fn is_merging_namespace_statement(
 /// The value symbol is left alone when the namespace contributes no value
 /// members (the `@types/node` shape: the namespace holds types only).
 fn apply_merging_namespace_value_members(
-    merging_namespaces: &[(String, surge_ts_types::PropertyMap)],
+    merging_namespaces: &[(String, surge_ts_types::PropertyMap, bool)],
     exportable_values: &mut SymbolTable,
 ) {
-    for (name, members) in merging_namespaces {
+    for (name, members, declared_by_a_function) in merging_namespaces {
         let Some(symbol) = exportable_values.get_shared(name) else {
             // The value declaration bound nothing (an unsupported binding form);
             // fall back to the namespace object so the name stays a value.
+            // A *function* merged with its namespace stays callable even when
+            // the walk produced no value for it: a bare namespace object here
+            // made `drizzle(client)` report TS2349 in every module that imports it.
+            // The signature is deliberately permissive — the same shape an
+            // unresolved callee already had — so nothing about the call is
+            // newly checked, only that it is a call.
+            let object = crate::metrics::alloc_object_type(members.clone(), None);
+            let object = if *declared_by_a_function {
+                object.with_call_signature(surge_ts_types::FunctionType::new(
+                    vec![Type::Any],
+                    Type::Any,
+                    true,
+                    0,
+                ))
+            } else {
+                object
+            };
             let _ = exportable_values.insert(
                 name.clone(),
                 SymbolInfo {
-                    ty: Type::Object(crate::metrics::alloc_object_type(members.clone(), None)),
+                    ty: Type::Object(object),
                     kind: SymbolKind::Const,
                     function_signature: None,
                 },
