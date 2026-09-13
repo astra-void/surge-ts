@@ -1043,6 +1043,7 @@ fn build_module_local_values(
             &analysis.local_type_declarations,
             &seed,
             None,
+            parsed_file.is_module,
             &ctx,
         );
         module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(table));

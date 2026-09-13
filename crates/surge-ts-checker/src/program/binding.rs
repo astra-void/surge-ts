@@ -464,6 +464,7 @@ fn analyze_module(
                 local_type_declarations.as_ref(),
                 &import_seed,
                 None,
+                parsed_file.is_module,
                 ctx,
             );
             ctx.thin_superseded_value_collection = false;

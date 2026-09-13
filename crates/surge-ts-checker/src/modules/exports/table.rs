@@ -19,6 +19,7 @@ pub(crate) fn build_module_export_table(
         local_type_declarations,
         local_symbols,
         Some(imported_symbols),
+        parsed_file.is_module,
         ctx,
     );
     crate::program::binding::analyze_split_record(3, split_start);
