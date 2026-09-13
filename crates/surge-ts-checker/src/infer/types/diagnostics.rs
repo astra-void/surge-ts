@@ -51,6 +51,25 @@ pub(crate) fn emit_generic_arity(
     ctx.push_utility_diagnostic_once(diagnostic);
 }
 
+/// `Foo<Bad>` where `Foo`'s parameter is constrained. Only reported when both the
+/// argument and the constraint resolved to real, settled shapes: the whole point
+/// of the degradation sentinel is that surge cannot tell "violates the
+/// constraint" from "I could not model this", and reporting on the latter turns
+/// every modelling gap into a false positive.
+pub(crate) fn emit_type_argument_constraint(
+    argument: &surge_ts_types::Type,
+    constraint: &surge_ts_types::Type,
+    name_span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let mut diagnostic =
+        Diagnostic::ts2344(&argument.name(), &constraint.name(), ctx.file_name.clone());
+    if let Some(span) = name_span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+    ctx.push_utility_diagnostic_once(diagnostic);
+}
+
 pub(crate) fn emit_type_declaration_cycle(
     name: &str,
     name_span: Option<TextSpan>,

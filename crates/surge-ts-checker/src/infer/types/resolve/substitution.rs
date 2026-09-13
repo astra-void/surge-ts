@@ -68,6 +68,17 @@ pub(crate) fn bind_type_arguments(
             if parsed_type_is_placeholder_reference(argument, parent_substitution) {
                 substitution.insert_placeholder(parameter.name.clone(), resolved_ty);
             } else {
+                check_type_argument_constraint(
+                    parameter,
+                    &resolved_ty,
+                    argument_had_error,
+                    name_span,
+                    ctx,
+                    resolving,
+                    parent_substitution,
+                    &substitution,
+                    declaration_scope,
+                );
                 substitution.insert(parameter.name.clone(), resolved_ty);
             }
             if argument_had_error {
@@ -296,6 +307,87 @@ pub(crate) fn is_concrete_substituted_index_reference(
         ParsedType::KeyOf(inner) => {
             is_concrete_substituted_named_reference(inner.as_ref(), substitution)
         }
+        _ => false,
+    }
+}
+
+/// `Expect<false>` where `Expect<a extends true>`: a written type argument has to
+/// satisfy its parameter's constraint, which surge never checked for a type
+/// reference (only for a call's explicit `keyof` arguments). Both sides must be
+/// settled — an argument or constraint that degraded says nothing about whether
+/// the constraint holds — and a constraint naming an earlier parameter resolves
+/// under the bindings made so far (`<T, K extends keyof T>`).
+#[allow(clippy::too_many_arguments)]
+fn check_type_argument_constraint(
+    parameter: &ParsedTypeParameter,
+    argument: &Type,
+    argument_had_error: bool,
+    name_span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    parent_substitution: &TypeParameterSubstitution,
+    bound_so_far: &TypeParameterSubstitution,
+    declaration_scope: Option<(
+        &Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
+        &str,
+    )>,
+) {
+    let Some(constraint) = parameter.constraint.clone() else {
+        return;
+    };
+    if argument_had_error || !constraint_judgeable(argument) {
+        return;
+    }
+
+    let mut effective = parent_substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+    effective.extend(bound_so_far.clone_with_reason(TypeCopyReason::SubstitutionChanged));
+    // A constraint is authored in the *declaring* module and names its siblings
+    // bare, exactly like a default: resolving it under the consumer's scope
+    // reports every such sibling as an unknown name. The resolution is also
+    // speculative — it exists only to judge the argument — so anything it emits
+    // on the way is rolled back.
+    let diagnostics_before = ctx.diagnostics().len();
+    let resolved_constraint = if let Some((scope, file_name)) = declaration_scope {
+        with_type_declaration_scope(scope, ctx, |ctx| {
+            with_file_name(ctx, file_name, |ctx| {
+                resolve_parsed_type(constraint, ctx, resolving, &effective)
+            })
+        })
+    } else {
+        resolve_parsed_type(constraint, ctx, resolving, &effective)
+    };
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    if resolved_constraint.had_error || !constraint_judgeable(&resolved_constraint.ty) {
+        return;
+    }
+
+    if !surge_ts_types::is_assignable_to(argument, &resolved_constraint.ty) {
+        crate::infer::types::diagnostics::emit_type_argument_constraint(
+            argument,
+            &resolved_constraint.ty,
+            name_span,
+            ctx,
+        );
+    }
+}
+
+/// A type whose constraint relationship surge can judge without leaning on
+/// structural assignability. Deliberately only primitives and literals: every
+/// structural gap surge still has (an interface that should satisfy `object`, a
+/// lazy reference whose shape is not forced) would otherwise surface here as a
+/// false `TS2344` on code that is fine, and this check has no way to tell that
+/// from a real violation. The assertion idiom this exists for — `Expect<a extends
+/// true>`, `K extends keyof T` with a written key — is entirely in this domain.
+fn constraint_judgeable(ty: &Type) -> bool {
+    match ty {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(constraint_judgeable),
         _ => false,
     }
 }
