@@ -65,6 +65,9 @@ fn select_indexed_property_no_cascade(object: &Type, index: &Type) -> Option<Typ
         }
         (Type::Array(element_type), Type::Number) => Some(*element_type.clone()),
         (Type::Tuple(elements), Type::Number) => Some(union_type(elements.clone())),
+        (Type::Tuple(elements), Type::StringLiteral(key)) if key == "length" => Some(
+            Type::NumberLiteral(surge_ts_types::NumberLiteralType { value: elements.len().to_string() }),
+        ),
         _ => None,
     }
 }
@@ -428,6 +431,18 @@ pub(super) fn resolve_indexed_access_type(
             }
             ResolvedType {
                 ty: union_type(elements.clone()),
+                had_error: false,
+            }
+        }
+        // `T['length']` on a tuple is its arity as a literal, which is how every
+        // type-level list walk states its base case (`Length<path> extends 5`).
+        // Without it the guard degrades and takes the whole recursion with it.
+        (Type::Tuple(elements), Type::StringLiteral(key)) if key == "length" => {
+            if generic_indexed_access {
+                record_generic_indexed_access_success();
+            }
+            ResolvedType {
+                ty: Type::NumberLiteral(surge_ts_types::NumberLiteralType { value: elements.len().to_string() }),
                 had_error: false,
             }
         }
