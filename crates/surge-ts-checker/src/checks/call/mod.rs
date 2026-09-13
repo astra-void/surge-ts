@@ -1096,6 +1096,57 @@ fn infer_generic_class_type_arguments(
 /// Checks a call whose callee is an arbitrary expression (an IIFE, a call on a
 /// call). The callee and the arguments are always evaluated so everything
 /// written inside them is checked; the result is the callee's return type.
+/// An arrow invoked on the spot (`((table) => …)(f.field.table)`), checked with
+/// the call's own arguments standing in for the contextual type the arrow has no
+/// other way to get. Without this its parameters are un-annotated and
+/// `noImplicitAny` reports every one of them, which tsc never does — it types
+/// them from the argument at the same position.
+///
+/// The arguments are typed with diagnostics dropped: they are checked for real
+/// by the call below, and reporting here would double every one of them.
+fn immediately_invoked_arrow_type(
+    callee: &surge_ts_syntax::ParsedExpression,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<surge_ts_types::FunctionType> {
+    let surge_ts_syntax::ParsedExpression::ArrowFunction(arrow) = callee else {
+        return None;
+    };
+    if arrow.parameters.is_empty()
+        || arrow
+            .parameters
+            .iter()
+            .all(|parameter| parameter.declared_type.is_some())
+    {
+        return None;
+    }
+
+    let diagnostics_before = ctx.diagnostics().len();
+    let argument_types: Vec<Type> = arguments
+        .iter()
+        .map(
+            |argument| match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
+                InferredExpression::Known(ty) => ty,
+                _ => Type::Unknown,
+            },
+        )
+        .collect();
+    ctx.truncate_diagnostics(diagnostics_before);
+    if argument_types.iter().any(|ty| ty.is_unknown()) {
+        return None;
+    }
+
+    let required = argument_types.len();
+    let expected = crate::metrics::alloc_function_type(argument_types, Type::Unknown, false, required);
+    Some(crate::checks::function::check_arrow_function_expression_with_expected_type(
+        (**arrow).clone(),
+        Some(&expected),
+        symbols,
+        ctx,
+    ))
+}
+
 pub(crate) fn check_expression_call(
     callee: &surge_ts_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,
@@ -1105,7 +1156,10 @@ pub(crate) fn check_expression_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    let callee_result = evaluate_expression(callee, callee_span, symbols, ctx);
+    let callee_result = match immediately_invoked_arrow_type(callee, arguments, symbols, ctx) {
+        Some(function_type) => InferredExpression::Known(Type::Function(function_type)),
+        None => evaluate_expression(callee, callee_span, symbols, ctx),
+    };
 
     let callee_type = match callee_result {
         InferredExpression::Known(ty) => ty.peeled(),
