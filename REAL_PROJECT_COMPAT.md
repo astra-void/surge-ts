@@ -1202,6 +1202,89 @@ a namespace, re-exported through the package entry — `TS2339` ×8, `TS2351` ×
 `new SQL(…)`, `TS7006` ×5, `TS18048` ×1.
 
 
+## zustand corpus (provisioned 2026-09-13)
+
+pmndrs/zustand `v5.0.15` at `2115efb`, installed with
+`pnpm run real:zustand:provision` (blobless clone, `corepack pnpm install
+--ignore-scripts`). Every dependency the corpus types is a devDependency of the
+one package — `react`, `@types/react`, `immer`, `redux`,
+`@redux-devtools/extension`, `use-sync-external-store`, `@testing-library/*` —
+so a plain install is enough.
+
+**There is no aggregate target.** Upstream's root `tsconfig.json` *is* the
+corpus: `pnpm test:types` runs `tsc --noEmit` against it, it covers `src/` and
+`tests/` in one program, and TypeScript 7 needs nothing removed from it. That
+makes zustand the only corpus measured exactly as it ships. It is 31 root files
+(30 `.ts`/`.tsx` plus `src/types.d.ts`) under `strict`,
+`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
+`verbatimModuleSyntax`, `isolatedDeclarations`, `allowImportingTsExtensions`,
+`jsx: react-jsx`, `moduleResolution: bundler`, with `paths` mapping `zustand`
+and `zustand/*` onto `./src/`.
+
+The pinned TypeScript 7.0.2 oracle reports **0** diagnostics, so — like ky and
+unnamed — every surge diagnostic on it is a false positive. surge reported
+**136** on the first measurement (2026-09-13, clean worktree at `31d9bd6b`),
+all surge-only, and finished in about 0.24 s at about 88 MB peak RSS (`tsc`
+1.71 s / 326 MB, `tsgo` 0.19 s / 181 MB on the same target): the smallest and
+cheapest corpus in the set, and the fastest to iterate on. It is deliberately
+**not** a gate at 136; a ky-style exact-0/0 assertion can be armed when it
+reaches zero.
+
+First-measurement inventory, by code: `TS2339` ×79, `TS2349` ×34, `TS2304` ×9,
+`TS2322` ×4, `TS2345` ×4, `TS18048` ×3, `TS2536` ×1, `TS2353` ×1, `TS7006` ×1.
+By file the weight is in `tests/basic.test.tsx` (39), `tests/persistAsync.test.tsx`
+(26), `tests/middlewareTypes.test.tsx` (23) and `tests/shallow.test.tsx` (9); the
+`src/` side is 21.
+
+Three causes are reduced, and the first two account for the nine `TS2304`
+directly. None is pinned by a fixture — a fixture here would bake in the false
+positive rather than a fix.
+
+- **An augmented interface's members resolve in the augmented file's scope.**
+  zustand's whole middleware typing rests on one mechanism: each middleware
+  declares `declare module 'zustand/vanilla' { interface StoreMutators<S, A> {
+  'zustand/persist': WithPersist<S> } }`, and `Mutate<S, Ms>` in
+  `src/vanilla.ts` indexes `StoreMutators` to compose the store type. surge
+  merges the augmentation member but resolves its *type* where the interface was
+  declared, so `WithDevtools`, `WithPersist` and `WithRedux` — all local to their
+  own middleware file — are `TS2304` at `src/vanilla.ts:16`, `:25` and `:101`,
+  and the store type they feed loses its middleware surface. That loss is the
+  likely engine behind most of the 79 `TS2339` and 34 `TS2349`: the test files
+  call `store.persist.*`, `store.setState(…, action)` and `useStore(…)` on a
+  store whose mutators never applied. Reduced to two files of a dozen lines
+  (`export interface StoreMutators<S, A> {}` plus `Mutate` indexing it; a
+  sibling that augments it with a file-local alias) — tsc is clean and surge
+  reports `TS2304` at the *declaring* file's member span. Adjacent to the
+  augmentation-visibility gaps inventoried for tanstack-query, where an
+  augmentation of a base interface is not seen from a derived one.
+- **`infer` names past the first signature of an overloaded call-signature
+  group are unbound.** `persist.ts:125` and `devtools.ts:68` both write
+  `S extends { setState: { (...args: infer Sa1): infer Sr1; (...args: infer
+  Sa2): infer Sr2 } }` to capture both `setState` overloads, and the true branch
+  then names all four. `Sr1` resolves; `Sa1`, `Sa2` and `Sr2` are `TS2304`, so
+  only the first signature's return is registered from the group. Reduced to
+  nine lines with no imports; the single-signature form
+  (`{ getState: () => infer T }`, which `ExtractState` uses) is fine.
+- **A captured `let` is not narrowed past its last assignment.**
+  `createJSONStorage` declares `let storage: StateStorage<R> | undefined`,
+  assigns it inside a `try` whose `catch` returns, and then reads it from the
+  callbacks of the object literal it returns. Nothing assigns it after those
+  callbacks are created, so tsc narrows the capture to the assigned type; surge
+  reads the declared type and answers `TS18048` ×3 (`persist.ts:50`, `:57`,
+  `:58`). Reduced to thirteen lines with no imports.
+
+Three smaller items are not yet reduced. `src/vanilla/shallow.ts` carries four
+`TS2339` where `valueA instanceof Map ? valueA : new Map(valueA.entries())`
+does not come out as a `Map` — at `:18` the result is the parameter's own shape
+alone and at `:22` a union of that shape with `Map<any, any>`, so the two
+branches are being combined differently on the two lines. `src/vanilla.ts:20`
+answers `TS2536` on `number extends Ms['length' & keyof Ms]`, the
+intersection-keyed index zustand uses to test for a non-tuple array.
+`src/middleware/immer.ts:76` answers one `TS7006` on the rest parameter of
+`store.setState = (updater, replace, ...args) => …`, contextually typed by the
+assignment target's overloaded `setState`.
+
+
 ## Compatibility fixture matrix
 
 Fourteen real-world-shaped oracle presets (added 2026-07-16) pin the library

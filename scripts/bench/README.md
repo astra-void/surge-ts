@@ -56,7 +56,8 @@ pnpm run bench:compilers -- --project .local-projects/trpc --json .bench/compile
 ```
 
 `bench:ky`, `bench:trpc`, `bench:zod`, `bench:ofetch`, `bench:tanstack-query`,
-`bench:ts-pattern`, `bench:drizzle-orm`, and `bench:unnamed` are predefined for
+`bench:ts-pattern`, `bench:drizzle-orm`, `bench:zustand`, and `bench:unnamed`
+are predefined for
 the usual local checkouts and write their JSON/SVG/HTML reports to
 `.bench/compilers/<name>.*`. Extra flags append after `--`, e.g.
 `pnpm run bench:trpc -- --iterations 3 --rustJobs 1`.

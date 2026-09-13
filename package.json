@@ -24,6 +24,7 @@
 		"bench:ofetch": "tsx scripts/bench/compare-compilers.ts --project .local-projects/ofetch --json .bench/compilers/ofetch.json --chart .bench/compilers/ofetch.svg --html .bench/compilers/ofetch.html",
 		"bench:drizzle-orm": "tsx scripts/bench/compare-compilers.ts --project .local-projects/drizzle-orm/drizzle-orm/tsconfig.surge.json --json .bench/compilers/drizzle-orm.json --chart .bench/compilers/drizzle-orm.svg --html .bench/compilers/drizzle-orm.html",
 		"bench:ts-pattern": "tsx scripts/bench/compare-compilers.ts --project .local-projects/ts-pattern/tsconfig.surge.json --json .bench/compilers/ts-pattern.json --chart .bench/compilers/ts-pattern.svg --html .bench/compilers/ts-pattern.html",
+		"bench:zustand": "tsx scripts/bench/compare-compilers.ts --project .local-projects/zustand --json .bench/compilers/zustand.json --chart .bench/compilers/zustand.svg --html .bench/compilers/zustand.html",
 		"bench:unnamed": "tsx scripts/bench/compare-compilers.ts --project ../../nextjs/unnamed --json .bench/compilers/unnamed.json --chart .bench/compilers/unnamed.svg --html .bench/compilers/unnamed.html",
 		"real:project": "tsx scripts/real-projects/measure-project.ts",
 		"real:test": "tsx --test scripts/real-projects/measure-project.test.ts scripts/real-projects/ky-regression.test.ts scripts/real-projects/unnamed-regression.test.ts",
@@ -36,10 +37,12 @@
 		"real:zod": "tsx scripts/real-projects/measure-project.ts --project .local-projects/zod --name zod --allowMissing",
 		"real:tanstack-query": "tsx scripts/real-projects/measure-project.ts --project .local-projects/tanstack-query/tsconfig.surge.json --name tanstack-query --allowMissing",
 		"real:ts-pattern": "tsx scripts/real-projects/measure-project.ts --project .local-projects/ts-pattern/tsconfig.surge.json --name ts-pattern --allowMissing",
+		"real:zustand": "tsx scripts/real-projects/measure-project.ts --project .local-projects/zustand --name zustand --allowMissing",
 		"real:drizzle-orm": "tsx scripts/real-projects/measure-project.ts --project .local-projects/drizzle-orm/drizzle-orm/tsconfig.surge.json --name drizzle-orm --allowMissing",
 		"real:tanstack-query:provision": "scripts/real-projects/provision-tanstack-query.sh",
 		"real:ts-pattern:provision": "scripts/real-projects/provision-ts-pattern.sh",
-		"real:drizzle-orm:provision": "scripts/real-projects/provision-drizzle-orm.sh"
+		"real:drizzle-orm:provision": "scripts/real-projects/provision-drizzle-orm.sh",
+		"real:zustand:provision": "scripts/real-projects/provision-zustand.sh"
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.3",
