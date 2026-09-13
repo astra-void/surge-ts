@@ -192,7 +192,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; dirty-tree measurement, not a gate (see note) |
-| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 54 | **newly provisioned, provisional** — 134 when first measured and 139 once `20b5ef3` began reporting `TS2344`; all 54 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
+| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 31 | **newly provisioned, provisional** — 134 when first measured; all 31 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
 
 Notes that matter:
 
@@ -239,11 +239,15 @@ Notes that matter:
   receiver's string index signature (−2); the inline-arrow predicate a `filter`
   call reads was resolved with reporting on, out of the arrow's own scope (−2);
   and a union member a property-path guard rules out was kept rather than
-  dropped, which is the AWS SDK `?: never` member pattern (−10). It stands at
-  **54** rather than 49 because `20b5ef3` then began reporting `TS2344` and put
-  five new over-reports on this corpus, one in each dialect's
-  `select.types.ts` — those are not from this burn-down and are not yet
-  inventoried. Measured from an isolated worktree, base and branch built from
+  dropped, which is the AWS SDK `?: never` member pattern (−10). It stands at **31**
+  after a third pass: the five `TS2344` `20b5ef3` had put on this corpus are
+  suppressed (a constraint stated in terms of a sibling parameter is only as
+  right as surge's model of that sibling), `new SQL(…)` constructs again where a
+  generic class merges with a namespace (−7), and `drizzle(client)` is callable
+  again where a function does (−11). None of those three is preset-pinned —
+  each was reduced as far as the corpus file and no further, and every
+  hand-written version of the shape is already clean — so the corpus is the
+  only evidence for them. Measured from an isolated worktree, base and branch built from
   the same tree, but not from a clean checkout of a commit that contains these
   changes; re-measure before treating any of it as a baseline. Full inventory in
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#drizzle-orm-corpus-provisioned-2026-09-13).
