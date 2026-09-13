@@ -1089,6 +1089,19 @@ fn evaluate_tuple_literal_with_expected_type(
     InferredExpression::Known(Type::Tuple(expected_elements.to_vec()))
 }
 
+/// Whether an expected member type stands at surge's degradation sentinel, so a
+/// comparison against it proves nothing. Deliberately shallow: this runs for
+/// every property of every checked object literal, and the deep walk resolves
+/// lazy references — too expensive here, and re-entrant while a literal is
+/// mid-check.
+fn expected_member_is_degraded(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown => true,
+        Type::Union(union) => union.types().iter().any(|member| member.is_unknown()),
+        _ => false,
+    }
+}
+
 fn evaluate_object_literal_with_expected_type(
     properties: &[ParsedObjectProperty],
     expected_object_type: &surge_ts_types::ObjectType,
@@ -1150,6 +1163,16 @@ fn evaluate_object_literal_with_expected_type(
         return InferredExpression::Unknown;
     }
 
+    // Set when a property the literal *writes* is compared against an expected
+    // member surge could not model. tsc reports one error per literal and stops:
+    // a written property that fails is reported at the property, and the
+    // missing-required-property report never happens. When the member is a
+    // degradation sentinel the comparison passes permissively, so a missing
+    // property below would be reported *instead* of the property error tsc
+    // reports — the `@ts-expect-error` a test wrote over the property then does
+    // not cover it. Withhold the missing-property report in that case.
+    let mut degraded_property_comparison = false;
+
     for property in properties {
         if property.is_spread {
             continue;
@@ -1178,6 +1201,10 @@ fn evaluate_object_literal_with_expected_type(
                 expected_property.ty.clone()
             })
         };
+        if expected_member_is_degraded(&expected_property.ty) {
+            degraded_property_comparison = true;
+        }
+
         // Without `exactOptionalPropertyTypes` an optional property's type
         // *includes* `undefined` — tsc folds it in at declaration resolution —
         // so the contextual type has to carry it. A conditional value is checked
@@ -1281,7 +1308,7 @@ fn evaluate_object_literal_with_expected_type(
         }
     }
 
-    if let Some((property_name, _)) = (!has_spread)
+    if let Some((property_name, _)) = (!has_spread && !degraded_property_comparison)
         .then(|| {
             expected_object_type
                 .required_properties()
