@@ -883,6 +883,85 @@ drive ts-pattern's deep conditional instantiation still resolve to a degraded
 chain rather than being instantiated. The comparison becomes meaningful when the
 merged signature stops degrading, not when the diagnostic count drops.
 
+### The two `tsc`-only assertions (2026-09-13)
+
+Both are `Expect<Equal<…>>` assertions ts-pattern wrote against TypeScript 5.9
+that the pinned 7.0.2 oracle evaluates to `false`. They looked like two obscure
+type-level cases; they were the top of a five-layer stack, and the bottom four
+layers were gaps in surge that had nothing to do with ts-pattern:
+
+1. **Variadic tuples were not modelled.** A tuple with a rest element
+   (`[...a, ...b]`, `[infer head, ...infer tail]`, `[...path, k]`) lowered to
+   `Unknown` in the parser, so every type-level list walk degraded on its first
+   step. Now a `ParsedType::VariadicTuple`; spread operands with a known length
+   splice into a fixed tuple, and a tuple `extends` pattern decides its branch by
+   arity (`try_tuple_infer_match`), which is what lets a recursion terminate on
+   `[]`. Committed as `ca4420b`.
+2. **No contravariant inference.** A union check type against a signature
+   pattern bound nothing, so `UnionToIntersection` — the idiom behind
+   `IsUnion`, `UnionToTuple`, and most of the ecosystem — was always the
+   sentinel. Candidates found in parameter positions now intersect, return
+   positions union (`bind_union_signature_infer_captures`).
+3. **An intersection of signatures inferred from its permissive fold.** The
+   fold's return degrades whenever two overloads disagree, so
+   `UnionToTuple`'s `extends (_: any) => infer elem` never bound. The
+   intersection now keeps its operands as an overload group and inference reads
+   the *last* one, as tsc does.
+4. **`Equal<a, b>` was always `true`.** Both deferred conditionals resolved to
+   the same sentinel. Two generic signatures whose returns test their own type
+   parameter are now related by identity of the resolved parts
+   (`deferred_conditional_identity`); a sentinel on either side still degrades.
+5. **`TS2344` on a type reference's arguments did not exist at all** — only a
+   call's explicit `keyof` arguments were checked. Now checked for primitive
+   and literal operands, with the constraint resolved in the *declaring* module
+   (resolving it in the consumer's scope reported every declaring-module
+   sibling as an unknown name: zod +89 `TS2304`). Structural operands stay out
+   because surge's structural gaps surface there as false positives
+   (`PromiseLike<unknown>` against `WeakKey`).
+
+Three general bugs were found under the same probes and are fixed with the
+stack: **`1 extends object` was true** (the `object` keyword was the empty
+object type, which primitives satisfy — now a `non_primitive` marker;
+`IsPlainObject<1>` was `true` because of it); **`X extends unknown` always took
+the false branch** (the genuine `unknown` constraint shared `is_unknown()` with
+the degradation sentinel and was treated as unmodelled — `@bomb.sh/args`'
+`UnionToIntersection` therefore resolved to `never`); and **a symbol-keyed
+member vanished from its type literal** (`{ readonly [Symbol.toStringTag]:
+string }` became `{}`, which everything satisfies — kept under a name no
+identifier can spell). Also: tuple `['length']`, the empty tuple's element type
+as `never`, and `never`-inference defaulting an `infer` capture to the genuine
+`unknown`.
+
+With all of it, `FindUnions<{ a: 1 | 2 }, { a: 1 }>` matches the oracle exactly
+under `SURGE_GENERIC_RECURSIVE_ALIAS=1`, and the corpus **does not move** on the
+default configuration (ky 0, ofetch 1, zod 21, trpc 1155, tanstack-query 10,
+ts-pattern 1, all measured on a dirty tree). Under that gate ts-pattern's one
+surge-only report disappears and the run completes (it used to die), at the cost
+of one tanstack-query report; the default was not flipped here.
+
+**Why the two assertions stay open.** Each rests on a 7.0.2 behaviour that is
+not semantics surge can reason its way to:
+
+- `distribute-unions.test.ts:240` — `FindUnions` now evaluates the whole
+  `res5`, and the only difference from the oracle is **union member order**:
+  surge yields `[a,e], [a,f], [b]`, which is what TypeScript 5.9 produced and
+  what the test asserts; 7.0.2 yields `[b], [a,e], [a,f]`. surge's unions keep
+  first-seen order; tsgo sorts constituents by internal type id. Reproducing
+  that means reproducing tsgo's type-creation order, which is an implementation
+  detail, not a rule.
+- `when.test.ts:218` — the oracle types the `P.when((x) => …)` parameter as
+  **`unknown` whenever the predicate sits inside `P.array({ … })`**, with or
+  without a surrounding `.with`, and as `string` in a plain object pattern. That
+  is 7.0.2 giving up contextual inference at that nesting where 5.9 did not.
+  surge yields the sentinel there (the sealed overload program above), so
+  `Equal` declines to decide. Matching the oracle means matching *where* its
+  generic-call inference fails.
+
+Neither is a fixture; both are recorded so the next reader does not re-derive
+the stack. **The workspace test suite and the oracle sweep were not run for
+this pass** — every attempt was killed by machine pressure from concurrent
+builds — so the numbers above are corpus measurements only, not a gate result.
+
 ## drizzle-orm corpus (provisioned 2026-09-13)
 
 drizzle-team/drizzle-orm `drizzle-orm@0.45.3` at `b786252`, installed with

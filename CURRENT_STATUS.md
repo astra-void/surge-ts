@@ -191,7 +191,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
-| **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **newly provisioned, provisional** — 446 when first measured; the 1 that remains is surge-only and the 2 `tsc` reports are unmatched; dirty-tree measurement, not a gate (see note) |
+| **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; dirty-tree measurement, not a gate (see note) |
 | **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 134 | **newly provisioned, provisional** — first measurement, all 134 surge-only and the 16 `tsc` reports unmatched; dirty-tree measurement, not a gate (see note) |
 
 Notes that matter:
@@ -262,7 +262,10 @@ Notes that matter:
   `predicate-type-argument-from-arguments-basic`) and both leave every corpus
   byte-identical, because the third layer is the blocked overload program:
   ts-pattern's pattern argument comes back as `any` from its own overload group.
-  The one that remains is inventoried in
+  The one that remains, and the two `tsc`-only assertions with the five-layer
+  stack under them (variadic tuples, contravariant inference, last-overload
+  inference, `Equal` identity, `TS2344` on type-reference arguments — all landed
+  2026-09-13, corpus-neutral), are inventoried in
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#ts-pattern-surge-only-inventory-2026-09-11).
   Measured on a **dirty working tree** on top of `6e034fd`; re-measure from a
   clean worktree before treating any of it as a baseline.
