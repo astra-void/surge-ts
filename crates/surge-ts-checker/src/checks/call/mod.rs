@@ -249,7 +249,19 @@ pub(crate) fn check_call_like_with_expected_type(
             }
             Some(Type::Any)
         }
-        _ => {
+        ref other => {
+            if std::env::var("SURGE_CALL_DEBUG").is_ok() {
+                let shown = match other {
+                    Type::Object(o) => format!(
+                        "Object(call={}, ctor={}, props=[{}])",
+                        o.call_signature().is_some(),
+                        o.construct_signature().is_some(),
+                        o.properties.keys().take(6).map(|k| k.to_string()).collect::<Vec<_>>().join(",")
+                    ),
+                    t => format!("{t:?}").chars().take(70).collect(),
+                };
+                eprintln!("[call] not callable: {shown} in {}", ctx.file_name);
+            }
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2349(ctx.file_name.clone()),
                 callee_span,
@@ -815,6 +827,25 @@ pub(crate) fn check_new_like(
         Type::Any => generic_class_instance_type(callee, type_arguments, arguments, symbols, ctx)
             .or(Some(Type::Any)),
         Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
+        // A generic class merged with a namespace (`class SQL` +
+        // `namespace SQL { class Aliased }`) has the namespace object for a
+        // value: the class half contributed the `any` above, which the merge
+        // drops, so the members survive and the construct signature does not.
+        // The class's *type* side is exact either way, so the instance is built
+        // by name exactly as the `any` arm does — reporting here instead called
+        // `new SQL(...)` unconstructable in the module that declares it.
+        Type::Object(ref object) if object.construct_signature().is_none() => {
+            match generic_class_instance_type(callee, type_arguments, arguments, symbols, ctx) {
+                Some(instance) => Some(instance),
+                None => {
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts2351(ctx.file_name.clone()),
+                        callee_span,
+                    ));
+                    None
+                }
+            }
+        }
         _ => {
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2351(ctx.file_name.clone()),
