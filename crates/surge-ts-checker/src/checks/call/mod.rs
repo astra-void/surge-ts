@@ -1744,13 +1744,15 @@ pub(crate) fn type_argument_is_unresolved(ty: &Type) -> bool {
         Type::Unknown => true,
         Type::Array(element) => type_argument_is_unresolved(element),
         Type::Tuple(elements) => elements.iter().any(type_argument_is_unresolved),
-        Type::Function(function) => {
-            function
-                .parameters()
-                .iter()
-                .any(type_argument_is_unresolved)
-                || type_argument_is_unresolved(function.return_type())
-        }
+        // A *member's* signature carrying the sentinel does not disqualify the
+        // object that holds it. `class SQL implements SQLWrapper` and
+        // `SQLWrapper.getSQL(): SQL` are mutually recursive, so surge's cycle
+        // break leaves `getSQL`'s return as the sentinel — and every drizzle
+        // class that implements the interface was then refused as a type
+        // argument, which is what abandoned `is(dialect, PgDialect)`. Binding
+        // `T` to such a shape still types every use of `T` correctly except that
+        // one member, which was already unmodelled.
+        Type::Function(_) => false,
         Type::Object(object) => {
             object
                 .properties
