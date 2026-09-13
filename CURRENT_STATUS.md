@@ -192,6 +192,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **newly provisioned, provisional** — 446 when first measured; the 1 that remains is surge-only and the 2 `tsc` reports are unmatched; dirty-tree measurement, not a gate (see note) |
+| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 134 | **newly provisioned, provisional** — first measurement, all 134 surge-only and the 16 `tsc` reports unmatched; dirty-tree measurement, not a gate (see note) |
 
 Notes that matter:
 
@@ -202,6 +203,30 @@ Notes that matter:
   (a ratchet that only moves down) plus a precondition that `tsc` still reports
   0. Both *skip* cleanly when the project or the `typescript` package is absent
   (no third-party source is vendored).
+- **drizzle-orm is newly provisioned and is not a gate.** The aggregate target
+  `tsconfig.surge.json` (448 `src/` files plus the 80-file `type-tests/` suite,
+  installed by `pnpm run real:drizzle-orm:provision`) is the corpus — the same
+  set upstream's own `test:types` covers, under the repo's unusually strict
+  settings (`noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`,
+  `noImplicitOverride`, `checkJs`). It is deliberately *not* a clean-oracle
+  corpus: the pinned TypeScript 7.0.2 oracle reports 16 diagnostics of its own,
+  eight `@ts-expect-error` directives drizzle wrote against TypeScript 5.6 that
+  TypeScript 7 no longer satisfies at that line, each paired with the `TS2769`
+  that landed one construct over. surge matches none of them. surge reports
+  **134** on the first measurement, every one surge-only, and finishes in about
+  2.4 s at about 480 MB peak RSS (`tsc` 12.8 s / 1.22 GB, `tsgo` 2.6 s /
+  1.66 GB on the same target) — no hang and no unbounded expansion, so the
+  corpus is usable as-is. The dominant cluster is drizzle's `is(value, Klass)`
+  entity guard, a generic predicate narrowing to `InstanceType<T>` with `T`
+  inferred from a class value: 70 of the 134 sit within eight lines of an
+  `is(...)` call, which is a proximity count rather than an attribution. Two
+  smaller causes are confirmed by reading the source:
+  `/// <reference types="…" />` is not honoured (19 `TS2304` on
+  `@cloudflare/workers-types` globals) and `abstract` members are checked as if
+  they had bodies (2 `TS2355`). No fix has been attempted yet. Measured on a
+  **dirty working tree** on top of `6641008`; re-measure from a clean worktree
+  before treating any of it as a baseline. Full inventory in
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#drizzle-orm-corpus-provisioned-2026-09-13).
 - **ts-pattern is newly provisioned and is not a gate.** The aggregate target
   `tsconfig.surge.json` (18 `src/` files plus the 48-file type-level test suite,
   installed by `pnpm run real:ts-pattern:provision`) is the corpus. It is

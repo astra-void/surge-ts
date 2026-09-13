@@ -883,6 +883,118 @@ drive ts-pattern's deep conditional instantiation still resolve to a degraded
 chain rather than being instantiated. The comparison becomes meaningful when the
 merged signature stops degrading, not when the diagnostic count drops.
 
+## drizzle-orm corpus (provisioned 2026-09-13)
+
+drizzle-team/drizzle-orm `drizzle-orm@0.45.3` at `b786252`, installed with
+`pnpm run real:drizzle-orm:provision` (blobless clone, `corepack pnpm install
+--filter ./drizzle-orm --ignore-scripts`). Only the `drizzle-orm` package is
+installed: `drizzle-kit`, `drizzle-seed` and `integration-tests` pull in database
+servers and bundler toolchains the corpus never checks, while the package's own
+devDependencies already carry every driver its sources import (`pg`, `mysql2`,
+`better-sqlite3`, `@neondatabase/serverless`, `@planetscale/database`,
+`@libsql/client`, `@electric-sql/pglite`, `gel`, `kysely`, `knex`, …), so the
+filtered install is enough to type all of `src/`.
+
+The harness target is an aggregate, `tsconfig.surge.json`, kept in the repo at
+`scripts/real-projects/targets/drizzle-orm.tsconfig.json` and copied into the
+corpus by the provisioning script. Unlike the tanstack-query and ts-pattern
+targets it is written into the *package* directory, not the repo root, because
+`paths` and `typeRoots` resolve relative to the tsconfig that declares them and
+upstream's own type gate (`cd type-tests && tsc`) runs from there too.
+
+No upstream tsconfig can serve directly: every one of them inherits `baseUrl`
+from the repo root, which TypeScript 7 removed — the oracle answers `TS5102`
+(plus `TS5090` on the non-relative `paths` value) and checks nothing. The
+aggregate restates the root `compilerOptions` verbatim minus `baseUrl`, and
+replaces it with the mapping TypeScript 7 suggests: `"~/*": ["./src/*"]` for the
+package's own alias plus `"*": ["./*"]` for the root-relative imports the
+type-tests write (`import { Equal } from 'type-tests/utils.ts'`). It is 448
+`src/` files plus the 80-file `type-tests/` suite in one program — the same set
+upstream's `test:types` covers — under the repo's own settings, which are
+unusually strict: `strict`, `noUncheckedIndexedAccess`,
+`noPropertyAccessFromIndexSignature`, `noImplicitOverride`, `noImplicitReturns`,
+`exactOptionalPropertyTypes: false`, `checkJs`, `moduleResolution: bundler`,
+`allowImportingTsExtensions`.
+
+`src/prisma` is excluded. Those three drivers import the *generated* Prisma
+client, which only exists after `prisma generate` — a codegen step that
+downloads a query engine, so provisioning deliberately skips it. Left in, it
+costs six diagnostics on both sides (`TS2305` ×3, `TS7006` ×3) that measure the
+missing codegen rather than the checker. `typeRoots` and `types` are pinned to
+the package's own `node_modules/@types` so the surrounding surge-ts workspace's
+`@types/node` can never be picked up by the upward typeRoot walk.
+
+This is **not** a clean-oracle corpus. The pinned TypeScript 7.0.2 oracle
+reports 16 diagnostics of its own, all in `type-tests/`, all the same shape:
+eight `@ts-expect-error` directives that drizzle wrote against TypeScript 5.6
+and that TypeScript 7 no longer satisfies at that line, each producing a
+`TS2578 Unused '@ts-expect-error' directive` plus the `TS2769 No overload matches
+this call` that landed one construct over. surge matches none of them, so the
+corpus starts with 16 false negatives as well.
+
+### First measurement (2026-09-13)
+
+surge reports **134**, every one of them surge-only, from a **dirty working
+tree** on top of `6641008` (a copy of the tree's binary taken at 15:31, so this
+is not a clean-worktree figure and is not carried into the status table). It
+completes in about 2.4 s at about 480 MB peak RSS, against 12.8 s / 1.22 GB for
+`tsc` and 2.6 s / 1.66 GB for `tsgo` on the same target. No hang, no unbounded
+expansion: the corpus is usable as-is.
+
+| Code | Count |
+| --- | ---: |
+| TS2339 property does not exist | 42 |
+| TS18048 possibly 'undefined' | 27 |
+| TS2304 cannot find name | 19 |
+| TS2322 not assignable | 17 |
+| TS2349 not callable | 11 |
+| TS2351 not constructable | 7 |
+| TS7006 implicit any parameter | 5 |
+| TS2355 / TS2538 / TS2345 | 2 each |
+
+What is identified so far:
+
+- **drizzle's `is()` entity guard is the dominant cluster.** `src/entity.ts`
+  declares `is<T extends DrizzleEntityClass<any>>(value: any, type: T): value is
+  InstanceType<T>`, where `DrizzleEntityClass<T>` is
+  `((abstract new (...args: any[]) => T) | (new (...args: any[]) => T)) &
+  DrizzleEntity` — so `T` is inferred from a *class value* passed as the second
+  argument and the narrowed type is `InstanceType<T>`. surge does not land on the
+  instance type, and every dialect, `utils.ts`, `relations.ts` and migrator file
+  in the repo is written in terms of this one guard. **70 of the 134 sit within
+  eight lines of an `is(...)` call** — a proximity count, not an attribution;
+  the sampled `TS2339` (`entry.decoder`, `table._.usedTables`, `relation.config`,
+  `.dbMigrations`) and all 10 of the `PgDialect | PgDialectConfig` `TS2322`
+  (`this.dialect = is(dialect, PgDialect) ? dialect : undefined`) are confirmed
+  by reading the source. A minimal 18-line reproduction of the guard shape
+  *passes* on surge, so an additional ingredient in the real shape is still
+  unaccounted for.
+- **`/// <reference types="…" />` is not honoured** — 19 `TS2304`, all of them
+  ambient globals the referencing file pulls in that way: `D1Database`,
+  `D1PreparedStatement`, `D1Response`, `D1Result` from
+  `@cloudflare/workers-types` in `src/d1/`, and `DurableObjectStorage`,
+  `SqlStorageCursor` in `src/durable-sqlite/`. Both packages are installed and
+  neither is in `types`, which is exactly the case the directive exists for.
+- **A parameter is not in scope inside its own type-predicate annotation** —
+  `TS2304: Cannot find name 'c'` ×2, both
+  `.filter((c): c is Exclude<typeof c, undefined> => c !== undefined)` in
+  `src/sql/expressions/conditions.ts`.
+- **`abstract` members are checked as if they had bodies** — the two `TS2355`
+  in `src/cache/core/cache.ts` are `abstract strategy(): 'explicit' | 'all'` and
+  its sibling, reported as "must return a value".
+- **`T[string]` on a `Record`-shaped alias** — the one `TS2538` in
+  `src/operations.ts:39` is `SelectedFieldsFlat<TColumn>[string]`.
+- Not yet reduced: the 7 `TS2351 This expression is not constructable` on
+  `new SQL(…)` / `new StringChunk(…)` (both classes carry a computed
+  `static readonly [entityKind]: string`), the 11 `TS2349 This expression is not
+  callable` on `drizzle(new Client())` (a function merged with a namespace,
+  re-exported through the package entry), the 7 `Type 'Config | undefined' is not
+  assignable to type 'string'` across `src/libsql/`, and the 10 `TS18048` in
+  `src/aws-data-api/common/index.ts` on a repeated `field.arrayValue` access.
+
+No fix has been attempted against this corpus yet; the list above is the
+starting inventory, not a burn-down record.
+
 ## Compatibility fixture matrix
 
 Fourteen real-world-shaped oracle presets (added 2026-07-16) pin the library
