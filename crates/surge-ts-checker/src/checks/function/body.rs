@@ -39,13 +39,6 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
     contains_unknown(ty, false)
 }
 
-/// Whether a type carries surge's degradation sentinel. A written `unknown` is
-/// not degradation — `{ [k: string]: unknown }` is a fully determined type — so
-/// a caller that only wants to know whether inference gave up asks this.
-pub(crate) fn type_contains_degradation_sentinel(ty: &Type) -> bool {
-    contains_unknown(ty, true)
-}
-
 fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
     thread_local! {
         // References resolved while walking the current type, to break the cyclic
