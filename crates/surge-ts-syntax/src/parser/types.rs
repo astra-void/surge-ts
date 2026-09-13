@@ -34,16 +34,18 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSBooleanKeyword(_) => Some(ParsedType::Boolean),
         TSType::TSUndefinedKeyword(_) => Some(ParsedType::Undefined),
         TSType::TSNullKeyword(_) => Some(ParsedType::Undefined),
-        // `object` is every non-primitive, which the empty object type already
-        // models exactly for the member surface: a property read off it is an
-        // error and an assignment out of it is checked. Degrading it to the
-        // sentinel instead made both silent.
+        // `object` is every non-primitive: the empty object type models its
+        // member surface exactly (a property read off it is an error, an
+        // assignment out of it is checked), and the marker is what keeps a
+        // primitive from satisfying it — `1 extends object` is false, which is
+        // how `IsPlainObject`-style guards tell a value from a record.
         TSType::TSObjectKeyword(_) => Some(ParsedType::Object(std::sync::Arc::new(
             ParsedObjectType {
                 properties: Vec::new(),
                 string_index_type: None,
                 call_signature: None,
                 construct_signature: None,
+                non_primitive: true,
             },
         ))),
         // `symbol` and `bigint` have no modelled representation; degrade to
@@ -79,6 +81,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                     string_index_type: None,
                     call_signature: None,
                     construct_signature: Some(Box::new(function)),
+                    non_primitive: false,
                 }))
             })
         }
@@ -688,6 +691,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         string_index_type,
         call_signature,
         construct_signature,
+        non_primitive: false,
     }))
 }
 

@@ -639,6 +639,9 @@ pub struct ParsedObjectType {
     /// with only this signature — modelled distinctly from a call signature so
     /// a plain function does not satisfy `T extends new (…) => …`.
     pub construct_signature: Option<Box<ParsedFunctionType>>,
+    /// The `object` keyword: every non-primitive. Its member surface is the
+    /// empty object, but a primitive does not satisfy it, which `{}` cannot say.
+    pub non_primitive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

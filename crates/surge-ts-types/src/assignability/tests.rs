@@ -782,6 +782,7 @@ fn plain_object(entries: Vec<(&str, Type)>) -> Type {
         call_signature: None,
         is_intersection: false,
         synthetic_open_index: false,
+        non_primitive: false,
     })
 }
 

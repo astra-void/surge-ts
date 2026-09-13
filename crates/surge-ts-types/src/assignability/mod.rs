@@ -484,6 +484,17 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         // objects too, so they likewise satisfy a no-required-member target — this
         // is what makes `Object.fromEntries(entries: [...][])` accept its argument
         // when the parameter degrades to `{}`.
+        // The `object` keyword is the one no-member target a primitive does
+        // not satisfy; arrays and tuples are objects and still do.
+        (
+            Type::String
+            | Type::StringLiteral(_)
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_),
+            Type::Object(target),
+        ) if target.non_primitive => false,
         (
             Type::String
             | Type::StringLiteral(_)

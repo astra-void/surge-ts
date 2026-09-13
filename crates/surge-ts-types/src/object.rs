@@ -64,6 +64,10 @@ pub struct ObjectType {
     /// author wrote. Excluded from equality, like `is_intersection`, so no cache
     /// key, dedup fingerprint, or canonical-store identity changes.
     pub synthetic_open_index: bool,
+    /// Set for the `object` keyword. The member surface is the empty object,
+    /// but assignability refuses a primitive source. Excluded from equality
+    /// like the other markers.
+    pub non_primitive: bool,
 }
 
 impl PartialEq for ObjectType {
@@ -165,6 +169,7 @@ impl ObjectType {
             call_signature: None,
             is_intersection: false,
             synthetic_open_index: false,
+            non_primitive: false,
         }
     }
 
@@ -191,6 +196,12 @@ impl ObjectType {
     /// rather than a declared `[key: string]: T`.
     pub fn with_open_index_marker(mut self) -> Self {
         self.synthetic_open_index = true;
+        self
+    }
+
+    /// Marks this object as the `object` keyword: no primitive satisfies it.
+    pub fn with_non_primitive_marker(mut self) -> Self {
+        self.non_primitive = true;
         self
     }
 
@@ -309,6 +320,7 @@ impl Clone for ObjectType {
             call_signature: self.call_signature.clone(),
             is_intersection: self.is_intersection,
             synthetic_open_index: self.synthetic_open_index,
+            non_primitive: self.non_primitive,
         }
     }
 }

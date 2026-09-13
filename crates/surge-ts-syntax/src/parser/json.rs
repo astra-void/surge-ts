@@ -212,6 +212,7 @@ impl JsonParser<'_> {
             string_index_type: None,
             call_signature: None,
             construct_signature: None,
+            non_primitive: false,
         })))
     }
 

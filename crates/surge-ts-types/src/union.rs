@@ -788,6 +788,7 @@ mod tests {
                 call_signature: None,
                 is_intersection: false,
                 synthetic_open_index: false,
+                non_primitive: false,
             })
         };
 
@@ -919,6 +920,7 @@ mod tests {
                     call_signature: None,
                     is_intersection: false,
                     synthetic_open_index: false,
+                    non_primitive: false,
                 })
             })
             .collect();
@@ -951,6 +953,7 @@ mod tests {
                 call_signature: None,
                 is_intersection: false,
                 synthetic_open_index: false,
+                non_primitive: false,
             })
         };
 
@@ -995,6 +998,7 @@ mod tests {
                 call_signature: None,
                 is_intersection: false,
                 synthetic_open_index: false,
+                non_primitive: false,
             })
         };
 

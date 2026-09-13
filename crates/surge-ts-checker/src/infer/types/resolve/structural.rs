@@ -397,6 +397,9 @@ pub(crate) fn resolve_object_type(
         });
 
     let mut resolved_object = alloc_object_type(properties, string_index_type);
+    if object_type.non_primitive {
+        resolved_object = resolved_object.with_non_primitive_marker();
+    }
     if let Some(call_signature) = object_type.call_signature.as_deref() {
         let resolved = resolve_parsed_type(
             ParsedType::Function(std::sync::Arc::new(call_signature.clone())),
