@@ -1988,3 +1988,38 @@ default (`map<U>`, `resolve<T>`, `then<TResult1>`) yields `unknown`. That is a
 false-negative class of its own, well beyond these two lines; the
 `trpc-fn-80` branch carries a written-signature attachment for generic methods
 that is the likely repair, and this pair should be re-measured after it lands.
+
+## trpc-fn-80 merge (2026-09-13)
+
+`trpc-fn-80` (trpc `tsc`-only 116 → 89, surge-only 0) merged into main at
+`8d22087`, after the overload-selection and tanstack-query commits. The branch
+was one commit behind main's new work and both touched
+`checks/call/instantiate.rs`; the two conflicts were the explicit-type-argument
+seeding order (the branch's earlier seeding kept) and the union candidate guard
+(the branch's `matches.is_empty() && naked.is_empty()` kept — equivalent to
+main's removal whenever a naked member exists).
+
+Gates on the merged tree: sweep 212/212; trpc 1244 / 1155, surge-only 0,
+`tsc`-only 89; ky, ofetch, ts-pattern, unnamed byte-identical; tanstack-query
+13 (one `TS7030` closed by the branch's implicit-return work, one opened:
+`mutation.test.tsx:1250`, a `vi.fn(impl)` mock whose call signature is not
+modelled, recorded on the branch); zod 21 → 25.
+
+Of zod's four, two are the branch's own — `z.ZodError.assert(err)` no longer
+narrows a `useUnknownInCatchVariables` catch variable because `ZodError` is a
+generic class whose value side is `any`, and modelling generic-class statics was
+measured on the branch at +19 (`TS2351`/`TS2554` across zod, trpc, ofetch) and
+rejected. The other two were an **interaction**: with written signatures now
+attached to generic methods, `registry.get(schema)?.id` reached overload return
+selection through a fold whose members were never instantiated, and selection
+handed back the declaration's `$replace<Meta, S>` with `Meta` and `S` unbound.
+Bisected by toggling each mechanism on the merged tree (selection off → 23,
+candidate union off → 25). Selection now keeps the fold's return whenever the
+picked member's return still names a type parameter or the sentinel; zod is
+23 with every other corpus byte-identical, verified in a clean worktree because
+the main checkout was being edited by another session at the time.
+
+Cleanup with the merge: worktrees `surge-ts-fn80` and a stale scratch worktree
+removed; merged branches deleted; `recovery/overload-only` kept as the tag
+`archive/recovery-overload-only` (7cd5b23) for its `TS2769` and interface-member
+group work, which main still lacks.
