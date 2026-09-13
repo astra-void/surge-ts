@@ -386,6 +386,36 @@ fn install_body_local_type_declarations(
     Some(saved)
 }
 
+/// Opt-in (`SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1`): check a body-local type
+/// declaration at its statement. Off by default: on ts-pattern it turns 63
+/// genuine surge/tsc type-level divergences (`FindSelected`, `InvertPattern`,
+/// `DeepExclude` assertions) into `TS2344` reports on a corpus that otherwise
+/// stands at one. Flip it once those are burned down.
+fn body_local_declaration_checks_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("SURGE_LOCAL_TYPE_DECLARATION_CHECKS").as_deref() == Ok("1")
+    })
+}
+
+/// Checks the body-local declaration `name` binds (installed by
+/// `install_body_local_type_declarations`) the way a top-level one is checked
+/// by `validate_local_type_declarations`.
+fn validate_body_local_declaration(name: &str, ctx: &mut CheckerContext) {
+    if !body_local_declaration_checks_enabled() {
+        return;
+    }
+    let Some(declaration) = ctx
+        .type_declaration_scope
+        .as_ref()
+        .and_then(|scope| scope.get(name))
+        .cloned()
+    else {
+        return;
+    };
+    crate::infer::types::validate_local_type_declaration(&declaration, ctx);
+}
+
 /// The body-local declarations of `body`, paired with the name each binds.
 ///
 /// A declaration is registered under a synthetic, declaration-site-unique
@@ -465,16 +495,22 @@ fn body_local_placeholder_table(
         .find_map(|(_, declaration)| body_local_declaration_anchor(declaration));
     let mut table = crate::symbols::TypeDeclarationTable::new();
 
-    let placeholder = |name: &str, table: &mut crate::symbols::TypeDeclarationTable| {
+    let placeholder = |name: &str,
+                       type_parameters: Vec<surge_ts_syntax::ParsedTypeParameter>,
+                       table: &mut crate::symbols::TypeDeclarationTable| {
         let internal_name = match anchor {
             Some(anchor) => format!("{name}@{anchor}"),
             None => name.to_string(),
         };
+        // The placeholder keeps the declaration's own type parameters so a
+        // forward reference written with arguments (`Some<number>` before
+        // `type Some<T> = …`) binds them instead of reporting the placeholder
+        // as not generic.
         let mut info = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
             internal_name,
             file_name.clone(),
             None,
-            Vec::new(),
+            type_parameters,
             surge_ts_syntax::ParsedType::Unknown,
             None,
         ));
@@ -482,12 +518,16 @@ fn body_local_placeholder_table(
         let _ = table.insert(name, info);
     };
 
-    for (name, _) in declarations {
-        placeholder(name, &mut table);
+    for (name, declaration) in declarations {
+        let type_parameters = match declaration {
+            TypeDeclarationInfo::Alias(alias) => alias.body.type_parameters.clone(),
+            TypeDeclarationInfo::Interface(interface) => interface.body.type_parameters.clone(),
+        };
+        placeholder(name, type_parameters, &mut table);
     }
     for scope in &ctx.type_parameter_scopes {
         for name in scope.keys() {
-            placeholder(name, &mut table);
+            placeholder(name, Vec::new(), &mut table);
         }
     }
 
@@ -554,9 +594,19 @@ pub(crate) fn check_function_body_statement(
         // identifier reads inside it.
         ParsedFunctionBodyStatement::Function(_) => {}
         // The type side is bound ahead of the statement loop by
-        // `install_body_local_type_declarations`; a class's member bodies are
-        // not separately checked, matching the nested-function treatment above.
-        ParsedFunctionBodyStatement::TypeAlias(_) | ParsedFunctionBodyStatement::Interface(_) => {}
+        // `install_body_local_type_declarations`; the declaration is *checked*
+        // here, at its own statement, once the values before it are in scope —
+        // its body may query one (`type t = Expect<Equal<typeof x, string>>`),
+        // and a body nothing reads was never resolved at all, so every
+        // assertion a type-level test suite is made of reported nothing. A
+        // class's member bodies are not separately checked, matching the
+        // nested-function treatment above.
+        ParsedFunctionBodyStatement::TypeAlias(alias) => {
+            validate_body_local_declaration(&alias.name, ctx);
+        }
+        ParsedFunctionBodyStatement::Interface(interface) => {
+            validate_body_local_declaration(&interface.name, ctx);
+        }
         ParsedFunctionBodyStatement::Class(class) => {
             let symbol = crate::program::build_class_value_symbol(&class, ctx);
             scopes.insert_current_handle(class.name.as_str(), std::sync::Arc::new(symbol));
