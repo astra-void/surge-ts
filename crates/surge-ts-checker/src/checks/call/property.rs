@@ -611,6 +611,41 @@ pub(crate) fn promise_like_awaited_type(ty: &Type) -> Type {
     ty.clone()
 }
 
+/// The value a user-defined thenable resolves to: the parameter of the callback
+/// `then` takes first.
+///
+/// `await` is erased at parse time, so a promise-typed value is modelled as the
+/// value it resolves to everywhere — which is why `Promise<T>` reads as `T`
+/// above. A class that implements `Promise<T>` rather than being one
+/// (drizzle's `QueryPromise`, and every `PgRaw`/`SQLiteRaw` that extends it) got
+/// no such treatment, so `const rows = await db.execute(...)` read as the raw
+/// query object and indexing it reported a missing property.
+pub(crate) fn thenable_awaited_type(ty: &Type) -> Option<Type> {
+    let Type::Object(object) = ty.peeled() else {
+        return None;
+    };
+    let then = object.get_property_access_type("then")?;
+    let on_fulfilled = callable_first_parameter(&then)?;
+    callable_first_parameter(&on_fulfilled)
+}
+
+/// The first parameter of `ty` read as a callable — looking through a union, the
+/// way an optional callback parameter is written
+/// (`((value: T) => R) | undefined | null`).
+fn callable_first_parameter(ty: &Type) -> Option<Type> {
+    match ty.peeled() {
+        Type::Function(function) => function.parameters().first().cloned(),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .find_map(|member| match member.peeled() {
+                Type::Function(function) => function.parameters().first().cloned(),
+                _ => None,
+            }),
+        _ => None,
+    }
+}
+
 pub(crate) fn check_optional_property_call(
     object: &surge_ts_syntax::ParsedExpression,
     object_span: Option<SyntaxTextSpan>,

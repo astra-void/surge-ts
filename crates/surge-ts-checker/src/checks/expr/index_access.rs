@@ -158,6 +158,12 @@ pub(super) fn evaluate_index_access(
         ctx,
     );
 
+    // A user-defined thenable indexes like the value it resolves to: `await` is
+    // erased at parse time, so `const rows = await db.execute(...)` reaches here
+    // as the query object itself, exactly as a `Promise<T>` reaches it as `T`.
+    let receiver_type = crate::checks::call::thenable_awaited_type(&receiver_type)
+        .unwrap_or(receiver_type);
+
     // A nominal array reference (`Array<number>`, `ReadonlyArray<string>`)
     // indexes like the array it names; left unpeeled it fell through to the
     // object arm and reported the *receiver* as a missing property.
