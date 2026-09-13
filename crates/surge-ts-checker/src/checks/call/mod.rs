@@ -1479,6 +1479,16 @@ fn select_overload_return_type(
     let picked = overloads
         .iter()
         .find(|candidate| signature_accepts_argument_types(candidate, argument_types))?;
+    // A member whose return still names a type parameter, or stands at the
+    // sentinel, was folded before instantiation and never re-resolved for this
+    // call — a generic group reached without its written signature. Its return
+    // is the declaration's, not the call's; the fold's answer (which widened
+    // such disagreements to `any`) is the honest one. zod's
+    // `registry.get(schema)?.id` came back as an unbound `$replace<Meta, S>`
+    // without this.
+    if type_contains_unknown(picked.return_type()) {
+        return None;
+    }
     crate::program::record_overload_selection_pick();
     Some(picked.return_type().clone())
 }
