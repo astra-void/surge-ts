@@ -38,6 +38,29 @@ pub(crate) fn resolve_conditional_type(
     // `T` in `S extends Box<infer T> ? T : never` resolve to the real argument.
     let extends_pattern = (*conditional.extends_type).clone();
 
+    // Two generic signatures whose returns are conditionals over their own type
+    // parameter are related by *identity*, not assignability — tsc cannot evaluate
+    // either conditional with the parameter unbound, so it compares them
+    // structurally. That is the entire mechanism behind the `Equal<a, b>` idiom
+    // (`(<T>() => T extends a ? 1 : 2) extends (<T>() => T extends b ? 1 : 2)`),
+    // which every type-level test suite is written with. surge resolves both
+    // returns to the same `unknown` sentinel, so the plain assignability test
+    // below answers `true` for every pair of types.
+    if let Some(identical) = deferred_conditional_identity(
+        &conditional.check_type,
+        &extends_pattern,
+        ctx,
+        resolving,
+        substitution,
+    ) {
+        let branch = if identical {
+            (*conditional.true_type).clone()
+        } else {
+            (*conditional.false_type).clone()
+        };
+        return resolve_parsed_type(branch, ctx, resolving, substitution);
+    }
+
     let resolved_extends =
         resolve_parsed_type(*conditional.extends_type, ctx, resolving, substitution);
     // Only bail when the extends pattern is structureless: a usable shape that
@@ -125,6 +148,16 @@ pub(crate) fn resolve_conditional_type(
                 results.push(Type::Unknown);
                 continue;
             }
+            // A genuine `unknown` member decides its branch like any other type,
+            // but only against a constraint surge actually modelled. With an
+            // unmodelled one the loop below falls to the false branch, and a
+            // declaration whose false arm is `never` (`R extends Record<string,
+            // unknown> ? R : never`) then hands back `never` — a concrete wrong
+            // answer built on a gap, rather than a degrade.
+            if matches!(member, Type::GenuineUnknown) && resolved_extends.ty.is_unknown() {
+                results.push(Type::Unknown);
+                continue;
+            }
             // Same `any` rule as the non-distributive path below: an `any`
             // member makes the branch indeterminate (tsc yields the union of
             // both branches), so degrade to an open `any` rather than selecting
@@ -168,6 +201,13 @@ pub(crate) fn resolve_conditional_type(
             // lets `ComponentProps<"input">` skip its `JSXElementConstructor<infer>`
             // branch (whose body resolves to `unknown` here) and reach the
             // `keyof JSX.IntrinsicElements` branch.
+            // `T extends unknown ? … : …` is how a declaration forces distribution,
+            // and `unknown` is the top type: every member satisfies it. The guard
+            // below rejects an *unmodelled* extends clause, and the degradation
+            // sentinel shares `is_unknown()` with the genuine keyword, so without
+            // this the true branch was unreachable and the false arm — `never` in
+            // the `UnionToIntersection` spellings that use it — always won.
+            let extends_is_top = matches!(resolved_extends.ty, Type::GenuineUnknown);
             let branch = match try_tuple_infer_match(
                 &extends_pattern,
                 &member,
@@ -181,8 +221,9 @@ pub(crate) fn resolve_conditional_type(
                 }
                 TuplePatternMatch::Rejected => (*conditional.false_type).clone(),
                 TuplePatternMatch::Undecided => {
-                    if !resolved_extends.ty.is_unknown()
-                        && is_assignable_to(&member, &resolved_extends.ty)
+                    if extends_is_top
+                        || (!resolved_extends.ty.is_unknown()
+                            && is_assignable_to(&member, &resolved_extends.ty))
                     {
                         seed_infer_placeholders(&extends_pattern, &mut member_substitution);
                         bind_infer_captures(
@@ -268,8 +309,14 @@ pub(crate) fn resolve_conditional_type(
 
     // Non-distributive: only evaluate when the check type is concrete enough for a
     // meaningful assignability test. An unresolved generic parameter resolves to
-    // `Unknown`, which we treat as "cannot decide" and degrade.
-    if resolved_check.ty.is_unknown() || resolved_extends.ty.is_unknown() {
+    // `Unknown`, which we treat as "cannot decide" and degrade. The *genuine*
+    // `unknown` is a decision, not a failure — `unknown extends (…) => infer e` is
+    // plainly false — and that distinction is the whole reason the two are
+    // separate variants.
+    if (resolved_check.ty.is_unknown() && !matches!(resolved_check.ty, Type::GenuineUnknown))
+        || (resolved_extends.ty.is_unknown()
+            && !matches!(resolved_extends.ty, Type::GenuineUnknown))
+    {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,
@@ -366,10 +413,28 @@ fn bind_infer_captures(
             }
         }
         ParsedType::Array(element) => {
-            if let Type::Array(check_element) = check {
+            let peeled = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::ConditionalType,
+                || check.peeled(),
+            );
+            // A tuple *is* an array, so `T extends readonly (infer E)[]` captures
+            // its element union — which is how a list walk flattens the tuple it
+            // just built (`… extends readonly (infer T)[] ? T : never`). Matching
+            // only `Type::Array` left the capture unbound and the whole walk
+            // degraded one step later.
+            let element_check = match &peeled {
+                Type::Array(check_element) => Some(check_element.as_ref().clone()),
+                // The empty tuple has no element, and its element type is `never`
+                // — which is what stops a list walk at its last step. An empty
+                // union is not that: it is the degradation sentinel.
+                Type::Tuple(members) if members.is_empty() => Some(Type::Never),
+                Type::Tuple(members) => Some(union_type(members.clone())),
+                _ => None,
+            };
+            if let Some(element_check) = element_check {
                 bind_infer_captures(
                     element,
-                    check_element,
+                    &element_check,
                     substitution,
                     ctx,
                     resolving,
@@ -430,6 +495,32 @@ fn bind_infer_captures(
                 crate::program::DtsExpansionReason::ConditionalType,
                 || check.peeled(),
             );
+            // Inference from `never` makes no candidate at all, and tsc lets such a
+            // capture default to `unknown` — the *genuine* one, which then fails
+            // the next `extends` test against a function type. That is what
+            // terminates a union-peeling recursion on its last step; leaving the
+            // degradation sentinel there instead makes the enclosing conditional
+            // refuse to decide and the whole walk goes silent.
+            if matches!(peeled, Type::Never) {
+                let mut names = Vec::new();
+                collect_infer_names(extends, &mut names);
+                for name in names {
+                    substitution.insert(name, Type::GenuineUnknown);
+                }
+                return;
+            }
+            if let Type::Union(union) = &peeled {
+                bind_union_signature_infer_captures(
+                    pattern,
+                    union.types(),
+                    substitution,
+                    ctx,
+                    resolving,
+                    depth,
+                    reference_positional,
+                );
+                return;
+            }
             bind_signature_infer_captures(
                 pattern,
                 &peeled,
@@ -535,6 +626,70 @@ fn bind_infer_captures(
 fn tuple_infer_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("SURGE_VARIADIC_TUPLES").as_deref() != Ok("0"))
+}
+
+/// Whether a conditional is comparing two *deferred* conditionals for identity,
+/// and if so whether they are identical. `Some(false)` selects the false branch,
+/// `None` means this is not that shape (or one side is a modelling gap, where
+/// answering either way would be a guess).
+fn deferred_conditional_identity(
+    check: &ParsedType,
+    extends: &ParsedType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> Option<bool> {
+    let (ParsedType::Function(left), ParsedType::Function(right)) = (check, extends) else {
+        return None;
+    };
+    let left_body = deferred_parameter_conditional(left)?;
+    let right_body = deferred_parameter_conditional(right)?;
+    if left.parameters.len() != right.parameters.len() {
+        return None;
+    }
+
+    let mut identical = true;
+    for (left_part, right_part) in [
+        (&left_body.extends_type, &right_body.extends_type),
+        (&left_body.true_type, &right_body.true_type),
+        (&left_body.false_type, &right_body.false_type),
+    ] {
+        let left_resolved = resolve_parsed_type((**left_part).clone(), ctx, resolving, substitution);
+        let right_resolved =
+            resolve_parsed_type((**right_part).clone(), ctx, resolving, substitution);
+        if left_resolved.had_error
+            || right_resolved.had_error
+            || matches!(left_resolved.ty, Type::Unknown | Type::TypeParameter(_))
+            || matches!(right_resolved.ty, Type::Unknown | Type::TypeParameter(_))
+        {
+            return None;
+        }
+        identical &= left_resolved.ty == right_resolved.ty;
+    }
+
+    Some(identical)
+}
+
+/// The signature's return conditional, when the signature is generic and that
+/// conditional tests its own type parameter — the shape whose evaluation tsc
+/// defers.
+fn deferred_parameter_conditional(
+    function: &surge_ts_syntax::ParsedFunctionType,
+) -> Option<&surge_ts_syntax::ParsedConditionalType> {
+    if function.type_parameters.is_empty() {
+        return None;
+    }
+    let ParsedType::Conditional(body) = &*function.return_type else {
+        return None;
+    };
+    let ParsedType::Named(tested) = body.check_type.as_ref() else {
+        return None;
+    };
+    function
+        .type_parameters
+        .iter()
+        .any(|parameter| parameter.name == tested.name && tested.type_arguments.is_empty())
+        .then_some(body.as_ref())
 }
 
 fn tuple_element_type(element: &surge_ts_syntax::ParsedTupleElement) -> &ParsedType {
@@ -755,6 +910,135 @@ fn try_function_infer_match(
     }
 }
 
+/// Inference from a *union* of signatures into one written signature. tsc infers
+/// from every constituent and then combines the candidates by the position they
+/// were found in: a capture in a parameter position is contravariant, so its
+/// candidates intersect, and one in the return position is covariant, so they
+/// union. That contravariant intersection is the whole mechanism behind
+/// `UnionToIntersection` — `(u extends any ? (k: u) => void : never) extends
+/// (k: infer i) => void` — which is how most of the ecosystem spells "turn this
+/// union into an intersection". Without it the union check type matched no
+/// callable at all and every capture stayed unbound.
+#[allow(clippy::too_many_arguments)]
+fn bind_union_signature_infer_captures(
+    pattern: &surge_ts_syntax::ParsedFunctionType,
+    members: &[Type],
+    substitution: &mut TypeParameterSubstitution,
+    ctx: &CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    depth: usize,
+    reference_positional: bool,
+) {
+    let mut variance = Vec::new();
+    for parameter in pattern.parameters.iter().filter(|it| !it.is_this) {
+        collect_infer_variance(&parameter.ty, true, &mut variance);
+    }
+    collect_infer_variance(&pattern.return_type, false, &mut variance);
+    if variance.is_empty() {
+        return;
+    }
+
+    let mut candidates: Vec<Vec<Type>> = vec![Vec::new(); variance.len()];
+    for member in members {
+        let peeled = crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::ConditionalType,
+            || member.peeled(),
+        );
+        if callable_signature(&peeled).is_none() {
+            continue;
+        }
+        // A fresh map per constituent: the caller's substitution already carries a
+        // seeded placeholder for every capture, so binding into it would make
+        // "this member contributed nothing" indistinguishable from "it bound the
+        // seed".
+        let mut member_captures = TypeParameterSubstitution::new();
+        bind_signature_infer_captures(
+            pattern,
+            &peeled,
+            &mut member_captures,
+            ctx,
+            resolving,
+            depth,
+            reference_positional,
+        );
+        for (index, (name, _)) in variance.iter().enumerate() {
+            if let Some(bound) = member_captures.get(name) {
+                candidates[index].push(bound.clone());
+            }
+        }
+    }
+
+    for (index, (name, contravariant)) in variance.iter().enumerate() {
+        let bound = std::mem::take(&mut candidates[index]);
+        if bound.is_empty() {
+            continue;
+        }
+        let combined = if *contravariant {
+            super::intersection::merge_intersection_members(bound)
+        } else {
+            union_type(bound)
+        };
+        substitution.insert(name.clone(), combined);
+    }
+}
+
+/// Every `infer` capture in a written pattern with the variance of the position
+/// it sits in: `true` for contravariant (under an odd number of parameter
+/// positions), `false` for covariant.
+fn collect_infer_variance(ty: &ParsedType, contravariant: bool, out: &mut Vec<(String, bool)>) {
+    match ty {
+        ParsedType::Infer(name) => out.push((name.clone(), contravariant)),
+        ParsedType::Function(function) => {
+            for parameter in function.parameters.iter().filter(|it| !it.is_this) {
+                collect_infer_variance(&parameter.ty, !contravariant, out);
+            }
+            collect_infer_variance(&function.return_type, contravariant, out);
+        }
+        ParsedType::Array(inner) | ParsedType::KeyOf(inner) => {
+            collect_infer_variance(inner, contravariant, out)
+        }
+        ParsedType::Union(members)
+        | ParsedType::Intersection(members)
+        | ParsedType::Tuple(members) => {
+            for member in members.iter() {
+                collect_infer_variance(member, contravariant, out);
+            }
+        }
+        ParsedType::VariadicTuple(elements) => {
+            for element in elements.iter() {
+                collect_infer_variance(tuple_element_type(element), contravariant, out);
+            }
+        }
+        ParsedType::Named(named) => {
+            for argument in &named.type_arguments {
+                collect_infer_variance(argument, contravariant, out);
+            }
+        }
+        ParsedType::Object(object) => {
+            for property in &object.properties {
+                collect_infer_variance(&property.ty, contravariant, out);
+            }
+            for signature in object
+                .construct_signature
+                .as_deref()
+                .into_iter()
+                .chain(object.call_signature.as_deref())
+            {
+                for parameter in signature.parameters.iter().filter(|it| !it.is_this) {
+                    collect_infer_variance(&parameter.ty, !contravariant, out);
+                }
+                collect_infer_variance(&signature.return_type, contravariant, out);
+            }
+        }
+        ParsedType::Predicate(predicate) => {
+            if let Some(ty) = &predicate.ty {
+                collect_infer_variance(ty, contravariant, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The callable signature of a check type, treating a function and a callable
 /// object (one carrying a call or construct signature, e.g. React's
 /// `ForwardRefExoticComponent<P>` or a class value) uniformly. This lets
@@ -777,6 +1061,14 @@ fn bind_signature_infer_captures(
     let Some(check_function) = callable_signature(check) else {
         return;
     };
+    // An overload group infers from its *last* signature, matching tsc: with one
+    // target signature it pairs the tail of the source list. The fold itself is a
+    // permissive shape whose return degrades whenever two overloads disagree, so
+    // inferring from it would lose exactly what the caller asked for.
+    let check_function = check_function
+        .overloads()
+        .and_then(<[surge_ts_types::FunctionType]>::last)
+        .unwrap_or(check_function);
     let check_parameters = check_function.parameters();
     let pattern_parameters = pattern
         .parameters

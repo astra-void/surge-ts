@@ -294,7 +294,7 @@ fn dedup_identical_operands(members: Vec<Type>) -> Vec<Type> {
         .collect()
 }
 
-fn merge_intersection_members(members: Vec<Type>) -> Type {
+pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
     let (members, unwrapped_open) = flatten_deferred_intersections(members);
     if members.iter().any(|ty| matches!(ty, Type::Any)) {
         return Type::Any;
@@ -764,7 +764,18 @@ fn merge_intersection_members_now(
                 crate::infer::types::interface::merge_overload_signatures(&merged, function_type)
             },
         );
-        return Type::Function(merged);
+        // Keep the operands in written order alongside the fold. The fold is what
+        // stays callable at every arity, but inference has to see the individual
+        // signatures: tsc infers from the *last* one, which is what makes
+        // `UnionToTuple` peel a union one member at a time.
+        let operands = members
+            .iter()
+            .filter_map(|ty| match ty {
+                Type::Function(function_type) => Some(function_type.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        return Type::Function(merged.with_overloads(operands));
     }
 
     // Two distinct literals have no common inhabitant, so their intersection is
