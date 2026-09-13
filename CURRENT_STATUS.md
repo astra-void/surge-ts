@@ -46,7 +46,7 @@ level at this commit; the bisect and the before/after are in
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1932 / 1932 passed** |
+| Workspace tests | `cargo nextest run --workspace` | **1929 / 1932 passed** — three fixtures `20b5ef3` invalidated and did not update: `generic_constraint_parsed_not_enforced` and `generic_constraint_does_not_reject_out_of_constraint_yet` assert the constraint is *not* enforced, and `span_invalid_pick_alias_points_to_pick_reference_and_dedupes_usage` now gets the `TS2344` twice |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
 | Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **221 / 221 passed** |
 | Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **220 / 221 passed** — one message drift, see below |
@@ -192,7 +192,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; dirty-tree measurement, not a gate (see note) |
-| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 49 | **newly provisioned, provisional** — 134 when first measured; all 49 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
+| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 54 | **newly provisioned, provisional** — 134 when first measured and 139 once `20b5ef3` began reporting `TS2344`; all 54 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
 
 Notes that matter:
 
@@ -239,9 +239,12 @@ Notes that matter:
   receiver's string index signature (−2); the inline-arrow predicate a `filter`
   call reads was resolved with reporting on, out of the arrow's own scope (−2);
   and a union member a property-path guard rules out was kept rather than
-  dropped, which is the AWS SDK `?: never` member pattern (−10). Measured from an
-  isolated worktree at `1978841` with the surrounding tree's concurrent edits
-  excluded, but not from a clean checkout of a commit that contains these
+  dropped, which is the AWS SDK `?: never` member pattern (−10). It stands at
+  **54** rather than 49 because `20b5ef3` then began reporting `TS2344` and put
+  five new over-reports on this corpus, one in each dialect's
+  `select.types.ts` — those are not from this burn-down and are not yet
+  inventoried. Measured from an isolated worktree, base and branch built from
+  the same tree, but not from a clean checkout of a commit that contains these
   changes; re-measure before treating any of it as a baseline. Full inventory in
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#drizzle-orm-corpus-provisioned-2026-09-13).
 - **ts-pattern is newly provisioned and is not a gate.** The aggregate target
