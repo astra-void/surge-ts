@@ -187,7 +187,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | --- | --- | ---: | ---: | --- |
 | **ky** (sindresorhus/ky 2.0.2) | `3419113` | 0 | 0 | **exact** — strict false-positive gate |
 | **ofetch** (unjs/ofetch) | `1dbc37f` | 1 | 1 | **exact** — same file/code/line and message text (TS5108) |
-| **zod** | `912f0f5` | 21 | 23 | **regressed by the `trpc-fn-80` merge (2026-09-13)** — 21 matched exactly plus 2 surge-only `TS18046` on a catch variable narrowed by `z.ZodError.assert`, whose generic class has an `any` value side (static modelling was measured and rejected, see the merge record); two further `$replace<Meta, S>` over-reports the merge introduced were closed the same day |
+| **zod** | `912f0f5` | 21 | 21 | **exact** — same file/code/line and message text; the two surge-only `TS18046` the `trpc-fn-80` merge opened were closed by `2067888`, which gives a generic class a permissive static object when it declares a predicate or assertion static, so `z.ZodError.assert` narrows again |
 | **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
