@@ -72,6 +72,8 @@ pub fn check_source_with_options(
     }
     ctx.set_symbols(merged_sym);
 
+    seed_class_value_symbols(&parsed.statements, &mut ctx);
+
     let current_type_declarations = ctx.type_declarations.clone();
     let current_symbols = ctx.symbols.clone();
     let validation_symbols = crate::modules::collect_exportable_value_symbols(
@@ -95,6 +97,56 @@ pub fn check_source_with_options(
     ctx.module_value_fallback = None;
 
     ctx.finish()
+}
+
+/// Program mode seeds a class's value symbol in its signature pre-pass
+/// (`collect_function_signature_from_statement`). The single-file driver has no
+/// such pass, so `class A {}` left `A` resolvable as a type only and every
+/// value-position reference to it reported TS2693.
+fn seed_class_value_symbols(statements: &[ParsedStatement], ctx: &mut CheckerContext) {
+    // Building a class's value symbol resolves its heritage, and at seeding time
+    // the file's own value declarations are not in scope yet — a class extending
+    // a `declare const` factory would report the factory as an unresolved name.
+    // The check pass walks the same class afterwards with the full scope, so
+    // anything raised here is discarded rather than reported twice or early.
+    let diagnostics_before = ctx.diagnostics.len();
+
+    let mut symbols = ctx.symbols.clone();
+    for statement in statements {
+        seed_class_value_symbol(statement, &mut symbols, ctx);
+    }
+    ctx.set_symbols(symbols);
+
+    ctx.diagnostics.truncate(diagnostics_before);
+}
+
+fn seed_class_value_symbol(
+    statement: &ParsedStatement,
+    symbols: &mut crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let class = match statement {
+        ParsedStatement::ClassDeclaration(class) => class.as_ref(),
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                seed_class_value_symbol(declaration.as_ref(), symbols, ctx);
+                return;
+            }
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Class(class),
+                ..
+            } => class,
+            _ => return,
+        },
+        _ => return,
+    };
+
+    if class.is_declare || symbols.get_own(&class.name).is_some() {
+        return;
+    }
+
+    let symbol = crate::program::build_class_value_symbol_with_scope(class, Some(symbols), ctx);
+    symbols.insert(class.name.clone(), symbol);
 }
 
 fn inject_generated_default_libs(ctx: &mut CheckerContext) {
@@ -1462,11 +1514,19 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
     )
     .with_enum_name(alias.enum_name.as_deref(), alias.enum_exported);
 
-    if ctx
+    let previous = ctx
         .type_declarations
-        .insert(alias.name.clone(), TypeDeclarationInfo::Alias(info))
-        .is_some()
-    {
+        .insert(alias.name.clone(), TypeDeclarationInfo::Alias(info));
+
+    // Enums lower to aliases, and two `enum E` blocks are a legal merge rather
+    // than a redeclaration.
+    let merging_enums = alias.enum_name.is_some()
+        && matches!(
+            previous.as_ref(),
+            Some(TypeDeclarationInfo::Alias(previous)) if previous.enum_name.is_some()
+        );
+
+    if previous.is_some() && !merging_enums {
         let mut diagnostic = Diagnostic::ts2300(&alias.name, ctx.file_name.clone());
 
         if let Some(span) = alias.name_span {

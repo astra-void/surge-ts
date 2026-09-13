@@ -214,6 +214,7 @@ pub(crate) fn check_property_call_like(
         return if property_name == "then" {
             check_promise_then_call(object_ty, arguments, symbols, ctx)
         } else {
+            evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(object_ty)
         };
     }
@@ -509,7 +510,10 @@ pub(crate) fn check_property_call_like(
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
                     Some(Type::Any)
                 }
-                Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
+                Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+                    evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                    None
+                },
                 // See the union arm in the multi-receiver loop above: a property
                 // typed as a union of callables is callable, and one carrying the
                 // degradation sentinel is not a source error.
@@ -644,7 +648,10 @@ pub(crate) fn check_optional_property_call(
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(Type::Any)
         }
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+            evaluate_arguments_context_free(object, arguments, symbols, ctx);
+            None
+        },
         Type::Array(element_type) if property_name == "map" => check_array_map_call(
             element_type.as_ref(),
             property_span,
@@ -831,7 +838,10 @@ pub(crate) fn check_optional_property_call(
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
                     Some(Type::Any)
                 }
-                Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
+                Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+                    evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                    None
+                },
                 _ => {
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2349(ctx.file_name.clone()),
