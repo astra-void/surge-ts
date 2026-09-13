@@ -164,7 +164,7 @@ fn module_export_default_expression_string_import_valid() {
 fn module_export_default_duplicate_pinned() {
     let diagnostics = native_program(&[("index.ts", "export default 123;\nexport default 456;")]);
 
-    assert_eq!(codes(&diagnostics), vec!["surge::duplicate-default-export"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2528", "TS2528"]);
 }
 
 #[test]
@@ -557,10 +557,7 @@ fn program_order_default_export_duplicate_before_statement() {
         "export default 123;\nexport default 456;\nlet value: string = 123;",
     )]);
 
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["surge::duplicate-default-export", "TS2322"]
-    );
+    assert_eq!(codes(&diagnostics), vec!["TS2528", "TS2528", "TS2322"]);
 }
 
 #[test]

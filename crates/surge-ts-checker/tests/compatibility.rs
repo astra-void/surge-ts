@@ -384,15 +384,17 @@ fn equality_operands_widen_for_display() {
 }
 
 #[test]
-fn object_literal_missing_property_uses_first_target_order_property() {
+fn object_literal_missing_properties_are_listed_in_target_order() {
     let source = "let user: { name: string; alpha: number } = {};";
     let diagnostics = check_source(source, "example.ts");
     let rendered = render_diagnostics(&diagnostics, source);
 
-    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2741"]);
+    // Two missing properties are TS2739 with both named, in the target's own
+    // order; one missing property would be TS2741 naming it.
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2739"]);
     assert!(
-        diagnostics[0].message.contains("alpha"),
-        "unexpected TS2741 message: {rendered}"
+        diagnostics[0].message.contains("name, alpha"),
+        "unexpected TS2739 message: {rendered}"
     );
 }
 

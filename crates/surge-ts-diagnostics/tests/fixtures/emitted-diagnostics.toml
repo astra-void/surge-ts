@@ -630,11 +630,136 @@ span_tests = [
   "crates/surge-ts-checker/tests/generics.rs",
 ]
 
-["surge::duplicate-default-export"]
+[TS1117]
 status = "emitted"
-span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+oracle = [
+  "grammar-duplicate-object-literal-property-basic",
+]
+
+[TS1155]
+status = "emitted"
+oracle = [
+  "grammar-const-not-initialized-basic",
+]
+
+[TS2390]
+status = "emitted"
+oracle = [
+  "grammar-missing-implementation-basic",
+]
+
+[TS2391]
+status = "emitted"
+oracle = [
+  "grammar-missing-implementation-basic",
+]
+
+[TS2528]
+status = "emitted"
+oracle = [
+  "grammar-multiple-default-exports-basic",
+]
+
+[TS2739]
+status = "emitted"
+oracle = [
+  "missing-properties-plural-basic",
+]
+
+[TS2740]
+status = "emitted"
+oracle = [
+  "missing-properties-plural-basic",
+]
+
+[TS7008]
+status = "emitted"
+oracle = [
+  "implicit-any-member-and-return-basic",
+]
+
+[TS7010]
+status = "emitted"
+oracle = [
+  "implicit-any-member-and-return-basic",
+]
+
+[TS2377]
+status = "emitted"
+oracle = [
+  "grammar-class-member-hardening",
+]
+
+[TS2392]
+status = "emitted"
+oracle = [
+  "grammar-class-member-hardening",
+]
+
+[TS2695]
+status = "emitted"
+oracle = [
+  "grammar-comma-operator-basic",
+]
+
+[TS1015]
+status = "emitted"
+oracle = [
+  "grammar-parameter-list-hardening",
+]
+
+[TS1016]
+status = "emitted"
+oracle = [
+  "grammar-parameter-list-hardening",
+]
+
+[TS1039]
+status = "emitted"
+oracle = [
+  "grammar-member-modifier-hardening",
+]
+
+[TS1049]
+status = "emitted"
+oracle = [
+  "grammar-member-modifier-hardening",
+]
+
+[TS1095]
+status = "emitted"
+oracle = [
+  "grammar-member-modifier-hardening",
+]
+
+[TS1119]
+status = "emitted"
+oracle = [
+  "grammar-member-modifier-hardening",
+]
+
+[TS1244]
+status = "emitted"
+oracle = [
+  "grammar-member-modifier-hardening",
+]
+
+[TS1253]
+status = "emitted"
+oracle = [
+  "grammar-member-modifier-hardening",
+]
+
+[TS2369]
+status = "emitted"
+oracle = [
+  "grammar-parameter-list-hardening",
+]
+
+[TS2371]
+status = "emitted"
+oracle = [
+  "grammar-parameter-list-hardening",
 ]
 
 ["surge::unsupported-module-syntax"]

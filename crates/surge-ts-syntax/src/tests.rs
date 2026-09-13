@@ -3779,3 +3779,100 @@ fn parse_function_body_type_class_and_interface_declarations() {
         ParsedFunctionBodyStatement::Return(_)
     ));
 }
+
+fn grammar_kinds(source: &str, file_name: &str) -> Vec<ParsedGrammarDiagnosticKind> {
+    parse_source(source, file_name)
+        .grammar_diagnostics
+        .into_iter()
+        .map(|diagnostic| diagnostic.kind)
+        .collect()
+}
+
+#[test]
+fn grammar_walk_reports_a_const_without_an_initializer() {
+    let parsed = parse_source("const pending: number;", "example.ts");
+
+    assert_eq!(
+        grammar_kinds("const pending: number;", "example.ts"),
+        vec![ParsedGrammarDiagnosticKind::ConstNotInitialized]
+    );
+    let span = parsed.grammar_diagnostics[0].span;
+    assert_eq!(&"const pending: number;"[span.start..span.end], "pending");
+}
+
+#[test]
+fn grammar_walk_exempts_ambient_and_loop_head_bindings() {
+    for source in [
+        "declare const value: number;",
+        "declare namespace Ambient { const value: number; }",
+        "for (const value of [1]) { void value; }",
+        "for (const key in { a: 1 }) { void key; }",
+    ] {
+        assert!(
+            grammar_kinds(source, "example.ts").is_empty(),
+            "unexpected grammar diagnostics for {source}"
+        );
+    }
+}
+
+#[test]
+fn grammar_walk_reports_each_repeated_object_literal_property() {
+    assert_eq!(
+        grammar_kinds("const o = { a: 1, a: 2, a: 3 };", "example.ts"),
+        vec![
+            ParsedGrammarDiagnosticKind::DuplicateObjectLiteralProperty,
+            ParsedGrammarDiagnosticKind::DuplicateObjectLiteralProperty,
+        ]
+    );
+    assert!(
+        grammar_kinds(
+            "const o = { get a() { return 1; }, set a(v: number) { void v; } };",
+            "example.ts"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn grammar_walk_reports_an_overload_group_without_an_implementation() {
+    assert_eq!(
+        grammar_kinds(
+            "function f(a: string): void;\nfunction f(a: number): void;",
+            "example.ts"
+        ),
+        vec![ParsedGrammarDiagnosticKind::FunctionImplementationMissing]
+    );
+    assert!(
+        grammar_kinds(
+            "function f(a: string): void;\nfunction f(a: string | number): void {}",
+            "example.ts"
+        )
+        .is_empty()
+    );
+    assert!(grammar_kinds("declare function f(a: string): void;", "example.ts").is_empty());
+}
+
+#[test]
+fn grammar_walk_reports_a_derived_constructor_without_a_super_call() {
+    assert_eq!(
+        grammar_kinds("class D extends B { constructor() {} }", "example.ts"),
+        vec![ParsedGrammarDiagnosticKind::MissingSuperCall]
+    );
+    assert!(
+        grammar_kinds(
+            "class D extends B { constructor(f: boolean) { if (f) { super(1); } else { super(2); } } }",
+            "example.ts"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn grammar_walk_is_skipped_for_declaration_and_non_typescript_files() {
+    for file_name in ["example.d.ts", "example.js", "example.jsx"] {
+        assert!(
+            grammar_kinds("const pending: number;", file_name).is_empty(),
+            "unexpected grammar diagnostics for {file_name}"
+        );
+    }
+}

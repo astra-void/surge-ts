@@ -169,10 +169,15 @@ pub(crate) fn collect_exports_from_statement(
                     }
                 }
             }
-            ParsedExportDeclaration::Default { declaration, span } => match declaration {
+            ParsedExportDeclaration::Default {
+                declaration,
+                span: _,
+            } => match declaration {
                 ParsedDefaultExportDeclaration::Function(function) => {
                     if default_symbol.is_some() {
-                        push_duplicate_default_export_diagnostic(ctx, function.name_span.or(*span));
+                        // A second default export is reported once, as TS2528,
+                        // by the parser's grammar walk; the module pass only
+                        // keeps the first symbol.
                     } else {
                         let mut signature_symbols =
                             exportable_values.clone_with_reason(TypeCopyReason::ModuleExport);
@@ -208,21 +213,13 @@ pub(crate) fn collect_exports_from_statement(
                         type_declarations,
                     );
                     if let Some(symbol) = local_symbols.get_shared(&class.name) {
-                        if default_symbol.is_some() {
-                            push_duplicate_default_export_diagnostic(
-                                ctx,
-                                class.name_span.or(*span),
-                            );
-                        } else {
+                        if default_symbol.is_none() {
                             *default_symbol = Some(symbol);
                         }
-                    } else {
-                        push_duplicate_default_export_diagnostic(ctx, class.name_span.or(*span));
                     }
                 }
                 ParsedDefaultExportDeclaration::Expression(expression) => {
                     if default_symbol.is_some() {
-                        push_duplicate_default_export_diagnostic(ctx, *span);
                         return;
                     }
 

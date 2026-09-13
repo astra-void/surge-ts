@@ -219,6 +219,7 @@ pub(super) fn parse_program_file(
         file_kind,
         module_reads: parsed.module_reads,
         suppressed_ranges: parsed.suppressed_ranges,
+        grammar_diagnostics: parsed.grammar_diagnostics,
         json_module_type: parsed.json_module_type,
     }
 }

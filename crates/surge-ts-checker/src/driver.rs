@@ -172,6 +172,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 file_kind: FileKind::GeneratedDeclaration,
                 module_reads: parsed.module_reads,
                 suppressed_ranges: parsed.suppressed_ranges,
+                grammar_diagnostics: Vec::new(),
                 json_module_type: None,
             }
         })

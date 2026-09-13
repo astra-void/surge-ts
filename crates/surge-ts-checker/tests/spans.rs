@@ -1627,7 +1627,7 @@ fn index_access_primitive_receiver_no_ts2339() {
             "example.ts",
             CheckerOptions {
                 diagnostic_profile: Default::default(),
-            resolve_json_module: true,
+                resolve_json_module: true,
                 resolved_modules: Default::default(),
                 resolved_modules_by_importer: Default::default(),
                 stub_external_modules: false,
@@ -1687,7 +1687,9 @@ fn span_ts2353_excess_property_name() {
 }
 
 #[test]
-fn span_ts2741_missing_required_object_literal() {
+fn span_ts2739_missing_required_object_literal() {
+    // Two missing properties: tsc lists both and reports TS2739. One missing
+    // property would be TS2741 on the same span.
     let source = "let user: { name: string; age: number } = {};";
     let diagnostics = check_source_with_options(
         source,
@@ -1718,7 +1720,7 @@ fn span_ts2741_missing_required_object_literal() {
     );
     // tsc anchors a missing-required-property error on the declaration name, not
     // the object literal.
-    assert_single_span(source, diagnostics, "TS2741", span(source, "user"));
+    assert_single_span(source, diagnostics, "TS2739", span(source, "user"));
 }
 
 #[test]
@@ -2415,18 +2417,28 @@ fn span_module_unsupported_syntax_points_to_syntax_or_pinned() {
 }
 
 #[test]
-fn span_default_export_duplicate_points_to_default_keyword_or_export_span() {
+fn span_default_export_duplicate_points_to_each_export_statement() {
     let source = "export default 123;\nexport default 456;";
     let diagnostics = native_program(vec![surge_ts_checker::SourceFileInput {
         file_name: "example.ts".to_string(),
         source_text: source.to_string(),
     }]);
 
-    assert_single_span(
-        source,
-        diagnostics,
-        "surge::duplicate-default-export",
-        span(source, "export default 456;"),
+    // tsc reports every default export, not only the later one.
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![
+            (
+                "TS2528".to_string(),
+                "example.ts".to_string(),
+                Some(span(source, "export default 123;")),
+            ),
+            (
+                "TS2528".to_string(),
+                "example.ts".to_string(),
+                Some(span(source, "export default 456;")),
+            ),
+        ],
     );
 }
 

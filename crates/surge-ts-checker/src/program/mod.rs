@@ -82,6 +82,10 @@ pub(crate) struct ParsedProgramFile {
     /// Byte ranges of the lines an `@ts-expect-error`/`@ts-ignore` directive
     /// suppresses (see [`surge_ts_syntax::ParsedSource::suppressed_ranges`]).
     pub(crate) suppressed_ranges: Vec<surge_ts_syntax::TextSpan>,
+    /// Grammar findings from the parser's AST walk (see
+    /// [`surge_ts_syntax::ParsedSource::grammar_diagnostics`]), turned into
+    /// diagnostics at the start of the file's check.
+    pub(crate) grammar_diagnostics: Vec<surge_ts_syntax::ParsedGrammarDiagnostic>,
     /// See [`surge_ts_syntax::ParsedSource::json_module_type`]. Set for every
     /// `.json` file; its export table is built from this instead of from
     /// `statements`, which are always empty for such a file.

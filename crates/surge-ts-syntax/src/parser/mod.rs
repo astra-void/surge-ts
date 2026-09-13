@@ -17,6 +17,7 @@ mod exports;
 mod expressions;
 mod function_types;
 mod functions;
+mod grammar;
 mod import_calls;
 mod imports;
 mod interfaces;

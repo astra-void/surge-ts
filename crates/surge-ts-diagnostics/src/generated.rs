@@ -825,6 +825,226 @@ pub const TS7061: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::CatalogOnly,
 };
 
+pub const TS1117: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1117",
+    number: Some(1117),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An object literal cannot have multiple properties with the same name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1155: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1155",
+    number: Some(1155),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'const' declarations must be initialized.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2390: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2390",
+    number: Some(2390),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Constructor implementation is missing.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2391: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2391",
+    number: Some(2391),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Function implementation is missing or not immediately following the declaration.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2528: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2528",
+    number: Some(2528),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A module cannot have multiple default exports.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2739: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2739",
+    number: Some(2739),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' is missing the following properties from type '{1}': {2}",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2740: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2740",
+    number: Some(2740),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' is missing the following properties from type '{1}': {2}, and {3} more.",
+    argument_count: 4,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS7008: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS7008",
+    number: Some(7008),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Member '{0}' implicitly has an '{1}' type.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS7010: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS7010",
+    number: Some(7010),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}', which lacks return-type annotation, implicitly has an '{1}' return type.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2377: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2377",
+    number: Some(2377),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Constructors for derived classes must contain a 'super' call.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2392: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2392",
+    number: Some(2392),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Multiple constructor implementations are not allowed.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2695: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2695",
+    number: Some(2695),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Left side of comma operator is unused and has no side effects.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1015: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1015",
+    number: Some(1015),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Parameter cannot have question mark and initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1016: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1016",
+    number: Some(1016),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A required parameter cannot follow an optional parameter.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1039: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1039",
+    number: Some(1039),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Initializers are not allowed in ambient contexts.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1049: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1049",
+    number: Some(1049),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'set' accessor must have exactly one parameter.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1095: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1095",
+    number: Some(1095),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'set' accessor cannot have a return type annotation.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1119: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1119",
+    number: Some(1119),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An object literal cannot have property and accessor with the same name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1244: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1244",
+    number: Some(1244),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Abstract methods can only appear within an abstract class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1253: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1253",
+    number: Some(1253),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Abstract properties can only appear within an abstract class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2369: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2369",
+    number: Some(2369),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A parameter property is only allowed in a constructor implementation.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2371: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2371",
+    number: Some(2371),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A parameter initializer is only allowed in a function or constructor implementation.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const SURGE_PARSER_ERROR: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "surge::parser-error",
     number: None,
@@ -842,16 +1062,6 @@ pub const SURGE_DUPLICATE_TYPE_PARAMETER: DiagnosticDescriptor = DiagnosticDescr
     category: DiagnosticCategory::Error,
     message_template: "Duplicate type parameter '{0}'.",
     argument_count: 1,
-    support: DiagnosticSupport::Emitted,
-};
-
-pub const SURGE_DUPLICATE_DEFAULT_EXPORT: DiagnosticDescriptor = DiagnosticDescriptor {
-    code: "surge::duplicate-default-export",
-    number: None,
-    source: DiagnosticSource::TypeScriptRust,
-    category: DiagnosticCategory::Error,
-    message_template: "Duplicate default export.",
-    argument_count: 0,
     support: DiagnosticSupport::Emitted,
 };
 
@@ -978,9 +1188,30 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7059,
     TS7060,
     TS7061,
+    TS1117,
+    TS1155,
+    TS2390,
+    TS2391,
+    TS2528,
+    TS2739,
+    TS2740,
+    TS7008,
+    TS7010,
+    TS2377,
+    TS2392,
+    TS2695,
+    TS1015,
+    TS1016,
+    TS1039,
+    TS1049,
+    TS1095,
+    TS1119,
+    TS1244,
+    TS1253,
+    TS2369,
+    TS2371,
     SURGE_PARSER_ERROR,
     SURGE_DUPLICATE_TYPE_PARAMETER,
-    SURGE_DUPLICATE_DEFAULT_EXPORT,
     SURGE_UNSUPPORTED_MODULE_SYNTAX,
     SURGE_UNSUPPORTED_DECLARATION,
     SURGE_TYPE_ALIAS_CYCLE,
@@ -1775,6 +2006,158 @@ impl Diagnostic {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1117(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1117, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1155(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1155, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2390(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2390, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2391(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2391, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2528(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2528, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2739(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2739,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2740(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        arg3: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2740,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+                DiagnosticArg::from(arg3.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts7008(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS7008,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts7010(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS7010,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2377(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2377, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2392(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2392, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2695(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2695, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1015(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1015, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1016(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1016, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1039(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1039, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1049(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1049, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1095(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1095, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1119(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1119, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1244(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1244, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1253(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1253, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2369(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2369, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2371(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2371, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     pub fn surge_parser_error(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &SURGE_PARSER_ERROR,
@@ -1791,15 +2174,6 @@ impl Diagnostic {
         Self::from_descriptor(
             &SURGE_DUPLICATE_TYPE_PARAMETER,
             vec![DiagnosticArg::from(arg0.to_string())],
-            file_name,
-        )
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn surge_duplicate_default_export(file_name: impl Into<String>) -> Self {
-        Self::from_descriptor(
-            &SURGE_DUPLICATE_DEFAULT_EXPORT,
-            Vec::<DiagnosticArg>::new(),
             file_name,
         )
     }

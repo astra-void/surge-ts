@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+use surge_ts_diagnostics::Diagnostic;
 use surge_ts_types::with_program_type_store;
 
 // Instrumentation lives in `metrics`; re-export it so existing callers that
@@ -818,6 +819,71 @@ pub(super) fn module_scope_by_file_map(
     map
 }
 
+/// Turns the parser's grammar findings (see
+/// [`surge_ts_syntax::ParsedSource::grammar_diagnostics`]) into diagnostics.
+/// The two implicit-`any` kinds are reported only under `noImplicitAny`; the
+/// rest are grammar errors tsc reports whatever the options say.
+pub(crate) fn emit_grammar_diagnostics(
+    findings: &[surge_ts_syntax::ParsedGrammarDiagnostic],
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_syntax::ParsedGrammarDiagnosticKind as Kind;
+
+    for finding in findings {
+        let diagnostic = match finding.kind {
+            Kind::ConstNotInitialized => Diagnostic::ts1155(ctx.file_name.clone()),
+            Kind::DuplicateObjectLiteralProperty => Diagnostic::ts1117(ctx.file_name.clone()),
+            Kind::FunctionImplementationMissing => Diagnostic::ts2391(ctx.file_name.clone()),
+            Kind::ConstructorImplementationMissing => Diagnostic::ts2390(ctx.file_name.clone()),
+            Kind::MultipleDefaultExports => Diagnostic::ts2528(ctx.file_name.clone()),
+            Kind::ImplicitAnyMember => {
+                if !ctx.options.no_implicit_any {
+                    continue;
+                }
+                let Some(name) = finding.name.as_deref() else {
+                    continue;
+                };
+                Diagnostic::ts7008(name, "any", ctx.file_name.clone())
+            }
+            Kind::OptionalParameterWithInitializer => Diagnostic::ts1015(ctx.file_name.clone()),
+            Kind::RequiredParameterAfterOptional => Diagnostic::ts1016(ctx.file_name.clone()),
+            Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),
+            Kind::SetAccessorParameterCount => Diagnostic::ts1049(ctx.file_name.clone()),
+            Kind::SetAccessorReturnType => Diagnostic::ts1095(ctx.file_name.clone()),
+            Kind::ObjectLiteralPropertyAndAccessor => Diagnostic::ts1119(ctx.file_name.clone()),
+            Kind::AbstractMethodOutsideAbstractClass => Diagnostic::ts1244(ctx.file_name.clone()),
+            Kind::AbstractPropertyOutsideAbstractClass => Diagnostic::ts1253(ctx.file_name.clone()),
+            Kind::ParameterPropertyOutsideImplementation => {
+                Diagnostic::ts2369(ctx.file_name.clone())
+            }
+            Kind::ParameterInitializerOutsideImplementation => {
+                Diagnostic::ts2371(ctx.file_name.clone())
+            }
+            Kind::DuplicateMember => {
+                let Some(name) = finding.name.as_deref() else {
+                    continue;
+                };
+                Diagnostic::ts2300(name, ctx.file_name.clone())
+            }
+            Kind::DuplicateImplementation => Diagnostic::ts2393(ctx.file_name.clone()),
+            Kind::MultipleConstructorImplementations => Diagnostic::ts2392(ctx.file_name.clone()),
+            Kind::MissingSuperCall => Diagnostic::ts2377(ctx.file_name.clone()),
+            Kind::UnusedCommaOperand => Diagnostic::ts2695(ctx.file_name.clone()),
+            Kind::ImplicitAnyReturn => {
+                if !ctx.options.no_implicit_any {
+                    continue;
+                }
+                let Some(name) = finding.name.as_deref() else {
+                    continue;
+                };
+                Diagnostic::ts7010(name, "any", ctx.file_name.clone())
+            }
+        };
+
+        ctx.push(diagnostic.with_span(crate::context::convert_span(finding.span)));
+    }
+}
+
 pub(super) fn check_program_file(
     file_index: usize,
     parsed_file: &ParsedProgramFile,
@@ -845,6 +911,8 @@ pub(super) fn check_program_file(
             stats,
         };
     }
+
+    emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
 
     if parsed_file.is_module {
         let Some(module_analysis) = shared_state.module_analyses[file_index].as_ref() else {

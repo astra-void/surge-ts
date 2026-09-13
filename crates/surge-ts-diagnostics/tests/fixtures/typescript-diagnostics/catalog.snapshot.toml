@@ -657,6 +657,182 @@ message = "A mapped type may not declare properties or methods."
 arity = 0
 
 [[diagnostic]]
+code = "TS1117"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An object literal cannot have multiple properties with the same name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1155"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'const' declarations must be initialized."
+arity = 0
+
+[[diagnostic]]
+code = "TS2390"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Constructor implementation is missing."
+arity = 0
+
+[[diagnostic]]
+code = "TS2391"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Function implementation is missing or not immediately following the declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS2528"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A module cannot have multiple default exports."
+arity = 0
+
+[[diagnostic]]
+code = "TS2739"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is missing the following properties from type '{1}': {2}"
+arity = 3
+
+[[diagnostic]]
+code = "TS2740"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is missing the following properties from type '{1}': {2}, and {3} more."
+arity = 4
+
+[[diagnostic]]
+code = "TS7008"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Member '{0}' implicitly has an '{1}' type."
+arity = 2
+
+[[diagnostic]]
+code = "TS7010"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}', which lacks return-type annotation, implicitly has an '{1}' return type."
+arity = 2
+
+[[diagnostic]]
+code = "TS2377"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Constructors for derived classes must contain a 'super' call."
+arity = 0
+
+[[diagnostic]]
+code = "TS2392"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Multiple constructor implementations are not allowed."
+arity = 0
+
+[[diagnostic]]
+code = "TS2695"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Left side of comma operator is unused and has no side effects."
+arity = 0
+
+[[diagnostic]]
+code = "TS1015"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Parameter cannot have question mark and initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS1016"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A required parameter cannot follow an optional parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS1039"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Initializers are not allowed in ambient contexts."
+arity = 0
+
+[[diagnostic]]
+code = "TS1049"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'set' accessor must have exactly one parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS1095"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'set' accessor cannot have a return type annotation."
+arity = 0
+
+[[diagnostic]]
+code = "TS1119"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An object literal cannot have property and accessor with the same name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1244"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Abstract methods can only appear within an abstract class."
+arity = 0
+
+[[diagnostic]]
+code = "TS1253"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Abstract properties can only appear within an abstract class."
+arity = 0
+
+[[diagnostic]]
+code = "TS2369"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A parameter property is only allowed in a constructor implementation."
+arity = 0
+
+[[diagnostic]]
+code = "TS2371"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A parameter initializer is only allowed in a function or constructor implementation."
+arity = 0
+
+[[diagnostic]]
 code = "surge::parser-error"
 category = "Error"
 source = "surge-ts"
@@ -671,14 +847,6 @@ source = "surge-ts"
 support = "emitted"
 message = "Duplicate type parameter '{0}'."
 arity = 1
-
-[[diagnostic]]
-code = "surge::duplicate-default-export"
-category = "Error"
-source = "surge-ts"
-support = "emitted"
-message = "Duplicate default export."
-arity = 0
 
 [[diagnostic]]
 code = "surge::unsupported-module-syntax"

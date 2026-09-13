@@ -20,12 +20,81 @@ pub struct ParsedSource {
     /// They belong to the module graph exactly like declaration specifiers do,
     /// but the lossy `Parsed*` tree does not model either form.
     pub import_call_specifiers: Vec<String>,
+    /// Grammar-level findings collected in one walk of the full oxc AST (see
+    /// `parser::grammar`): a `const` with no initializer, a duplicate
+    /// object-literal key, an overload group with no implementation, a member
+    /// with no annotation. Empty for declaration and non-TypeScript files,
+    /// which surge does not report on.
+    pub grammar_diagnostics: Vec<ParsedGrammarDiagnostic>,
     /// For a `.json` file: the type of the value it holds, and the marker that
     /// this *is* a JSON module. Nothing in a JSON file is code, so it is never
     /// parsed as TypeScript and `statements` is empty; this carries its whole
     /// meaning. `None` for every other file. A `.json` file whose contents do
     /// not parse is still a module, with the degradation sentinel for a value.
     pub json_module_type: Option<ParsedType>,
+}
+
+/// One [`ParsedSource::grammar_diagnostics`] finding: what was wrong, where,
+/// and the name the message needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedGrammarDiagnostic {
+    pub kind: ParsedGrammarDiagnosticKind,
+    pub span: TextSpan,
+    /// The member/function name for the kinds whose message names one.
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedGrammarDiagnosticKind {
+    /// `const x;` outside an ambient context — TS1155.
+    ConstNotInitialized,
+    /// A second property of the same name in one object literal — TS1117.
+    DuplicateObjectLiteralProperty,
+    /// An overload group with no implementation — TS2391.
+    FunctionImplementationMissing,
+    /// A class whose constructor signatures have no implementation — TS2390.
+    ConstructorImplementationMissing,
+    /// More than one `export default` in a module — TS2528.
+    MultipleDefaultExports,
+    /// A property with neither annotation nor initializer — TS7008, reported
+    /// only under `noImplicitAny`.
+    ImplicitAnyMember,
+    /// A signature with neither a body nor a return type — TS7010, reported
+    /// only under `noImplicitAny`.
+    ImplicitAnyReturn,
+    /// Two members of one class, interface, or object literal declaring the
+    /// same name where neither is an overload of the other — TS2300.
+    DuplicateMember,
+    /// Two implementations of the same method — TS2393.
+    DuplicateImplementation,
+    /// Two constructor implementations — TS2392.
+    MultipleConstructorImplementations,
+    /// A derived class constructor with no `super` call — TS2377.
+    MissingSuperCall,
+    /// A comma operator whose left side is discarded and cannot have an
+    /// effect — TS2695.
+    UnusedCommaOperand,
+    /// A parameter written both optional and with a default — TS1015.
+    OptionalParameterWithInitializer,
+    /// A required parameter after an optional one — TS1016.
+    RequiredParameterAfterOptional,
+    /// An initializer in an ambient context — TS1039.
+    AmbientInitializer,
+    /// A `set` accessor whose parameter list is not exactly one — TS1049.
+    SetAccessorParameterCount,
+    /// A `set` accessor with a return type annotation — TS1095.
+    SetAccessorReturnType,
+    /// One name written in an object literal as both an accessor and a plain
+    /// property — TS1119.
+    ObjectLiteralPropertyAndAccessor,
+    /// An `abstract` method in a class that is not abstract — TS1244.
+    AbstractMethodOutsideAbstractClass,
+    /// An `abstract` property in a class that is not abstract — TS1253.
+    AbstractPropertyOutsideAbstractClass,
+    /// A parameter property on a constructor signature — TS2369.
+    ParameterPropertyOutsideImplementation,
+    /// A parameter default on a signature with no body — TS2371.
+    ParameterInitializerOutsideImplementation,
 }
 
 /// A leading `/// <reference types="..." />` directive. Only the `types` form is

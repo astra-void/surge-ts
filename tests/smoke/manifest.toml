@@ -1182,7 +1182,7 @@ expected_diagnostics = ["TS2353"]
 [[case]]
 name = "object-type-annotation-multiple-missing-first-property"
 path = "tests/smoke/object_type_annotation_multiple_missing_first_property.ts"
-expected_diagnostics = ["TS2741"]
+expected_diagnostics = ["TS2739"]
 
 [[case]]
 name = "object-type-annotation-semicolon-separator-valid"

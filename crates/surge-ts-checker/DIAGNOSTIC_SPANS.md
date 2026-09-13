@@ -45,13 +45,25 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS2536 invalid generic indexed-access key | key type / index type span when available, otherwise indexed-access type span |
 | TS2538 invalid index type | index expression span |
 | TS2353 excess object property | excess property name span |
-| TS2741 missing required property | declaration name span (the assignment target) when available, otherwise the object literal span |
+| TS2741/TS2739/TS2740 missing required properties | declaration name span (the assignment target) when available, otherwise the object literal span |
 | TS2355/TS2366 missing return | function/method name span when available, otherwise no span |
 | TS2362/TS2363 arithmetic operand mismatch | offending operand span |
 | TS2365 invalid operator | operator or whole expression span, pinned |
 | TS2367 no-overlap equality | operator or whole expression span, pinned |
 | TS2872/TS2873 truthiness | condition or literal span |
-| surge::duplicate-default-export | default keyword or export statement span, pinned |
+| TS2528 multiple default exports | each default export's name, or its export statement span |
+| TS1155 uninitialized `const` | binding name span |
+| TS1117/TS1119 repeated object-literal key | the repeated property's key span |
+| TS2300 duplicate member / TS2393 duplicate implementation | every member's name span |
+| TS2390/TS2391 missing implementation | last signature's name span |
+| TS2392 multiple constructor implementations | each constructor's `constructor` span |
+| TS2377 missing `super` call | the constructor's `constructor` span |
+| TS2695 unused comma operand | the discarded operand's span |
+| TS1015/TS1016/TS2369/TS2371 parameter-list grammar | the offending parameter's span, modifiers included |
+| TS1039 ambient initializer | the initializer expression's span |
+| TS1049/TS1095 `set` accessor grammar | accessor name span |
+| TS1244/TS1253 `abstract` outside an abstract class | the member's span, which starts at the modifier |
+| TS7008/TS7010 implicit `any` member/return | member or function name span |
 | surge::unsupported-declaration | keyword or full statement span, pinned |
 | surge::unsupported-module-syntax | import/export statement span, pinned |
 | parser-error | parser-provided best-effort span when available; otherwise no span |

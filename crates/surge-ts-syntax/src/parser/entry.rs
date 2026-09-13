@@ -63,6 +63,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             module_reads: Vec::new(),
             suppressed_ranges: Vec::new(),
             import_call_specifiers: Vec::new(),
+            grammar_diagnostics: Vec::new(),
             // A `.json` file that does not parse still *is* a JSON module —
             // reporting its importer as unresolved would be a worse answer than
             // an unmodelled value, and surge does not report JSON syntax errors.
@@ -119,6 +120,15 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let import_call_specifiers =
         super::import_calls::collect_import_call_specifiers(&parsed.program, source_text);
 
+    // Grammar findings are reported for hand-written TypeScript only: surge
+    // suppresses every declaration-file diagnostic, and a `.js` file is not
+    // type-checked the way `checkJs` would need.
+    let grammar_diagnostics = if collects_grammar_diagnostics(file_name) {
+        super::grammar::collect_grammar_diagnostics(&parsed.program)
+    } else {
+        Vec::new()
+    };
+
     ParsedSource {
         file_name: file_name.to_string(),
         statements,
@@ -128,6 +138,19 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         module_reads,
         suppressed_ranges,
         import_call_specifiers,
+        grammar_diagnostics,
         json_module_type: None,
     }
+}
+
+fn collects_grammar_diagnostics(file_name: &str) -> bool {
+    if file_name.ends_with(".d.ts")
+        || file_name.ends_with(".d.mts")
+        || file_name.ends_with(".d.cts")
+    {
+        return false;
+    }
+    [".ts", ".tsx", ".mts", ".cts"]
+        .iter()
+        .any(|extension| file_name.ends_with(extension))
 }

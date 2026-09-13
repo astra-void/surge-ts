@@ -1471,18 +1471,21 @@ fn evaluate_object_literal_with_expected_type(
         }
     }
 
-    if let Some((property_name, _)) = (!has_spread && !degraded_property_comparison)
-        .then(|| {
-            expected_object_type
-                .required_properties()
-                .find(|(property_name, _)| {
-                    !properties
-                        .iter()
-                        .any(|property| property.name == property_name.as_ref())
-                })
-        })
-        .flatten()
-    {
+    let missing_property_names: Vec<String> = if has_spread || degraded_property_comparison {
+        Vec::new()
+    } else {
+        expected_object_type
+            .required_properties()
+            .filter(|(property_name, _)| {
+                !properties
+                    .iter()
+                    .any(|property| property.name == property_name.as_ref())
+            })
+            .map(|(property_name, _)| property_name.to_string())
+            .collect()
+    };
+
+    if let Some(property_name) = missing_property_names.first() {
         let source_type_name = crate::checks::expr::widen_type(&object_literal_source_type_name(
             properties,
             &inferred_property_types,
@@ -1515,11 +1518,12 @@ fn evaluate_object_literal_with_expected_type(
                 ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
                     Diagnostic::ts1360(&source_type_name, &target_type_name, ctx.file_name.clone())
                 }
-                _ => Diagnostic::ts2741(
+                _ => missing_properties_diagnostic(
                     property_name,
+                    &missing_property_names,
                     &source_type_name,
                     &target_type_name,
-                    ctx.file_name.clone(),
+                    ctx,
                 ),
             }
         };
@@ -1539,6 +1543,42 @@ fn evaluate_object_literal_with_expected_type(
         timings.object_literal_checking += object_start.elapsed()
     });
     result
+}
+
+/// tsc names *every* missing required property, and picks the code by how many
+/// there are: one is TS2741, two to five are listed in full as TS2739, and six
+/// or more list the first four as TS2740 with the rest counted.
+fn missing_properties_diagnostic(
+    first_missing: &str,
+    missing: &[String],
+    source_type_name: &str,
+    target_type_name: &str,
+    ctx: &CheckerContext,
+) -> Diagnostic {
+    const LISTED_WHEN_TRUNCATED: usize = 4;
+    const MAX_LISTED: usize = 5;
+
+    match missing.len() {
+        0 | 1 => Diagnostic::ts2741(
+            first_missing,
+            source_type_name,
+            target_type_name,
+            ctx.file_name.clone(),
+        ),
+        count if count <= MAX_LISTED => Diagnostic::ts2739(
+            source_type_name,
+            target_type_name,
+            missing.join(", "),
+            ctx.file_name.clone(),
+        ),
+        count => Diagnostic::ts2740(
+            source_type_name,
+            target_type_name,
+            missing[..LISTED_WHEN_TRUNCATED].join(", "),
+            count - LISTED_WHEN_TRUNCATED,
+            ctx.file_name.clone(),
+        ),
+    }
 }
 
 fn object_literal_source_type_name(

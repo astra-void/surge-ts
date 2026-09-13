@@ -656,6 +656,182 @@
     "support": "catalog-only"
   },
   {
+    "code": "TS1117",
+    "category": "Error",
+    "message": "An object literal cannot have multiple properties with the same name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1155",
+    "category": "Error",
+    "message": "'const' declarations must be initialized.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2390",
+    "category": "Error",
+    "message": "Constructor implementation is missing.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2391",
+    "category": "Error",
+    "message": "Function implementation is missing or not immediately following the declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2528",
+    "category": "Error",
+    "message": "A module cannot have multiple default exports.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2739",
+    "category": "Error",
+    "message": "Type '{0}' is missing the following properties from type '{1}': {2}",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2740",
+    "category": "Error",
+    "message": "Type '{0}' is missing the following properties from type '{1}': {2}, and {3} more.",
+    "source": "typescript",
+    "arity": 4,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7008",
+    "category": "Error",
+    "message": "Member '{0}' implicitly has an '{1}' type.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7010",
+    "category": "Error",
+    "message": "'{0}', which lacks return-type annotation, implicitly has an '{1}' return type.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2377",
+    "category": "Error",
+    "message": "Constructors for derived classes must contain a 'super' call.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2392",
+    "category": "Error",
+    "message": "Multiple constructor implementations are not allowed.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2695",
+    "category": "Error",
+    "message": "Left side of comma operator is unused and has no side effects.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1015",
+    "category": "Error",
+    "message": "Parameter cannot have question mark and initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1016",
+    "category": "Error",
+    "message": "A required parameter cannot follow an optional parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1039",
+    "category": "Error",
+    "message": "Initializers are not allowed in ambient contexts.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1049",
+    "category": "Error",
+    "message": "A 'set' accessor must have exactly one parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1095",
+    "category": "Error",
+    "message": "A 'set' accessor cannot have a return type annotation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1119",
+    "category": "Error",
+    "message": "An object literal cannot have property and accessor with the same name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1244",
+    "category": "Error",
+    "message": "Abstract methods can only appear within an abstract class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1253",
+    "category": "Error",
+    "message": "Abstract properties can only appear within an abstract class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2369",
+    "category": "Error",
+    "message": "A parameter property is only allowed in a constructor implementation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2371",
+    "category": "Error",
+    "message": "A parameter initializer is only allowed in a function or constructor implementation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "surge::parser-error",
     "category": "Error",
     "message": "{0}",
@@ -669,14 +845,6 @@
     "message": "Duplicate type parameter '{0}'.",
     "source": "surge-ts",
     "arity": 1,
-    "support": "emitted"
-  },
-  {
-    "code": "surge::duplicate-default-export",
-    "category": "Error",
-    "message": "Duplicate default export.",
-    "source": "surge-ts",
-    "arity": 0,
     "support": "emitted"
   },
   {

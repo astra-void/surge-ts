@@ -32,19 +32,6 @@ fn quoted_module_specifier(module_specifier: &str) -> String {
     format!("\"{module_specifier}\"")
 }
 
-pub(crate) fn push_duplicate_default_export_diagnostic(
-    ctx: &mut CheckerContext,
-    name_span: Option<TextSpan>,
-) {
-    let mut diagnostic = Diagnostic::surge_duplicate_default_export(ctx.file_name.clone());
-
-    if let Some(span) = name_span {
-        diagnostic = diagnostic.with_span(convert_span(span));
-    }
-
-    ctx.push(diagnostic);
-}
-
 /// Diagnostic for an unresolved module specifier, mirroring tsc: a Node
 /// built-in name gets the install-@types/node hint via
 /// `cannot_resolve_module_name_error_for_specific_module`; anything else falls
