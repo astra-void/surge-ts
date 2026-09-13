@@ -788,11 +788,12 @@ mod tests {
     }
 
     #[test]
-    fn literal_union_does_not_collapse_boolean_literal_with_boolean() {
+    fn literal_union_folds_boolean_literal_into_boolean() {
+        // `boolean` is `true | false`, so tsc reduces the union to `boolean`.
         let ty = union_type(vec![Type::BooleanLiteral(true), Type::Boolean]);
 
-        assert!(matches!(ty, Type::Union(_)));
-        assert_eq!(ty.name(), "true | boolean");
+        assert_eq!(ty, Type::Boolean);
+        assert_eq!(ty.name(), "boolean");
     }
 
     #[test]
