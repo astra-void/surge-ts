@@ -46,7 +46,7 @@ level at this commit; the bisect and the before/after are in
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1929 / 1932 passed** — three fixtures `20b5ef3` invalidated and did not update: `generic_constraint_parsed_not_enforced` and `generic_constraint_does_not_reject_out_of_constraint_yet` assert the constraint is *not* enforced, and `span_invalid_pick_alias_points_to_pick_reference_and_dedupes_usage` now gets the `TS2344` twice |
+| Workspace tests | `cargo nextest run --workspace` | **1932 / 1933 passed** — `literal_union_does_not_collapse_boolean_literal_with_boolean` asserts that `true | false` stays a two-member union, which `5b87a462` deliberately changed without updating the test |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
 | Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **222 / 222 passed** |
 | Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **221 / 222 passed** — one message drift, see below |
