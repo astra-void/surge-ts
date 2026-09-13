@@ -269,7 +269,7 @@ pub fn union_type(types: Vec<Type>) -> Type {
     let had_members = !flattened.is_empty();
     flattened.retain(|ty| !matches!(ty, Type::Never));
 
-    let unique = dedup_members(flattened);
+    let unique = order_tuple_members(dedup_members(flattened));
 
     match unique.len() {
         0 if had_members => Type::Never,
@@ -277,6 +277,37 @@ pub fn union_type(types: Vec<Type>) -> Type {
         1 => unique[0].clone(),
         _ => Type::Union(UnionType::from_borrowed_members(&unique)),
     }
+}
+
+/// TypeScript 7 orders a union's tuple constituents after everything else and
+/// by ascending arity, keeping first-seen order within one arity — measured on
+/// the 7.0.2 oracle (`[1, 2, 3] | [1, 2] | [] | [1]` reads back as `[[], [1],
+/// [1, 2], [1, 2, 3]]` whichever way it is written, and `{ o: 1 } | [1] | { q: 2 }
+/// | [2, 3]` as `[{ o: 1 }, { q: 2 }, [1], [2, 3]]`). The order is observable:
+/// `UnionToTuple` peels a union one constituent at a time, so a type-level list
+/// built from a union of tuples (ts-pattern's `FindUnions`) comes out in this
+/// order and nothing else. Every other constituent keeps its first-seen order.
+fn order_tuple_members(members: Vec<&Type>) -> Vec<&Type> {
+    if members
+        .iter()
+        .filter(|ty| matches!(ty, Type::Tuple(_)))
+        .count()
+        < 2
+        && !members
+            .iter()
+            .any(|ty| matches!(ty, Type::Tuple(_)))
+    {
+        return members;
+    }
+    let (mut tuples, mut others): (Vec<&Type>, Vec<&Type>) = members
+        .into_iter()
+        .partition(|ty| matches!(ty, Type::Tuple(_)));
+    tuples.sort_by_key(|ty| match ty {
+        Type::Tuple(elements) => elements.len(),
+        _ => 0,
+    });
+    others.append(&mut tuples);
+    others
 }
 
 /// Below this size, pairwise `contains` beats the per-member hashing overhead;
@@ -731,6 +762,23 @@ mod tests {
     fn union_drops_never_members() {
         let ty = union_type(vec![Type::StringLiteral("b".to_string()), Type::Never]);
         assert_eq!(ty, Type::StringLiteral("b".to_string()));
+    }
+
+    #[test]
+    fn tuple_members_sort_after_others_by_ascending_arity() {
+        let three = Type::Tuple(vec![Type::Number, Type::Number, Type::Number]);
+        let one = Type::Tuple(vec![Type::Number]);
+        let empty = Type::Tuple(Vec::new());
+        let object = Type::Object(crate::ObjectType::new(crate::PropertyMap::default(), None));
+        let Type::Union(union) = union_type(vec![
+            three.clone(),
+            object.clone(),
+            empty.clone(),
+            one.clone(),
+        ]) else {
+            panic!("expected a union");
+        };
+        assert_eq!(union.types(), &[object, empty, one, three]);
     }
 
     #[test]
