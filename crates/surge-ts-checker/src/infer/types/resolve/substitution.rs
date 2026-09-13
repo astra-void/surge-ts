@@ -70,6 +70,7 @@ pub(crate) fn bind_type_arguments(
             } else {
                 check_type_argument_constraint(
                     parameter,
+                    type_parameters,
                     &resolved_ty,
                     argument_had_error,
                     name_span,
@@ -320,6 +321,7 @@ pub(crate) fn is_concrete_substituted_index_reference(
 #[allow(clippy::too_many_arguments)]
 fn check_type_argument_constraint(
     parameter: &ParsedTypeParameter,
+    type_parameters: &[ParsedTypeParameter],
     argument: &Type,
     argument_had_error: bool,
     name_span: Option<TextSpan>,
@@ -337,6 +339,18 @@ fn check_type_argument_constraint(
     };
     let constraint_for_display = constraint.clone();
     if argument_had_error || !constraint_judgeable(argument) {
+        return;
+    }
+    // A constraint stated in terms of a *sibling* parameter (`K extends keyof T
+    // & string`) is only as right as surge's model of that sibling. It resolves
+    // to a literal union, which passes the judgeability test below while saying
+    // nothing about whether the argument is really out of constraint: drizzle's
+    // `PgSelectWithout<T, TDynamic, K extends keyof T & string>` reported its own
+    // method-name union as violating `keyof T` in five files, because `T`'s keys
+    // came back as an unrelated shape. The assertion idiom this check exists for
+    // (`Expect<a extends true>`) never names a sibling, and `Pick`/`Omit` keep
+    // their own dedicated check in `utility.rs`.
+    if constraint_names_a_sibling(&constraint, type_parameters) {
         return;
     }
 
@@ -399,6 +413,46 @@ fn written_constraint_display(
                 .unwrap_or_else(|| named.name.clone()),
         ),
         other => crate::driver::parsed_type_display(other),
+    }
+}
+
+/// Whether `constraint` mentions one of the declaration's own type parameters.
+/// Anything this cannot look inside counts as mentioning one: the check is worth
+/// having only where it is certain, and a missed report costs less than a false
+/// one.
+fn constraint_names_a_sibling(constraint: &ParsedType, siblings: &[ParsedTypeParameter]) -> bool {
+    let names_sibling = |name: &str| siblings.iter().any(|sibling| sibling.name == name);
+    match constraint {
+        ParsedType::String
+        | ParsedType::Number
+        | ParsedType::Boolean
+        | ParsedType::BigInt
+        | ParsedType::Symbol
+        | ParsedType::Undefined
+        | ParsedType::Void
+        | ParsedType::Any
+        | ParsedType::Unknown
+        | ParsedType::UnknownKeyword
+        | ParsedType::Never
+        | ParsedType::StringLiteral(_)
+        | ParsedType::NumberLiteral(_)
+        | ParsedType::BooleanLiteral(_) => false,
+        ParsedType::Named(named) => {
+            names_sibling(&named.name)
+                || named
+                    .type_arguments
+                    .iter()
+                    .any(|argument| constraint_names_a_sibling(argument, siblings))
+        }
+        ParsedType::Array(inner) | ParsedType::KeyOf(inner) => {
+            constraint_names_a_sibling(inner, siblings)
+        }
+        ParsedType::Union(members)
+        | ParsedType::Intersection(members)
+        | ParsedType::Tuple(members) => members
+            .iter()
+            .any(|member| constraint_names_a_sibling(member, siblings)),
+        _ => true,
     }
 }
 
