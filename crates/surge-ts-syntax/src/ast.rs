@@ -483,6 +483,9 @@ pub struct ParsedClassMethod {
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub return_type: Option<ParsedType>,
+    /// See [`ParsedFunctionDeclaration::return_type_span`]. tsc reports a
+    /// missing return on the written return type, falling back to the name.
+    pub return_type_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     /// See [`ParsedFunctionDeclaration::has_body`].
     pub has_body: bool,

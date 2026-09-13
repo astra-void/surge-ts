@@ -3,6 +3,8 @@ use oxc_ast::ast::{
     PropertyDefinitionType, PropertyKey,
 };
 
+use oxc_span::GetSpan;
+
 use crate::{
     ParsedClassAccessor, ParsedClassConstructor, ParsedClassDeclaration, ParsedClassMember,
     ParsedClassMethod, ParsedClassProperty, ParsedNamedType,
@@ -147,6 +149,9 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         .return_type
                         .as_ref()
                         .and_then(|annotation| parse_type_annotation(annotation));
+                    let return_type_span = method.value.return_type.as_ref().map(|annotation| {
+                        text_span_from_oxc_span(annotation.type_annotation.span())
+                    });
 
                     Some(ParsedClassMember::Method(ParsedClassMethod {
                         name: key.name.to_string(),
@@ -162,6 +167,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         ),
                         parameters,
                         return_type,
+                        return_type_span,
                         body,
                         has_body: method.value.body.is_some(),
                         is_generator: method.value.generator,

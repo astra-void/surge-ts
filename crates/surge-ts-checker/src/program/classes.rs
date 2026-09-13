@@ -487,6 +487,17 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     None,
                     ctx,
                 );
+                // A bodyless method is `abstract`, an overload signature, or a
+                // member of an ambient class: there is no body to check, and
+                // checking the absent one reported TS2355 for a non-void return
+                // the implementation below actually satisfies. The same guard
+                // has always been on the function-declaration path
+                // (`check_function_declaration`); class members never had it.
+                // The signature above is still mapped, so its annotations are
+                // resolved and reported either way.
+                if !method.has_body {
+                    continue;
+                }
                 let this_type = if method.is_static {
                     static_type.clone()
                 } else {
@@ -500,7 +511,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     &method.type_parameters,
                     None,
                     method.return_type.is_some(),
-                    method.name_span,
+                    method.return_type_span.or(method.name_span),
                     Some(this_type),
                     false,
                     method.has_body.then(|| method.body_reads.as_slice()),
