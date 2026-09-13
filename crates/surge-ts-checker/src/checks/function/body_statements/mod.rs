@@ -4,8 +4,7 @@
 use super::*;
 
 use surge_ts_syntax::{
-    ParsedExpression,
-    ParsedFunctionBodyStatement, ParsedVariableDeclaration, ParsedVariableKind,
+    ParsedExpression, ParsedFunctionBodyStatement, ParsedVariableDeclaration, ParsedVariableKind,
 };
 use surge_ts_types::{Type, is_assignable_to};
 
@@ -13,23 +12,22 @@ use crate::checks::expr::evaluate_expression;
 use crate::checks::var::{VariableCheckOptions, check_variable_declaration_against_symbols};
 use crate::context::CheckerContext;
 use crate::flow::{
-    AssignmentState, FlowCheck, FunctionFlowState,
-    apply_variable_declaration_state, check_expression_flow,
-    check_obvious_truthiness_condition,
+    AssignmentState, FlowCheck, FunctionFlowState, apply_variable_declaration_state,
+    check_expression_flow, check_obvious_truthiness_condition,
 };
 use crate::infer::InferredExpression;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
 mod alias_conditions;
+mod assignments;
 mod branch_assignments;
 mod control_flow;
-mod assignments;
 mod returns;
 
 pub(crate) use alias_conditions::*;
+pub(crate) use assignments::*;
 use branch_assignments::*;
 pub(crate) use control_flow::*;
-pub(crate) use assignments::*;
 pub(crate) use returns::*;
 
 pub(crate) fn check_function_variable_declaration(
@@ -58,9 +56,7 @@ pub(crate) fn check_function_variable_declaration(
         // A `const` whose initializer is plainly a condition keeps that
         // condition, so a later `if (ok)` narrows exactly as the written
         // expression would (tsc's aliased-condition narrowing).
-        if matches!(variable_kind, ParsedVariableKind::Const)
-            && is_condition_shaped(initializer)
-        {
+        if matches!(variable_kind, ParsedVariableKind::Const) && is_condition_shaped(initializer) {
             let condition = std::sync::Arc::new(initializer.clone());
             flow_state.record_alias_guard_condition(local_name.clone(), condition.clone());
             scopes.record_alias_condition(local_name.as_str(), Some(condition));
@@ -70,8 +66,7 @@ pub(crate) fn check_function_variable_declaration(
         // A `const` bound to a property reference is a discriminant alias:
         // `const { direction } = opts` lowers to `direction = opts.direction`,
         // and testing `direction` narrows `opts`.
-        if matches!(variable_kind, ParsedVariableKind::Const)
-            && is_property_reference(initializer)
+        if matches!(variable_kind, ParsedVariableKind::Const) && is_property_reference(initializer)
         {
             flow_state.record_discriminant_alias(
                 local_name.clone(),
@@ -250,11 +245,11 @@ fn symbol_kind_for_variable(kind: ParsedVariableKind) -> SymbolKind {
 fn literal_initializer_type(initializer: Option<&ParsedExpression>) -> Option<Type> {
     match initializer? {
         ParsedExpression::StringLiteral(value) => Some(Type::StringLiteral(value.clone())),
-        ParsedExpression::NumberLiteral(value) => Some(Type::NumberLiteral(
-            surge_ts_types::NumberLiteralType {
+        ParsedExpression::NumberLiteral(value) => {
+            Some(Type::NumberLiteral(surge_ts_types::NumberLiteralType {
                 value: value.clone(),
-            },
-        )),
+            }))
+        }
         ParsedExpression::BooleanLiteral(value) => Some(Type::BooleanLiteral(*value)),
         _ => None,
     }
