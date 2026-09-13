@@ -486,11 +486,26 @@ fn bind_infer_captures(
                     );
                 }
             }
-            // A constructor *type* (`abstract new (...args: infer P) => any`,
-            // `ConstructorParameters`' whole pattern) is an object carrying only
-            // a construct signature, so its captures live there rather than in a
-            // property.
-            if let Some(signature) = pattern
+            // An overloaded pattern (`{ (…): infer R1; (…): infer R2 }`) pairs
+            // its signatures with the check type's overloads one for one,
+            // aligned at the end the way tsc pairs signature lists. The parsed
+            // fold that stands in for the group elsewhere widens every slot the
+            // overloads disagree on, which is precisely where the captures are.
+            if !pattern.call_signature_overloads.is_empty() {
+                bind_overload_group_infer_captures(
+                    &pattern.call_signature_overloads,
+                    &peeled,
+                    substitution,
+                    ctx,
+                    resolving,
+                    depth,
+                    reference_positional,
+                );
+            } else if let Some(signature) = pattern
+                // A constructor *type* (`abstract new (...args: infer P) => any`,
+                // `ConstructorParameters`' whole pattern) is an object carrying only
+                // a construct signature, so its captures live there rather than in a
+                // property.
                 .construct_signature
                 .as_deref()
                 .or(pattern.call_signature.as_deref())
@@ -1468,6 +1483,46 @@ fn collect_infer_variance(ty: &ParsedType, contravariant: bool, out: &mut Vec<(S
 /// remaining one (what makes `Parameters`/`ConstructorParameters` yield a
 /// parameter list), and the return position.
 #[allow(clippy::too_many_arguments)]
+/// Binds the captures of an overloaded call-signature pattern. Target
+/// signature `i` is paired with the check type's overload at the same distance
+/// from the end, which is how tsc lines up two signature lists; with fewer
+/// source overloads than the pattern writes, the extra patterns all read the
+/// last one rather than binding nothing.
+fn bind_overload_group_infer_captures(
+    patterns: &[surge_ts_syntax::ParsedFunctionType],
+    check: &Type,
+    substitution: &mut TypeParameterSubstitution,
+    ctx: &CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    depth: usize,
+    reference_positional: bool,
+) {
+    let Some(check_function) = callable_signature(check) else {
+        return;
+    };
+    let overloads = check_function.overloads().unwrap_or_default();
+    for (index, pattern) in patterns.iter().enumerate() {
+        let check_signature = if overloads.len() >= patterns.len() {
+            overloads.get(overloads.len() - patterns.len() + index)
+        } else {
+            overloads.get(index).or_else(|| overloads.last())
+        };
+        let check_type = match check_signature {
+            Some(signature) => Type::Function(signature.clone()),
+            None => check.clone(),
+        };
+        bind_signature_infer_captures(
+            pattern,
+            &check_type,
+            substitution,
+            ctx,
+            resolving,
+            depth,
+            reference_positional,
+        );
+    }
+}
+
 fn bind_signature_infer_captures(
     pattern: &surge_ts_syntax::ParsedFunctionType,
     check: &Type,
