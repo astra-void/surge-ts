@@ -46,27 +46,29 @@ level at this commit; the bisect and the before/after are in
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1868 / 1868 passed** |
+| Workspace tests | `cargo nextest run --workspace` | **1900 / 1900 passed** |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **162 / 162 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **162 / 162 passed** |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **162 / 162 passed** |
-| Oracle preset sweep — both strict flags | same + both | **162 / 162 passed** |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **212 / 212 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **211 / 212 passed** — one message drift, see below |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **212 / 212 passed** |
+| Oracle preset sweep — both strict flags | same + both | **211 / 212 passed** — the same drift |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
 | Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 162 presets the
-sweep saw 288 `tsc` diagnostics and 288 `surge-ts` diagnostics, with
+parity against the upstream TypeScript compiler. Across all 212 presets the
+sweep saw 342 `tsc` diagnostics and 342 `surge-ts` diagnostics, with
 `onlyTsc = 0` and `onlyRust = 0`.
 
-**Message text and span/column match on every registered preset.** Both strict
-sweeps have been green since 2026-09-03; the nine drifting targets recorded on
-2026-09-01 were closed then, and their deltas plus the fixes are kept in
+**Span/column matches on every registered preset; message text matches on all
+but one.** `declaration-flow-narrowing-basic` drifts under `--strictMessages`:
+surge names an assigned union `'"a" | "b"'` where tsc names it `'string'`, same
+file/code/line/column. It is the only drift in the sweep, it predates the
+2026-09-13 measurement, and the normal gate is unaffected. The strict flags are
+*separate dimensions* — a preset can reopen one without failing the normal gate
+— so their exit codes stay non-gating in CI. The 2026-09-01 drift inventory and
+the fixes that closed it are kept in
 [STRICT_DRIFT_INVENTORY.md § Current snapshot](STRICT_DRIFT_INVENTORY.md#current-snapshot-2026-09-03).
-The strict flags are still *separate dimensions* — a future preset may reopen
-one without failing the normal gate — so the exit codes remain non-gating in CI
-even though they currently exit zero.
 
 `diagnostics-pack`, the compact emitted-diagnostic fixture, is green at **31/31**
 and passes the normal gate *and* both strict gates.
@@ -164,9 +166,9 @@ unstable or out of scope.
 
 Summary of what backs it today:
 
-- 162 oracle presets under `tests/compat-projects/`, all green at the normal
-  gate **and at both strict gates** (see the table above).
-- 372 compat-project fixtures in total; the ones not registered as oracle
+- 212 oracle presets under `tests/compat-projects/`, all green at the normal
+  gate, and all but one at the strict gates (see the table above).
+- 434 compat-project fixtures in total; the ones not registered as oracle
   presets are exercised by `cargo nextest run --workspace` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
@@ -188,7 +190,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **zod** | `912f0f5` | 21 | 21 | **exact** — every diagnostic matched, message text included |
 | **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
 | **trpc** | `dfbafa8` | 1244 | 1128 | surge-only **0**, `tsc`-only 116 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-11) |
-| **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 25 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
+| **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 13 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **newly provisioned, provisional** — 446 when first measured; the 1 that remains is surge-only and the 2 `tsc` reports are unmatched; dirty-tree measurement, not a gate (see note) |
 
 Notes that matter:
@@ -248,12 +250,28 @@ Notes that matter:
   overflow unbounded, 55 GB of RSS under a depth bound). The merge now detects
   the cycle by operand identity, flattens nested deferred intersections, and
   shares one deferred merge per operand set, and `typeof globalThis` is a
-  nominal reference. With that the aggregate completes in about 5 s at about
-  1.1 GB peak RSS. The over-report has been burned down since — **25** at the
-  2026-09-11 measurement, from 133 when it first completed — and every one of
-  them is a false positive. That number was measured on a **dirty working tree**
-  on top of `6e034fd`; re-measure from a clean worktree before recording it as a
-  gate. The distribution lives in
+  nominal reference. With that the aggregate completes in about 0.6 s at about
+  190 MB peak RSS, after the program-lifetime interface memo
+  ([docs/perf/TANSTACK-QUERY-PROGRAM-MEMO-2026-09-12.md](docs/perf/TANSTACK-QUERY-PROGRAM-MEMO-2026-09-12.md)).
+  The over-report has been burned down since — **13** at the 2026-09-13
+  measurement, from 133 when it first completed — and every one of them is a
+  false positive. After the `react-query` pass below, four more closed in
+  query-core: a type parameter bound from its first argument alone, later object
+  candidates dropped and a fresh object literal never widened
+  (`generic-object-candidate-union-basic`); and a `vi.fn()` callback that
+  bound nothing, because a rest parameter's element was never lined up and a
+  callable object never inferred (`callback-rest-any-inference-basic`). The 2026-09-13 pass closed all eleven in the `react-query`
+  type tests, through five root causes: a generic overload group discarding its
+  folded parameter union at instantiation, `TS2356` applied to unary `+`/`-`
+  where tsc coerces, a declaration's annotation re-checked under the call's
+  substitution, a missing-property report made on a literal whose written
+  property could not be compared, and — the last one — a call taking the
+  overload group's *fold* as its return type rather than the return of the
+  overload its arguments actually match (overload return selection, landed the
+  same day with flat CPU and memory). Each is pinned by a preset or a Rust test
+  and left every other corpus byte-identical. That number was measured on a **dirty
+  working tree** on top of `7780246`; re-measure from a clean worktree before
+  recording it as a gate. The distribution lives in
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md).
 - **zod is exact at this commit.** All 21 `tsc` diagnostics are matched at
   file/code/line *and* message text (21/21). The one long-standing over-report
@@ -301,13 +319,18 @@ snapshot without re-verification and are labelled as such.
   only (`String` is an object with a call signature, not a function symbol)
   and does not instantiate a member's type parameters. `const bad: number =
   fn((n: number) => String(n))` is not reported.
-- **Overload resolution uses the first overload only.** *(re-probed
-  2026-09-03.)* A call that should select a later overload resolves against the
-  first signature. Today this surfaces as an *under-report*:
-  `declare function f(a: string): string; declare function f(a: number):
-  number;` then `const bad: string = f(1)` — `tsc` reports TS2322, surge
-  reports nothing. A full overload-resolution implementation exists on a branch
-  but is blocked on a measured ~+79% CPU regression.
+- **Overload resolution: the return type is selected, the no-match diagnostic
+  is not.** *(refuted in part 2026-09-13 on `7780246`, dirty tree.)* The
+  2026-09-03 example — `declare function f(a: string): string; declare
+  function f(a: number): number;` then `const bad: string = f(1)` — now reports
+  TS2322 like `tsc`: the arguments are checked once against the group's
+  permissive fold and the return type is the first overload's that accepts
+  them, at no measured CPU or memory cost (the branch that re-checked every
+  candidate, ~+79% CPU, was not rebased). What remains: a call matching *no*
+  overload keeps the fold's `TS2345`/`TS2322` where `tsc` reports `TS2769`,
+  and interface / type-literal method groups still resolve through the fold
+  alone. See
+  [REAL_PROJECT_COMPAT.md § Overload return selection](REAL_PROJECT_COMPAT.md#overload-return-selection-2026-09-13).
 - **Module augmentation is lost through a star re-export wrapper.**
   *(re-probed 2026-09-03.)* With `declare module "core"` in a `.d.ts` and
   `export * from "core"` in `wrapper`, importing the augmented interface from
@@ -527,10 +550,11 @@ Performance history, methodology, and the reproduction recipe live in
 
 - **No full TypeScript compatibility claim.** The oracle gate establishes
   parity on the covered fixtures and projects only.
-- **No general message-text or span/column parity claim.** Both strict sweeps
-  are green across the 162 registered presets at this commit, which is a
-  statement about those fixtures — not about arbitrary code. The strict flags
-  stay non-gating so a new preset can record a drift without failing CI.
+- **No general message-text or span/column parity claim.** The strict sweeps
+  are green across the 212 registered presets at this commit bar one message
+  drift, which is a statement about those fixtures — not about arbitrary code.
+  The strict flags stay non-gating so a preset can record a drift without
+  failing CI.
 - **No claim that trpc matches `tsc`.** It is a workload and a measured
   baseline; 135 diagnostics still differ in each direction combined.
 - **No wall-clock performance claim at this commit** — see the caveat above.
