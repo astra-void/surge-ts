@@ -798,15 +798,24 @@ fn generic_class_instance_type(
         let names: Vec<&str> = declared.iter().map(|p| p.name.as_str()).collect();
         let mut synthesized = Vec::with_capacity(declared.len());
         for parameter in declared.iter() {
-            if inferred.get(&parameter.name).is_some() && !inferred.is_placeholder(&parameter.name)
+            if let Some(inferred_type) = inferred.get(&parameter.name)
+                && !inferred.is_placeholder(&parameter.name)
             {
-                // Resolved through the substitution below, so the inferred type
-                // needs no name that is in scope anywhere.
-                synthesized.push(ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
-                    name: parameter.name.clone(),
-                    span: None,
-                    type_arguments: Vec::new(),
-                })));
+                // Written back as the type it resolved to whenever the syntax can
+                // say it, so the instance is built exactly as an explicit
+                // `new C<string, …>()` is. Resolving a synthesized `Named(param)`
+                // through the substitution binds the *argument* correctly but a
+                // member's lazy alias reference (`subscribe(listener:
+                // Listener<A, B, C>)`) re-reads its parsed arguments later, past
+                // the substitution, and came out with the class's own parameters
+                // unbound. A type the syntax cannot spell keeps the name route.
+                synthesized.push(reify_type_argument(inferred_type).unwrap_or_else(|| {
+                    ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                        name: parameter.name.clone(),
+                        span: None,
+                        type_arguments: Vec::new(),
+                    }))
+                }));
                 continue;
             }
             let fallback = parameter
@@ -850,6 +859,42 @@ fn generic_class_instance_type(
     }
     ctx.symbols = saved_symbols;
     (!instance.is_unknown()).then_some(instance)
+}
+
+/// The written form of a resolved type, for the cases the syntax spells
+/// directly: primitives, literals, and arrays/tuples/unions of those. `None` for
+/// anything nominal or structural, which has no context-free spelling here.
+fn reify_type_argument(ty: &Type) -> Option<ParsedType> {
+    Some(match ty {
+        Type::String => ParsedType::String,
+        Type::Number => ParsedType::Number,
+        Type::Boolean => ParsedType::Boolean,
+        Type::BigInt => ParsedType::BigInt,
+        Type::Symbol => ParsedType::Symbol,
+        Type::Undefined => ParsedType::Undefined,
+        Type::Void => ParsedType::Void,
+        Type::Any => ParsedType::Any,
+        Type::Never => ParsedType::Never,
+        Type::GenuineUnknown => ParsedType::UnknownKeyword,
+        Type::StringLiteral(value) => ParsedType::StringLiteral(value.to_string()),
+        Type::NumberLiteral(literal) => ParsedType::NumberLiteral(literal.value.to_string()),
+        Type::BooleanLiteral(value) => ParsedType::BooleanLiteral(*value),
+        Type::Array(element) => ParsedType::Array(std::sync::Arc::new(reify_type_argument(element)?)),
+        Type::Tuple(elements) => ParsedType::Tuple(std::sync::Arc::new(
+            elements
+                .iter()
+                .map(reify_type_argument)
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        Type::Union(union) => ParsedType::Union(std::sync::Arc::new(
+            union
+                .types()
+                .iter()
+                .map(reify_type_argument)
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        _ => return None,
+    })
 }
 
 /// The class type arguments the constructor call infers, by the same machinery a
@@ -1081,6 +1126,12 @@ pub(crate) fn check_function_type_call(
         return None;
     }
 
+    // What each argument evaluated to, for overload selection afterwards. A
+    // `None` type is a wildcard: a callback (typed by whichever overload is
+    // picked, so it cannot pick), a degraded or unresolved argument, or a
+    // spread.
+    let mut argument_types: Vec<ArgumentShape> = Vec::with_capacity(arguments.len());
+
     for (i, argument) in arguments.iter().enumerate() {
         // A spread stands for however many arguments its type holds, so it does
         // not line up with the parameter at this position — checking it against
@@ -1088,6 +1139,7 @@ pub(crate) fn check_function_type_call(
         // expression is still evaluated so errors inside it surface.
         if argument.spread {
             let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            argument_types.push(ArgumentShape::wildcard());
             continue;
         }
 
@@ -1147,6 +1199,19 @@ pub(crate) fn check_function_type_call(
             mismatch_reported = true;
         }
 
+        argument_types.push(ArgumentShape {
+            ty: match &inferred_argument {
+                InferredExpression::Known(argument_type)
+                    if !argument_is_callback(&argument.expression)
+                        && !type_contains_unknown(argument_type) =>
+                {
+                    Some(argument_type.clone())
+                }
+                _ => None,
+            },
+            written_keys: written_object_keys(&argument.expression),
+        });
+
         match inferred_argument {
             InferredExpression::Known(argument_type) => {
                 if argument_type.is_unknown() || mismatch_reported {
@@ -1187,10 +1252,192 @@ pub(crate) fn check_function_type_call(
         return None;
     }
 
-    Some(with_type_copy_reason(
-        TypeCopyReason::CallResolution,
-        || function_type.return_type().clone(),
-    ))
+    // The arguments were checked once, against the permissive fold. With their
+    // types in hand, the return type is the first overload's that accepts them
+    // — tsc's resolution order — and the fold's when none does, which keeps a
+    // no-match call exactly where it was.
+    let return_type = if mismatch_reported || has_spread_argument {
+        None
+    } else {
+        select_overload_return_type(function_type, &argument_types)
+    };
+    Some(with_type_copy_reason(TypeCopyReason::CallResolution, || {
+        return_type.unwrap_or_else(|| function_type.return_type().clone())
+    }))
+}
+
+/// What overload selection knows about one argument.
+struct ArgumentShape {
+    /// The evaluated type, or `None` for a wildcard position.
+    ty: Option<Type>,
+    /// The property names an object-literal argument writes, spread-free. Known
+    /// from the syntax alone, so it survives a degraded member type: an
+    /// overload requiring a property the literal never writes is rejected even
+    /// when the literal's type had to be a wildcard.
+    written_keys: Option<Vec<String>>,
+}
+
+impl ArgumentShape {
+    fn wildcard() -> Self {
+        Self {
+            ty: None,
+            written_keys: None,
+        }
+    }
+}
+
+fn written_object_keys(expression: &ParsedExpression) -> Option<Vec<String>> {
+    let ParsedExpression::ObjectLiteral { properties, .. } = expression else {
+        return None;
+    };
+    if properties.iter().any(|property| property.is_spread) {
+        return None;
+    }
+    Some(
+        properties
+            .iter()
+            .map(|property| property.name.clone())
+            .collect(),
+    )
+}
+
+/// Whether an object-literal argument writing exactly `keys` can satisfy a
+/// parameter of this type: every required property of the object it must land
+/// in is written. A union is satisfied by any member; a type this cannot see
+/// into is not judged.
+fn written_keys_satisfy(parameter_type: &Type, keys: &[String]) -> bool {
+    match parameter_type.peeled() {
+        Type::Object(object) => object
+            .required_properties()
+            .all(|(name, _)| keys.iter().any(|key| key.as_str() == name.as_ref())),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| written_keys_satisfy(member, keys)),
+        _ => true,
+    }
+}
+
+/// An argument whose type is *given* by the parameter it lands in: it was
+/// contextually typed by the fold, so it cannot tell the overloads apart.
+fn argument_is_callback(expression: &ParsedExpression) -> bool {
+    matches!(expression, ParsedExpression::ArrowFunction(_))
+}
+
+/// The return type of the first overload the evaluated arguments satisfy, or
+/// `None` when the signature carries no group or no member accepts them.
+fn select_overload_return_type(
+    function_type: &FunctionType,
+    argument_types: &[ArgumentShape],
+) -> Option<Type> {
+    let overloads = function_type.overloads()?;
+    crate::program::record_overload_selection_attempt();
+    let picked = overloads
+        .iter()
+        .find(|candidate| signature_accepts_argument_types(candidate, argument_types))?;
+    crate::program::record_overload_selection_pick();
+    Some(picked.return_type().clone())
+}
+
+fn signature_accepts_argument_types(
+    signature: &FunctionType,
+    argument_types: &[ArgumentShape],
+) -> bool {
+    let parameters = signature.parameters();
+    let expected = parameters.len();
+    let actual = argument_types.len();
+    let mut required = signature.required_parameter_count();
+    while required > 0 && parameter_is_void_optional(&parameters[required - 1]) {
+        required -= 1;
+    }
+    if actual < required || (!signature.is_variadic() && actual > expected) {
+        return false;
+    }
+
+    argument_types.iter().enumerate().all(|(i, argument)| {
+        let is_rest_position = signature.is_variadic() && expected > 0 && i >= expected - 1;
+        let parameter_type = if is_rest_position {
+            rest_parameter_element_type(&parameters[expected - 1], i - (expected - 1))
+        } else if i < expected {
+            let declared = parameters[i].clone();
+            if i >= signature.required_parameter_count() {
+                union_type(vec![declared, Type::Undefined])
+            } else {
+                declared
+            }
+        } else {
+            return true;
+        };
+        if let Some(keys) = argument.written_keys.as_deref()
+            && !written_keys_satisfy(&parameter_type, keys)
+        {
+            return false;
+        }
+        let Some(argument_type) = argument.ty.as_ref() else {
+            return true;
+        };
+        // A parameter standing at the degradation sentinel proves nothing about
+        // this position; committing to such an overload would hand its (equally
+        // degraded) return to every consumer.
+        !type_contains_unknown(&parameter_type)
+            && is_assignable_to(argument_type, &parameter_type)
+            && !weak_type_rejects(argument_type, &parameter_type)
+    })
+}
+
+/// tsc's weak-type rule, applied to selection only: an object type whose
+/// properties are all optional accepts nothing that shares no property with it.
+/// surge's assignability is lenient there — `'utf8'` passes against
+/// `{ encoding?: null; flag?: string } | null` — and a lenient match commits to
+/// the wrong overload: `fs.readFileSync(path, 'utf8')` picked the `Buffer`
+/// overload on both zod and trpc. Rejects when every parameter member that
+/// accepted the argument is a weak object the argument shares nothing with.
+fn weak_type_rejects(argument_type: &Type, parameter_type: &Type) -> bool {
+    let parameter_type = parameter_type.peeled();
+    let members: Vec<Type> = match &parameter_type {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let mut accepting = 0usize;
+    let mut weakly_rejected = 0usize;
+    for member in &members {
+        if !is_assignable_to(argument_type, member) {
+            continue;
+        }
+        accepting += 1;
+        if let Type::Object(object) = member.peeled()
+            && is_weak_object(&object)
+            && !shares_a_property(argument_type, &object)
+        {
+            weakly_rejected += 1;
+        }
+    }
+    accepting > 0 && accepting == weakly_rejected
+}
+
+fn is_weak_object(object: &surge_ts_types::ObjectType) -> bool {
+    !object.properties.is_empty()
+        && object.required_properties().next().is_none()
+        && !object.declares_string_index_access()
+        && object.call_signature().is_none()
+        && object.construct_signature().is_none()
+}
+
+/// Whether `argument_type` is an object carrying at least one of `target`'s
+/// property names, or an empty object (which tsc lets through). Primitives,
+/// arrays and functions share nothing.
+fn shares_a_property(argument_type: &Type, target: &surge_ts_types::ObjectType) -> bool {
+    match argument_type.peeled() {
+        Type::Any => true,
+        Type::Object(object) => {
+            object.properties.is_empty()
+                || object
+                    .properties
+                    .keys()
+                    .any(|name| target.contains_property(name))
+        }
+        _ => false,
+    }
 }
 
 /// When `expected` is a nominal reference to the interface `name` with `arity`
@@ -1257,6 +1504,7 @@ fn substituted_construct_signature(
         declaring_file: None,
         namespace_prefix: None,
         predicate_overload: None,
+        overload_alternatives: Vec::new(),
     };
     let mut substitution = crate::infer::TypeParameterSubstitution::new();
     for (type_parameter, argument) in parsed.type_parameters.iter().zip(type_arguments.iter()) {

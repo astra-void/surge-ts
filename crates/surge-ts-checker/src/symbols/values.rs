@@ -70,6 +70,13 @@ pub(crate) struct FunctionSignatureInfo {
     /// the folded value type and every instantiation path are untouched, so
     /// carrying it cannot change which parameters a call binds.
     pub(crate) predicate_overload: Option<Arc<FunctionSignatureInfo>>,
+    /// The group's *later* overloads, in declaration order, when this signature
+    /// is the one kept for an overload group. A generic group re-resolves its
+    /// parameter annotations at every call, which discards the folded parameter
+    /// union and leaves only this signature's shape; instantiating these
+    /// alongside restores the fold at the instantiated level, so an argument
+    /// written for a later overload is not reported against the first.
+    pub(crate) overload_alternatives: Vec<Arc<FunctionSignatureInfo>>,
 }
 
 #[derive(Debug, Default)]

@@ -54,6 +54,8 @@ pub(crate) struct ProgramCounters {
     pub(crate) generic_call_inference_failed_count: u64,
     pub(crate) generic_call_inference_explicit_type_args_skip_count: u64,
     pub(crate) generic_call_inference_unresolved_argument_skip_count: u64,
+    pub(crate) overload_selection_attempt_count: u64,
+    pub(crate) overload_selection_pick_count: u64,
     pub(crate) generic_call_inference_tuple_return_suppressed_count: u64,
     pub(crate) generic_call_inference_candidate_count: u64,
     pub(crate) generic_indexed_access_attempt_count: u64,
@@ -336,6 +338,14 @@ pub(crate) fn record_generic_call_inference_attempt() {
 
 pub(crate) fn record_generic_call_inference_success() {
     record_program_counter(|c| c.generic_call_inference_success_count += 1);
+}
+
+pub(crate) fn record_overload_selection_attempt() {
+    record_program_counter(|c| c.overload_selection_attempt_count += 1);
+}
+
+pub(crate) fn record_overload_selection_pick() {
+    record_program_counter(|c| c.overload_selection_pick_count += 1);
 }
 
 pub(crate) fn record_generic_call_inference_failed() {
