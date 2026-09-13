@@ -16,6 +16,21 @@ pub(crate) fn infer_arrow_function(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> surge_ts_types::FunctionType {
+    infer_arrow_function_with_contextual_parameters(arrow_function, &[], symbols, ctx)
+}
+
+/// [`infer_arrow_function`] with the parameter types the signature the callback
+/// is being passed to gives it. A generic call's second inference pass supplies
+/// them: an un-annotated parameter sketched as `any` types the body as `any`
+/// too, and a type parameter that appears only in the callback's *return*
+/// position (`map<U>(f: (v: T) => U): U`) is then bound to `any` — the call's
+/// result silences every diagnostic downstream of it.
+pub(crate) fn infer_arrow_function_with_contextual_parameters(
+    arrow_function: &ParsedArrowFunction,
+    contextual_parameters: &[Type],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> surge_ts_types::FunctionType {
     // This sketch feeds generic-call inference (`fn(impl?: T)` bound from a
     // `vi.fn((n: number) => …)` argument); the authoritative
     // `check_arrow_function_expression` pass follows with the contextual
@@ -27,7 +42,8 @@ pub(crate) fn infer_arrow_function(
     let parameters = arrow_function
         .parameters
         .iter()
-        .map(|parameter| match &parameter.declared_type {
+        .enumerate()
+        .map(|(index, parameter)| match &parameter.declared_type {
             // An annotation that does not resolve stays `any`, which is what
             // every parameter was before annotations were read at all, so it
             // cannot newly disable an inference that used to succeed.
@@ -39,7 +55,7 @@ pub(crate) fn infer_arrow_function(
                     mapped
                 }
             }
-            _ => Type::Any,
+            _ => contextual_parameter_type(contextual_parameters, index),
         })
         .collect::<Vec<_>>();
     let declared_return_type = arrow_function.return_type.as_ref().and_then(|ty| {
@@ -80,6 +96,23 @@ pub(crate) fn infer_arrow_function(
         false,
         required_parameter_count(arrow_function.parameters.as_slice()),
     )
+}
+
+/// A contextual parameter type is usable only once it is a real type: an
+/// unresolved shape or a still-open type parameter would type the body as
+/// something the caller cannot bind, which is worse than the `any` the
+/// un-contextualized sketch uses.
+fn contextual_parameter_type(contextual_parameters: &[Type], index: usize) -> Type {
+    match contextual_parameters.get(index) {
+        Some(ty)
+            if !ty.is_unknown()
+                && !matches!(ty, Type::TypeParameter(_))
+                && !matches!(ty.peeled(), Type::Unknown) =>
+        {
+            ty.clone()
+        }
+        _ => Type::Any,
+    }
 }
 
 fn primitive_declared_return_type(ty: &surge_ts_syntax::ParsedType) -> Option<Type> {

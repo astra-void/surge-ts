@@ -105,6 +105,7 @@ pub(crate) fn instantiate_function_type<'a>(
     let mut substitution = infer_type_argument_substitution(
         function_signature,
         arguments,
+        outer_type_arguments,
         expected_return_type,
         symbols,
         ctx,
@@ -198,7 +199,7 @@ fn fold_overload_alternative_parameters<'a>(
     for alternative in &function_signature.overload_alternatives {
         let mut substitution = if type_arguments.is_empty() {
             let mut substitution =
-                infer_type_argument_substitution(alternative, arguments, None, symbols, ctx);
+                infer_type_argument_substitution(alternative, arguments, &[], None, symbols, ctx);
             apply_uninferred_type_parameter_defaults(
                 alternative,
                 arguments.len(),
@@ -887,6 +888,7 @@ fn constraint_target_display(
 pub(crate) fn infer_type_argument_substitution(
     function_signature: &FunctionSignatureInfo,
     arguments: &[ParsedCallArgument],
+    outer_type_arguments: &[(String, Type)],
     expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -907,6 +909,8 @@ pub(crate) fn infer_type_argument_substitution(
         .then(|| function_signature.parameter_types.len().checked_sub(1))
         .flatten();
     let mut rest_tuple_bound = false;
+    let mut deferred_callbacks: Vec<(&ParsedType, &surge_ts_syntax::ParsedArrowFunction)> =
+        Vec::new();
     for (index, argument) in arguments.iter().enumerate() {
         let rest_target = rest_index
             .filter(|rest_index| index >= *rest_index)
@@ -952,6 +956,18 @@ pub(crate) fn infer_type_argument_substitution(
                 parameter_type
             }
         };
+
+        // A callback with an un-annotated parameter is *context-sensitive*: what
+        // its body — and so its return type — infers depends on the parameter
+        // types this very signature gives it. Sketching it now types those
+        // parameters as `any`, and a type parameter appearing only in the
+        // callback's return position would be bound to `any` from the `any`
+        // body. It waits for the second pass below, which types it against the
+        // parameters the arguments here have already pinned.
+        if let Some(callback) = context_sensitive_callback_argument(parameter_type, argument) {
+            deferred_callbacks.push((parameter_type, callback));
+            continue;
+        }
 
         // This is an inference *probe*: the argument is evaluated only to infer the
         // call's type parameters, without the contextual parameter type the
@@ -1009,6 +1025,15 @@ pub(crate) fn infer_type_argument_substitution(
         });
     }
 
+    infer_from_context_sensitive_callbacks(
+        function_signature,
+        &deferred_callbacks,
+        outer_type_arguments,
+        &mut substitution,
+        symbols,
+        ctx,
+    );
+
     with_declaring_scope(function_signature, ctx, |ctx| {
         infer_type_arguments_from_expected_return_type(
             function_signature,
@@ -1019,6 +1044,124 @@ pub(crate) fn infer_type_argument_substitution(
     });
 
     substitution
+}
+
+/// The written function annotation a callback argument is matched against, with
+/// the optionality a lib signature wraps it in removed: `then`'s parameter is
+/// `((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null`, and
+/// the callback is the union's only function member.
+fn callback_parameter_annotation(
+    parameter_type: &ParsedType,
+) -> Option<&std::sync::Arc<surge_ts_syntax::ParsedFunctionType>> {
+    match parameter_type {
+        ParsedType::Function(function) => Some(function),
+        ParsedType::Union(members) => {
+            let mut functions = members.iter().filter_map(|member| match member {
+                ParsedType::Function(function) => Some(function),
+                _ => None,
+            });
+            let function = functions.next()?;
+            functions.next().is_none().then_some(function)
+        }
+        _ => None,
+    }
+}
+
+/// An arrow argument whose parameters this signature is the one to type: at
+/// least one is written without an annotation, and the parameter it is passed
+/// to is a callback the signature spells out. A generic arrow keeps its own
+/// type parameters and is left to the ordinary path.
+fn context_sensitive_callback_argument<'a>(
+    parameter_type: &ParsedType,
+    argument: &'a ParsedCallArgument,
+) -> Option<&'a surge_ts_syntax::ParsedArrowFunction> {
+    let callback = callback_parameter_annotation(parameter_type)?;
+    let surge_ts_syntax::ParsedExpression::ArrowFunction(arrow) = &argument.expression else {
+        return None;
+    };
+    if !arrow.type_parameters.is_empty() || arrow.parameters.is_empty() {
+        return None;
+    }
+    if !arrow
+        .parameters
+        .iter()
+        .any(|parameter| parameter.declared_type.is_none())
+    {
+        return None;
+    }
+    // Nothing to gain when the signature does not type the position either.
+    callback
+        .parameters
+        .iter()
+        .any(|parameter| !parameter.is_this)
+        .then_some(arrow.as_ref())
+}
+
+/// The second inference pass: every deferred callback is sketched with the
+/// parameter types the signature gives it — the first pass's candidates
+/// substituted in, over the enclosing bindings the member was read under — and
+/// the sketch then infers the type parameters the callback's return names.
+fn infer_from_context_sensitive_callbacks(
+    function_signature: &FunctionSignatureInfo,
+    deferred_callbacks: &[(&ParsedType, &surge_ts_syntax::ParsedArrowFunction)],
+    outer_type_arguments: &[(String, Type)],
+    substitution: &mut TypeParameterSubstitution,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if deferred_callbacks.is_empty() {
+        return;
+    }
+    // The enclosing interface's own arguments (`T` of the `Box<string>` the
+    // method was read off) are seeded here and here only: they type the
+    // callback's parameters, but they are not this call's to infer, and the
+    // caller seeds them into the real substitution after inference.
+    let mut contextual_substitution =
+        substitution.clone_with_reason(TypeCopyReason::CallResolution);
+    seed_outer_type_arguments(&mut contextual_substitution, outer_type_arguments);
+
+    for (parameter_type, arrow) in deferred_callbacks {
+        let Some(callback) = callback_parameter_annotation(parameter_type) else {
+            continue;
+        };
+        let diagnostics_before = ctx.diagnostics().len();
+        let contextual_parameters = with_declaring_scope(function_signature, ctx, |ctx| {
+            callback
+                .parameters
+                .iter()
+                .filter(|parameter| !parameter.is_this)
+                .map(|parameter| {
+                    map_parsed_type_with_substitution(
+                        parameter.ty.clone(),
+                        ctx,
+                        &contextual_substitution,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        let sketch = Type::Function(
+            crate::infer::expression::infer_arrow_function_with_contextual_parameters(
+                arrow,
+                &contextual_parameters,
+                symbols,
+                ctx,
+            ),
+        );
+        ctx.truncate_diagnostics(diagnostics_before);
+        if crate::checks::expr::carries_leaked_type_parameter(&sketch, ctx) {
+            continue;
+        }
+        with_declaring_scope(function_signature, ctx, |ctx| {
+            collect_inferred_type_argument(
+                &ParsedType::Function(callback.clone()),
+                &sketch,
+                substitution,
+                false,
+                ctx,
+                0,
+            );
+        });
+    }
 }
 
 /// tsc infers the *widened* type from a literal expression — `behaviorSubject(1)`
@@ -1270,6 +1413,27 @@ pub(crate) fn collect_inferred_type_argument(
                     }
                     _ => {}
                 }
+            }
+
+            // surge models a resolved `Promise<T>` as its awaited `T`, so a
+            // written `Promise<TData>` is handed the awaited value itself —
+            // `fn: (v: string) => Promise<TData>` against a callback returning
+            // `string` — and the generic-reference walk below, which matches
+            // member for member, infers nothing from a primitive. Infer the
+            // argument against the awaited actual, which is the actual itself
+            // when it is already awaited.
+            if named_type.type_arguments.len() == 1
+                && matches!(named_type.name.as_str(), "Promise" | "PromiseLike")
+            {
+                let awaited = crate::checks::call::promise_like_awaited_type(argument_type);
+                collect_inferred_type_argument(
+                    &named_type.type_arguments[0],
+                    &awaited,
+                    substitution,
+                    widen_literals,
+                    ctx,
+                    depth,
+                );
             }
 
             // A generic-instantiation parameter (`Wrapper<T>`,
