@@ -49,6 +49,9 @@ fn select_indexed_property_no_cascade(object: &Type, index: &Type) -> Option<Typ
         (Type::Object(object_type), Type::StringLiteral(key)) => {
             object_type.get_property_access_type(key)
         }
+        (Type::Object(object_type), Type::String) => {
+            object_type.string_index_type.as_deref().cloned()
+        }
         (Type::Object(object_type), Type::Union(union_ty)) => {
             let mut types = Vec::new();
             for key_ty in union_ty.types() {
@@ -295,6 +298,35 @@ pub(super) fn resolve_indexed_access_type(
                 ResolvedType {
                     ty: Type::Unknown,
                     had_error: true,
+                }
+            }
+        }
+        // The `string` keyword as an index reads the receiver's string index
+        // signature, which is what makes `Record<string, V>[string]` mean `V`.
+        // drizzle writes it twice (`SelectedFieldsFlat<TColumn>[string]`,
+        // `UpdateSet[string]`) and it is the normal way to name a `Record`'s
+        // value type. Without an index signature tsc answers TS2537, not the
+        // TS2538 the fallback below would report — surge has no TS2537, so the
+        // receiver degrades silently rather than report a code tsc never does.
+        (Type::Object(object_type), Type::String) => {
+            match object_type.string_index_type.as_deref() {
+                Some(value_ty) => {
+                    if generic_indexed_access {
+                        record_generic_indexed_access_success();
+                    }
+                    ResolvedType {
+                        ty: value_ty.clone(),
+                        had_error: false,
+                    }
+                }
+                None => {
+                    if generic_indexed_access {
+                        record_generic_indexed_access_unknown_fallback();
+                    }
+                    ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: true,
+                    }
                 }
             }
         }
