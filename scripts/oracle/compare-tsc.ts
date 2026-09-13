@@ -398,6 +398,7 @@ export const fixturePresets: Record<string, string> = {
   'property-path-impossible-union-member-basic': path.join(workspaceRoot, 'tests/compat-projects/property-path-impossible-union-member-basic/tsconfig.json'),
   'typeof-guard-unreachable-branch-basic': path.join(workspaceRoot, 'tests/compat-projects/typeof-guard-unreachable-branch-basic/tsconfig.json'),
   'thenable-awaited-index-access-basic': path.join(workspaceRoot, 'tests/compat-projects/thenable-awaited-index-access-basic/tsconfig.json'),
+  'predicate-property-path-subject-basic': path.join(workspaceRoot, 'tests/compat-projects/predicate-property-path-subject-basic/tsconfig.json'),
   'class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/class-static-inheritance-basic/tsconfig.json'),
   'declaration-flow-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/declaration-flow-narrowing-basic/tsconfig.json'),
   'lib-reference-index-and-signature-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-reference-index-and-signature-scope-basic/tsconfig.json'),

@@ -99,30 +99,31 @@ pub(super) fn predicate_type_argument_substitution(
         return Some(explicit_predicate_type_argument_substitution(guard, ctx));
     }
     // A property path means the tested value is not the whole argument, so the
-    // parameter annotation cannot be matched against the subject's type.
-    if !guard.path.is_empty() {
-        return None;
-    }
-    let subject_ty = subject_ty?;
-    let parameter_type = guard
-        .signature
-        .parameter_types
-        .get(guard.parameter_index)?
-        .as_ref()?;
+    // parameter annotation cannot be matched against the subject's type — only
+    // that inference is skipped. The loop below does not read the subject at
+    // all, so a predicate whose parameters come from its *other* arguments still
+    // binds: `is(options.role, PgRole)` takes `T` from the class, and dropping
+    // the whole guard here left every `is(x.y, C)` in drizzle unnarrowed.
+    let subject_ty = guard.path.is_empty().then_some(subject_ty).flatten();
     for type_parameter in &guard.signature.type_parameters {
         substitution.insert_placeholder(
             type_parameter.name.clone(),
             Type::type_parameter(&type_parameter.name),
         );
     }
-    crate::checks::call::collect_inferred_type_argument(
-        parameter_type,
-        subject_ty,
-        &mut substitution,
-        false,
-        ctx,
-        0,
-    );
+    if let Some(subject_ty) = subject_ty
+        && let Some(Some(parameter_type)) =
+            guard.signature.parameter_types.get(guard.parameter_index)
+    {
+        crate::checks::call::collect_inferred_type_argument(
+            parameter_type,
+            subject_ty,
+            &mut substitution,
+            false,
+            ctx,
+            0,
+        );
+    }
 
     // Only the tested argument used to contribute, so a predicate that states
     // its target in terms of *another* argument (`isMatching(pattern, value)` is
@@ -176,6 +177,11 @@ pub(super) fn predicate_type_argument_substitution(
         .filter(|type_parameter| substitution.is_placeholder(&type_parameter.name))
         .collect();
     if !unresolved.is_empty() {
+        // Filling with `Any` is only sound while the predicate still *selects*
+        // among the subject's union members, which needs the subject's type.
+        // Without it (a property-path subject) an unbound parameter drops the
+        // guard, as it always has.
+        let subject_ty = subject_ty?;
         let mut filled = substitution.clone_with_reason(TypeCopyReason::ScopeOrContext);
         for type_parameter in unresolved {
             filled.insert(type_parameter.name.clone(), Type::Any);
