@@ -746,10 +746,18 @@ mod tests {
 
     #[test]
     fn narrowing_returns_none_when_nothing_changes() {
-        // No member has tag "boolean", so the true branch would be empty -> None.
-        assert!(narrow_union_by_typeof(&union3(), "boolean", true).is_none());
         // A non-union type is never narrowed.
         assert!(narrow_union_by_arrayness(&Type::String, true).is_none());
+    }
+
+    #[test]
+    fn typeof_narrows_an_unreachable_branch_to_never() {
+        // No member has tag "boolean", so nothing can reach the true branch and
+        // tsc types the subject `never` there — not "unchanged".
+        assert_eq!(
+            narrow_union_by_typeof(&union3(), "boolean", true),
+            Some(Type::Never)
+        );
     }
 
     struct FixedResolver(Type);

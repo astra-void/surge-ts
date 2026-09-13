@@ -71,7 +71,17 @@ pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
         })
         .collect();
 
-    if kept.is_empty() || kept.len() == union.types().len() {
+    // Nothing survived: every member carried a tag (an untagged one is kept by
+    // the filter above) and none of them lands in this branch, so the branch is
+    // unreachable and tsc types the subject `never`. Answering "no narrowing"
+    // instead left the whole union standing, which is how
+    // `typeof connection === 'string' ? createClient({ url: connection }) : …`
+    // over a `Config | undefined` reported the union against `string` — tsc
+    // checks `never` there and says nothing.
+    if kept.is_empty() {
+        return Some(Type::Never);
+    }
+    if kept.len() == union.types().len() {
         return None;
     }
     Some(union_type(kept))
