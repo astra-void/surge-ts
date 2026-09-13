@@ -388,6 +388,7 @@ fn object_with_namespace_members(
     merged.construct_signature = object.construct_signature.clone();
     merged.call_signature = object.call_signature.clone();
     merged.is_intersection = object.is_intersection;
+    merged.intersection_operands = object.intersection_operands.clone();
     merged.synthetic_open_index = object.synthetic_open_index;
     merged
 }

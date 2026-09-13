@@ -399,7 +399,7 @@ fn bind_infer_captures(
     extends: &ParsedType,
     check: &Type,
     substitution: &mut TypeParameterSubstitution,
-    ctx: &CheckerContext,
+    ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     depth: usize,
     reference_positional: bool,
@@ -597,12 +597,20 @@ fn bind_infer_captures(
             // `ForwardRefExoticComponent` reference whose arguments live in its
             // resolved body, and returning here left `Props` as the seeded
             // placeholder, collapsing the whole conditional to `unknown`.
+            // A reference to a *different* declaration (`StringChainable<p,
+            // never>` against `Matcher<infer …>`) has nothing positional to
+            // offer; it resolves toward the pattern's declaration below.
+            let declaration_id = declaration_reference_id(&named.name, ctx);
             if reference_positional
                 && let Type::Reference(reference) = check
                 && !reference.arguments.is_empty()
+                && declaration_id
+                    .as_deref()
+                    .is_none_or(|id| *reference.id == *id)
             {
+                let check_arguments = complete_reference_arguments(named, reference, ctx, resolving);
                 for (pattern_argument, check_argument) in
-                    named.type_arguments.iter().zip(reference.arguments.iter())
+                    named.type_arguments.iter().zip(check_arguments.iter())
                 {
                     bind_infer_captures(
                         pattern_argument,
@@ -614,6 +622,25 @@ fn bind_infer_captures(
                         reference_positional,
                     );
                 }
+                return;
+            }
+            // An intersection source (`Matcher<unknown, string> & Omit<…>`)
+            // merged to one object: the operand that references the pattern's
+            // own declaration is what tsc infers from, positionally.
+            if reference_positional
+                && let Some(declaration_id) = declaration_id.as_deref()
+                && let Some(operand) =
+                    intersection_operand_for(check, declaration_id, OPERAND_SEARCH_DEPTH)
+            {
+                bind_infer_captures(
+                    extends,
+                    &operand,
+                    substitution,
+                    ctx,
+                    resolving,
+                    depth,
+                    reference_positional,
+                );
                 return;
             }
             // The pattern is a generic alias whose argument carries an `infer`
@@ -639,6 +666,124 @@ fn bind_infer_captures(
         }
         _ => {}
     }
+}
+
+/// How far the operand search follows alias references and nested merges:
+/// `StringPattern` → `Chainable<…> & Omit<…>` → `GuardP<…> & Omit<…>` →
+/// `Matcher<…>` is three levels.
+const OPERAND_SEARCH_DEPTH: usize = 6;
+
+/// The reference to `declaration_id` that `ty` is, or carries as an operand of
+/// the intersection it merges — through alias references (`GuardP<a, b>` is a
+/// `Matcher<a, b>`) and nested merges — with its arguments.
+fn intersection_operand_for(ty: &Type, declaration_id: &str, depth: usize) -> Option<Type> {
+    if depth == 0 {
+        return None;
+    }
+    match ty {
+        Type::Reference(reference) => {
+            if *reference.id == *declaration_id && !reference.arguments.is_empty() {
+                return Some(ty.clone());
+            }
+            intersection_operand_for(&reference.resolve(), declaration_id, depth - 1)
+        }
+        Type::Object(object) => object
+            .intersection_operands
+            .as_deref()?
+            .iter()
+            .find_map(|operand| intersection_operand_for(operand, declaration_id, depth - 1)),
+        _ => None,
+    }
+}
+
+/// The nominal id (`file\0Name`) a lazy reference to `name`'s declaration
+/// carries, as seen from the current scope.
+fn declaration_reference_id(name: &str, ctx: &CheckerContext) -> Option<String> {
+    let handle = ctx.lookup_type_declaration_handle(name)?;
+    let (file_name, declaration_name) = match handle.get() {
+        crate::symbols::TypeDeclarationInfo::Alias(alias) => (alias.file_name.clone(), alias.name.clone()),
+        crate::symbols::TypeDeclarationInfo::Interface(interface) => {
+            (interface.file_name.clone(), interface.name.clone())
+        }
+    };
+    Some(format!("{file_name}\u{0}{declaration_name}"))
+}
+
+/// The reference's arguments followed by the declaration's resolved defaults
+/// for the parameters it left out, so a pattern with more slots than the
+/// reference wrote (`M<infer i, infer n, infer mt>` against `M<number,
+/// string>`) lines up the way tsc's `M<number, string, "default">` does. The
+/// written list is kept whenever a default cannot be bound; diagnostics the
+/// probe emits are rolled back.
+fn complete_reference_arguments(
+    named: &ParsedNamedType,
+    reference: &surge_ts_types::TypeReference,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) -> Vec<Type> {
+    let written = reference.arguments.to_vec();
+    if named.type_arguments.len() <= written.len() {
+        return written;
+    }
+    let Some(handle) = ctx.lookup_type_declaration_handle(&named.name) else {
+        return written;
+    };
+    let (type_parameters, scope, file_name, name, name_span, declared_name) = match handle.get() {
+        crate::symbols::TypeDeclarationInfo::Alias(alias) => (
+            alias.body.type_parameters.clone(),
+            alias.resolution_scope.clone(),
+            alias.file_name.clone(),
+            alias.name.clone(),
+            alias.name_span,
+            alias.declared_name.clone(),
+        ),
+        crate::symbols::TypeDeclarationInfo::Interface(interface) => (
+            interface.body.type_parameters.clone(),
+            interface.resolution_scope.clone(),
+            interface.file_name.clone(),
+            interface.name.clone(),
+            interface.name_span,
+            interface.declared_name.clone(),
+        ),
+    };
+    if type_parameters.len() <= written.len() {
+        return written;
+    }
+    let declaration_scope = scope.or_else(|| {
+        ctx.module_scope_for_file(&file_name)
+            .filter(|scope| !scope.is_empty())
+    });
+    let prefix =
+        crate::infer::types::utility::namespace_member_prefix(declared_name.as_deref(), &name);
+    if let Some(prefix) = prefix.clone() {
+        ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix);
+    }
+    let diagnostics_before = ctx.diagnostics().len();
+    let bound = bind_type_arguments(
+        &type_parameters,
+        vec![ParsedType::Never; written.len()],
+        &name,
+        name_span,
+        ctx,
+        resolving,
+        &TypeParameterSubstitution::new(),
+        Some(&written),
+        Some((&declaration_scope, &file_name)),
+    );
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    if prefix.is_some() {
+        ctx.namespace_member_resolution_depth -= 1;
+        ctx.namespace_member_prefix_stack.pop();
+    }
+    let Some(bound) = bound.filter(|bound| !bound.had_error) else {
+        return written;
+    };
+    type_parameters
+        .iter()
+        .map(|parameter| bound.substitution.get(&parameter.name).cloned())
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or(written)
 }
 
 /// `SURGE_VARIADIC_TUPLES=0` also turns off tuple `extends`-pattern inference, so
@@ -688,14 +833,13 @@ fn deferred_conditional_identity(
         let left_resolved = resolve_parsed_type((**left_part).clone(), ctx, resolving, substitution);
         let right_resolved =
             resolve_parsed_type((**right_part).clone(), ctx, resolving, substitution);
-        if left_resolved.had_error
-            || right_resolved.had_error
-            || contains_degradation_sentinel(&left_resolved.ty, SENTINEL_WALK_DEPTH)
-            || contains_degradation_sentinel(&right_resolved.ty, SENTINEL_WALK_DEPTH)
-        {
+        if left_resolved.had_error || right_resolved.had_error {
             return DeferredIdentity::Undecidable;
         }
-        identical &= identity_equal(&left_resolved.ty, &right_resolved.ty, SENTINEL_WALK_DEPTH);
+        match identity_compare(&left_resolved.ty, &right_resolved.ty, SENTINEL_WALK_DEPTH) {
+            Some(equal) => identical &= equal,
+            None => return DeferredIdentity::Undecidable,
+        }
     }
 
     DeferredIdentity::Identical(identical)
@@ -729,61 +873,137 @@ fn tuple_pattern(extends: &ParsedType) -> &ParsedType {
 /// referenced alias instantiation has to be peeled before it can match the
 /// shape it stands for, on either side and at every nesting level a type-level
 /// test looks at.
-fn identity_equal(left: &Type, right: &Type, depth: usize) -> bool {
+///
+/// Three-valued: `None` means the comparison reached a shape surge could not
+/// model — the degradation sentinel, an unbound parameter, or `any`, which is
+/// far more often surge's answer for an inference it could not make than a
+/// written one — *at a position where the two sides otherwise agree*, so
+/// neither answer would be honest. A difference decided before that point
+/// (a union against an object, a missing key, a different literal) is a real
+/// difference whatever sits deeper: ts-pattern's `Pattern<unknown>` carries
+/// written `any`s and still is not `StringPattern`. Past the depth bound the
+/// answer is "cannot tell".
+fn identity_compare(left: &Type, right: &Type, depth: usize) -> Option<bool> {
     if left == right {
-        return true;
+        return Some(true);
     }
     if depth == 0 || is_readonly_shape(left) != is_readonly_shape(right) {
-        return false;
+        return (depth != 0).then_some(false);
     }
     let (left, right) = (left.peeled(), right.peeled());
+    if left == right {
+        return Some(true);
+    }
+    let undecidable = |ty: &Type| matches!(ty, Type::Unknown | Type::TypeParameter(_) | Type::Any);
+    if undecidable(&left) || undecidable(&right) {
+        return None;
+    }
     match (&left, &right) {
         (Type::Object(left), Type::Object(right)) => {
-            left.properties.len() == right.properties.len()
-                && left.properties.iter().all(|(name, property)| {
-                    right.properties.get(name).is_some_and(|other| {
-                        property.optional == other.optional
-                            && property.method == other.method
-                            && identity_equal(&property.ty, &other.ty, depth - 1)
-                    })
-                })
-                && match (&left.string_index_type, &right.string_index_type) {
-                    (None, None) => true,
-                    (Some(l), Some(r)) => identity_equal(l, r, depth - 1),
-                    _ => false,
+            if left.properties.len() != right.properties.len()
+                || left.string_index_type.is_some() != right.string_index_type.is_some()
+                || left.call_signature != right.call_signature
+                || left.construct_signature != right.construct_signature
+            {
+                return Some(false);
+            }
+            let mut undecided = false;
+            for (name, property) in left.properties.iter() {
+                let Some(other) = right.properties.get(name) else {
+                    return Some(false);
+                };
+                if property.optional != other.optional || property.method != other.method {
+                    return Some(false);
                 }
-                && left.call_signature == right.call_signature
-                && left.construct_signature == right.construct_signature
+                match identity_compare(&property.ty, &other.ty, depth - 1) {
+                    Some(true) => {}
+                    Some(false) => return Some(false),
+                    None => undecided = true,
+                }
+            }
+            if let (Some(l), Some(r)) = (&left.string_index_type, &right.string_index_type) {
+                match identity_compare(l, r, depth - 1) {
+                    Some(true) => {}
+                    Some(false) => return Some(false),
+                    None => undecided = true,
+                }
+            }
+            (!undecided).then_some(true)
         }
         (Type::Union(left), Type::Union(right)) => {
-            left.types().len() == right.types().len()
-                && left.types().iter().all(|member| {
-                    right
-                        .types()
-                        .iter()
-                        .any(|other| identity_equal(member, other, depth - 1))
-                })
+            if left.types().len() != right.types().len() {
+                return Some(false);
+            }
+            let mut undecided = false;
+            for member in left.types().iter() {
+                let mut found = false;
+                let mut member_undecided = false;
+                for other in right.types().iter() {
+                    match identity_compare(member, other, depth - 1) {
+                        Some(true) => {
+                            found = true;
+                            break;
+                        }
+                        Some(false) => {}
+                        None => member_undecided = true,
+                    }
+                }
+                if !found {
+                    if member_undecided {
+                        undecided = true;
+                    } else {
+                        return Some(false);
+                    }
+                }
+            }
+            (!undecided).then_some(true)
         }
-        (Type::Array(left), Type::Array(right)) => identity_equal(left, right, depth - 1),
+        (Type::Array(left), Type::Array(right)) => identity_compare(left, right, depth - 1),
         (Type::Tuple(left), Type::Tuple(right)) => {
-            left.len() == right.len()
-                && left
-                    .iter()
-                    .zip(right.iter())
-                    .all(|(l, r)| identity_equal(l, r, depth - 1))
+            if left.len() != right.len() {
+                return Some(false);
+            }
+            let mut undecided = false;
+            for (l, r) in left.iter().zip(right.iter()) {
+                match identity_compare(l, r, depth - 1) {
+                    Some(true) => {}
+                    Some(false) => return Some(false),
+                    None => undecided = true,
+                }
+            }
+            (!undecided).then_some(true)
         }
-        _ => left == right,
+        (Type::Function(left), Type::Function(right)) => {
+            if left.parameters().len() != right.parameters().len() {
+                return Some(false);
+            }
+            let mut undecided = false;
+            for (l, r) in left
+                .parameters()
+                .iter()
+                .zip(right.parameters().iter())
+                .chain(std::iter::once((left.return_type(), right.return_type())))
+            {
+                match identity_compare(l, r, depth - 1) {
+                    Some(true) => {}
+                    Some(false) => return Some(false),
+                    None => undecided = true,
+                }
+            }
+            (!undecided).then_some(true)
+        }
+        _ => Some(false),
     }
 }
 
-/// How deep `contains_degradation_sentinel` looks before giving up and calling
-/// the type undecidable. Bounded so a lazy self-referential shape cannot be
+/// How deep `identity_compare` looks before giving up and calling the type
+/// undecidable. Bounded so a lazy self-referential shape cannot be
 /// walked forever; four levels covers the handler-parameter shapes a type-level
 /// test compares (`{ type: 'some'; value: { list: … } }`).
 const SENTINEL_WALK_DEPTH: usize = 4;
 
 /// Whether an unresolved type parameter or the degradation sentinel sits
-/// anywhere inside `ty` (bounded like `contains_degradation_sentinel`; `any` is
+/// anywhere inside `ty` (bounded like `identity_compare`; `any` is
 /// a decision of its own and is not counted here).
 fn contains_unresolved_parameter(ty: &Type, depth: usize) -> bool {
     match ty {
@@ -818,72 +1038,6 @@ fn contains_unresolved_parameter(ty: &Type, depth: usize) -> bool {
     }
 }
 
-/// Whether the degradation sentinel — or `any` — sits anywhere inside `ty`. An
-/// identity comparison against such a type has no answer: the sentinel stands
-/// for a shape surge could not model, and `any` is far more often surge's
-/// answer for an inference it could not make (a `.with(pattern, (v) => …)`
-/// handler parameter through a sealed overload group) than a written one, so
-/// `false` there would report a difference that is surge's, not the program's.
-/// Past the depth bound the answer is "cannot tell", which is treated the same
-/// way.
-fn contains_degradation_sentinel(ty: &Type, depth: usize) -> bool {
-    match ty {
-        Type::Unknown | Type::TypeParameter(_) | Type::Any => true,
-        Type::Union(union) => union
-            .types()
-            .iter()
-            .any(|member| contains_degradation_sentinel(member, depth)),
-        Type::Array(element) => contains_degradation_sentinel(element, depth),
-        Type::Tuple(elements) => elements
-            .iter()
-            .any(|element| contains_degradation_sentinel(element, depth)),
-        Type::OpenTuple(open) => {
-            open.leading
-                .iter()
-                .chain(open.trailing.iter())
-                .any(|element| contains_degradation_sentinel(element, depth))
-                || contains_degradation_sentinel(&open.rest, depth)
-        }
-        Type::Function(function) => {
-            function
-                .parameters()
-                .iter()
-                .any(|parameter| contains_degradation_sentinel(parameter, depth))
-                || contains_degradation_sentinel(function.return_type(), depth)
-        }
-        Type::Object(object) => {
-            object
-                .properties
-                .values()
-                .any(|property| contains_degradation_sentinel(&property.ty, depth))
-                || object
-                    .string_index_type
-                    .as_deref()
-                    .is_some_and(|index| contains_degradation_sentinel(index, depth))
-                || object
-                    .call_signature()
-                    .into_iter()
-                    .chain(object.construct_signature())
-                    .any(|signature| {
-                        signature
-                            .parameters()
-                            .iter()
-                            .any(|parameter| contains_degradation_sentinel(parameter, depth))
-                            || contains_degradation_sentinel(signature.return_type(), depth)
-                    })
-        }
-        // A reference is identical to another by declaration and arguments —
-        // tsc's identity for a type reference — so only the arguments decide
-        // whether the comparison is sound. Peeling the body would find the
-        // method's own type parameters (`match: <I>(value: I | input) => …`)
-        // and call every interface with a generic method undecidable.
-        Type::Reference(reference) => reference
-            .arguments
-            .iter()
-            .any(|argument| contains_degradation_sentinel(argument, depth)),
-        _ => false,
-    }
-}
 
 /// The signature's return conditional, when the signature is generic and that
 /// conditional tests its own type parameter — the shape whose evaluation tsc
@@ -1146,7 +1300,7 @@ fn try_function_infer_match(
     extends: &ParsedType,
     check: &Type,
     base: &TypeParameterSubstitution,
-    ctx: &CheckerContext,
+    ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
 ) -> Option<TypeParameterSubstitution> {
     if callable_signature(&crate::program::with_dts_expansion_reason(
@@ -1188,7 +1342,7 @@ fn bind_union_signature_infer_captures(
     pattern: &surge_ts_syntax::ParsedFunctionType,
     members: &[Type],
     substitution: &mut TypeParameterSubstitution,
-    ctx: &CheckerContext,
+    ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     depth: usize,
     reference_positional: bool,
@@ -1318,7 +1472,7 @@ fn bind_signature_infer_captures(
     pattern: &surge_ts_syntax::ParsedFunctionType,
     check: &Type,
     substitution: &mut TypeParameterSubstitution,
-    ctx: &CheckerContext,
+    ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     depth: usize,
     reference_positional: bool,

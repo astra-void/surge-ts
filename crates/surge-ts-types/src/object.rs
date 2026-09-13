@@ -68,6 +68,13 @@ pub struct ObjectType {
     /// but assignability refuses a primitive source. Excluded from equality
     /// like the other markers.
     pub non_primitive: bool,
+    /// The nominal reference operands of the intersection this object was
+    /// merged from (`Matcher<unknown, string> & Omit<…>` keeps the `Matcher`
+    /// reference). An `infer` pattern naming that declaration binds its
+    /// captures off the reference's arguments, which the merged property map
+    /// no longer carries. Provenance only — excluded from equality like the
+    /// other markers.
+    pub intersection_operands: Option<Arc<[Type]>>,
 }
 
 impl PartialEq for ObjectType {
@@ -170,7 +177,15 @@ impl ObjectType {
             is_intersection: false,
             synthetic_open_index: false,
             non_primitive: false,
+            intersection_operands: None,
         }
+    }
+
+    /// Records the nominal reference operands of the intersection this object
+    /// merges; see `intersection_operands`.
+    pub fn with_intersection_operands(mut self, operands: Vec<Type>) -> Self {
+        self.intersection_operands = (!operands.is_empty()).then(|| Arc::from(operands));
+        self
     }
 
     /// Returns a copy tagged with the interface/type-alias name it was resolved
@@ -321,6 +336,7 @@ impl Clone for ObjectType {
             is_intersection: self.is_intersection,
             synthetic_open_index: self.synthetic_open_index,
             non_primitive: self.non_primitive,
+            intersection_operands: self.intersection_operands.clone(),
         }
     }
 }

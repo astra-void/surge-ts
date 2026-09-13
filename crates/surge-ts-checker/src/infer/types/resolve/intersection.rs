@@ -589,6 +589,11 @@ fn merge_intersection_members_now(
         MergeEntry::DepthExceeded => return open_merge_fallback(members),
     };
 
+    let nominal_operands: Vec<Type> = members
+        .iter()
+        .filter(|member| matches!(member, Type::Reference(_)))
+        .cloned()
+        .collect();
     // Peel reference operands (`StudentBulkImportRow & { … }`) so a named object
     // member contributes its properties to the merged intersection surface.
     let members: Vec<Type> = members.iter().map(Type::peeled).collect();
@@ -736,8 +741,9 @@ fn merge_intersection_members_now(
             }
         }
 
-        let mut merged =
-            alloc_object_type(properties, string_index_type).with_intersection_marker();
+        let mut merged = alloc_object_type(properties, string_index_type)
+            .with_intersection_marker()
+            .with_intersection_operands(nominal_operands.clone());
         if string_index_is_synthetic {
             merged = merged.with_open_index_marker();
         }

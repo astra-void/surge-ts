@@ -783,6 +783,7 @@ fn plain_object(entries: Vec<(&str, Type)>) -> Type {
         is_intersection: false,
         synthetic_open_index: false,
         non_primitive: false,
+                intersection_operands: None,
     })
 }
 
