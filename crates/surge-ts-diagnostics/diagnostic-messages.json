@@ -832,6 +832,46 @@
     "support": "emitted"
   },
   {
+    "code": "TS18004",
+    "category": "Error",
+    "message": "No value exists in scope for the shorthand property '{0}'. Either declare one or provide an initializer.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2678",
+    "category": "Error",
+    "message": "Type '{0}' is not comparable to type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2515",
+    "category": "Error",
+    "message": "Non-abstract class '{0}' does not implement inherited abstract member {1} from class '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2654",
+    "category": "Error",
+    "message": "Non-abstract class '{0}' is missing implementations for the following members of '{1}': {2}.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2655",
+    "category": "Error",
+    "message": "Non-abstract class '{0}' is missing implementations for the following members of '{1}': {2} and {3} more.",
+    "source": "typescript",
+    "arity": 4,
+    "support": "emitted"
+  },
+  {
     "code": "surge::parser-error",
     "category": "Error",
     "message": "{0}",

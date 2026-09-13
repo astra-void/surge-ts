@@ -25,12 +25,18 @@ pub(crate) fn evaluate_expression(
                 if property.is_method || property.is_accessor {
                     continue;
                 }
+                if property.is_shorthand {
+                    ctx.shorthand_property_depth += 1;
+                }
                 let _ = evaluate_expression(
                     &property.value,
                     property.value_span.or(property.span).or(fallback_span),
                     symbols,
                     ctx,
                 );
+                if property.is_shorthand {
+                    ctx.shorthand_property_depth -= 1;
+                }
             }
 
             inferred_expression

@@ -411,7 +411,7 @@ fn evaluate_equality_binary(
 /// widened operands are reported only when widening does not make them
 /// comparable. `1 === "string"` reads `'number'` and `'string'`, while
 /// `"a" === "b"` and a literal-union subject keep their literal names.
-fn equality_operand_display_names(left: &Type, right: &Type) -> (String, String) {
+pub(crate) fn equality_operand_display_names(left: &Type, right: &Type) -> (String, String) {
     let left_base = widen_type(left);
     let right_base = widen_type(right);
     if types_overlap_for_equality(&left_base, &right_base) {
@@ -420,7 +420,7 @@ fn equality_operand_display_names(left: &Type, right: &Type) -> (String, String)
     (left_base.name(), right_base.name())
 }
 
-fn inferred_type(result: &InferredExpression) -> Option<&Type> {
+pub(crate) fn inferred_type(result: &InferredExpression) -> Option<&Type> {
     match result {
         InferredExpression::Known(ty) => Some(ty),
         InferredExpression::UnresolvedIdentifier { .. }
@@ -441,7 +441,7 @@ fn is_comparison_operand_valid(ty: &Type) -> bool {
     matches!(ty.base_primitive(), Some(Type::Number) | Some(Type::String))
 }
 
-fn types_overlap_for_equality(left: &Type, right: &Type) -> bool {
+pub(crate) fn types_overlap_for_equality(left: &Type, right: &Type) -> bool {
     match (left, right) {
         (Type::Union(left_union), Type::Union(right_union)) => {
             left_union.types().iter().any(|left_ty| {

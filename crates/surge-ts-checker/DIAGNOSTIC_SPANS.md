@@ -64,6 +64,9 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
 | TS1049/TS1095 `set` accessor grammar | accessor name span |
 | TS1244/TS1253 `abstract` outside an abstract class | the member's span, which starts at the modifier |
 | TS7008/TS7010 implicit `any` member/return | member or function name span |
+| TS18004 unresolved shorthand property | the shorthand identifier's span |
+| TS2678 case not comparable | the `case` test expression's span |
+| TS2515/TS2654/TS2655 unimplemented abstract members | the derived class's name span |
 | surge::unsupported-declaration | keyword or full statement span, pinned |
 | surge::unsupported-module-syntax | import/export statement span, pinned |
 | parser-error | parser-provided best-effort span when available; otherwise no span |

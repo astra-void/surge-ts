@@ -762,6 +762,36 @@ oracle = [
   "grammar-parameter-list-hardening",
 ]
 
+[TS18004]
+status = "emitted"
+oracle = [
+  "shorthand-property-scope-basic",
+]
+
+[TS2678]
+status = "emitted"
+oracle = [
+  "switch-case-comparability-basic",
+]
+
+[TS2515]
+status = "emitted"
+oracle = [
+  "abstract-member-implementation-basic",
+]
+
+[TS2654]
+status = "emitted"
+oracle = [
+  "abstract-member-implementation-basic",
+]
+
+[TS2655]
+status = "emitted"
+oracle = [
+  "abstract-member-implementation-basic",
+]
+
 ["surge::unsupported-module-syntax"]
 status = "emitted"
 fixtures = [

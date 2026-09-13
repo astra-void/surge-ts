@@ -267,6 +267,12 @@ pub(crate) fn unresolved_name_diagnostic(
 ) -> Diagnostic {
     match suggested_unresolved_name(name, symbols, ctx) {
         Some(suggestion) => Diagnostic::ts2552(name, suggestion, ctx.file_name.clone()),
+        // A shorthand property names the value it reads, so tsc's message says
+        // what to do about it instead of reporting a bare missing name. A
+        // spelling suggestion still wins, as it does for any other reference.
+        None if ctx.shorthand_property_depth > 0 => {
+            Diagnostic::ts18004(name, ctx.file_name.clone())
+        }
         None => Diagnostic::ts2304(name, ctx.file_name.clone()),
     }
 }

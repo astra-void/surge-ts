@@ -498,6 +498,9 @@ pub struct ParsedInterfaceMember {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedClassDeclaration {
     pub is_declare: bool,
+    /// `abstract class C {}`. A non-abstract class must implement every
+    /// abstract member it inherits, and only an abstract class may declare one.
+    pub is_abstract: bool,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub type_parameters: Vec<ParsedTypeParameter>,
@@ -997,6 +1000,10 @@ pub struct ParsedObjectProperty {
     /// is the spread argument expression; inference merges the argument's own
     /// object properties into the result.
     pub is_spread: bool,
+    /// True for shorthand (`{ value }`), where the property name is also the
+    /// identifier read. tsc reports an unresolved shorthand name as TS18004
+    /// rather than as a plain missing name.
+    pub is_shorthand: bool,
     /// True for a `get`/`set` accessor (`{ get value() { … } }`). The `value` is
     /// lowered to an arrow like method shorthand, but the property's type is the
     /// accessor's *value* type — the getter's return type, or the setter's

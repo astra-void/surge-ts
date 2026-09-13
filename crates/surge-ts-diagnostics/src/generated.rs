@@ -1045,6 +1045,56 @@ pub const TS2371: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS18004: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS18004",
+    number: Some(18004),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "No value exists in scope for the shorthand property '{0}'. Either declare one or provide an initializer.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2678: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2678",
+    number: Some(2678),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' is not comparable to type '{1}'.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2515: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2515",
+    number: Some(2515),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Non-abstract class '{0}' does not implement inherited abstract member {1} from class '{2}'.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2654: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2654",
+    number: Some(2654),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Non-abstract class '{0}' is missing implementations for the following members of '{1}': {2}.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2655: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2655",
+    number: Some(2655),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Non-abstract class '{0}' is missing implementations for the following members of '{1}': {2} and {3} more.",
+    argument_count: 4,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const SURGE_PARSER_ERROR: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "surge::parser-error",
     number: None,
@@ -1210,6 +1260,11 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1253,
     TS2369,
     TS2371,
+    TS18004,
+    TS2678,
+    TS2515,
+    TS2654,
+    TS2655,
     SURGE_PARSER_ERROR,
     SURGE_DUPLICATE_TYPE_PARAMETER,
     SURGE_UNSUPPORTED_MODULE_SYNTAX,
@@ -2155,6 +2210,83 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2371(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2371, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts18004(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS18004,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2678(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2678,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2515(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2515,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2654(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2654,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2655(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        arg3: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2655,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+                DiagnosticArg::from(arg3.to_string()),
+            ],
+            file_name,
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)]

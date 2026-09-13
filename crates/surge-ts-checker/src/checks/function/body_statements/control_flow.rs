@@ -408,6 +408,59 @@ pub(super) fn emit_switch_fallthrough_diagnostics(
     }
 }
 
+/// A `case` test is an expression of its own — whatever is written there is
+/// checked — and its type has to be comparable to the discriminant's, the same
+/// relation `===` uses (TS2678). A `default` clause has no test.
+fn check_switch_case_tests(
+    switch_statement: &ParsedSwitchStatement,
+    discriminant: &InferredExpression,
+    symbols: &crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    // The comparison uses the discriminant's *declared* type when it has one.
+    // A `let` the source narrows through a closure keeps its declared union in
+    // tsc, and surge's flow state can be narrower than the source really
+    // guarantees — comparing against the narrowed type there reports a case the
+    // program does reach.
+    let declared_discriminant = match &switch_statement.discriminant {
+        ParsedExpression::Identifier { name, .. } => symbols.declared_type(name),
+        _ => None,
+    };
+
+    for switch_case in &switch_statement.cases {
+        let Some(test) = switch_case.test.as_ref() else {
+            continue;
+        };
+        let inferred_case = evaluate_expression(test, switch_case.test_span, symbols, ctx);
+        let (Some(case_type), Some(discriminant_type)) = (
+            crate::checks::ops::inferred_type(&inferred_case),
+            declared_discriminant.or_else(|| crate::checks::ops::inferred_type(discriminant)),
+        ) else {
+            continue;
+        };
+        // Same exemptions the `===` check makes: a degraded or `any` operand
+        // says nothing, and a nullish test is comparable to anything.
+        if case_type.is_unknown()
+            || discriminant_type.is_unknown()
+            || matches!(case_type, Type::Any | Type::Undefined)
+            || matches!(discriminant_type, Type::Any | Type::Undefined)
+        {
+            continue;
+        }
+        if crate::checks::ops::types_overlap_for_equality(case_type, discriminant_type) {
+            continue;
+        }
+        let (case_name, discriminant_name) =
+            crate::checks::ops::equality_operand_display_names(case_type, discriminant_type);
+        let diagnostic = Diagnostic::ts2678(&case_name, &discriminant_name, ctx.file_name.clone());
+        let diagnostic = match switch_case.test_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        };
+        ctx.push(diagnostic);
+    }
+}
+
 pub(crate) fn check_function_switch_statement(
     switch_statement: ParsedSwitchStatement,
     statement_index: usize,
@@ -435,12 +488,13 @@ pub(crate) fn check_function_switch_statement(
 
     if !condition_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
-        let _ = evaluate_expression(
+        let discriminant = evaluate_expression(
             &switch_statement.discriminant,
             switch_statement.discriminant_span,
             &visible_symbols,
             ctx,
         );
+        check_switch_case_tests(&switch_statement, &discriminant, &visible_symbols, ctx);
     }
 
     // `switch (x.kind) case "a":` narrows the case body exactly like

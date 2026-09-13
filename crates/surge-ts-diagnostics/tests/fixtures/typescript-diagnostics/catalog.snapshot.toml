@@ -833,6 +833,46 @@ message = "A parameter initializer is only allowed in a function or constructor 
 arity = 0
 
 [[diagnostic]]
+code = "TS18004"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "No value exists in scope for the shorthand property '{0}'. Either declare one or provide an initializer."
+arity = 1
+
+[[diagnostic]]
+code = "TS2678"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is not comparable to type '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2515"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Non-abstract class '{0}' does not implement inherited abstract member {1} from class '{2}'."
+arity = 3
+
+[[diagnostic]]
+code = "TS2654"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Non-abstract class '{0}' is missing implementations for the following members of '{1}': {2}."
+arity = 3
+
+[[diagnostic]]
+code = "TS2655"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Non-abstract class '{0}' is missing implementations for the following members of '{1}': {2} and {3} more."
+arity = 4
+
+[[diagnostic]]
 code = "surge::parser-error"
 category = "Error"
 source = "surge-ts"

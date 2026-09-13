@@ -1263,6 +1263,44 @@ fn expected_member_is_degraded(ty: &Type) -> bool {
     }
 }
 
+/// tsc's excess-property report: the first property the target does not
+/// declare, reported once. It runs only after the written properties have
+/// checked out — a property that fails against its expected type reports
+/// instead — and it takes precedence over the missing-required report.
+fn report_excess_property(
+    properties: &[ParsedObjectProperty],
+    expected_object_type: &surge_ts_types::ObjectType,
+    fallback_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if expected_object_type.allows_string_index_access() || expected_object_type.properties.is_empty()
+    {
+        return false;
+    }
+    let Some(property) = properties.iter().find(|property| {
+        !property.is_spread && !expected_object_type.contains_property(&property.name)
+    }) else {
+        return false;
+    };
+
+    let diagnostic = Diagnostic::ts2353(
+        &property.name,
+        &Type::Object(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+            expected_object_type.clone()
+        }))
+        .name(),
+        ctx.file_name.clone(),
+    );
+    ctx.push(diagnostic_with_syntax_span(
+        diagnostic,
+        choose_span(
+            property.name_span,
+            choose_span(property.span, fallback_span),
+        ),
+    ));
+    true
+}
+
 fn evaluate_object_literal_with_expected_type(
     properties: &[ParsedObjectProperty],
     expected_object_type: &surge_ts_types::ObjectType,
@@ -1284,45 +1322,6 @@ fn evaluate_object_literal_with_expected_type(
     // required-property scan below (conservative: under-check rather than emit a
     // false `TS2353`/`TS2741`).
     let has_spread = properties.iter().any(|property| property.is_spread);
-    if !expected_object_type.allows_string_index_access()
-        && !expected_object_type.properties.is_empty()
-        && let Some(property) = properties.iter().find(|property| {
-            !property.is_spread && !expected_object_type.contains_property(&property.name)
-        })
-    {
-        if std::env::var("SURGE_DBG_EXCESS").is_ok() {
-            eprintln!(
-                "[EXCESS] {} missing={} is_intersection={} props=[{}] index={:?}",
-                ctx.file_name,
-                property.name,
-                expected_object_type.is_intersection,
-                expected_object_type
-                    .properties
-                    .keys()
-                    .map(|k| k.to_string())
-                    .collect::<Vec<_>>()
-                    .join(","),
-                expected_object_type.string_index_type.is_some()
-            );
-        }
-        let diagnostic = Diagnostic::ts2353(
-            &property.name,
-            &Type::Object(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
-                expected_object_type.clone()
-            }))
-            .name(),
-            ctx.file_name.clone(),
-        );
-
-        ctx.push(diagnostic_with_syntax_span(
-            diagnostic,
-            choose_span(
-                property.name_span,
-                choose_span(property.span, fallback_span),
-            ),
-        ));
-        return InferredExpression::Unknown;
-    }
 
     // Set when a property the literal *writes* is compared against an expected
     // member surge could not model. tsc reports one error per literal and stops:
@@ -1347,6 +1346,25 @@ fn evaluate_object_literal_with_expected_type(
         {
             ObjectProperty::required(index_type)
         } else {
+            // The target has no such property, so there is no contextual type
+            // to check the value against — but the value is still an expression
+            // with errors of its own, and tsc reports them alongside the excess
+            // report below. Method and accessor shorthand is checked by the
+            // inference pass, as in the plain object-literal path.
+            if !property.is_method && !property.is_accessor {
+                if property.is_shorthand {
+                    ctx.shorthand_property_depth += 1;
+                }
+                let _ = evaluate_expression(
+                    &property.value,
+                    property.value_span.or(property.span),
+                    symbols,
+                    ctx,
+                );
+                if property.is_shorthand {
+                    ctx.shorthand_property_depth -= 1;
+                }
+            }
             continue;
         };
 
@@ -1387,6 +1405,9 @@ fn evaluate_object_literal_with_expected_type(
                 0,
             ))
         });
+        if property.is_shorthand {
+            ctx.shorthand_property_depth += 1;
+        }
         let inferred_property = evaluate_expression_with_expected_type(
             &property.value,
             property.value_span.or(property.span),
@@ -1399,6 +1420,9 @@ fn evaluate_object_literal_with_expected_type(
             symbols,
             ctx,
         );
+        if property.is_shorthand {
+            ctx.shorthand_property_depth -= 1;
+        }
         let inferred_property = match inferred_property {
             InferredExpression::Known(Type::Function(function_type)) if property.is_accessor => {
                 InferredExpression::Known(match function_type.parameters().first() {
@@ -1466,9 +1490,17 @@ fn evaluate_object_literal_with_expected_type(
             | InferredExpression::MissingProperty { .. }
             | InferredExpression::Unknown => {
                 inferred_property_types.insert(property.name.clone(), Type::Unknown);
+                // The value's own error is already reported and the literal
+                // cannot be compared further, but an excess property is a
+                // separate report tsc still makes.
+                report_excess_property(properties, expected_object_type, fallback_span, ctx);
                 return InferredExpression::Unknown;
             }
         }
+    }
+
+    if report_excess_property(properties, expected_object_type, fallback_span, ctx) {
+        return InferredExpression::Unknown;
     }
 
     let missing_property_names: Vec<String> = if has_spread || degraded_property_comparison {

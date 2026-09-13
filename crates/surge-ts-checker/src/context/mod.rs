@@ -469,6 +469,10 @@ pub(crate) struct CheckerContext {
     /// surge's modelling gap rather than the source. Same rule as
     /// [`Self::unmodelled_jsx_props_depth`].
     pub(crate) degraded_expected_type_depth: usize,
+    /// Nonzero while checking the value of a shorthand object-literal property
+    /// (`{ value }`). An unresolved name there is TS18004 to tsc — the property
+    /// has no initializer to fall back on — rather than a plain missing name.
+    pub(crate) shorthand_property_depth: usize,
     /// How deep the per-property union-member probe is nested. It types a
     /// literal's properties against a candidate union, and a nested literal
     /// probes again, so the depth is what keeps that from multiplying.
@@ -609,6 +613,7 @@ impl CheckerContext {
             timings: None,
             namespace_member_resolution_depth: 0,
             unmodelled_jsx_props_depth: 0,
+            shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
@@ -744,6 +749,7 @@ impl CheckerContext {
             timings: data.timings.clone(),
             namespace_member_resolution_depth: 0,
             unmodelled_jsx_props_depth: 0,
+            shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
@@ -1124,6 +1130,7 @@ impl CheckerContext {
         self.file_type_only_import_names.clear();
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
+        self.shorthand_property_depth = 0;
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"

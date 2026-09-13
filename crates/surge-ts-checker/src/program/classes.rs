@@ -443,7 +443,135 @@ fn class_construct_signature(
 
 /// Type-checks a class's constructor and method bodies, binding `this` to the
 /// instance type (instance members/constructor) or static side (static methods).
+/// TS2515/TS2654/TS2655: a class that is not itself abstract has to implement
+/// every abstract member it inherits. tsc picks the code by how many are
+/// missing — one names it, two to five list them, six or more list the first
+/// four and count the rest — and names the *direct* base class.
+///
+/// Base resolution is conservative in the same way `check_implicit_override`
+/// is: a base that does not resolve to a source-declared class leaves the whole
+/// check quiet rather than risking a false positive.
+fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    const LISTED_WHEN_TRUNCATED: usize = 4;
+    const MAX_LISTED: usize = 5;
+
+    if class.is_abstract || class.is_declare {
+        return;
+    }
+    let Some(base) = class.extends.first() else {
+        return;
+    };
+
+    let mut satisfied: std::collections::HashSet<String> = class
+        .members
+        .iter()
+        .filter_map(implemented_member_name)
+        .collect();
+    satisfied.extend(
+        constructor_parameter_property_members(class)
+            .into_iter()
+            .map(|member| member.name),
+    );
+
+    let mut missing: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut next_base = Some(base.name.clone());
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    while let Some(base_name) = next_base.take() {
+        if !visited.insert(base_name.clone()) {
+            break;
+        }
+        let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&base_name)
+        else {
+            return;
+        };
+        // A base whose declaration surge resolved out of a declaration file may
+        // not be the class the oracle sees; stay quiet rather than guess.
+        if info.file_name.ends_with(".d.ts") {
+            return;
+        }
+        for member in &info.body.members {
+            if satisfied.contains(&member.name) || !seen.insert(member.name.clone()) {
+                continue;
+            }
+            if member.is_abstract {
+                missing.push(member.name.clone());
+            }
+        }
+        next_base = info.body.extends.first().map(|parent| parent.name.clone());
+    }
+
+    if missing.is_empty() {
+        return;
+    }
+
+    // tsc names the base as written, type arguments included (`Base<string>`).
+    let base_display = if base.type_arguments.is_empty() {
+        base.name.clone()
+    } else {
+        let arguments: Vec<String> = base
+            .type_arguments
+            .iter()
+            .map(|argument| map_parsed_type(argument.clone(), ctx).name())
+            .collect();
+        format!("{}<{}>", base.name, arguments.join(", "))
+    };
+    let quoted = |names: &[String]| {
+        names
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let diagnostic = match missing.len() {
+        1 => Diagnostic::ts2515(
+            &class.name,
+            &missing[0],
+            &base_display,
+            ctx.file_name.clone(),
+        ),
+        count if count <= MAX_LISTED => Diagnostic::ts2654(
+            &class.name,
+            &base_display,
+            quoted(&missing),
+            ctx.file_name.clone(),
+        ),
+        count => Diagnostic::ts2655(
+            &class.name,
+            &base_display,
+            quoted(&missing[..LISTED_WHEN_TRUNCATED]),
+            count - LISTED_WHEN_TRUNCATED,
+            ctx.file_name.clone(),
+        ),
+    };
+    let diagnostic = match class.name_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    };
+    ctx.push(diagnostic);
+}
+
+/// The name a class member declares when it is not itself abstract — what
+/// implements an inherited abstract member of the same name.
+fn implemented_member_name(member: &ParsedClassMember) -> Option<String> {
+    match member {
+        ParsedClassMember::Property(property) if !property.is_abstract && !property.is_static => {
+            Some(property.name.clone())
+        }
+        ParsedClassMember::Method(method) if !method.is_abstract && !method.is_static => {
+            Some(method.name.clone())
+        }
+        ParsedClassMember::Accessor(accessor) if !accessor.is_abstract && !accessor.is_static => {
+            Some(accessor.name.clone())
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    check_inherited_abstract_members(class, ctx);
+
     // Ambient classes have no bodies; generic classes are out of scope and would
     // resolve member/`this` types against unbound type parameters.
     if class.is_declare || !class.type_parameters.is_empty() {

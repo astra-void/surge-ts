@@ -996,6 +996,7 @@ pub(crate) fn parse_object_properties(
                         is_method: false,
                         is_spread: true,
                         is_accessor: false,
+                        is_shorthand: false,
                     });
                 }
             };
@@ -1066,6 +1067,7 @@ pub(crate) fn parse_object_properties(
                 is_method: false,
                 is_spread: false,
                 is_accessor: false,
+                is_shorthand: property.shorthand,
             })
         })
         .collect()
@@ -1149,6 +1151,7 @@ fn parse_object_method_shorthand_named(
         is_method: true,
         is_spread: false,
         is_accessor: false,
+        is_shorthand: false,
     })
 }
 

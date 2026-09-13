@@ -31,6 +31,7 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
 
     Some(ParsedClassDeclaration {
         is_declare: class.declare,
+        is_abstract: class.r#abstract,
         name: id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(id.span)),
         type_parameters: parse_type_parameters(class.type_parameters.as_deref()),
