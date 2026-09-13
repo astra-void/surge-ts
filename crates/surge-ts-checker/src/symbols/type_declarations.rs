@@ -122,6 +122,30 @@ pub(crate) struct InterfaceBody {
     pub(crate) construct_signatures: Vec<ParsedFunctionType>,
     pub(crate) declaration_fragments: Vec<InterfaceDeclarationFragmentId>,
     pub(crate) member_fragments: Vec<InterfaceDeclarationFragmentId>,
+    /// Resolution scopes for fragments written in another file — a `declare
+    /// module` augmentation. The merged declaration resolves under the
+    /// *augmented* file's scope, where a name the augmenting file declared
+    /// locally does not exist, so those members carry their own scope here.
+    /// Empty for every declaration that was never augmented.
+    pub(crate) fragment_scopes: Vec<(InterfaceDeclarationFragmentId, Arc<TypeDeclarationScope>)>,
+}
+
+impl InterfaceBody {
+    /// The scope a member's own declaration fragment resolves under, when that
+    /// fragment came from a `declare module` augmentation in another file.
+    pub(crate) fn member_scope(
+        &self,
+        member_index: usize,
+    ) -> Option<(&Arc<TypeDeclarationScope>, &Arc<str>)> {
+        if self.fragment_scopes.is_empty() {
+            return None;
+        }
+        let fragment = self.member_fragments.get(member_index)?;
+        self.fragment_scopes
+            .iter()
+            .find(|(candidate, _)| candidate == fragment)
+            .map(|(fragment, scope)| (scope, &fragment.file_name))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -145,6 +169,7 @@ impl Clone for InterfaceBody {
             construct_signatures: self.construct_signatures.clone(),
             declaration_fragments: self.declaration_fragments.clone(),
             member_fragments: self.member_fragments.clone(),
+            fragment_scopes: self.fragment_scopes.clone(),
         }
     }
 }
@@ -212,6 +237,7 @@ impl InterfaceInfo {
                 construct_signatures,
                 declaration_fragments: vec![declaration_fragment],
                 member_fragments,
+                fragment_scopes: Vec::new(),
             }),
             cached_resolution_key: std::sync::OnceLock::new(),
             cached_alias_id: std::sync::OnceLock::new(),
@@ -341,7 +367,66 @@ pub(crate) fn merge_interface_infos(
         .cloned()
         .collect();
     Arc::make_mut(&mut merged_info.body).member_fragments = member_fragments;
+    let mut fragment_scopes = existing.body.fragment_scopes.clone();
+    for entry in &incoming.body.fragment_scopes {
+        if !fragment_scopes
+            .iter()
+            .any(|(fragment, _)| fragment == &entry.0)
+        {
+            fragment_scopes.push(entry.clone());
+        }
+    }
+    Arc::make_mut(&mut merged_info.body).fragment_scopes = fragment_scopes;
     merged_info
+}
+
+/// Declaration-merge an interface contributed by a `declare module` block in
+/// another file. Identical to [`merge_type_declaration_into_table`] except that
+/// the incoming fragments keep their own resolution scope: the merged
+/// declaration resolves under the augmented file's scope, where a type the
+/// augmenting file declared locally (`type WithPersist<S> = …`, named by the
+/// member it adds) does not exist.
+pub(crate) fn merge_augmentation_type_declaration_into_table(
+    table: &mut TypeDeclarationTable,
+    name: &str,
+    incoming: &TypeDeclarationInfo,
+) {
+    merge_type_declaration_into_table(table, name, incoming);
+    let (TypeDeclarationInfo::Interface(incoming), Some(scope)) = (
+        incoming,
+        match incoming {
+            TypeDeclarationInfo::Interface(info) => info.resolution_scope.clone(),
+            TypeDeclarationInfo::Alias(_) => None,
+        },
+    ) else {
+        return;
+    };
+    let Some(TypeDeclarationInfo::Interface(merged)) = table.get(name) else {
+        return;
+    };
+    if merged
+        .body
+        .declaration_fragments
+        .iter()
+        .all(|fragment| incoming.body.declaration_fragments.contains(fragment))
+    {
+        // The augmentation is the only fragment, so the declaration already
+        // resolves under its own scope.
+        return;
+    }
+    let mut merged = merged.clone();
+    let body = Arc::make_mut(&mut merged.body);
+    for fragment in &incoming.body.declaration_fragments {
+        if !body
+            .fragment_scopes
+            .iter()
+            .any(|(existing, _)| existing == fragment)
+        {
+            body.fragment_scopes
+                .push((fragment.clone(), scope.clone()));
+        }
+    }
+    table.upsert(name, TypeDeclarationInfo::Interface(merged));
 }
 
 /// Insert `incoming` into `table`, merging into an existing interface of the same
@@ -524,6 +609,15 @@ fn fold_interface_declaration(
         .extend(incoming.body.construct_signatures.iter().cloned());
     body.declaration_fragments
         .extend(incoming.body.declaration_fragments.iter().cloned());
+    for entry in &incoming.body.fragment_scopes {
+        if !body
+            .fragment_scopes
+            .iter()
+            .any(|(fragment, _)| fragment == &entry.0)
+        {
+            body.fragment_scopes.push(entry.clone());
+        }
+    }
     if accumulator.resolution_scope.is_none() {
         accumulator.resolution_scope = incoming.resolution_scope.clone();
     }
