@@ -271,7 +271,13 @@ Notes that matter:
   **The 4 that remain each have an identified cause.** Two `.config` on
   `Relation<string>` are a predicate guard whose subject is an *element access*:
   element guards model truthiness, `typeof` and nullish, and have no predicate
-  arm. One `'result.typings' is possibly 'undefined'` is the
+  arm. Adding one was **implemented and rejected by measurement** — it closes the
+  first of the two and turns the second into two `TS2532`, because drizzle's
+  shape (`is(rs[0], One) && rs[0].config`) needs the next layer immediately: a
+  property path *below* an element access. The element key renders the path
+  before the index (`a.b[0]`), so `a[0].b` is not expressible, in the writer or
+  in any reader. Closing these two is that key-format extension, not the
+  predicate arm. One `'result.typings' is possibly 'undefined'` is the
   `if (!x.y) { x.y = … }` join — an assignment in the branch makes the property
   definite on both paths. One `Property 'strings' does not exist on type
   'TemplateStringsArray'` in `sql.ts` is unreduced.
