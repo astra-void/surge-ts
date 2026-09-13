@@ -754,7 +754,12 @@ fn try_tuple_infer_match(
             continue;
         }
         let resolved_element = resolve_parsed_type(pattern_element.clone(), ctx, resolving, base);
-        if resolved_element.had_error || resolved_element.ty.is_unknown() {
+        // A slot written as the genuine `unknown` (`[...infer R, unknown]`, the
+        // shape `DropLast` is written with) accepts anything; only the
+        // degradation sentinel means the slot could not be modelled.
+        if resolved_element.had_error
+            || matches!(resolved_element.ty, Type::Unknown | Type::TypeParameter(_))
+        {
             return TuplePatternMatch::Undecided;
         }
         if !is_assignable_to(check_element, &resolved_element.ty) {
