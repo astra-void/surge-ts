@@ -97,3 +97,72 @@ fn two_literal_arguments_meet_at_the_primitive() {
     );
     assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
+
+// A fresh object literal widens the same way a fresh primitive does:
+// `subject({ n: 1 })` binds `T` to `{ n: number }`, so a later `next({ n: 2 })`
+// fits. A `const` assertion is not fresh and keeps its literals.
+#[test]
+fn a_fresh_object_literal_argument_widens() {
+    let diagnostics = check(&format!(
+        "{SUBJECT}\
+         export function f() {{\n\
+             const value = subject({{ n: 1 }});\n\
+             value.next({{ n: 2 }});\n\
+             const n: number = value.get().n;\n\
+             const kept = subject({{ n: 1 }} as const);\n\
+             const one: 1 = kept.get().n;\n\
+         }}\n"
+    ));
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+// Two object candidates for one parameter infer the union of them, as tsc
+// does, so the second argument is not checked against the first. A union
+// parameter (`b: T | undefined`) takes the same path: an argument matching no
+// structured member is still an answer for the naked one.
+#[test]
+fn two_object_arguments_meet_at_their_union() {
+    let diagnostics = check(
+        "declare function eq<T extends Record<string, any>>(a: T, b: T | undefined): boolean;\n\
+         export const same = eq({ a: 1 }, { a: 2 });\n\
+         export const wider = eq({ a: 1 }, { a: 1, b: 2 });\n",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+// A callback argument infers through a rest parameter's *element*:
+// `(...args: any[]) => any` — vitest's `vi.fn()` — binds each expected
+// parameter to `any`, as tsc does. Zipping positionally bound the first to
+// `any[]` and the rest to nothing, which left `TVariables` at its `void`
+// default and rejected every `mutate(1)`.
+#[test]
+fn a_rest_any_callback_binds_every_expected_parameter() {
+    let diagnostics = check(
+        "declare const anyFn: (...args: any[]) => any;\n\
+         interface Opts<TData, TVariables> {\n\
+             mutationFn?: (variables: TVariables) => Promise<TData>;\n\
+             onSuccess?: (data: TData, variables: TVariables) => void;\n\
+         }\n\
+         declare function observe<TData = unknown, TVariables = void>(\n\
+             options: Opts<TData, TVariables>,\n\
+         ): { mutate: (variables: TVariables) => Promise<TData> };\n\
+         export function f() {\n\
+             const observer = observe({ mutationFn: () => Promise.resolve('data'), onSuccess: anyFn });\n\
+             observer.mutate(1);\n\
+         }\n",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+// A callable object — an interface with a call signature — infers through
+// that signature the way a function does.
+#[test]
+fn a_callable_object_infers_through_its_call_signature() {
+    let diagnostics = check(
+        "interface Mock { (...args: any[]): any; calls: number }\n\
+         declare const mock: Mock;\n\
+         declare function on<T>(handler: (value: T) => void): T;\n\
+         export const value: string = on(mock);\n",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
