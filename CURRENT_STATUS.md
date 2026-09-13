@@ -278,8 +278,11 @@ Notes that matter:
   before the index (`a.b[0]`), so `a[0].b` is not expressible, in the writer or
   in any reader. Closing these two is that key-format extension, not the
   predicate arm. One `'result.typings' is possibly 'undefined'` is the
-  `if (!x.y) { x.y = … }` join — an assignment in the branch makes the property
-  definite on both paths. One `Property 'strings' does not exist on type
+  `if (!x.y) { x.y = … }` join, and it is *only* the join: the same read inside
+  the branch narrows, and the same shape over a binding rather than a property
+  path narrows. An assignment to a property narrows the branch frame, which the
+  `if` pops; making it survive means merging that with the implicit else's
+  narrowing, which is flow analysis surge does not do yet. One `Property 'strings' does not exist on type
   'TemplateStringsArray'` in `sql.ts` is unreduced.
 
   One known gap is *not* in that four: `await` is still erased at parse time, so
