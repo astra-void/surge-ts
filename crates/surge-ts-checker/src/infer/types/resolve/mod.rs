@@ -228,6 +228,18 @@ pub(crate) fn resolve_parsed_type(
             resolving,
             substitution,
         ),
+        ParsedType::Readonly(inner) => {
+            let inner = resolve_parsed_type(
+                std::sync::Arc::unwrap_or_clone(inner),
+                ctx,
+                resolving,
+                substitution,
+            );
+            ResolvedType {
+                ty: readonly_reference(inner.ty),
+                had_error: inner.had_error,
+            }
+        }
         ParsedType::Union(types) => resolve_union_type(
             std::sync::Arc::unwrap_or_clone(types),
             ctx,

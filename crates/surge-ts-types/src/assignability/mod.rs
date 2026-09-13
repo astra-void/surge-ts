@@ -380,6 +380,13 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
     // comparing the structural expansion, so a reference stays interchangeable
     // with its expanded shape without forcing eager expansion at construction.
     if let Type::Reference(reference) = from {
+        // A readonly array or tuple is not assignable to a mutable one: the
+        // mutable surface has `push`/`splice` the readonly one lacks.
+        if reference.is_readonly_array()
+            && matches!(to, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_))
+        {
+            return false;
+        }
         // `resolve_arc` borrows the memoized/interned expansion instead of
         // deep-cloning it — this arm is peeled millions of times on
         // conditional-heavy programs.

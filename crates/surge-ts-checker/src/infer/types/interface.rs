@@ -357,8 +357,15 @@ pub(crate) fn resolve_interface(
             "Array" | "ReadonlyArray" => {
                 let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
                 resolving.pop();
+                let array = Type::Array(Box::new(element_type));
                 return ResolvedType {
-                    ty: Type::Array(Box::new(element_type)),
+                    ty: if &*interface.name == "ReadonlyArray"
+                        && crate::infer::types::resolve::readonly_arrays_enabled()
+                    {
+                        crate::infer::types::resolve::readonly_reference(array)
+                    } else {
+                        array
+                    },
                     had_error: false,
                 };
             }
@@ -402,8 +409,15 @@ pub(crate) fn resolve_interface(
             "Array" | "ReadonlyArray" => {
                 let element_type = local_substitution.get("T").cloned().unwrap_or(Type::Any);
                 resolving.pop();
+                let array = Type::Array(Box::new(element_type));
                 return ResolvedType {
-                    ty: Type::Array(Box::new(element_type)),
+                    ty: if &*interface.name == "ReadonlyArray"
+                        && crate::infer::types::resolve::readonly_arrays_enabled()
+                    {
+                        crate::infer::types::resolve::readonly_reference(array)
+                    } else {
+                        array
+                    },
                     had_error: false,
                 };
             }

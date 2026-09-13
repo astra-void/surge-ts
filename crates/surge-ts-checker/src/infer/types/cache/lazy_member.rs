@@ -180,9 +180,9 @@ pub(crate) fn parsed_method_has_contextual_typing_dependency(
                         .iter()
                         .any(|property| contains_callable(&property.ty, depth + 1))
             }
-            ParsedType::Array(element) | ParsedType::KeyOf(element) => {
-                contains_callable(element, depth + 1)
-            }
+            ParsedType::Array(element)
+            | ParsedType::KeyOf(element)
+            | ParsedType::Readonly(element) => contains_callable(element, depth + 1),
             ParsedType::Tuple(elements) | ParsedType::Union(elements) => {
                 elements.iter().any(|e| contains_callable(e, depth + 1))
             }
@@ -310,6 +310,7 @@ pub(super) fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        ParsedType::Readonly(inner) => format!("readonly {}", parsed_annotation_display(inner)),
         ParsedType::Union(members) => members
             .iter()
             .map(parsed_annotation_display)

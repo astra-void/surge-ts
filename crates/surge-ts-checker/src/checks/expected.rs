@@ -449,8 +449,10 @@ fn evaluate_expression_with_expected_type_inner(
     // `string` and then rejected it).
     if let (Type::Union(union), ParsedExpression::ArrayLiteral { .. }) = (expected_type, expression)
     {
-        let mut array_members = union
-            .types()
+        // A `readonly T[]` member contextually types the literal exactly like
+        // `T[]` does; the modifier only matters for the assignability test.
+        let members: Vec<Type> = union.types().iter().map(mutable_sequence_shape).collect();
+        let mut array_members = members
             .iter()
             .filter(|member| matches!(member, Type::Array(_) | Type::Tuple(_)));
         if let (Some(member), None) = (array_members.next(), array_members.next()) {
@@ -470,8 +472,7 @@ fn evaluate_expression_with_expected_type_inner(
         // `[{ type: 'b', s: '2' }]` against `A[] | B[]` has to reach `B[]`, or
         // the literal is evaluated context-free and widens.
         if let ParsedExpression::ArrayLiteral { elements, .. } = expression
-            && let Some(member) =
-                sole_matching_sequence_member(union.types(), elements, symbols, ctx)
+            && let Some(member) = sole_matching_sequence_member(&members, elements, symbols, ctx)
         {
             return evaluate_expression_with_expected_type_anchored(
                 expression,
@@ -1007,6 +1008,13 @@ fn evaluate_array_literal_with_expected_type(
         TypeCopyReason::ExpectedType,
         || expected_element_type.clone(),
     ))))
+}
+
+fn mutable_sequence_shape(member: &Type) -> Type {
+    match member {
+        Type::Reference(reference) if reference.is_readonly_array() => reference.resolve(),
+        other => other.clone(),
+    }
 }
 
 /// The one array-or-tuple member of a union target an array literal can be: a

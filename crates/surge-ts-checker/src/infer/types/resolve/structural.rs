@@ -36,6 +36,40 @@ pub(crate) fn resolve_tuple_type(
 /// operand (an array, an unresolved parameter) leaves the length unknown; the
 /// fixed-length model cannot state that, so it degrades as it did before this
 /// shape was modelled at all.
+/// `SURGE_READONLY_ARRAYS=0` collapses `ReadonlyArray<T>` to the mutable array
+/// again; the parser reads the same switch for the `readonly` operator.
+pub(crate) fn readonly_arrays_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_READONLY_ARRAYS").as_deref() != Ok("0"))
+}
+
+struct ReadonlyShape(Type);
+
+impl surge_ts_types::ResolveReference for ReadonlyShape {
+    fn resolve(&self) -> Type {
+        self.0.clone()
+    }
+}
+
+/// Wraps an array or tuple shape in the nominal `readonly` reference. Anything
+/// else (a degraded operand, a union the operator was written over in error)
+/// is returned unchanged so no new degradation is introduced.
+pub(crate) fn readonly_reference(ty: Type) -> Type {
+    match ty {
+        Type::Reference(ref reference) if reference.is_readonly_array() => ty,
+        Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => {
+            let display = format!("readonly {}", ty.name());
+            Type::Reference(surge_ts_types::TypeReference::new(
+                surge_ts_types::READONLY_REFERENCE_ID,
+                display,
+                vec![ty.clone()],
+                std::sync::Arc::new(ReadonlyShape(ty)),
+            ))
+        }
+        other => other,
+    }
+}
+
 pub(crate) fn resolve_variadic_tuple_type(
     elements: Vec<ParsedTupleElement>,
     ctx: &mut CheckerContext,

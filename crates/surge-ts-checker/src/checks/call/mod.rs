@@ -1802,6 +1802,9 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
         Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => true,
         Type::Array(element) => type_contains_unknown(element),
+        Type::Reference(reference) if reference.is_readonly_array() => {
+            reference.arguments.iter().any(type_contains_unknown)
+        }
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {
             function.parameters().iter().any(type_contains_unknown)

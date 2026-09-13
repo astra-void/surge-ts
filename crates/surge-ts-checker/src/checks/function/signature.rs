@@ -589,6 +589,7 @@ fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {
         ParsedType::Object(_)
         | ParsedType::Tuple(_)
         | ParsedType::VariadicTuple(_)
+        | ParsedType::Readonly(_)
         | ParsedType::Union(_)
         | ParsedType::Intersection(_)
         | ParsedType::Function(_)

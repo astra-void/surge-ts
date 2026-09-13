@@ -277,12 +277,22 @@ fn parse_type_operator(type_operator: &TSTypeOperator<'_>) -> Option<ParsedType>
     match type_operator.operator {
         TSTypeOperatorOperator::Keyof => parse_type(&type_operator.type_annotation)
             .map(|ty| ParsedType::KeyOf(std::sync::Arc::new(ty))),
-        // `readonly T[]` / `readonly [A, B]` are not distinguished from their
-        // mutable forms here; lowering to the inner array/tuple keeps the
-        // annotation intact instead of dropping it (which would cascade into
-        // `TS7006`/`TS7031` on the annotated binding). `unique symbol` has no
-        // modelled representation, so it degrades to `Unknown`.
-        TSTypeOperatorOperator::Readonly => parse_type(&type_operator.type_annotation),
+        // The operand is only ever an array or tuple shape (tsc rejects anything
+        // else with TS1354); an operand that lowered to something else stays as
+        // it is so the annotation is kept rather than dropped (which would
+        // cascade into `TS7006`/`TS7031` on the annotated binding). `unique
+        // symbol` has no modelled representation, so it degrades to `Unknown`.
+        TSTypeOperatorOperator::Readonly => {
+            let inner = parse_type(&type_operator.type_annotation)?;
+            Some(match inner {
+                ParsedType::Array(_) | ParsedType::Tuple(_) | ParsedType::VariadicTuple(_)
+                    if readonly_array_types_enabled() =>
+                {
+                    ParsedType::Readonly(std::sync::Arc::new(inner))
+                }
+                other => other,
+            })
+        }
         TSTypeOperatorOperator::Unique => Some(ParsedType::Unknown),
     }
 }
@@ -510,6 +520,13 @@ fn parse_variadic_tuple(tuple_type: &TSTupleType<'_>) -> ParsedType {
 /// homogeneous lowerings cannot express degrades to `Unknown` wholesale. Kept as
 /// the off switch for the A/B this change has to carry, since turning the shape
 /// on changes which conditional branches are reachable across every corpus.
+/// `SURGE_READONLY_ARRAYS=0` lowers `readonly T[]` / `readonly [A, B]` to the
+/// mutable shape again, the behaviour before the modifier was modelled.
+fn readonly_array_types_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_READONLY_ARRAYS").as_deref() != Ok("0"))
+}
+
 fn variadic_tuple_elements_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("SURGE_VARIADIC_TUPLES").as_deref() != Ok("0"))

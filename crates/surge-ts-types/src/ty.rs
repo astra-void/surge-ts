@@ -287,7 +287,12 @@ impl Type {
             // the access falls through to `None` and is misreported as a missing
             // property, where the old eager `any` shape emitted nothing.
             Type::Any => Some(Type::Any),
-            Type::Reference(reference) => reference.resolve().get_property_access_type(name),
+            Type::Reference(reference) => {
+                if reference.is_readonly_array() && MUTATING_ARRAY_MEMBERS.contains(&name) {
+                    return None;
+                }
+                reference.resolve().get_property_access_type(name)
+            }
             // Every member must declare the property, and the read is their
             // union. Without this a nominal reference that *resolves* to a union
             // answered `None` for every property, which the callers report as a
@@ -628,6 +633,11 @@ fn element_or_undefined(element: &Type) -> Type {
 /// `extends Array<T>`/`ReadonlyArray<T>` inherits a structural member set, and
 /// the array surface is modelled by a name lookup rather than a property map —
 /// this is what lets the heritage merge materialize it.
+/// `Array.prototype` members `ReadonlyArray` does not declare.
+pub const MUTATING_ARRAY_MEMBERS: &[&str] = &[
+    "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin",
+];
+
 pub fn array_property_names() -> &'static [&'static str] {
     &[
         "length", "map", "find", "findLast", "findIndex", "findLastIndex", "filter", "some",

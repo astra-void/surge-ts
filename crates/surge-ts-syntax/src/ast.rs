@@ -119,6 +119,10 @@ pub enum ParsedType {
     /// spread of a concrete tuple flattens into a fixed one, and anything else
     /// falls back to the length-less array lowering.
     VariadicTuple(std::sync::Arc<Vec<ParsedTupleElement>>),
+    /// `readonly T[]` / `readonly [A, B]`. The operand is an array or tuple
+    /// shape; the modifier survives so a readonly array is not assignable to a
+    /// mutable one and the two are not identical.
+    Readonly(std::sync::Arc<ParsedType>),
     Union(std::sync::Arc<Vec<ParsedType>>),
     Intersection(std::sync::Arc<Vec<ParsedType>>),
     Function(std::sync::Arc<ParsedFunctionType>),
@@ -178,6 +182,7 @@ impl Clone for ParsedType {
             Self::Array(payload) => Self::Array(payload.clone()),
             Self::Tuple(payload) => Self::Tuple(payload.clone()),
             Self::VariadicTuple(payload) => Self::VariadicTuple(payload.clone()),
+            Self::Readonly(payload) => Self::Readonly(payload.clone()),
             Self::Union(payload) => Self::Union(payload.clone()),
             Self::Intersection(payload) => Self::Intersection(payload.clone()),
             Self::Function(payload) => Self::Function(payload.clone()),
@@ -212,7 +217,7 @@ impl ParsedType {
             Self::StringLiteral(_) => 1,
             Self::NumberLiteral(_) => 2,
             Self::Object(_) => 3,
-            Self::Array(_) | Self::KeyOf(_) => 4,
+            Self::Array(_) | Self::KeyOf(_) | Self::Readonly(_) => 4,
             Self::Tuple(_)
             | Self::VariadicTuple(_)
             | Self::Union(_)

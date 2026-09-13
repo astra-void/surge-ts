@@ -95,7 +95,18 @@ pub struct TypeReference {
     resolver: Arc<dyn ResolveReference>,
 }
 
+/// Nominal id of the synthetic reference that carries the `readonly` array /
+/// tuple modifier. The single argument is the mutable shape; resolving the
+/// reference yields it, so every structural consumer that peels sees the
+/// array, while assignability and identity can still tell the two apart.
+pub const READONLY_REFERENCE_ID: &str = "\u{0}readonly";
+
 impl TypeReference {
+    /// Whether this is the synthetic `readonly T[]` / `readonly [A, B]` wrapper.
+    pub fn is_readonly_array(&self) -> bool {
+        &*self.id == READONLY_REFERENCE_ID
+    }
+
     pub fn new(
         id: impl Into<Arc<str>>,
         display: impl Into<Arc<str>>,

@@ -412,12 +412,14 @@ fn bind_infer_captures(
         // line up the fixed slots positionally and hand the spread slot the
         // middle as a tuple of its own. This is the list primitive every
         // type-level recursion is written with.
-        ParsedType::Tuple(_) | ParsedType::VariadicTuple(_) if tuple_infer_enabled() => {
+        ParsedType::Tuple(_) | ParsedType::VariadicTuple(_) | ParsedType::Readonly(_)
+            if tuple_infer_enabled() =>
+        {
             let peeled = crate::program::with_dts_expansion_reason(
                 crate::program::DtsExpansionReason::ConditionalType,
                 || check.peeled(),
             );
-            if let Some(pairs) = tuple_pattern_pairs(extends, &peeled) {
+            if let Some(pairs) = tuple_pattern_pairs(tuple_pattern(extends), &peeled) {
                 for (pattern_element, check_element) in pairs {
                     bind_infer_captures(
                         &pattern_element,
@@ -699,6 +701,29 @@ fn deferred_conditional_identity(
     DeferredIdentity::Identical(identical)
 }
 
+/// Whether `ty` is (or lazily resolves to) the readonly array/tuple wrapper.
+fn is_readonly_shape(ty: &Type) -> bool {
+    let mut current = ty.clone();
+    for _ in 0..8 {
+        match current {
+            Type::Reference(reference) if reference.is_readonly_array() => return true,
+            Type::Reference(reference) => current = reference.resolve(),
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// The tuple pattern under a `readonly` modifier: `readonly [infer a, ...infer b]`
+/// lines up its slots exactly like the mutable spelling (a mutable tuple is
+/// assignable to the readonly pattern).
+fn tuple_pattern(extends: &ParsedType) -> &ParsedType {
+    match extends {
+        ParsedType::Readonly(inner) => inner,
+        other => other,
+    }
+}
+
 /// tsc's identity relation is structural: `Id<{ a: 1 }>` and `{ a: 1 }` are
 /// the same type. `Type::Reference` equality is nominal, so a lazily
 /// referenced alias instantiation has to be peeled before it can match the
@@ -708,7 +733,7 @@ fn identity_equal(left: &Type, right: &Type, depth: usize) -> bool {
     if left == right {
         return true;
     }
-    if depth == 0 {
+    if depth == 0 || is_readonly_shape(left) != is_readonly_shape(right) {
         return false;
     }
     let (left, right) = (left.peeled(), right.peeled());
@@ -911,6 +936,7 @@ fn try_tuple_infer_match(
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
 ) -> TuplePatternMatch {
+    let extends = tuple_pattern(extends);
     if !tuple_infer_enabled()
         || !matches!(extends, ParsedType::Tuple(_) | ParsedType::VariadicTuple(_))
         || !parsed_type_contains_infer(extends)
@@ -1247,6 +1273,7 @@ fn collect_infer_variance(ty: &ParsedType, contravariant: bool, out: &mut Vec<(S
                 collect_infer_variance(tuple_element_type(element), contravariant, out);
             }
         }
+        ParsedType::Readonly(inner) => collect_infer_variance(inner, contravariant, out),
         ParsedType::Named(named) => {
             for argument in &named.type_arguments {
                 collect_infer_variance(argument, contravariant, out);
@@ -1426,6 +1453,7 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
                 collect_infer_names(tuple_element_type(element), names);
             }
         }
+        ParsedType::Readonly(inner) => collect_infer_names(inner, names),
         ParsedType::Function(function) => {
             for parameter in &function.parameters {
                 collect_infer_names(&parameter.ty, names);
@@ -1489,7 +1517,9 @@ fn parsed_type_contains_infer(ty: &ParsedType) -> bool {
                             || parsed_type_contains_infer(&signature.return_type)
                     })
         }
-        ParsedType::Array(inner) | ParsedType::KeyOf(inner) => parsed_type_contains_infer(inner),
+        ParsedType::Array(inner) | ParsedType::KeyOf(inner) | ParsedType::Readonly(inner) => {
+            parsed_type_contains_infer(inner)
+        }
         ParsedType::Union(members)
         | ParsedType::Intersection(members)
         | ParsedType::Tuple(members) => members.iter().any(parsed_type_contains_infer),
