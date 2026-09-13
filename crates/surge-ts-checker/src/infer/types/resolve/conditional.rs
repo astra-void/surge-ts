@@ -693,10 +693,62 @@ fn deferred_conditional_identity(
         {
             return DeferredIdentity::Undecidable;
         }
-        identical &= left_resolved.ty == right_resolved.ty;
+        identical &= identity_equal(&left_resolved.ty, &right_resolved.ty, SENTINEL_WALK_DEPTH);
     }
 
     DeferredIdentity::Identical(identical)
+}
+
+/// tsc's identity relation is structural: `Id<{ a: 1 }>` and `{ a: 1 }` are
+/// the same type. `Type::Reference` equality is nominal, so a lazily
+/// referenced alias instantiation has to be peeled before it can match the
+/// shape it stands for, on either side and at every nesting level a type-level
+/// test looks at.
+fn identity_equal(left: &Type, right: &Type, depth: usize) -> bool {
+    if left == right {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    let (left, right) = (left.peeled(), right.peeled());
+    match (&left, &right) {
+        (Type::Object(left), Type::Object(right)) => {
+            left.properties.len() == right.properties.len()
+                && left.properties.iter().all(|(name, property)| {
+                    right.properties.get(name).is_some_and(|other| {
+                        property.optional == other.optional
+                            && property.method == other.method
+                            && identity_equal(&property.ty, &other.ty, depth - 1)
+                    })
+                })
+                && match (&left.string_index_type, &right.string_index_type) {
+                    (None, None) => true,
+                    (Some(l), Some(r)) => identity_equal(l, r, depth - 1),
+                    _ => false,
+                }
+                && left.call_signature == right.call_signature
+                && left.construct_signature == right.construct_signature
+        }
+        (Type::Union(left), Type::Union(right)) => {
+            left.types().len() == right.types().len()
+                && left.types().iter().all(|member| {
+                    right
+                        .types()
+                        .iter()
+                        .any(|other| identity_equal(member, other, depth - 1))
+                })
+        }
+        (Type::Array(left), Type::Array(right)) => identity_equal(left, right, depth - 1),
+        (Type::Tuple(left), Type::Tuple(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right.iter())
+                    .all(|(l, r)| identity_equal(l, r, depth - 1))
+        }
+        _ => left == right,
+    }
 }
 
 /// How deep `contains_degradation_sentinel` looks before giving up and calling
