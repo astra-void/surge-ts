@@ -586,9 +586,47 @@ configuration. Every one carries the concrete reason it is still off.
 | Gate | Effect | Why still off |
 | --- | --- | --- |
 | `SURGE_UPGRADE_ANALYSIS_SCOPES=1` | Give a module's exported declarations the real resolution scope (own declarations + import layers) during analysis instead of the import-less preliminary one. Makes the published type of an export honest where its body names an imported type. | On trpc it closes 12 `TS2339` and opens 13: an honest export lets `ProtectedIntersection`'s conditional decide from a router key set surge never had, and the string-literal error type it then produces swallows every property read off the router. See [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#trpc-tsc-only-inventory-2026-09-11). |
-| `SURGE_GENERIC_RECURSIVE_ALIAS=1` | Key a generic alias's resolution frame by its *instantiation* (declaration + resolved-argument fingerprint) rather than its declaration, so recursing into itself with different arguments is not read as a cycle. Without it a recursive generic record collapses to the degradation sentinel. | **Nontermination on ts-pattern**, which is now the only blocker. Measured 2026-09-14 on all nine corpora with one frozen binary: zustand 37 → 11 (27 false positives closed, 1 opened), every other finishing corpus byte-identical — the previously recorded drizzle-orm 4 → 6 and tanstack-query +2 regressions **no longer reproduce**. ts-pattern does not finish in 600 s and is SIGKILLed. Profiling shows ~88% of that time in `Type` structural equality under instantiation-cache lookup, but forcing the per-declaration bucket cap to 1, 4 and 16 all still time out at 240 s, so the cost is instantiation *volume*, not bucket scanning: with frames discriminated by argument fingerprint, the depth-only limits (`MAX_NESTED_INSTANTIATIONS` = 8, `MAX_RESOLUTION_DEPTH` = 24) bound recursion depth but not breadth. A total per-root instantiation work budget is the missing guard. |
+| `SURGE_GENERIC_RECURSIVE_ALIAS=1` | Key a generic alias's resolution frame by its *instantiation* (declaration + resolved-argument fingerprint) rather than its declaration, so recursing into itself with different arguments is not read as a cycle. Without it a recursive generic record collapses to the degradation sentinel. | One false positive and a cost, both on named corpora. Measured 2026-09-14 on all nine corpora from an isolated worktree: zustand 37 → 11 (27 false positives closed, **1 opened** — `TS2554` at `tests/middlewareTypes.test.tsx:476`, where `devtools`' three-argument `set` loses its mutator extension under the nested `devtools(subscribeWithSelector(…))` composition), every other corpus byte-identical. The previously recorded drizzle-orm 4 → 6 and tanstack-query +2 regressions **no longer reproduce**. The nontermination that used to seal this gate is fixed by the per-root breadth budget (see below); ts-pattern now finishes, but costs seconds where the gate-off run costs a third of one, because the gate makes surge actually evaluate a type-level program it previously short-circuited to `unknown`. |
 | `SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1` | Check a body-local `type` / `interface` / `class` declaration at its statement, the way a top-level one is checked. | Measured 2026-09-14 on all nine corpora: only ts-pattern moves, 0 → 22, every one an `Expect<Equal<…>>` type-level divergence. Eight other corpora are byte-identical, so the remaining work is entirely ts-pattern's type-level program. |
 | `SURGE_COMPLETE_DEFAULT_ARGS=1` | Carry an interface's resolved defaults on its reference, as tsc's type reference does; positional `infer` binding against a partially-written reference needs them. | Measured 2026-09-14: a pure regression of 4 on the current corpora (zod +2, tanstack-query +1, trpc +1) and 0 closed. zod's is `ParsePayload`'s bare `$ZodRawIssue` member losing its own alias default once the interface reference carries one — a default bound under the wrong substitution. |
+
+### Termination model for recursive generic aliases
+
+Under `SURGE_GENERIC_RECURSIVE_ALIAS=1` a generic alias's resolution frame is
+keyed by declaration *plus* a fingerprint of its resolved arguments, so a
+recursion whose arguments keep changing resolves instead of being cut as a
+cycle. Termination then rests on three things, in order of precedence:
+
+1. **Repeated-state detection** — the frame key collides exactly when the
+   argument tuple repeats, which is the real cycle. This is the semantic model.
+2. **Path-local depth guards** — `MAX_RESOLUTION_DEPTH` (24) and
+   `MAX_NESTED_INSTANTIATIONS` (8) bound how deep one path may go.
+3. **A per-root breadth budget** (`MAX_ROOT_INSTANTIATION_WORK`, 200) — the
+   last-resort ceiling, overridable with `SURGE_ROOT_INSTANTIATION_WORK`.
+
+(3) exists because (1) and (2) are both path-local. A type-level program that
+*fans out* — ts-pattern's `Chainable` / `Pattern` family instantiate a fresh
+argument tuple per member per level — never repeats an argument tuple and never
+nests deeply, so neither fires while total work grows exponentially. Before the
+budget, ts-pattern was SIGKILLed at 600 s with the gate on.
+
+Two things are worth recording so they are not re-derived. Profiling put ~88% of
+that runtime in `Type` structural equality under instantiation-cache lookup,
+which reads like a bucket-scan problem; it is not — forcing the per-declaration
+bucket cap to 1, 4 and 16 all still time out at 240 s. And the ceiling's value
+is empirical but not arbitrary: the cost is superlinear in it (200 → ~5 s,
+500 → 14 s, 1000 → 35 s, 2000 and 5000 → still running at 240 s), while
+dropping to 50 terminates sooner but costs zod its exact 21/21 parity.
+
+`SURGE_ROOT_WORK_TRIP=1` names the declarations that exhaust the budget.
+
+**Known gap:** the nontermination has no reduced reproduction. Three synthetic
+fan-out probes (a variadic-tuple walk, a per-key recursive `Exclude`, and a
+direct transcription of `Chainable`) all terminate in under 0.1 s and none even
+reach the budget, so the only reproduction is ts-pattern itself, via
+`SURGE_GENERIC_RECURSIVE_ALIAS=1 SURGE_ROOT_INSTANTIATION_WORK=5000` on the
+provisioned corpus. A regression test asserting the budget is therefore *not*
+included: one written against those probes would pass with and without the fix.
 
 **Performance experiments (off by default).** These are implementation
 strategies, not semantics; leaving them off costs no compatibility.
