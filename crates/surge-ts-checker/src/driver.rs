@@ -30,6 +30,7 @@ pub fn check_source_with_options(
     options: crate::context::CheckerOptions,
 ) -> Vec<Diagnostic> {
     let parsed = parse_source(source_text, file_name);
+    let suppressed_ranges = parsed.suppressed_ranges.clone();
     let file_name = parsed.file_name;
     let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(file_name.clone(), classify_file_kind(&file_name));
@@ -97,7 +98,11 @@ pub fn check_source_with_options(
     }
     ctx.module_value_fallback = None;
 
-    ctx.finish()
+    let mut diagnostics = ctx.finish();
+    // Program mode drops these in `check_files`; the single-file driver has no
+    // such stage, so an `@ts-expect-error` suppressed nothing here.
+    crate::program::drop_suppressed_diagnostics(&mut diagnostics, &suppressed_ranges);
+    diagnostics
 }
 
 /// Program mode seeds a class's value symbol in its signature pre-pass

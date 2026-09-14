@@ -1392,13 +1392,40 @@ pub(crate) fn collect_inferred_type_argument(
                 )
             {
                 let element_type = &named_type.type_arguments[0];
-                match argument_type {
+                let (argument_type, widen_elements) = match argument_type {
+                    // A `readonly` array or tuple carries its shape inside the
+                    // readonly reference; `as const` produces exactly that, and
+                    // `ReadonlyArray<T>` is what such an argument is usually
+                    // handed to. Its elements keep their literal types: the
+                    // const context is what the assertion was written for.
+                    Type::Reference(reference) if reference.is_readonly_array() => {
+                        (reference.resolve(), false)
+                    }
+                    other => (other.clone(), true),
+                };
+                match &argument_type {
                     Type::Array(actual_element_type) => {
                         collect_inferred_type_argument(
                             element_type,
                             actual_element_type.as_ref(),
                             substitution,
-                            true,
+                            widen_elements,
+                            ctx,
+                            depth,
+                        );
+                    }
+                    // A tuple's element type is the union of its elements, and
+                    // that union is one candidate: recording the elements one
+                    // by one makes two literal candidates collapse to their
+                    // common primitive, so `as const` would infer `string`
+                    // where tsc infers `"a" | "b"`. Widening is still per the
+                    // const context.
+                    Type::Tuple(elements) if !widen_elements => {
+                        collect_inferred_type_argument(
+                            element_type,
+                            &surge_ts_types::union_type(elements.clone()),
+                            substitution,
+                            false,
                             ctx,
                             depth,
                         );
@@ -1409,7 +1436,7 @@ pub(crate) fn collect_inferred_type_argument(
                                 element_type,
                                 element,
                                 substitution,
-                                true,
+                                widen_elements,
                                 ctx,
                                 depth,
                             );
