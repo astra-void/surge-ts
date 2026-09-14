@@ -122,11 +122,192 @@ fn widen_narrowed_literals(ty: &Type) -> Type {
     }
 }
 
+/// The type a write through `receiver[index]` is checked against: the element
+/// of an array, the element a literal index selects out of a tuple, the member
+/// a literal key names, or an index signature's value type. `None` leaves the
+/// write unchecked — the receiver is a shape whose element type surge cannot
+/// name, and reporting against a guess would be a false positive.
+fn element_write_target_type(receiver: &Type, index_type: &Type) -> Option<Type> {
+    match receiver {
+        Type::Array(element) => {
+            is_assignable_to(index_type, &Type::Number).then(|| element.as_ref().clone())
+        }
+        Type::Tuple(elements) => {
+            if let Some(index) = crate::infer::tuple_index_value(index_type) {
+                // An out-of-range index is an error in its own right (TS2493),
+                // which surge does not report yet; it is not an assignability
+                // failure, so the write stays unchecked rather than being held
+                // to a made-up element type.
+                return elements.get(index).cloned();
+            }
+            is_assignable_to(index_type, &Type::Number)
+                .then(|| union_type(elements.to_vec()))
+        }
+        Type::Object(object) => {
+            if let Some(key) = literal_index_key(index_type)
+                && let Some(member) = object.get_property_access_type(&key)
+            {
+                return Some(member);
+            }
+            object.string_index_type.as_deref().cloned()
+        }
+        // A nominal reference (`Array<number>`, an alias) writes like whatever
+        // it names; an open tuple like the array of everything it can hold.
+        Type::Reference(_) => match receiver.peeled() {
+            peeled @ (Type::Array(_) | Type::Tuple(_) | Type::Object(_)) => {
+                element_write_target_type(&peeled, index_type)
+            }
+            _ => None,
+        },
+        Type::OpenTuple(tuple) => {
+            is_assignable_to(index_type, &Type::Number).then(|| tuple.element_union())
+        }
+        _ => None,
+    }
+}
+
+/// The property name a literal index names. A numeric key indexes an object by
+/// its string form, which is why `record[1]` reaches a string index signature.
+fn literal_index_key(index_type: &Type) -> Option<String> {
+    match index_type {
+        Type::StringLiteral(value) => Some(value.clone()),
+        Type::NumberLiteral(literal) => Some(literal.value.clone()),
+        _ => None,
+    }
+}
+
+/// `receiver[index] = value`. The written element resolves exactly as a read of
+/// the same expression does; before this the whole statement was dropped, so
+/// `arr[1] = "s"` and `tuple[0] = "s"` went unreported.
+fn check_element_assignment(
+    object: &ParsedExpression,
+    object_span: Option<surge_ts_syntax::TextSpan>,
+    index: &ParsedExpression,
+    index_span: Option<surge_ts_syntax::TextSpan>,
+    assignment: &ParsedMemberAssignment,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let visible_symbols = visible_symbols(scopes);
+
+    let InferredExpression::Known(object_type) = evaluate_expression(
+        object,
+        object_span.or(assignment.target_span),
+        &visible_symbols,
+        ctx,
+    ) else {
+        return;
+    };
+
+    let InferredExpression::Known(index_type) = evaluate_expression(
+        index,
+        index_span.or(assignment.target_span),
+        &visible_symbols,
+        ctx,
+    ) else {
+        return;
+    };
+
+    // A write is checked against the *declared* element type, not whatever the
+    // enclosing branch narrowed the receiver to.
+    let receiver_type =
+        declared_reference_type(object, &visible_symbols).unwrap_or(object_type);
+
+    let Some(target_type) = element_write_target_type(&receiver_type, &index_type) else {
+        return;
+    };
+
+    check_assigned_value(&target_type, assignment, &visible_symbols, ctx);
+}
+
+/// The value half of a member write: evaluate it against the target type and
+/// report a mismatch. Shared by the property and element paths.
+fn check_assigned_value(
+    target_type: &Type,
+    assignment: &ParsedMemberAssignment,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type(
+        &assignment.value,
+        assignment.value_span,
+        Some(target_type),
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+        symbols,
+        ctx,
+    );
+
+    let InferredExpression::Known(value_type) = inferred_value else {
+        return;
+    };
+
+    if value_type.is_unknown() || target_type.is_unknown() {
+        return;
+    }
+
+    if is_assignable_to(&value_type, target_type) {
+        return;
+    }
+
+    let diagnostic = Diagnostic::ts2322(
+        &crate::checks::expr::source_display_name(&value_type, target_type),
+        &target_type.name(),
+        ctx.file_name.clone(),
+    );
+    let diagnostic = match assignment.value_span.or(assignment.target_span) {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    };
+    ctx.push(diagnostic);
+}
+
 pub(crate) fn check_member_assignment(
     assignment: ParsedMemberAssignment,
     scopes: &mut ScopeStack,
     ctx: &mut CheckerContext,
 ) {
+    match &assignment.target {
+        ParsedExpression::IndexAccess {
+            object_name,
+            object_span,
+            index,
+            index_span,
+        } => {
+            let object = ParsedExpression::Identifier {
+                name: object_name.clone(),
+                span: *object_span,
+            };
+            check_element_assignment(
+                &object,
+                *object_span,
+                index,
+                *index_span,
+                &assignment,
+                scopes,
+                ctx,
+            );
+            return;
+        }
+        ParsedExpression::ElementAccess {
+            object,
+            object_span,
+            index,
+            index_span,
+        } => {
+            check_element_assignment(
+                object,
+                *object_span,
+                index,
+                *index_span,
+                &assignment,
+                scopes,
+                ctx,
+            );
+            return;
+        }
+        _ => {}
+    }
+
     let ParsedExpression::PropertyAccess {
         object,
         object_span,

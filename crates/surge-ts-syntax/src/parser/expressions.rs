@@ -1260,7 +1260,7 @@ fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<Pars
     parsed
 }
 
-fn parse_computed_member_expression(
+pub(super) fn parse_computed_member_expression(
     member_expression: &ComputedMemberExpression<'_>,
 ) -> Option<ParsedExpression> {
     // String-literal bracket access (`obj["key"]`, `obj?.["key"]`) lowers to the

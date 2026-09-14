@@ -258,30 +258,40 @@ fn parse_expression_statement_as_function_body(
 /// `o.p = v` where the target is a member of something other than `this`.
 /// Without this the whole statement was dropped, so neither the assignment's own
 /// type check nor the narrowing it establishes for the code after it happened.
-fn parse_member_assignment(
+pub(super) fn parse_member_assignment(
     assignment: &oxc_ast::ast::AssignmentExpression<'_>,
 ) -> Option<crate::ParsedMemberAssignment> {
-    let AssignmentTarget::StaticMemberExpression(member) = &assignment.left else {
-        return None;
-    };
-
-    let (object, object_span) = parse_expression(&member.object);
-    if object == ParsedExpression::Unknown {
-        return None;
-    }
-    let target = ParsedExpression::PropertyAccess {
-        object: Box::new(object),
-        object_span: Some(text_span_from_oxc_span(object_span)),
-        property_name: member.property.name.to_string(),
-        property_span: Some(text_span_from_oxc_span(member.property.span)),
-        is_bracketed: false,
+    // The target is parsed into the same shape a *read* of it produces, so the
+    // checker resolves the written member exactly as it resolves the read.
+    let (target, member_span) = match &assignment.left {
+        AssignmentTarget::StaticMemberExpression(member) => {
+            let (object, object_span) = parse_expression(&member.object);
+            if object == ParsedExpression::Unknown {
+                return None;
+            }
+            (
+                ParsedExpression::PropertyAccess {
+                    object: Box::new(object),
+                    object_span: Some(text_span_from_oxc_span(object_span)),
+                    property_name: member.property.name.to_string(),
+                    property_span: Some(text_span_from_oxc_span(member.property.span)),
+                    is_bracketed: false,
+                },
+                member.span,
+            )
+        }
+        AssignmentTarget::ComputedMemberExpression(member) => (
+            super::expressions::parse_computed_member_expression(member)?,
+            member.span,
+        ),
+        _ => return None,
     };
 
     let (value, value_span) = parse_expression(&assignment.right);
     if value == ParsedExpression::Unknown {
         return None;
     }
-    let target_span = Some(text_span_from_oxc_span(member.span));
+    let target_span = Some(text_span_from_oxc_span(member_span));
     let value_span = Some(text_span_from_oxc_span(value_span));
     let value = super::logical_assignment_value(
         assignment.operator,

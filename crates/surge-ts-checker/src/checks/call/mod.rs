@@ -613,6 +613,21 @@ pub(crate) fn check_new_like(
         && let Some(crate::symbols::TypeDeclarationInfo::Interface(info)) =
             ctx.lookup_type_declaration(name)
         && info.is_abstract_class
+        // tsc resolves the *value* and looks at its construct signatures. This
+        // lookup is by name over the type table, so a binding that shadows the
+        // class — zod's `partial(Class: SchemaClass<…>, …)` beside its own
+        // `export abstract class Class` — otherwise reported every `new Class()`
+        // in the function as an abstract instantiation. A binding that can hold
+        // any value no longer denotes the declaration; a `const` does (that is
+        // what a class declaration itself binds).
+        && !matches!(
+            symbols.get(name).map(|symbol| symbol.kind),
+            Some(
+                crate::symbols::SymbolKind::Parameter
+                    | crate::symbols::SymbolKind::Let
+                    | crate::symbols::SymbolKind::Var
+            )
+        )
     {
         // tsc underlines the whole `new` expression, not the class name.
         ctx.push(diagnostic_with_syntax_span(
