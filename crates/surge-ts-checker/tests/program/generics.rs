@@ -1123,3 +1123,50 @@ fn generic_function_import_export_parser_safe() {
 
     assert!(diagnostics.is_empty());
 }
+
+#[test]
+fn callback_return_type_parameter_is_inferred_from_a_contextual_body() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "interface Reader<TValue> { read<TResult>(map: (value: TValue) => TResult): TResult; } declare const reader: Reader<string>; const width: number = reader.read((value) => value.length); const rejected: string = reader.read((value) => value.length);",
+    )]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert!(diagnostics[0].message.contains("'number' is not assignable to type 'string'"));
+}
+
+#[test]
+fn callback_return_type_parameter_reads_a_sibling_argument_binding() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "declare function pick<TValue, TResult>(value: TValue, map: (value: TValue) => TResult): TResult; const picked: number = pick('abc', (value) => value.length); const rejected: string = pick('abc', (value) => value.length);",
+    )]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn class_method_callback_return_type_parameter_is_inferred() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "class Box<TValue> { constructor(readonly value: TValue) {} map<TResult>(map: (value: TValue) => TResult): TResult { return map(this.value); } } const mapped: number = new Box('abc').map((value) => value.length); const rejected: string = new Box('abc').map((value) => value.length);",
+    )]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn an_annotated_callback_parameter_still_infers_the_same_argument() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "interface Reader<TValue> { read<TResult>(map: (value: TValue) => TResult): TResult; } declare const reader: Reader<string>; const width: number = reader.read((value: string) => value.length);",
+    )]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}
+
+#[test]
+fn a_written_promise_parameter_infers_from_the_awaited_argument() {
+    let diagnostics = program(&[(
+        "a.ts",
+        "interface Loader<TData> { load: (key: string) => Promise<TData> } declare function observe<TData>(loader: Loader<TData>): (listener: (value: TData) => void) => void; const subscribe = observe({ load: async (key: string) => key.length }); subscribe((value) => { const asNumber: number = value; void asNumber; }); subscribe((value) => { const asString: string = value; void asString; });",
+    )]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert!(diagnostics[0].message.contains("'number' is not assignable to type 'string'"));
+}

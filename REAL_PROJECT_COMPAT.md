@@ -2601,3 +2601,58 @@ Remaining 10: eslint-plugin-query 5 (typescript-eslint augmentation through
 heritage), MutationObserver `subscribe` 2 (blocked on generic-method call
 results being the sentinel), persister 2 (above), `vi.fn(impl)` `Mock<T>` 1
 (the merge's known residue).
+## Context-sensitive callback inference (2026-09-13)
+
+A type parameter that appears only in a callback's *return* position could not
+be inferred when the callback's parameters were written without annotations.
+surge sketched every un-annotated parameter as `any` before inference ran, so
+`read<TResult>(map: (value: TValue) => TResult): TResult` handed
+`(value) => value.length` inferred `TResult` from an `any` body; the call
+returned `any` and every diagnostic downstream of it disappeared. The class is
+wider than the property-call path the previous round suspected: a bare
+`declare function` with the same shape was silent too, and it is the un-annotated
+*parameter*, not the receiver, that decides — `read((value: string) => …)`
+already inferred correctly.
+
+Such an argument is context-sensitive, and it now waits for a second inference
+pass, as it does in tsc: the first pass infers from every other argument, and
+the callback is then sketched with the parameter types the signature gives it —
+the enclosing interface's or class's own arguments seeded for that sketch alone
+— before its return type infers what is left. A callback argument that is not an
+arrow, or one whose parameters are all annotated, takes the single-pass path
+unchanged.
+
+Landing it left the tanstack `subscribe` pair open on a second gap, closed with
+it: surge models a resolved `Promise<T>` as its awaited `T`, so a written
+`Promise<TData>` parameter is handed the awaited value itself, and the
+member-for-member walk over a generic reference infers nothing from a primitive.
+Inference through a written `Promise`/`PromiseLike` argument now matches the
+awaited actual, which is the actual itself when it is already awaited.
+
+Measured on a detached worktree at `dca25f0`, with the baseline binary built
+from that same clean checkout. (`6641008`, main's tip at the time, does not
+build: its docs commit also deleted `crates/surge-ts-checker/src/arena.rs`.)
+
+| Corpus | Before | After |
+| --- | ---: | ---: |
+| trpc | surge-only 0, `tsc`-only 89 | unchanged, byte-identical |
+| tanstack-query | 13 | **11** |
+| zod | 2 | unchanged |
+| ky / ofetch / ts-pattern | 0 | unchanged, byte-identical |
+
+The tanstack baseline is **13, not the 10** recorded for the post-merge round:
+that round's three fixes are uncommitted in a separate worktree and are not in
+this tree. The two that close here are `mutation.test.tsx:90` and `:168` — the
+`subscribe` pair recorded there as blocked on this exact class.
+
+Gates: workspace 1945/1945; oracle sweep 212/212 tracked presets, `onlyTsc` 0,
+`onlyRust` 0, one pre-existing message drift; the new preset
+`callback-return-type-parameter-basic` at exact parity (4/4, message and span
+included). Interleaved A/B over three runs each: trpc 3.55 / 3.68 s before
+against 3.54 / 3.48 s after (RSS 730 against 732 MB), tanstack-query 0.67 /
+0.66 s against 0.67 / 0.69 s — flat.
+
+Still open in the same area, each measured: a callback passed as a *named*
+function rather than an arrow (`f(src)`) infers nothing, and `Promise.resolve(1)`
+does not instantiate `T` — the latter is an interface-member overload group,
+which main does not yet resolve.

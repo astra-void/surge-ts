@@ -1104,7 +1104,7 @@ fn infer_generic_class_type_arguments(
         return None;
     }
     Some(infer_type_argument_substitution(
-        &signature, arguments, None, symbols, ctx,
+        &signature, arguments, &[], None, symbols, ctx,
     ))
 }
 
