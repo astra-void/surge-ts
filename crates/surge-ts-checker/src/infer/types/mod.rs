@@ -317,31 +317,29 @@ pub(crate) fn validate_local_type_declaration(
             }
 
             let mut resolving = Vec::new();
-            // A body that resolves to the sentinel is one surge could not model;
-            // whatever it reported on the way (`unknown['key']` inside a helper
-            // reached with a degraded operand) describes surge's gap, not the
-            // program, so it is rolled back with the result.
-            let diagnostics_before = ctx.diagnostics().len();
-            let resolved = with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
+            // A body that degrades is *not* grounds for rolling back what it
+            // reported: the report is usually the reason it degraded. `type
+            // PickValue<T, K> = T[K]` reports TS2536 and yields the sentinel,
+            // and so do the TS2493, TS2686 and TS2304 declarations the span and
+            // program tests pin — rolling those back dropped twelve of them.
+            // Two false positives this used to mask are recorded in
+            // CURRENT_STATUS; each wants fixing where it is raised, not here.
+            with_type_declaration_scope(&alias.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &alias.file_name, |ctx| {
                     // Register the parameter constraints so indexed access through
                     // a constrained parameter (`T extends …`) is not falsely
                     // flagged. Placeholder detection still flows through the
                     // substitution above.
                     ctx.push_type_parameter_scope(&alias.body.type_parameters, None);
-                    let resolved = resolve_parsed_type_with_substitution(
+                    resolve_parsed_type_with_substitution(
                         alias.body.ty.clone(),
                         ctx,
                         &mut resolving,
                         &substitution,
                     );
                     ctx.pop_type_parameter_scope();
-                    resolved
                 })
             });
-            if resolved.had_error || matches!(resolved.ty, Type::Unknown) {
-                ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
-            }
         }
         TypeDeclarationInfo::Interface(interface) => {
             let mut substitution = TypeParameterSubstitution::new();
