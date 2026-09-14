@@ -13,13 +13,17 @@ pub(crate) fn parse_interface_declaration(
     declaration: &TSInterfaceDeclaration<'_>,
 ) -> Option<ParsedInterfaceDeclaration> {
     let getters = super::types::getter_accessor_names(&declaration.body.body);
-    let members = declaration
+    let mut members: Vec<ParsedInterfaceMember> = declaration
         .body
         .body
         .iter()
         .filter(|member| !super::types::is_shadowed_setter(member, &getters))
         .filter_map(parse_interface_member)
         .collect();
+    attach_member_write_types(
+        &mut members,
+        &super::types::setter_accessor_types(&declaration.body.body),
+    );
 
     // A string/number index signature (`[key: string]: T`) contributes the
     // object's `string_index_type` rather than a named property. The last one
@@ -101,6 +105,23 @@ fn parse_interface_heritage(heritage: &TSInterfaceHeritage<'_>) -> Option<crate:
     })
 }
 
+/// The interface-member form of
+/// [`super::types::attach_accessor_write_types`]: a getter that shadowed a
+/// setter is not read-only, and carries the setter's parameter type as its
+/// write type when the two differ.
+fn attach_member_write_types(
+    members: &mut [ParsedInterfaceMember],
+    setters: &std::collections::HashMap<String, crate::ParsedType>,
+) {
+    for member in members {
+        let Some(setter_type) = setters.get(&member.name) else {
+            continue;
+        };
+        member.readonly = false;
+        member.write_ty = (member.ty != *setter_type).then(|| setter_type.clone());
+    }
+}
+
 fn parse_interface_member(member: &TSSignature<'_>) -> Option<ParsedInterfaceMember> {
     let property = match member {
         TSSignature::TSPropertySignature(property_signature) => {
@@ -118,6 +139,8 @@ fn parse_interface_member(member: &TSSignature<'_>) -> Option<ParsedInterfaceMem
         optional: property.optional,
         is_abstract: false,
         is_method: property.is_method,
+        readonly: property.readonly,
+        write_ty: property.write_ty,
         ty: property.ty,
     })
 }

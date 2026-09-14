@@ -1364,7 +1364,8 @@ pub(crate) fn resolve_interface_declaration(
         } else {
             ObjectProperty::required(property_type.ty)
         }
-        .with_method(member.is_method);
+        .with_method(member.is_method)
+        .with_readonly(member.readonly);
 
         properties.insert(member.name.as_str().into(), object_property);
         own_member_names.insert(member.name.as_str());

@@ -1101,6 +1101,13 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         ParsedStatement::Assignment(assignment) => {
             assign::check_assignment(*assignment, ctx);
         }
+        ParsedStatement::MemberAssignment(assignment) => {
+            let symbols = ctx
+                .symbols
+                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+            let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+            crate::checks::function::check_member_assignment(*assignment, &mut scopes, ctx);
+        }
         ParsedStatement::FunctionDeclaration(function) => {
             check_function::check_function_declaration(*function, ctx);
         }

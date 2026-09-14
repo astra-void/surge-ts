@@ -702,6 +702,7 @@ fn narrow_value_guards_in_scope(
                     ty: narrowed_property,
                     optional: base_property_type.optional,
                     method: base_property_type.method,
+                    readonly: base_property_type.readonly,
                 },
             );
             (
@@ -833,6 +834,7 @@ mod tests {
                     ty: Type::Number,
                     optional: *optional,
                     method: false,
+                    readonly: false,
                 },
             );
         }

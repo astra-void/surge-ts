@@ -63,6 +63,8 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 is_abstract: property.is_abstract,
                 is_method: false,
                 ty: property.declared_type.clone().unwrap_or(ParsedType::Any),
+                readonly: property.readonly,
+                write_ty: None,
             })
         }
         ParsedClassMember::Method(method) if !method.is_static => Some(ParsedInterfaceMember {
@@ -72,6 +74,8 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
             is_abstract: method.is_abstract,
             is_method: true,
             ty: method_function_type(method),
+            readonly: false,
+            write_ty: None,
         }),
         ParsedClassMember::Accessor(accessor) if !accessor.is_static => {
             Some(ParsedInterfaceMember {
@@ -81,6 +85,10 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 is_abstract: accessor.is_abstract,
                 is_method: false,
                 ty: accessor_property_type(accessor),
+                // A getter with no setter is read-only, exactly as
+                // `isReadonlySymbol` has it.
+                readonly: accessor.has_getter && !accessor.has_setter,
+                write_ty: accessor_write_type(accessor),
             })
         }
         _ => None,
@@ -124,11 +132,28 @@ fn constructor_parameter_property_members(
                         is_abstract: false,
                         is_method: false,
                         ty: parameter.declared_type.clone().unwrap_or(ParsedType::Any),
+                        readonly: parameter.is_readonly_parameter_property,
+                        write_ty: None,
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// What a write to an accessor is checked against, when that differs from what
+/// a read of it produces: the setter's parameter type of a pair whose getter
+/// declares something else. tsc keeps the two apart as `getTypeOfSymbol` and
+/// `getWriteTypeOfSymbol`, and writes against the latter, so
+/// `set value(next: number | string)` beside `get value(): number` accepts a
+/// string. `None` when reading and writing share a type, which is every member
+/// that is not such a pair.
+fn accessor_write_type(accessor: &ParsedClassAccessor) -> Option<ParsedType> {
+    let setter_param_type = accessor.setter_param_type.clone()?;
+    if !accessor.has_getter || accessor.getter_return_type.is_none() {
+        return None;
+    }
+    (accessor.getter_return_type.as_ref() != Some(&setter_param_type)).then_some(setter_param_type)
 }
 
 /// Lowers an accessor to the type of the property it presents. A getter's

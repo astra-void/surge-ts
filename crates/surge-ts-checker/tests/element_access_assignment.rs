@@ -100,3 +100,57 @@ fn a_binding_that_shadows_an_abstract_class_is_not_an_abstract_instantiation() {
     );
     assert_eq!(codes(&diagnostics), vec!["TS2511"]);
 }
+
+/// A module-scope write reached no checker at all: the top-level statement
+/// parser accepted only an identifier target.
+#[test]
+fn module_scope_member_writes_are_checked() {
+    let diagnostics = check(
+        "const o = { a: 1, b: \"x\" };\n\
+         o.a = 2;\n\
+         o.a = \"s\";\n\
+         export { o };\n",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+}
+
+#[test]
+fn module_scope_element_writes_are_checked() {
+    let diagnostics = check(
+        "const arr: number[] = [];\n\
+         arr[0] = 1;\n\
+         arr[1] = \"s\";\n\
+         const rec: Record<string, number> = {};\n\
+         rec[\"k\"] = \"s\";\n\
+         export { arr, rec };\n",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322", "TS2322"]);
+}
+
+#[test]
+fn module_scope_writes_to_a_class_member_are_checked() {
+    let diagnostics = check(
+        "class C { static s: string = \"\"; annotated: number = 0; }\n\
+         C.s = 1;\n\
+         const c = new C();\n\
+         c.annotated = \"s\";\n\
+         export { C, c };\n",
+    );
+    assert_eq!(codes(&diagnostics), vec!["TS2322", "TS2322"]);
+}
+
+/// A write whose target type surge could not resolve reports nothing — the
+/// value carries no contextual type there, so what the evaluation would say
+/// about it (an implicit-`any` parameter, say) is surge's gap and not the
+/// source's. The narrowing the write installs still happens, which is what the
+/// reads after it depend on.
+#[test]
+fn a_write_against_an_unresolved_target_reports_nothing() {
+    let diagnostics = check(
+        "export function f(bag: { patterns?: string[] }) {\n\
+         \x20 bag.patterns = [];\n\
+         \x20 return bag.patterns.length;\n\
+         }\n",
+    );
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+}

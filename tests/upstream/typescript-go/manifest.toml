@@ -773,10 +773,10 @@ upstream_repo = "microsoft/typescript-go"
 upstream_commit = "2c251880acd98bad0fda5e01985b10eb7821d06a"
 upstream_path = "testdata/tests/cases/compiler/panicSatisfiesOnExportEqualsDeclaration.ts"
 upstream_baseline_path = "testdata/baselines/reference/compiler/panicSatisfiesOnExportEqualsDeclaration.types"
-local_path = "tests/upstream/typescript-go/cases/panicSatisfiesOnExportEqualsDeclaration.ts"
+local_path = "tests/upstream/typescript-go/cases/panicSatisfiesOnExportEqualsDeclaration.js"
 mode = "single_source"
 expected_diagnostics = []
-reason = "Covers a JSDoc `@satisfies` tag on `module.exports`. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source."
+reason = "Covers a JSDoc `@satisfies` tag on `module.exports`. Upstream emits no errors baseline, so this pins the case as false-positive free. Its `@Filename:` markers are not matched by the test-only splitter, so the fixture is checked as a single source under the `.js` name the marker gives it — `module.exports = …` is a CommonJS export declaration only in a JavaScript file."
 
 [[case]]
 name = "parameter-property-with-default-value"

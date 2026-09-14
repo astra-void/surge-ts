@@ -42,6 +42,42 @@ pub(crate) fn check_expression_statement(expression: ParsedExpression, ctx: &mut
     });
 }
 
+/// tsc reports a `readonly` array or tuple written to a mutable one with its
+/// own code (`The_type_0_is_readonly_and_cannot_be_assigned_to_the_mutable_type_1`,
+/// relater.go), not the generic assignability error.
+pub(crate) fn readonly_to_mutable_mismatch(source: &Type, target: &Type) -> bool {
+    let Type::Reference(reference) = source else {
+        return false;
+    };
+    reference.is_readonly_array()
+        && matches!(
+            target,
+            Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)
+        )
+}
+
+/// The diagnostic an assignability failure reports: TS4104 when a readonly
+/// array or tuple is written to a mutable one, and otherwise the position's
+/// ordinary code — TS2345 for an argument, TS2322 everywhere else.
+pub(crate) fn assignability_mismatch_diagnostic(
+    source: &Type,
+    target: &Type,
+    source_name: &str,
+    target_name: &str,
+    argument_position: bool,
+    file_name: impl Into<String>,
+) -> surge_ts_diagnostics::Diagnostic {
+    let file_name = file_name.into();
+    if readonly_to_mutable_mismatch(source, target) {
+        return surge_ts_diagnostics::Diagnostic::ts4104(source_name, target_name, file_name);
+    }
+    if argument_position {
+        surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
+    } else {
+        surge_ts_diagnostics::Diagnostic::ts2322(source_name, target_name, file_name)
+    }
+}
+
 pub(crate) fn evaluate_const_expression(
     expression: &ParsedExpression,
     fallback_span: Option<SyntaxTextSpan>,
@@ -63,7 +99,11 @@ pub(crate) fn evaluate_const_expression(
                     _ => Type::Unknown,
                 });
             }
-            let result = InferredExpression::Known(Type::Tuple(element_types));
+            // `as const` on an array makes it `readonly [...]`, which is what
+            // makes a write through an index TS2540 rather than a type error.
+            let result = InferredExpression::Known(
+                crate::infer::types::readonly_reference(Type::Tuple(element_types)),
+            );
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || result.clone()),
                 fallback_span,
@@ -91,6 +131,9 @@ pub(crate) fn evaluate_const_expression(
                         ty,
                         optional: false,
                         method: false,
+                        // `as const` makes every property read-only, which is
+                        // what turns a write to one into TS2540.
+                        readonly: true,
                     },
                 );
             }

@@ -188,6 +188,8 @@ impl JsonParser<'_> {
                         ty,
                         optional: false,
                         is_method: false,
+                        readonly: false,
+                        write_ty: None,
                     });
                 }
                 self.skip_whitespace();

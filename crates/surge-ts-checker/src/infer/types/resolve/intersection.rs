@@ -711,6 +711,7 @@ fn merge_intersection_members_now(
                             ]),
                             optional: existing.is_optional() && property.is_optional(),
                             method: existing.method,
+                            readonly: false,
                         };
                         properties.insert(name.clone(), merged_property);
                     }

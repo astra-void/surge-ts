@@ -726,6 +726,8 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         properties.push(property);
     }
 
+    attach_accessor_write_types(&mut properties, &setter_accessor_types(&type_literal.members));
+
     ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
         properties,
         string_index_type,
@@ -882,6 +884,51 @@ pub(crate) fn getter_accessor_names<'a>(
         .collect()
 }
 
+/// The parameter type of every `set` accessor in a member list, by name. A
+/// setter shadowed by a getter of the same name is dropped from the member
+/// list, so this is where the pair's *write* type is recovered — tsc keeps the
+/// two apart as `getTypeOfSymbol` and `getWriteTypeOfSymbol`.
+pub(crate) fn setter_accessor_types(
+    members: &[TSSignature<'_>],
+) -> std::collections::HashMap<String, ParsedType> {
+    members
+        .iter()
+        .filter_map(|member| match member {
+            TSSignature::TSMethodSignature(signature)
+                if signature.kind == TSMethodSignatureKind::Set =>
+            {
+                let PropertyKey::StaticIdentifier(key) = &signature.key else {
+                    return None;
+                };
+                let parameter_type = signature
+                    .params
+                    .items
+                    .first()
+                    .and_then(|parameter| parameter.type_annotation.as_ref())
+                    .and_then(|annotation| parse_type_annotation(annotation))?;
+                Some((key.name.to_string(), parameter_type))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Folds each `set` accessor's parameter type into the getter that shadowed it:
+/// the member stops being read-only, and carries the setter's type as its write
+/// type when the two differ.
+pub(crate) fn attach_accessor_write_types(
+    properties: &mut [ParsedObjectTypeProperty],
+    setters: &std::collections::HashMap<String, ParsedType>,
+) {
+    for property in properties {
+        let Some(setter_type) = setters.get(&property.name) else {
+            continue;
+        };
+        property.readonly = false;
+        property.write_ty = (property.ty != *setter_type).then(|| setter_type.clone());
+    }
+}
+
 pub(crate) fn is_shadowed_setter(
     member: &TSSignature<'_>,
     getters: &std::collections::HashSet<&str>,
@@ -944,6 +991,11 @@ pub(crate) fn parse_type_method_signature(
             name_span,
             optional: false,
             is_method: false,
+            // A getter is read-only until a setter of the same name merges into
+            // it; the merge (in the interface/type-literal member list) is what
+            // clears this and records the write type.
+            readonly: method_signature.kind == TSMethodSignatureKind::Get,
+            write_ty: None,
             ty: accessor_type,
         });
     }
@@ -973,6 +1025,8 @@ pub(crate) fn parse_type_method_signature(
             type_parameters: parse_type_parameters(method_signature.type_parameters.as_deref()),
         })),
         optional: method_signature.optional,
+        readonly: false,
+        write_ty: None,
         is_method: true,
     })
 }
@@ -1069,6 +1123,8 @@ pub(crate) fn parse_type_property_signature(
                 ty: type_annotation,
                 optional: property_signature.optional,
                 is_method: false,
+                readonly: property_signature.readonly,
+                write_ty: None,
             })
         });
     }
@@ -1099,6 +1155,10 @@ pub(crate) fn parse_type_property_signature(
         ty: type_annotation,
         optional: property_signature.optional,
         is_method: false,
+        // tsc's `isReadonlySymbol`: a `readonly` member rejects every write,
+        // whatever its type.
+        readonly: property_signature.readonly,
+        write_ty: None,
     })
 }
 

@@ -97,7 +97,7 @@ pub(crate) fn check_assignment_with_symbols(
     }
 }
 
-fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
+pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
     thread_local! {
         // References already on the walk, to break the cyclic structural graphs
         // lazy nominal references form (interface A whose member resolves to B

@@ -321,6 +321,51 @@ fixtures = [
   "tests/compat-projects/indexed-access-basic/src/index.ts",
 ]
 
+[TS2540]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/write-target-types-basic/src/index.ts",
+]
+oracle = [
+  "write-target-types-basic",
+]
+
+[TS2542]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/write-target-types-basic/src/index.ts",
+]
+oracle = [
+  "write-target-types-basic",
+]
+
+[TS2514]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/write-target-types-basic/src/index.ts",
+]
+oracle = [
+  "write-target-types-basic",
+]
+
+[TS2862]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/write-target-types-basic/src/index.ts",
+]
+oracle = [
+  "write-target-types-basic",
+]
+
+[TS4104]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/write-target-types-basic/src/index.ts",
+]
+oracle = [
+  "write-target-types-basic",
+]
+
 [TS2536]
 status = "emitted"
 fixtures = [

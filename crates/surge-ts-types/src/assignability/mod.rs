@@ -194,6 +194,7 @@ fn discriminated_union_assignable(from: &Type, to_union: &crate::UnionType) -> b
                     ty: literal.clone(),
                     optional: property.optional,
                     method: property.method,
+                    readonly: false,
                 },
             );
             let narrowed = Type::Object(ObjectType::new(

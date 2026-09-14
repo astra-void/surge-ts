@@ -195,6 +195,7 @@ pub(crate) fn resolve_mapped_type(
                     ty: property_type.clone(),
                     optional,
                     method: source_method,
+                    readonly: false,
                 },
             );
         }

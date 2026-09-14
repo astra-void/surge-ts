@@ -1192,6 +1192,11 @@ fn parsed_statement_bytes(statement: &surge_ts_syntax::ParsedStatement) -> u64 {
                     })
                     .sum::<u64>()
         }
+        S::MemberAssignment(assignment) => {
+            size_of::<surge_ts_syntax::ParsedMemberAssignment>() as u64
+                + parsed_expression_bytes(&assignment.target)
+                + parsed_expression_bytes(&assignment.value)
+        }
         S::Expression(expression) => parsed_expression_bytes(expression),
         S::TypeAliasDeclaration(alias) => {
             size_of::<surge_ts_syntax::ParsedTypeAliasDeclaration>() as u64

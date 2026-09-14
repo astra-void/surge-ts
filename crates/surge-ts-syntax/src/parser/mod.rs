@@ -183,8 +183,16 @@ fn parse_expression_statement(
             let (expression, _) = parse_expression(&expression_statement.expression);
             Some(ParsedStatement::Expression(Box::new(expression)))
         }
-        Expression::AssignmentExpression(assignment) => parse_assignment_expression(assignment)
-            .map(|assignment| ParsedStatement::Assignment(Box::new(assignment))),
+        Expression::AssignmentExpression(assignment) => {
+            if let Some(assignment) = parse_assignment_expression(assignment) {
+                return Some(ParsedStatement::Assignment(Box::new(assignment)));
+            }
+            // A write to a member or element, which the identifier-target
+            // parser above does not accept. Dropping it left every module-scope
+            // `o.a = …` and `o[k] = …` unchecked.
+            functions::parse_member_assignment(assignment)
+                .map(|assignment| ParsedStatement::MemberAssignment(Box::new(assignment)))
+        }
         Expression::UnaryExpression(unary_expression) => parse_unary_expression(unary_expression)
             .map(|expression| ParsedStatement::Expression(Box::new(expression))),
         Expression::ConditionalExpression(conditional_expression) => {
@@ -226,7 +234,20 @@ pub(super) fn logical_assignment_value(
         }
         AssignmentOperator::LogicalOr => crate::ParsedLogicalOperator::Or,
         AssignmentOperator::LogicalAnd => crate::ParsedLogicalOperator::And,
-        _ => return None,
+        // `x op= v` is `x = x op v`, which is how tsc checks it too: the
+        // operator's own result type is what the assignment is then checked
+        // against (`checkBinaryLikeExpression` feeds `checkAssignmentOperator`).
+        other => {
+            let binary = compound_assignment_operator(other)?;
+            return Some(ParsedExpression::Binary {
+                left: Box::new(target),
+                left_span: target_span,
+                operator: binary,
+                operator_span: None,
+                right: Box::new(value),
+                right_span: value_span,
+            });
+        }
     };
     Some(ParsedExpression::Logical {
         left: Box::new(target),
@@ -235,6 +256,28 @@ pub(super) fn logical_assignment_value(
         operator_span: None,
         right: Box::new(value),
         right_span: value_span,
+    })
+}
+
+/// The binary operator a compound assignment applies.
+fn compound_assignment_operator(
+    operator: AssignmentOperator,
+) -> Option<crate::ParsedBinaryOperator> {
+    use crate::ParsedBinaryOperator as B;
+    Some(match operator {
+        AssignmentOperator::Addition => B::Add,
+        AssignmentOperator::Subtraction => B::Subtract,
+        AssignmentOperator::Multiplication => B::Multiply,
+        AssignmentOperator::Division => B::Divide,
+        AssignmentOperator::Remainder => B::Remainder,
+        AssignmentOperator::Exponential => B::Exponential,
+        AssignmentOperator::ShiftLeft => B::ShiftLeft,
+        AssignmentOperator::ShiftRight => B::ShiftRight,
+        AssignmentOperator::ShiftRightZeroFill => B::ShiftRightZeroFill,
+        AssignmentOperator::BitwiseOR => B::BitwiseOR,
+        AssignmentOperator::BitwiseXOR => B::BitwiseXOR,
+        AssignmentOperator::BitwiseAnd => B::BitwiseAnd,
+        _ => return None,
     })
 }
 

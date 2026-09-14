@@ -81,6 +81,7 @@ pub(crate) fn infer_object_literal(
                                     ]),
                                     optional: existing.optional,
                                     method: existing.method || source_property.method,
+                                    readonly: false,
                                 }
                             }
                             _ => source_property.clone(),
@@ -198,7 +199,10 @@ pub(crate) fn infer_const_expression(
                     _ => return InferredExpression::Unknown,
                 }
             }
-            InferredExpression::Known(Type::Tuple(element_types))
+            // `as const`: a readonly tuple, exactly as the annotation form.
+            InferredExpression::Known(crate::infer::types::readonly_reference(
+                Type::Tuple(element_types),
+            ))
         }
         ParsedExpression::ObjectLiteral { properties, .. }
             if !properties.iter().any(|property| property.is_spread) =>
@@ -209,7 +213,8 @@ pub(crate) fn infer_const_expression(
                     InferredExpression::Known(ty) if !ty.is_unknown() => {
                         members.insert(
                             property.name.as_str().into(),
-                            surge_ts_types::ObjectProperty::required(ty),
+                            // `as const`: every property is read-only.
+                            surge_ts_types::ObjectProperty::required(ty).with_readonly(true),
                         );
                     }
                     _ => return InferredExpression::Unknown,

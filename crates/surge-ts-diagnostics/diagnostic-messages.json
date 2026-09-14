@@ -328,6 +328,46 @@
     "support": "emitted"
   },
   {
+    "code": "TS2540",
+    "category": "Error",
+    "message": "Cannot assign to '{0}' because it is a read-only property.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2542",
+    "category": "Error",
+    "message": "Index signature in type '{0}' only permits reading.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2514",
+    "category": "Error",
+    "message": "A tuple type cannot be indexed with a negative value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2862",
+    "category": "Error",
+    "message": "Type '{0}' is generic and can only be indexed for reading.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4104",
+    "category": "Error",
+    "message": "The type '{0}' is 'readonly' and cannot be assigned to the mutable type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2536",
     "category": "Error",
     "message": "Type '{0}' cannot be used to index type '{1}'.",

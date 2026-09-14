@@ -122,6 +122,192 @@ fn widen_narrowed_literals(ty: &Type) -> Type {
     }
 }
 
+/// tsc's `getWriteTypeOfSymbol`: a write is checked against the *setter's*
+/// parameter type when an accessor pair declares two different types, while a
+/// read produces the getter's. Only a non-generic declaration is answered here
+/// — under type arguments the write type would have to be resolved through the
+/// interface member cache, which owns that substitution.
+fn accessor_write_type(
+    receiver: &Type,
+    property_name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let (write_ty, substitution) = {
+        let (member, substitution) = declared_member(receiver, property_name, ctx)?;
+        (member.write_ty.clone()?, substitution)
+    };
+    Some(crate::infer::types::map_parsed_type_with_substitution(
+        write_ty,
+        ctx,
+        &substitution,
+    ))
+}
+
+/// The member a write names, as its *declaration* wrote it, together with the
+/// substitution its annotation resolves under — the reference's type arguments
+/// bound to the declaration's own parameter names, so a generic accessor's
+/// write type (`set value(next: T | string)`) resolves like any other member.
+fn declared_member<'a>(
+    receiver: &Type,
+    property_name: &str,
+    ctx: &'a CheckerContext,
+) -> Option<(
+    &'a surge_ts_syntax::ParsedInterfaceMember,
+    crate::infer::types::TypeParameterSubstitution,
+)> {
+    let Type::Reference(reference) = receiver else {
+        return None;
+    };
+    let name = reference.id.split('\u{0}').next_back()?;
+    let crate::symbols::TypeDeclarationInfo::Interface(info) = ctx.lookup_type_declaration(name)?
+    else {
+        return None;
+    };
+    let member = info
+        .body
+        .members
+        .iter()
+        .find(|member| member.name == property_name)?;
+
+    let mut substitution = crate::infer::types::TypeParameterSubstitution::new();
+    for (type_parameter, argument) in info
+        .body
+        .type_parameters
+        .iter()
+        .zip(reference.arguments.iter())
+    {
+        substitution.set(type_parameter.name.clone(), argument.clone(), false);
+    }
+
+    Some((member, substitution))
+}
+
+/// Reports a literal tuple index outside the tuple's fixed length (TS2493) or a
+/// negative one (TS2514), and answers `undefined` as the element they name —
+/// tsc reports the assigned value against that, so a write to a missing element
+/// carries both diagnostics.
+fn tuple_index_out_of_bounds(
+    receiver: &Type,
+    index: &ParsedExpression,
+    index_type: &Type,
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Tuple(elements) = receiver.peeled() else {
+        return None;
+    };
+    // `-1` is a unary expression over a literal, and its type widens to
+    // `number`, so the negative case is read off the syntax.
+    let index = match index_type {
+        Type::NumberLiteral(literal) => literal.value.parse::<i64>().ok()?,
+        _ => negated_literal_index(index)?,
+    };
+
+    let diagnostic = if index < 0 {
+        Diagnostic::ts2514(ctx.file_name.clone())
+    } else if index as usize >= elements.len() {
+        Diagnostic::ts2493(
+            Type::Tuple(elements.clone()).name(),
+            elements.len(),
+            index,
+            ctx.file_name.clone(),
+        )
+    } else {
+        return None;
+    };
+
+    ctx.push(match span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
+    Some(Type::Undefined)
+}
+
+/// The value of a `-<number literal>` index expression.
+fn negated_literal_index(index: &ParsedExpression) -> Option<i64> {
+    let ParsedExpression::Unary {
+        operator: surge_ts_syntax::ParsedUnaryOperator::Minus,
+        operand,
+        ..
+    } = index
+    else {
+        return None;
+    };
+    let ParsedExpression::NumberLiteral(literal) = operand.as_ref() else {
+        return None;
+    };
+    literal.parse::<i64>().ok().map(|value| -value)
+}
+
+/// tsc's `isReadonlySymbol` for the members surge records it for: a `readonly`
+/// property and a getter with no setter. The write is reported and the
+/// assignability check skipped, exactly as tsc does after `checkReferenceExpression`
+/// returns the error type.
+fn report_readonly_property_write(
+    receiver: &Type,
+    property_name: &str,
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let readonly = object_property_is_readonly(receiver, property_name)
+        || declared_member(receiver, property_name, ctx)
+            .is_some_and(|(member, _)| member.readonly);
+    if !readonly {
+        return false;
+    }
+
+    let diagnostic = Diagnostic::ts2540(property_name, ctx.file_name.clone());
+    ctx.push(match span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
+    true
+}
+
+/// Whether the receiver's own object surface declares the member `readonly`.
+/// A union is read-only in the member only when every constituent is, which is
+/// what tsc's synthetic union property records.
+fn object_property_is_readonly(receiver: &Type, property_name: &str) -> bool {
+    match receiver.peeled() {
+        Type::Object(object) => object
+            .properties
+            .get(property_name)
+            .is_some_and(|property| property.readonly),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .all(|member| object_property_is_readonly(member, property_name)),
+        _ => false,
+    }
+}
+
+/// A write through an index into a `readonly` array or tuple. tsc reports the
+/// index signature (TS2542) for an array-like receiver and the element itself
+/// (TS2540) for a tuple, whose elements are properties.
+fn report_readonly_element_write(
+    receiver: &Type,
+    index_type: &Type,
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let Type::Reference(reference) = receiver else {
+        return false;
+    };
+    if !reference.is_readonly_array() {
+        return false;
+    }
+
+    let diagnostic = match (receiver.peeled(), literal_index_key(index_type)) {
+        (Type::Tuple(_), Some(key)) => Diagnostic::ts2540(key, ctx.file_name.clone()),
+        _ => Diagnostic::ts2542(receiver.name(), ctx.file_name.clone()),
+    };
+    ctx.push(match span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
+    true
+}
+
 /// The type a write through `receiver[index]` is checked against: the element
 /// of an array, the element a literal index selects out of a tuple, the member
 /// a literal key names, or an index signature's value type. `None` leaves the
@@ -162,8 +348,46 @@ fn element_write_target_type(receiver: &Type, index_type: &Type) -> Option<Type>
         Type::OpenTuple(tuple) => {
             is_assignable_to(index_type, &Type::Number).then(|| tuple.element_union())
         }
+        // A union receiver writes against the union of its members' write
+        // types — tsc's synthetic union property defers to the union of its
+        // write constituents (`getWriteTypeOfSymbolWithDeferredType`). Every
+        // member has to answer: one that does not is a missing property, which
+        // this path does not report.
+        Type::Union(union) => {
+            let mut members = Vec::with_capacity(union.types().len());
+            for member in union.types() {
+                members.push(element_write_target_type(member, index_type)?);
+            }
+            Some(union_type(members))
+        }
+        Type::Never => Some(Type::Never),
         _ => None,
     }
+}
+
+/// A key that is itself a union (`o[k]` with `k: "a" | "b"`) writes against the
+/// *intersection* of what each key names — tsc's
+/// `getIndexedAccessTypeOrUndefined` intersects the constituents' types under
+/// `AccessFlags.Writing`, so two members of different types leave `never` and
+/// no value can be written.
+fn union_index_write_target_type(
+    receiver: &Type,
+    index_type: &Type,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Union(union) = index_type else {
+        return None;
+    };
+
+    let mut targets = Vec::with_capacity(union.types().len());
+    for key_type in union.types() {
+        let key = literal_index_key(key_type)?;
+        let target = accessor_write_type(receiver, &key, ctx)
+            .or_else(|| element_write_target_type(receiver, key_type))?;
+        targets.push(target);
+    }
+
+    (!targets.is_empty()).then(|| crate::infer::types::merge_intersection_members(targets))
 }
 
 /// The property name a literal index names. A numeric key indexes an object by
@@ -213,7 +437,49 @@ fn check_element_assignment(
     let receiver_type =
         declared_reference_type(object, &visible_symbols).unwrap_or(object_type);
 
-    let Some(target_type) = element_write_target_type(&receiver_type, &index_type) else {
+    let property_span = index_span.or(assignment.target_span);
+
+    // tsc sets `AccessFlags.NoIndexSignatures` for a generic receiver, so a
+    // write that lands on an index signature is TS2862 instead. Two keys do
+    // *not* land on one and are excluded: a literal names a member of the
+    // constraint, and a generic key (`K extends keyof T`) defers to an
+    // indexed-access type — `shouldDeferIndexedAccessType` returns before the
+    // index-signature lookup, which is why zod's
+    // `defineLazy<T, K extends keyof T>` writes without complaint.
+    if let Type::TypeParameter(type_parameter) = &receiver_type
+        && matches!(index_type, Type::String | Type::Number | Type::Symbol)
+    {
+        let diagnostic = Diagnostic::ts2862(type_parameter.name.clone(), ctx.file_name.clone());
+        ctx.push(match object_span.or(assignment.target_span) {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        });
+        return;
+    }
+
+    if report_readonly_element_write(&receiver_type, &index_type, property_span, ctx) {
+        return;
+    }
+    if let Some(key) = literal_index_key(&index_type)
+        && report_readonly_property_write(&receiver_type, &key, property_span, ctx)
+    {
+        return;
+    }
+
+    // A literal index outside a tuple's fixed length is an error in its own
+    // right, and the element it names is `undefined` — which is what tsc then
+    // reports the assigned value against, so both diagnostics appear.
+    let out_of_bounds_target =
+        tuple_index_out_of_bounds(&receiver_type, index, &index_type, property_span, ctx);
+
+    let target_type = out_of_bounds_target
+        .or_else(|| {
+            literal_index_key(&index_type)
+                .and_then(|key| accessor_write_type(&receiver_type, &key, ctx))
+        })
+        .or_else(|| union_index_write_target_type(&receiver_type, &index_type, ctx))
+        .or_else(|| element_write_target_type(&receiver_type, &index_type));
+    let Some(target_type) = target_type else {
         return;
     };
 
@@ -254,11 +520,43 @@ fn check_assigned_value(
         &target_type.name(),
         ctx.file_name.clone(),
     );
-    let diagnostic = match assignment.value_span.or(assignment.target_span) {
+    // tsc anchors the assignment's type error on the whole assignment, which
+    // starts at its target — not on the value.
+    let diagnostic = match assignment.target_span.or(assignment.value_span) {
         Some(span) => diagnostic.with_span(convert_span(span)),
         None => diagnostic,
     };
     ctx.push(diagnostic);
+}
+
+/// `exports.foo = …` / `module.exports = …` in a JavaScript file is a CommonJS
+/// export *declaration*, which tsc's binder turns into one
+/// (`getAssignmentDeclarationKind`) rather than a write to an undeclared
+/// `exports`. Checking it as a write reported a false TS2304 on the receiver.
+fn is_commonjs_export_declaration(target: &ParsedExpression, ctx: &CheckerContext) -> bool {
+    let lower = ctx.file_name.to_ascii_lowercase();
+    if !(lower.ends_with(".js")
+        || lower.ends_with(".jsx")
+        || lower.ends_with(".mjs")
+        || lower.ends_with(".cjs"))
+    {
+        return false;
+    }
+
+    let mut root = target;
+    loop {
+        match root {
+            ParsedExpression::PropertyAccess { object, .. }
+            | ParsedExpression::ElementAccess { object, .. } => root = object,
+            ParsedExpression::Identifier { name, .. } => {
+                return name == "exports" || name == "module";
+            }
+            ParsedExpression::IndexAccess { object_name, .. } => {
+                return object_name == "exports" || object_name == "module";
+            }
+            _ => return false,
+        }
+    }
 }
 
 pub(crate) fn check_member_assignment(
@@ -266,6 +564,10 @@ pub(crate) fn check_member_assignment(
     scopes: &mut ScopeStack,
     ctx: &mut CheckerContext,
 ) {
+    if is_commonjs_export_declaration(&assignment.target, ctx) {
+        return;
+    }
+
     match &assignment.target {
         ParsedExpression::IndexAccess {
             object_name,
@@ -352,20 +654,40 @@ pub(crate) fn check_member_assignment(
     // `o.flag = true` is still an assignment to `boolean | undefined`.
     let declared_object_type = declared_reference_type(object, &visible_symbols)
         .or_else(|| declared_object_type_by_name(&object_type, ctx));
-    let Some(target_type) = declared_object_type
+    let receiver_for_declaration = declared_object_type
+        .as_ref()
+        .unwrap_or(&object_type)
+        .clone();
+    if report_readonly_property_write(
+        &receiver_for_declaration,
+        property_name,
+        property_span.or(assignment.target_span),
+        ctx,
+    ) {
+        return;
+    }
+    let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx);
+    let Some(target_type) = accessor_write_type
+        .or_else(|| declared_object_type
         .as_ref()
         .and_then(|declared| declared.get_property_access_type(property_name))
         .or_else(|| {
             object_type
                 .get_property_access_type(property_name)
                 .map(|narrowed| widen_narrowed_literals(&narrowed))
-        })
+        }))
     else {
         // `decl.id = x` on `A | B` where `B` has no `id`: tsc reports the
         // member on the union. Only a union of fully modelled objects is
         // reported, so an incompletely modelled receiver stays silent.
+        //
+        // The union has to be the receiver's *own* form, not something it peels
+        // to. A reference that peels to one may have lost members on the way —
+        // `NextComponentType<…> = ComponentType<P> & { getInitialProps?… }`
+        // peels to `ComponentType`'s union alone, and reporting off that made
+        // `MyApp.getInitialProps = …` a false TS2339.
         let receiver = declared_object_type.as_ref().unwrap_or(&object_type);
-        if let Type::Union(union) = receiver.peeled()
+        if let Type::Union(union) = receiver
             && union.types().iter().all(|member| {
                 matches!(member.peeled(), Type::Object(_))
                     && !crate::checks::expr::carries_leaked_type_parameter(member, ctx)
@@ -386,6 +708,16 @@ pub(crate) fn check_member_assignment(
         return;
     };
 
+    // A target surge could not fully resolve carries no contextual type for the
+    // value either, so evaluating against it reports what the value could not
+    // be given — an object literal's method parameter as implicit-any, say.
+    // The value is still evaluated, because the narrowing the write installs
+    // depends on it (`bag.patterns = []` is what makes the reads after it
+    // non-optional); only what the evaluation reports is discarded. The
+    // comparison below is skipped for such a target anyway.
+    let target_unresolved = crate::checks::assign::type_contains_unknown(&target_type);
+    let checkpoint = ctx.diagnostics().len();
+
     let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type(
         &assignment.value,
         assignment.value_span,
@@ -395,11 +727,20 @@ pub(crate) fn check_member_assignment(
         ctx,
     );
 
+    if target_unresolved {
+        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    }
+
     let InferredExpression::Known(value_type) = inferred_value else {
         return;
     };
 
-    if value_type.is_unknown() || target_type.is_unknown() {
+    if target_unresolved || value_type.is_unknown() || target_type.is_unknown() {
+        crate::checks::function::narrowing::narrow_assignment_target_in_scope(
+            &assignment.target,
+            &value_type,
+            scopes,
+        );
         return;
     }
 

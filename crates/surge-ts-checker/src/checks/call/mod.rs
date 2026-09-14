@@ -1515,9 +1515,12 @@ pub(crate) fn check_function_type_call(
                 {
                     let argument_type_name = source_display_name(&argument_type, &parameter_type);
                     let parameter_type_name = parameter_type.name();
-                    let diagnostic = Diagnostic::ts2345(
+                    let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
+                        &argument_type,
+                        &parameter_type,
                         &argument_type_name,
                         &parameter_type_name,
+                        true,
                         ctx.file_name.clone(),
                     );
 

@@ -116,6 +116,8 @@ fn lower_enum_declaration(
             ty: member_type.clone(),
             optional: false,
             is_method: false,
+            readonly: false,
+            write_ty: None,
         });
         member_types.push(member_type);
     }

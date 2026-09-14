@@ -111,6 +111,11 @@ pub struct ReferenceTypeDirective {
 pub enum ParsedStatement {
     VariableDeclaration(Box<ParsedVariableDeclaration>),
     Assignment(Box<ParsedAssignment>),
+    /// A module-scope write through a member or element access
+    /// (`Component.displayName = "X"`, `registry[key] = value`). Checked with
+    /// the same code a function body uses, over a scope stack rooted at the
+    /// module's symbol table.
+    MemberAssignment(Box<ParsedMemberAssignment>),
     FunctionDeclaration(Box<ParsedFunctionDeclaration>),
     Call(Box<ParsedCall>),
     Expression(Box<ParsedExpression>),
@@ -500,6 +505,16 @@ pub struct ParsedInterfaceMember {
     /// parameters bivariantly even under `strictFunctionTypes`.
     pub is_method: bool,
     pub ty: ParsedType,
+    /// Declared `readonly`, or a getter with no matching setter — tsc's
+    /// `isReadonlySymbol`, which turns a write into TS2540 before any
+    /// assignability check runs.
+    pub readonly: bool,
+    /// What a *write* to this member is checked against, when that differs from
+    /// `ty`. tsc: "Distinct write types come only from set accessors"
+    /// (`getWriteTypeOfSymbol`), so this is the setter's parameter type of an
+    /// accessor pair whose getter declares something else. `None` everywhere
+    /// else, where reading and writing share a type.
+    pub write_ty: Option<ParsedType>,
 }
 
 /// A `class` declaration. The instance side (fields + methods) is modelled as a
@@ -758,6 +773,10 @@ pub struct ParsedObjectTypeProperty {
     pub optional: bool,
     /// See [`ParsedInterfaceMember::is_method`].
     pub is_method: bool,
+    /// See [`ParsedInterfaceMember::readonly`].
+    pub readonly: bool,
+    /// See [`ParsedInterfaceMember::write_ty`].
+    pub write_ty: Option<ParsedType>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1294,6 +1313,9 @@ pub struct ParsedFunctionParameter {
     /// (`public`/`private`/`protected`) or `readonly` modifier, which declares a
     /// class instance member of the same name and type.
     pub is_parameter_property: bool,
+    /// The parameter property was declared `readonly`, so the member it
+    /// declares rejects writes (tsc's `isReadonlySymbol`).
+    pub is_readonly_parameter_property: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

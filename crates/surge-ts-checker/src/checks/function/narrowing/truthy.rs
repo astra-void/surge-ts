@@ -152,6 +152,7 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
                         ty: surge_ts_types::remove_undefined(&existing.ty),
                         optional: false,
                         method: existing.method,
+                        readonly: existing.readonly,
                     },
                 );
             }

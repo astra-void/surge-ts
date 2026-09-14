@@ -467,7 +467,8 @@ pub(crate) fn resolve_object_type(
         } else {
             ObjectProperty::required(property_type.ty)
         }
-        .with_method(property.is_method);
+        .with_method(property.is_method)
+        .with_readonly(property.readonly);
 
         properties.insert(property.name.as_str().into(), object_property);
     }

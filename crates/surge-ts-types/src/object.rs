@@ -117,6 +117,12 @@ pub struct ObjectProperty {
     /// bivariantly even under `strictFunctionTypes`, so the distinction is
     /// load-bearing for assignability.
     pub method: bool,
+    /// Declared `readonly`, or a getter with no matching setter. tsc's
+    /// `isReadonlySymbol`: a write to such a member is TS2540 whatever its
+    /// type. Like `method`, it participates in equality but not in the property
+    /// fingerprint — two objects differing only here land in one bucket and are
+    /// told apart by equality.
+    pub readonly: bool,
 }
 
 impl ObjectProperty {
@@ -125,6 +131,7 @@ impl ObjectProperty {
             ty,
             optional: false,
             method: false,
+            readonly: false,
         }
     }
 
@@ -133,11 +140,17 @@ impl ObjectProperty {
             ty,
             optional: true,
             method: false,
+            readonly: false,
         }
     }
 
     pub fn with_method(mut self, method: bool) -> Self {
         self.method = method;
+        self
+    }
+
+    pub fn with_readonly(mut self, readonly: bool) -> Self {
+        self.readonly = readonly;
         self
     }
 

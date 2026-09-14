@@ -172,9 +172,12 @@ pub(crate) fn check_variable_declaration_against_symbols(
                             declared_type_name,
                             &ctx.file_name,
                         );
-                    let diagnostic = Diagnostic::ts2322(
+                    let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
+                        inferred_initializer_type,
+                        declared_type,
                         &inferred_type_name,
                         &declared_type_name,
+                        false,
                         ctx.file_name.clone(),
                     );
 
