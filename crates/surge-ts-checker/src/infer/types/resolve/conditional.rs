@@ -1473,16 +1473,6 @@ fn collect_infer_variance(ty: &ParsedType, contravariant: bool, out: &mut Vec<(S
     }
 }
 
-/// The callable signature of a check type, treating a function and a callable
-/// object (one carrying a call or construct signature, e.g. React's
-/// `ForwardRefExoticComponent<P>` or a class value) uniformly. This lets
-/// `JSXElementConstructor<infer P>` recover the props type from a `forwardRef`/
-/// `memo` component, not only from a plain function component.
-/// Lines up a written signature pattern with the check type's callable surface:
-/// value parameters positionally, the rest parameter against the tuple of every
-/// remaining one (what makes `Parameters`/`ConstructorParameters` yield a
-/// parameter list), and the return position.
-#[allow(clippy::too_many_arguments)]
 /// Binds the captures of an overloaded call-signature pattern. Target
 /// signature `i` is paired with the check type's overload at the same distance
 /// from the end, which is how tsc lines up two signature lists; with fewer
@@ -1492,7 +1482,7 @@ fn bind_overload_group_infer_captures(
     patterns: &[surge_ts_syntax::ParsedFunctionType],
     check: &Type,
     substitution: &mut TypeParameterSubstitution,
-    ctx: &CheckerContext,
+    ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     depth: usize,
     reference_positional: bool,
@@ -1523,6 +1513,16 @@ fn bind_overload_group_infer_captures(
     }
 }
 
+/// The callable signature of a check type, treating a function and a callable
+/// object (one carrying a call or construct signature, e.g. React's
+/// `ForwardRefExoticComponent<P>` or a class value) uniformly. This lets
+/// `JSXElementConstructor<infer P>` recover the props type from a `forwardRef`/
+/// `memo` component, not only from a plain function component.
+/// Lines up a written signature pattern with the check type's callable surface:
+/// value parameters positionally, the rest parameter against the tuple of every
+/// remaining one (what makes `Parameters`/`ConstructorParameters` yield a
+/// parameter list), and the return position.
+#[allow(clippy::too_many_arguments)]
 fn bind_signature_infer_captures(
     pattern: &surge_ts_syntax::ParsedFunctionType,
     check: &Type,
