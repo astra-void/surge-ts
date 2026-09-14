@@ -282,7 +282,7 @@ fn infer_block_body_return_type(
                 if ty.is_unknown() {
                     return None;
                 }
-                returned.push(ty);
+                returned.push(widen_fresh_literal_return(expression, ty));
             }
             _ => {}
         }
