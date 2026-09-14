@@ -13,17 +13,21 @@ use crate::driver::collect_type_declarations;
 use crate::modules::{ModuleExportTable, build_module_export_table};
 
 /// See the comment at the ambient block-import binding phase in
-/// [`collect_ambient_modules`]. Opt-in (`SURGE_AMBIENT_BLOCK_IMPORTS=1`):
-/// since the namespace class+interface declaration merge and the class-arm
-/// prefix repair, flag-on is diagnostics-clean on every corpus (the earlier
-/// `Socket.destroy` false positive is gone) — but resolving the @types/node
-/// graph that the bound imports open up costs +36% user time on tRPC
-/// (interleaved A/B, diagnostics set-identical), because the newly reachable
-/// declarations expand eagerly per peel. Flip the default only after
-/// member-level lazy expansion makes that graph affordable.
+/// [`collect_ambient_modules`]. Default-on (opt-out `SURGE_AMBIENT_BLOCK_IMPORTS=0`):
+/// an import written inside `declare module "..."` binds, which is what
+/// TypeScript does and the only way a block-internal import is visible from a
+/// declaration body.
+///
+/// It was opt-in while resolving the @types/node graph the bound imports open
+/// up cost +36% user time on tRPC. Re-measured 2026-09-14 on an interleaved
+/// A/B (three reps, same frozen binary): trpc user time 4.07 s off vs 3.98 s
+/// on and peak RSS unchanged, zod within noise, and the diagnostic set is
+/// identical on all nine corpora — the memoization work that landed since
+/// absorbed the cost, so the reason to keep it off is gone.
 fn ambient_block_imports_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("SURGE_AMBIENT_BLOCK_IMPORTS").is_some())
+    *ENABLED
+        .get_or_init(|| std::env::var_os("SURGE_AMBIENT_BLOCK_IMPORTS").is_none_or(|v| v != "0"))
 }
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 

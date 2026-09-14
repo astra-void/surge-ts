@@ -188,12 +188,12 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **ky** (sindresorhus/ky 2.0.2) | `3419113` | 0 | 0 | **exact** — strict false-positive gate |
 | **ofetch** (unjs/ofetch) | `1dbc37f` | 1 | 1 | **exact** — same file/code/line and message text (TS5108) |
 | **zod** | `912f0f5` | 21 | 21 | **exact** — same file/code/line and message text; the two surge-only `TS18046` the `trpc-fn-80` merge opened were closed by `2067888`, which gives a generic class a permissive static object when it declares a predicate or assertion static, so `z.ZodError.assert` narrows again |
-| **unnamed** (local Next.js App Router app) | local | 0 | 0 | **exact** — strict false-positive corpus |
+| **unnamed** (local Next.js App Router app) | local | 0 | 1 | **regressed, gate broken** — re-measured 2026-09-14 from a frozen binary at `a78ea118`: one surge-only `TS2353` (`app/[locale]/application/data-table.tsx:542`, a computed `[field]` key rejected against the target object type). It was 0/0 when last recorded; the regression predates the semantic-gate work and is not yet attributed to a commit. |
 | **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; under `SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1` (body-local `Expect<Equal<…>>` assertions fire) the surge-only count is 7 after the 2026-09-13/14 follow-up (63 → 7; the six left are one `Chainable` alias-cycle degradation, see the note); dirty-tree measurement, not a gate (see note) |
 | **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 4 | **newly provisioned, provisional** — 134 when first measured; all 4 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
-| **zustand** (pmndrs/zustand 5.0.15) | `2115efb` | 0 | 42 | **provisional** — 136 when first measured; clean under the oracle, so all 42 are surge-only false positives, and 26 of them are behind one sealed gate; not a gate (see note) |
+| **zustand** (pmndrs/zustand 5.0.15) | `2115efb` | 0 | 37 | **provisional** — 136 when first measured, 42 when last recorded, **37** re-measured 2026-09-14 at `a78ea118`; clean under the oracle, so all 37 are surge-only false positives, and 27 of them are closed by one sealed gate; not a gate (see note) |
 
 Notes that matter:
 
@@ -355,12 +355,12 @@ Notes that matter:
   ambient global of the same name, which published lib.dom's `window.screen`
   as `@testing-library/dom`'s `screen` export (50 diagnostics on its own).
   **26 of the remaining 42 are behind the generic-recursive-alias gate**
-  (`SURGE_GENERIC_RECURSIVE_ALIAS=1` takes zustand to 16): zustand's middleware
+  (`SURGE_GENERIC_RECURSIVE_ALIAS=1` takes zustand to 11): zustand's middleware
   types are a recursive generic alias walking a mutator list, and the default
   cycle break answers `unknown` for every generic back-edge. That gate stays
-  sealed — on the same binary it leaves ts-pattern unfinished after 4 minutes
-  (it was still running at 15) and costs drizzle-orm 4 -> 6 — so the remaining
-  cluster is not a quick fix.
+  sealed, but as of the 2026-09-14 re-measurement its only remaining blocker is
+  that ts-pattern does not terminate; the drizzle-orm 4 -> 6 regression
+  previously recorded here no longer reproduces. See the gate inventory.
   A ky-style exact-0/0 gate can be armed once the over-report reaches zero; it
   is deliberately not armed at 42.
 - **tanstack-query is newly provisioned; its count is provisional.** The
@@ -572,20 +572,51 @@ settled.
 
 **Opt-in (off by default) — changes checking behavior or performance:**
 
+Gates are classified by what they are: a **semantic compatibility gate** hides
+behavior surge should ultimately perform by default and is therefore a bug to
+be burned down, not a feature; a **performance experiment** is an
+implementation strategy that need never be enabled; a **kill switch** restores
+a previous implementation of behavior that is already the default; and
+**instrumentation** is opt-in by nature.
+
+**Semantic compatibility gates (off by default).** Each of these is intended
+TypeScript behavior that surge does not yet perform in the default
+configuration. Every one carries the concrete reason it is still off.
+
+| Gate | Effect | Why still off |
+| --- | --- | --- |
+| `SURGE_UPGRADE_ANALYSIS_SCOPES=1` | Give a module's exported declarations the real resolution scope (own declarations + import layers) during analysis instead of the import-less preliminary one. Makes the published type of an export honest where its body names an imported type. | On trpc it closes 12 `TS2339` and opens 13: an honest export lets `ProtectedIntersection`'s conditional decide from a router key set surge never had, and the string-literal error type it then produces swallows every property read off the router. See [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#trpc-tsc-only-inventory-2026-09-11). |
+| `SURGE_GENERIC_RECURSIVE_ALIAS=1` | Key a generic alias's resolution frame by its *instantiation* (declaration + resolved-argument fingerprint) rather than its declaration, so recursing into itself with different arguments is not read as a cycle. Without it a recursive generic record collapses to the degradation sentinel. | **Nontermination on ts-pattern**, which is now the only blocker. Measured 2026-09-14 on all nine corpora with one frozen binary: zustand 37 → 11 (27 false positives closed, 1 opened), every other finishing corpus byte-identical — the previously recorded drizzle-orm 4 → 6 and tanstack-query +2 regressions **no longer reproduce**. ts-pattern does not finish in 600 s and is SIGKILLed. Profiling shows ~88% of that time in `Type` structural equality under instantiation-cache lookup, but forcing the per-declaration bucket cap to 1, 4 and 16 all still time out at 240 s, so the cost is instantiation *volume*, not bucket scanning: with frames discriminated by argument fingerprint, the depth-only limits (`MAX_NESTED_INSTANTIATIONS` = 8, `MAX_RESOLUTION_DEPTH` = 24) bound recursion depth but not breadth. A total per-root instantiation work budget is the missing guard. |
+| `SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1` | Check a body-local `type` / `interface` / `class` declaration at its statement, the way a top-level one is checked. | Measured 2026-09-14 on all nine corpora: only ts-pattern moves, 0 → 22, every one an `Expect<Equal<…>>` type-level divergence. Eight other corpora are byte-identical, so the remaining work is entirely ts-pattern's type-level program. |
+| `SURGE_COMPLETE_DEFAULT_ARGS=1` | Carry an interface's resolved defaults on its reference, as tsc's type reference does; positional `infer` binding against a partially-written reference needs them. | Measured 2026-09-14: a pure regression of 4 on the current corpora (zod +2, tanstack-query +1, trpc +1) and 0 closed. zod's is `ParsePayload`'s bare `$ZodRawIssue` member losing its own alias default once the interface reference carries one — a default bound under the wrong substitution. |
+
+**Performance experiments (off by default).** These are implementation
+strategies, not semantics; leaving them off costs no compatibility.
+
 | Gate | Effect |
 | --- | --- |
-| `SURGE_AMBIENT_BLOCK_IMPORTS=1` | Bind imports inside ambient `declare module` blocks. Diagnostics set-identical on the corpus, but costly (~+36% user time on trpc) until member-level lazy expansion lands. |
-| `SURGE_UPGRADE_ANALYSIS_SCOPES=1` | Give a module's exported declarations the real resolution scope (own declarations + import layers) during analysis instead of the import-less preliminary one. Makes the published type of an export honest where its body names an imported type; on trpc that closes 12 `TS2339` and opens 13, because an honest export lets a conditional decide from a router key set surge never had. See [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#trpc-tsc-only-inventory-2026-09-11). |
 | `SURGE_LAZY_IFACE_MEMBERS=1` | Stage 1 of member-level lazy interface expansion (property annotations only; methods stay eager). Design: [docs/perf/MEMBER-LAZY-EXPANSION.md](docs/perf/MEMBER-LAZY-EXPANSION.md). |
 | `SURGE_LIB_MEMBER_CACHE=1` | Extended per-member instantiation cache. Measured at roughly +2% and left off. |
 | `SURGE_IFACE_CACHE_ALL=1` | Extended interface-instantiation cache. Measured at +1.7% and left off. |
+| `SURGE_DEFER_PLACEHOLDER_INSTANTIATIONS=1` | Defer placeholder-argument instantiation. Left off: mixed intersections and conditionals peel immediately and zod's RSS rose. |
 
 **Default-on with an opt-out kill switch** (for A/B profiling and regression
-isolation only — production behavior is the default): `SURGE_NS_IFACE_MERGE`,
-`SURGE_NS_QUALIFIED_RETRY`, `SURGE_LAZY_DTS_VALUES`, `SURGE_THIN_PRELIM`,
-`SURGE_MODULE_TYPE_DEDUP`, `SURGE_EAGER_DEPENDENCY_ALIASES`,
-`SURGE_DISABLE_CANONICAL_*`, `SURGE_DISABLE_SIG_CONTEXT_CACHE`,
-`SURGE_DISABLE_PHYSICAL_INTERFACE_*`.
+isolation only — production behavior is the default): `SURGE_AMBIENT_BLOCK_IMPORTS`,
+`SURGE_NS_IFACE_MERGE`, `SURGE_NS_QUALIFIED_RETRY`, `SURGE_READONLY_ARRAYS`,
+`SURGE_VARIADIC_TUPLES`, `SURGE_WRITTEN_CALL_SIGNATURE`, `SURGE_LAZY_DTS_VALUES`,
+`SURGE_THIN_PRELIM`, `SURGE_MODULE_TYPE_DEDUP`, `SURGE_EAGER_DEPENDENCY_ALIASES`,
+`SURGE_EAGER_REFERENCE_INTERSECTIONS`, `SURGE_IFACE_KEY_ENV`,
+`SURGE_PRESCANNED_PARSE_REUSE`, `SURGE_PRELIM_EARLY_RELEASE`,
+`SURGE_PARALLEL_ANALYSIS_FINAL`, `SURGE_DISABLE_CANONICAL_*`,
+`SURGE_DISABLE_SIG_CONTEXT_CACHE`, `SURGE_DISABLE_PHYSICAL_INTERFACE_*`.
+
+`SURGE_AMBIENT_BLOCK_IMPORTS` became the default on 2026-09-14. It binds an
+import written inside a `declare module "..."` block, which is what TypeScript
+does. It had been opt-in because resolving the @types/node graph those imports
+open up cost +36% user time on trpc; re-measured on an interleaved A/B with one
+frozen binary, trpc user time is 4.07 s off versus 3.98 s on with peak RSS
+unchanged, zod is within noise, and the diagnostic set is identical on all nine
+corpora.
 
 **Instrumentation only** (no semantic effect): `SURGE_TIMINGS`, `SURGE_RSS`,
 `SURGE_RETENTION_CENSUS`, `SURGE_PAUSE_AT_STAGE`, `SURGE_ALLOCATION_CENSUS`,
