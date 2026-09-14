@@ -234,6 +234,15 @@ pub(crate) fn resolve_conditional_type(
                 }
                 TuplePatternMatch::Rejected => (*conditional.false_type).clone(),
                 TuplePatternMatch::Undecided => {
+                    // A pattern with captures whose own shape degraded (an
+                    // interface instantiated over placeholders that lost a
+                    // member) is permissive for the wrong reason: the
+                    // assignability test would take the true branch for a
+                    // member that matches nothing, binding nothing.
+                    if pattern_shape_degraded(&extends_pattern, &resolved_extends) {
+                        results.push(Type::Unknown);
+                        continue;
+                    }
                     if extends_is_top
                         || (!resolved_extends.ty.is_unknown()
                             && is_assignable_to(&member, &resolved_extends.ty))
@@ -318,6 +327,14 @@ pub(crate) fn resolve_conditional_type(
             return resolve_parsed_type(*conditional.false_type, ctx, resolving, substitution);
         }
         TuplePatternMatch::Undecided => {}
+    }
+
+    // See the distributive arm: a degraded capture pattern decides nothing.
+    if pattern_shape_degraded(&extends_pattern, &resolved_extends) {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
     }
 
     // Non-distributive: only evaluate when the check type is concrete enough for a
@@ -887,16 +904,22 @@ fn identity_compare(left: &Type, right: &Type, depth: usize) -> Option<bool> {
     if left == right {
         return Some(true);
     }
-    if depth == 0 || is_readonly_shape(left) != is_readonly_shape(right) {
-        return (depth != 0).then_some(false);
+    if depth == 0 {
+        return None;
     }
+    let readonly_differs = is_readonly_shape(left) != is_readonly_shape(right);
     let (left, right) = (left.peeled(), right.peeled());
     if left == right {
         return Some(true);
     }
+    // A side surge could not model decides nothing, not even against the
+    // readonly modifier of the other side.
     let undecidable = |ty: &Type| matches!(ty, Type::Unknown | Type::TypeParameter(_) | Type::Any);
     if undecidable(&left) || undecidable(&right) {
         return None;
+    }
+    if readonly_differs {
+        return Some(false);
     }
     match (&left, &right) {
         (Type::Object(left), Type::Object(right)) => {
@@ -994,6 +1017,18 @@ fn identity_compare(left: &Type, right: &Type, depth: usize) -> Option<bool> {
         }
         _ => Some(false),
     }
+}
+
+/// Whether an `extends` pattern with `infer` captures resolved to a shape
+/// surge could not model: the resolution itself degraded, or a lazily
+/// resolved member of it did (`Matcher<infer …>` whose `[matcher]` member
+/// degrades on peel). An assignability test against such a shape is
+/// permissive for the wrong reason — a member that matches nothing would
+/// take the true branch and bind nothing — so the conditional degrades.
+fn pattern_shape_degraded(extends_pattern: &ParsedType, resolved_extends: &ResolvedType) -> bool {
+    parsed_type_contains_infer(extends_pattern)
+        && (resolved_extends.had_error
+            || contains_unresolved_parameter(&resolved_extends.ty, SENTINEL_WALK_DEPTH))
 }
 
 /// How deep `identity_compare` looks before giving up and calling the type

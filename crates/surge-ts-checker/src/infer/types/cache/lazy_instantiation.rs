@@ -227,6 +227,14 @@ impl ResolveReference for LazyInstantiation {
         if blocked {
             crate::program::note_expansion_degradation();
             crate::program::record_program_counter(|c| c.lazy_reference_blocked_count += 1);
+            if crate::infer::types::interface::had_error_trace_enabled() {
+                eprintln!(
+                    "[had-error] peel-blocked '{}' stack={} cp={}",
+                    self.decl_key.name,
+                    LAZY_PEEL_STACK.with(|stack| stack.borrow().len()),
+                    crate::program::in_check_phase()
+                );
+            }
             return Arc::new(Type::Unknown);
         }
         let creation_before = crate::program::type_creation_snapshot();
