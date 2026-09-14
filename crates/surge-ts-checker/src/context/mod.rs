@@ -455,6 +455,14 @@ pub(crate) struct CheckerContext {
     /// they resolve to `unknown` without a TS2304 cascade — tsc resolves them
     /// against the full `@types/*`/generated namespace and reports nothing.
     pub(crate) namespace_member_resolution_depth: usize,
+    /// Generic instantiations performed under the *current root* resolution
+    /// (reset whenever the declaration-resolution stack empties). The
+    /// `resolving`-stack guards bound how deep a recursion goes and how many
+    /// frames of one declaration may nest, but both are path-local: a
+    /// type-level program that fans out — many distinct argument tuples across
+    /// several levels, none repeating and none deep — does unbounded *total*
+    /// work without tripping either. This is the breadth ceiling.
+    pub(crate) instantiation_work: usize,
     /// Nonzero while checking the attributes/children of a JSX element whose
     /// component props type could not be modelled (the `unknown` sentinel).
     /// Without a props type there is no contextual type to hand an inline
@@ -612,6 +620,7 @@ impl CheckerContext {
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
             namespace_member_resolution_depth: 0,
+            instantiation_work: 0,
             unmodelled_jsx_props_depth: 0,
             shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
@@ -748,6 +757,7 @@ impl CheckerContext {
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
             timings: data.timings.clone(),
             namespace_member_resolution_depth: 0,
+            instantiation_work: 0,
             unmodelled_jsx_props_depth: 0,
             shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,

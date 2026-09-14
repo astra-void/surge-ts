@@ -80,6 +80,56 @@ const MAX_NESTED_INSTANTIATIONS: usize = 8;
 /// the same guard tsc spends its `TS2589` on.
 const MAX_RESOLUTION_DEPTH: usize = 24;
 
+/// Total generic instantiations one *root* resolution may perform before the
+/// alias being resolved is abandoned to the degradation sentinel.
+///
+/// `MAX_RESOLUTION_DEPTH` and `MAX_NESTED_INSTANTIATIONS` are both path-local:
+/// they look only at the frames currently on `resolving`. Once frames are
+/// discriminated by their arguments, a type-level program that *fans out* --
+/// ts-pattern's `DeepExclude` / `InvertPattern` walk a pattern against a value
+/// type and instantiate a fresh argument tuple per member, per level -- never
+/// repeats an argument tuple and never nests deeply, so neither guard fires
+/// while the total work grows exponentially. This is the breadth ceiling that
+/// bounds it, and it is a last-resort safety net: the primary termination
+/// model remains repeated-state detection on the argument fingerprint.
+///
+/// 200 is empirical, and chosen as the largest value that keeps every corpus's
+/// diagnostics at or better than their gate-off values. Measured 2026-09-14 on
+/// ts-pattern with one frozen binary: the cost is superlinear in the ceiling
+/// (200 -> ~5 s, 500 -> 14 s, 1000 -> 35 s, 2000 and 5000 -> still running at
+/// 240 s), and dropping to 50 terminates faster but costs zod its exact 21/21
+/// parity, so the window is real rather than arbitrary.
+const MAX_ROOT_INSTANTIATION_WORK: usize = 200;
+
+/// The breadth ceiling, overridable for tuning (`SURGE_ROOT_INSTANTIATION_WORK`).
+fn max_root_instantiation_work() -> usize {
+    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("SURGE_ROOT_INSTANTIATION_WORK")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(MAX_ROOT_INSTANTIATION_WORK)
+    })
+}
+
+/// Opt-in (`SURGE_ROOT_WORK_TRIP=1`): report which declaration exhausted the
+/// breadth budget, once per declaration.
+fn report_work_trip(key: &DeclarationResolutionKey) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("SURGE_ROOT_WORK_TRIP").is_some()) {
+        return;
+    }
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let label = format!("{}::{}", key.file_name, key.name);
+    if let Ok(mut seen) = SEEN.lock() {
+        let set = seen.get_or_insert_with(std::collections::HashSet::new);
+        if set.insert(label.clone()) {
+            eprintln!("[work-trip] {label}");
+        }
+    }
+}
+
 /// The `resolving`-stack identity for one *instantiation*.
 ///
 /// The plain declaration key carries no arguments, so `Decorate<{post: …}>` and
@@ -152,10 +202,27 @@ pub(crate) fn resolve_type_alias(
     } else {
         declaration_key.clone()
     };
+    // A new root resolution starts with an empty stack; the breadth budget is
+    // per root so that the same root always gets the same budget however the
+    // program's files are scheduled across workers.
+    if resolving.is_empty() {
+        ctx.instantiation_work = 0;
+    }
+    let work_exhausted = if generic_recursive_alias_references() && frame_key != declaration_key {
+        ctx.instantiation_work = ctx.instantiation_work.saturating_add(1);
+        let tripped = ctx.instantiation_work > max_root_instantiation_work();
+        if tripped {
+            report_work_trip(&declaration_key);
+        }
+        tripped
+    } else {
+        false
+    };
     let nesting_exhausted = generic_recursive_alias_references()
         && frame_key != declaration_key
-        && (resolving.len() + super::cache::lazy_peel_depth() * MAX_RESOLUTION_DEPTH / 4
-            >= MAX_RESOLUTION_DEPTH
+        && (work_exhausted
+            || resolving.len() + super::cache::lazy_peel_depth() * MAX_RESOLUTION_DEPTH / 4
+                >= MAX_RESOLUTION_DEPTH
             || nested_instantiation_limit_reached(resolving, &declaration_key));
     if let Some(index) = resolving
         .iter()
