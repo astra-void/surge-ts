@@ -24,6 +24,13 @@ pnpm-debug.log*
 npm-debug.log*
 .DS_Store
 
+# `tsc` emit. No JavaScript is authored in this workspace outside the fixture
+# packages re-included below, so an emitted sibling of a .ts/.cts/.mts source is
+# build output from a compiler run that forgot --noEmit.
+*.js
+*.cjs
+*.mjs
+
 # Test fixtures ship hand-written node_modules (package-resolution tests read
 # them), so re-include them — including dist/ dirs inside — but keep OS cruft out.
 !tests/compat-projects/**/node_modules/
