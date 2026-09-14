@@ -1,6 +1,6 @@
 use super::*;
 
-use surge_ts_syntax::ParsedMappedType;
+use surge_ts_syntax::{MappedOptionality, ParsedMappedType};
 use surge_ts_types::{ObjectProperty, PropertyMap};
 
 use crate::metrics::alloc_object_type;
@@ -178,12 +178,22 @@ pub(crate) fn resolve_mapped_type(
             .and_then(|object| object.get_property(&key));
         let source_optional = source_property.is_some_and(|property| property.is_optional());
         let source_method = source_property.is_some_and(|property| property.is_method());
+        // `-?` strips `undefined` from the mapped property as well as clearing
+        // the optional flag; that is what makes `Required<{ b?: number }>` a
+        // `number` rather than a required `number | undefined`.
+        let (property_type, optional) = match mapped.optional {
+            MappedOptionality::Keep => (resolved_value.ty.clone(), source_optional),
+            MappedOptionality::Add => (resolved_value.ty.clone(), true),
+            MappedOptionality::Remove => {
+                (surge_ts_types::remove_undefined(&resolved_value.ty), false)
+            }
+        };
         for name in property_names {
             properties.insert(
                 name.into(),
                 ObjectProperty {
-                    ty: resolved_value.ty.clone(),
-                    optional: mapped.optional || source_optional,
+                    ty: property_type.clone(),
+                    optional,
                     method: source_method,
                 },
             );

@@ -9,7 +9,8 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 
 use crate::{
-    ParsedConditionalType, ParsedFunctionType, ParsedIndexedAccessType, ParsedMappedType,
+    MappedOptionality, ParsedConditionalType, ParsedFunctionType, ParsedIndexedAccessType,
+    ParsedMappedType,
     ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedPredicateType,
     ParsedTemplateLiteralType, ParsedTupleElement, ParsedType, ParsedTypeAliasDeclaration,
     ParsedTypeOfType, ParsedTypeParameter,
@@ -312,7 +313,9 @@ fn parse_indexed_access_type(indexed_access: &TSIndexedAccessType<'_>) -> Option
 
 /// The `readonly` modifier (`readonly [K in …]`, `-readonly`) is not
 /// modelled for properties anywhere, so it is ignored rather than degrading
-/// the whole mapping.
+/// the whole mapping. The optionality modifier is modelled, and its three
+/// states are distinct: `-?` makes a property required even when the
+/// homomorphic source's is optional, so it cannot fold into `?`.
 fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
     let name_type = match mapped_type.name_type.as_ref() {
         Some(name_type) => Some(Box::new(parse_type(name_type)?)),
@@ -320,9 +323,11 @@ fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
     };
 
     let optional = match mapped_type.optional {
-        Some(TSMappedTypeModifierOperator::True) => true,
-        Some(_) => return Some(ParsedType::Unknown), // unsupported +? or -?
-        None => false,
+        Some(TSMappedTypeModifierOperator::True | TSMappedTypeModifierOperator::Plus) => {
+            MappedOptionality::Add
+        }
+        Some(TSMappedTypeModifierOperator::Minus) => MappedOptionality::Remove,
+        None => MappedOptionality::Keep,
     };
 
     let constraint = parse_type(&mapped_type.constraint)?;

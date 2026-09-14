@@ -324,13 +324,24 @@ pub struct ParsedConditionalType {
     pub span: Option<TextSpan>,
 }
 
+/// A mapped type's optionality modifier. `-?` makes every mapped property
+/// required even when the homomorphic source property is optional, so the
+/// three states cannot collapse to a bool: `Keep` inherits the source's
+/// optionality, `Add` forces optional, `Remove` forces required.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappedOptionality {
+    Keep,
+    Add,
+    Remove,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedMappedType {
     pub key_name: String,
     pub key_span: Option<TextSpan>,
     pub constraint: Box<ParsedType>,
     pub value_type: Box<ParsedType>,
-    pub optional: bool,
+    pub optional: MappedOptionality,
     /// The `as` clause (`[K in keyof T as Rename<K>]`): each key is mapped
     /// through it, `never` drops the key, a union of literals fans it out.
     pub name_type: Option<Box<ParsedType>>,

@@ -458,6 +458,7 @@ export const fixturePresets: Record<string, string> = {
   'typeof-function-member-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/typeof-function-member-generic-call-basic/tsconfig.json'),
   'method-type-parameter-default-basic': path.join(workspaceRoot, 'tests/compat-projects/method-type-parameter-default-basic/tsconfig.json'),
   'callback-return-type-parameter-basic': path.join(workspaceRoot, 'tests/compat-projects/callback-return-type-parameter-basic/tsconfig.json'),
+  'mapped-type-optionality-modifier-basic': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-optionality-modifier-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

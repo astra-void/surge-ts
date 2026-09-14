@@ -3692,7 +3692,7 @@ fn parse_mapped_type_required() {
     };
 
     assert_eq!(mapped.key_name, "K");
-    assert!(!mapped.optional);
+    assert_eq!(mapped.optional, MappedOptionality::Keep);
     assert!(matches!(*mapped.constraint, ParsedType::KeyOf(_)));
     assert!(matches!(*mapped.value_type, ParsedType::IndexedAccess(_)));
 }
@@ -3712,7 +3712,7 @@ fn parse_mapped_type_optional() {
     };
 
     assert_eq!(mapped.key_name, "K");
-    assert!(mapped.optional);
+    assert_eq!(mapped.optional, MappedOptionality::Add);
     assert!(matches!(*mapped.constraint, ParsedType::KeyOf(_)));
     assert!(matches!(*mapped.value_type, ParsedType::IndexedAccess(_)));
 }
@@ -3737,8 +3737,8 @@ fn parse_mapped_type_carries_its_remapping() {
 }
 
 #[test]
-fn parse_mapped_type_readonly_is_modelled_and_minus_optional_is_not() {
-    let source = "type ReadonlyClone<T> = { readonly [K in keyof T]: T[K] }; type MinusOpt<T> = { [K in keyof T]-?: T[K] };";
+fn parse_mapped_type_readonly_and_optionality_modifiers_are_modelled() {
+    let source = "type ReadonlyClone<T> = { readonly [K in keyof T]: T[K] }; type MinusOpt<T> = { [K in keyof T]-?: T[K] }; type PlusOpt<T> = { [K in keyof T]+?: T[K] };";
     let parsed = parse_source(source, "test.ts");
 
     let ParsedStatement::TypeAliasDeclaration(alias1) = &parsed.statements[0] else {
@@ -3747,14 +3747,23 @@ fn parse_mapped_type_readonly_is_modelled_and_minus_optional_is_not() {
     let ParsedType::Mapped(readonly_clone) = &alias1.ty else {
         panic!("expected a mapped type");
     };
-    assert!(!readonly_clone.optional);
+    assert_eq!(readonly_clone.optional, MappedOptionality::Keep);
 
-    // `-?` and `+?` are still unmodelled and degrade the alias; only `readonly`
-    // and the `as` remapping were implemented.
     let ParsedStatement::TypeAliasDeclaration(alias2) = &parsed.statements[1] else {
         panic!("expected a type alias declaration");
     };
-    assert!(matches!(alias2.ty, ParsedType::Unknown));
+    let ParsedType::Mapped(minus_opt) = &alias2.ty else {
+        panic!("expected `-?` to keep the mapping rather than degrade the alias");
+    };
+    assert_eq!(minus_opt.optional, MappedOptionality::Remove);
+
+    let ParsedStatement::TypeAliasDeclaration(alias3) = &parsed.statements[2] else {
+        panic!("expected a type alias declaration");
+    };
+    let ParsedType::Mapped(plus_opt) = &alias3.ty else {
+        panic!("expected `+?` to keep the mapping rather than degrade the alias");
+    };
+    assert_eq!(plus_opt.optional, MappedOptionality::Add);
 }
 
 #[test]

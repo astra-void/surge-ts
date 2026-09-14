@@ -400,7 +400,11 @@ pub(super) fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType
             format!("{{ {} }}", members.join("; "))
         }
         ParsedType::Mapped(mapped) => {
-            let optional = if mapped.optional { "?" } else { "" };
+            let optional = match mapped.optional {
+                surge_ts_syntax::MappedOptionality::Keep => "",
+                surge_ts_syntax::MappedOptionality::Add => "?",
+                surge_ts_syntax::MappedOptionality::Remove => "-?",
+            };
             format!(
                 "{{ [{} in {}]{optional}: {} }}",
                 mapped.key_name,
