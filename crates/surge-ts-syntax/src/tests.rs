@@ -3718,7 +3718,7 @@ fn parse_mapped_type_optional() {
 }
 
 #[test]
-fn parse_mapped_type_unsupported_remapping() {
+fn parse_mapped_type_carries_its_remapping() {
     let source = "type Remapped<T> = { [K in keyof T as string]: T[K] };";
     let parsed = parse_source(source, "test.ts");
 
@@ -3726,19 +3726,31 @@ fn parse_mapped_type_unsupported_remapping() {
         panic!("expected a type alias declaration");
     };
 
-    assert!(matches!(alias.ty, ParsedType::Unknown));
+    let ParsedType::Mapped(mapped) = &alias.ty else {
+        panic!("expected a mapped type");
+    };
+    assert_eq!(mapped.key_name, "K");
+    assert!(matches!(
+        mapped.name_type.as_deref(),
+        Some(ParsedType::String)
+    ));
 }
 
 #[test]
-fn parse_mapped_type_unsupported_modifiers() {
+fn parse_mapped_type_readonly_is_modelled_and_minus_optional_is_not() {
     let source = "type ReadonlyClone<T> = { readonly [K in keyof T]: T[K] }; type MinusOpt<T> = { [K in keyof T]-?: T[K] };";
     let parsed = parse_source(source, "test.ts");
 
     let ParsedStatement::TypeAliasDeclaration(alias1) = &parsed.statements[0] else {
         panic!("expected a type alias declaration");
     };
-    assert!(matches!(alias1.ty, ParsedType::Unknown));
+    let ParsedType::Mapped(readonly_clone) = &alias1.ty else {
+        panic!("expected a mapped type");
+    };
+    assert!(!readonly_clone.optional);
 
+    // `-?` and `+?` are still unmodelled and degrade the alias; only `readonly`
+    // and the `as` remapping were implemented.
     let ParsedStatement::TypeAliasDeclaration(alias2) = &parsed.statements[1] else {
         panic!("expected a type alias declaration");
     };
