@@ -509,18 +509,25 @@ pub(crate) fn resolve_readonly_utility_type(
         };
     };
 
-    // `readonly` properties are not modelled, so an object is returned as it
-    // is; an array or tuple becomes the readonly shape.
-    let ty = match source_type.peeled() {
+    ResolvedType {
+        ty: readonly_shape(&source_type),
+        had_error: false,
+    }
+}
+
+/// `Readonly<T>`: `readonly` properties are not modelled, so an object is
+/// returned as it is; an array or tuple becomes the readonly shape; a union
+/// distributes (the mapped type is homomorphic); anything else is itself.
+fn readonly_shape(source: &Type) -> Type {
+    match source.peeled() {
         Type::Object(object_type) => Type::Object(object_type),
         sequence @ (Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)) => {
             crate::infer::types::resolve::readonly_reference(sequence)
         }
-        _ => Type::Unknown,
-    };
-    ResolvedType {
-        ty,
-        had_error: false,
+        Type::Union(union) => {
+            surge_ts_types::union_type(union.types().iter().map(readonly_shape).collect())
+        }
+        other => other,
     }
 }
 

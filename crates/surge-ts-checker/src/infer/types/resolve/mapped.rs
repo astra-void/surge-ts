@@ -126,6 +126,42 @@ pub(crate) fn resolve_mapped_type(
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
         new_substitution.insert(mapped.key_name.clone(), Type::StringLiteral(key.clone()));
 
+        // `as` remaps the key: `never` drops it, a union of literals fans it
+        // out, anything else is a shape surge cannot enumerate.
+        let property_names: Vec<String> = match mapped.name_type.as_deref() {
+            None => vec![key.clone()],
+            Some(name_type) => {
+                let renamed =
+                    resolve_parsed_type(name_type.clone(), ctx, resolving, &new_substitution);
+                had_error |= renamed.had_error;
+                match renamed.ty {
+                    Type::Never => continue,
+                    Type::StringLiteral(name) => vec![name],
+                    Type::Union(union) => {
+                        let names: Option<Vec<String>> = union
+                            .types()
+                            .iter()
+                            .map(|member| match member {
+                                Type::StringLiteral(name) => Some(name.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        match names {
+                            Some(names) => names,
+                            None => {
+                                had_error = true;
+                                continue;
+                            }
+                        }
+                    }
+                    _ => {
+                        had_error = true;
+                        continue;
+                    }
+                }
+            }
+        };
+
         let resolved_value = resolve_parsed_type(
             *mapped.value_type.clone(),
             ctx,
@@ -142,14 +178,16 @@ pub(crate) fn resolve_mapped_type(
             .and_then(|object| object.get_property(&key));
         let source_optional = source_property.is_some_and(|property| property.is_optional());
         let source_method = source_property.is_some_and(|property| property.is_method());
-        properties.insert(
-            key.into(),
-            ObjectProperty {
-                ty: resolved_value.ty,
-                optional: mapped.optional || source_optional,
-                method: source_method,
-            },
-        );
+        for name in property_names {
+            properties.insert(
+                name.into(),
+                ObjectProperty {
+                    ty: resolved_value.ty.clone(),
+                    optional: mapped.optional || source_optional,
+                    method: source_method,
+                },
+            );
+        }
     }
 
     // Reusing the source's index value type is exact for identity mappings

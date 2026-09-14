@@ -262,6 +262,9 @@ pub struct ParsedMappedType {
     pub constraint: Box<ParsedType>,
     pub value_type: Box<ParsedType>,
     pub optional: bool,
+    /// The `as` clause (`[K in keyof T as Rename<K>]`): each key is mapped
+    /// through it, `never` drops the key, a union of literals fans it out.
+    pub name_type: Option<Box<ParsedType>>,
     pub span: Option<TextSpan>,
 }
 

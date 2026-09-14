@@ -308,10 +308,14 @@ fn parse_indexed_access_type(indexed_access: &TSIndexedAccessType<'_>) -> Option
     })))
 }
 
+/// The `readonly` modifier (`readonly [K in …]`, `-readonly`) is not
+/// modelled for properties anywhere, so it is ignored rather than degrading
+/// the whole mapping.
 fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
-    if mapped_type.readonly.is_some() || mapped_type.name_type.is_some() {
-        return Some(ParsedType::Unknown);
-    }
+    let name_type = match mapped_type.name_type.as_ref() {
+        Some(name_type) => Some(Box::new(parse_type(name_type)?)),
+        None => None,
+    };
 
     let optional = match mapped_type.optional {
         Some(TSMappedTypeModifierOperator::True) => true,
@@ -331,6 +335,7 @@ fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
         constraint: Box::new(constraint),
         value_type: Box::new(value_type),
         optional,
+        name_type,
         span: Some(text_span_from_oxc_span(mapped_type.span)),
     })))
 }
