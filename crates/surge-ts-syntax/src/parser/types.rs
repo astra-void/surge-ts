@@ -44,6 +44,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                 properties: Vec::new(),
                 string_index_type: None,
                 call_signature: None,
+                call_signature_overloads: Vec::new(),
                 construct_signature: None,
                 non_primitive: true,
             },
@@ -80,6 +81,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                     properties: Vec::new(),
                     string_index_type: None,
                     call_signature: None,
+                    call_signature_overloads: Vec::new(),
                     construct_signature: Some(Box::new(function)),
                     non_primitive: false,
                 }))
@@ -650,6 +652,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
     let mut string_index_type: Option<Box<ParsedType>> = None;
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
+    let mut call_signature_overloads: Vec<ParsedFunctionType> = Vec::new();
     let mut construct_signature: Option<Box<ParsedFunctionType>> = None;
     let getters = getter_accessor_names(&type_literal.members);
 
@@ -673,6 +676,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 // `<T>(actual: T): …` and `<T>(): …`, and keeping only the
                 // first made every zero-argument call a false TS2554.
                 if let Some(parsed) = parse_call_signature(signature) {
+                    call_signature_overloads.push(parsed.clone());
                     call_signature = Some(match call_signature.take() {
                         Some(existing) => {
                             Box::new(merge_parsed_call_signatures(&existing, &parsed))
@@ -721,6 +725,12 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         properties,
         string_index_type,
         call_signature,
+        // One signature is already the whole story; the fold is lossless there.
+        call_signature_overloads: if call_signature_overloads.len() > 1 {
+            call_signature_overloads
+        } else {
+            Vec::new()
+        },
         construct_signature,
         non_primitive: false,
     }))
@@ -1017,6 +1027,13 @@ pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
     }
     match key {
         PropertyKey::StaticIdentifier(_) | PropertyKey::PrivateIdentifier(_) => None,
+        // A computed key that is a literal is just that property name —
+        // `{ ['a']: T }` and `{ 'a': T }` declare the same member. Dropping it
+        // emptied every interface written that way, which is how zustand's
+        // `interface StoreMutators<S, A> { ['zustand/immer']: WithImmer<S> }`
+        // augmentation contributed nothing at all.
+        PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::NumericLiteral(literal) => Some(literal.raw_str().to_string()),
         other => render(other.to_expression()).map(|path| format!("[{path}]")),
     }
 }

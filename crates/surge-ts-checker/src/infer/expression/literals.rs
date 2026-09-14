@@ -64,7 +64,28 @@ pub(crate) fn infer_object_literal(
                 Type::Object(source) => {
                     spread_source_is_open |= source.synthetic_open_index;
                     for (name, source_property) in source.properties.iter() {
-                        merged_properties.insert(name.clone(), source_property.clone());
+                        // An *optional* source property may not be carried at
+                        // all, so an earlier property of the same name survives:
+                        // tsc types the result as the union of both (with
+                        // `undefined` dropped from the spread side) and keeps
+                        // the earlier property's optionality. Replacing it
+                        // outright made zustand's `let options = { partialize:
+                        // (s) => s, …, ...baseOptions }` read `partialize` as
+                        // possibly-undefined and uncallable.
+                        let merged = match merged_properties.get(name.as_ref()) {
+                            Some(existing) if source_property.optional => {
+                                surge_ts_types::ObjectProperty {
+                                    ty: surge_ts_types::union_type(vec![
+                                        existing.ty.clone(),
+                                        surge_ts_types::remove_undefined(&source_property.ty),
+                                    ]),
+                                    optional: existing.optional,
+                                    method: existing.method || source_property.method,
+                                }
+                            }
+                            _ => source_property.clone(),
+                        };
+                        merged_properties.insert(name.clone(), merged);
                     }
                 }
                 // `{ ...(cond ? { list } : {}) }`: spreading a union contributes

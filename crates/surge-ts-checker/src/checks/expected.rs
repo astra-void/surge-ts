@@ -1742,6 +1742,14 @@ fn evaluate_conditional_expression_with_expected_type(
         _ => false,
     };
 
+    // `cond ? anyValue : maybeString` is `any` in tsc — a branch typed `any`
+    // absorbs the union — so neither branch is reported against the expected
+    // type. Checking them individually made every such argument a false
+    // TS2345 for whatever the *other* branch happened to be.
+    if matches!(true_branch_type, Some(Type::Any)) || matches!(false_branch_type, Some(Type::Any)) {
+        return InferredExpression::Known(Type::Any);
+    }
+
     has_contextual_mismatch |= check_conditional_branch_expected_type(
         true_result,
         true_branch_span,

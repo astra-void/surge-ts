@@ -995,6 +995,7 @@ pub(super) fn check_program_file(
             &current_type_declarations,
             &current_symbols,
             None,
+            parsed_file.is_module,
             ctx,
         );
         let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);
@@ -1107,6 +1108,7 @@ pub(super) fn check_program_file(
             &current_type_declarations,
             &current_symbols,
             None,
+            parsed_file.is_module,
             ctx,
         );
         let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);

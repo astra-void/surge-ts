@@ -1147,7 +1147,11 @@ pub(crate) fn merge_file_keyed_module_augmentation_into_declarations(
         .get(&module_augmentation_file_key(file_identity))
     {
         for (name, declaration) in augmentation.type_declarations.iter() {
-            crate::symbols::merge_type_declaration_into_table(table, name.as_ref(), declaration);
+            crate::symbols::merge_augmentation_type_declaration_into_table(
+                table,
+                name.as_ref(),
+                declaration,
+            );
         }
     }
 }
@@ -1157,7 +1161,7 @@ pub(crate) fn apply_module_augmentation(
     augmentation: &ModuleExportTable,
 ) {
     for (name, declaration) in augmentation.type_declarations.iter() {
-        crate::symbols::merge_type_declaration_into_table(
+        crate::symbols::merge_augmentation_type_declaration_into_table(
             Arc::make_mut(&mut base.type_declarations),
             name.as_ref(),
             declaration,

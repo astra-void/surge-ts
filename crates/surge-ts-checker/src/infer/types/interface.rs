@@ -659,6 +659,7 @@ pub(crate) fn resolve_interface(
                     declaration_template.as_deref(),
                     interface_key.as_ref(),
                     lazy_member_context,
+                    (!interface.body.fragment_scopes.is_empty()).then(|| &*interface.body),
                 )
             })
         })
@@ -795,6 +796,41 @@ thread_local! {
         const { std::cell::Cell::new(usize::MAX) };
 }
 
+/// A member's own resolution context, installed while its annotation resolves.
+struct InstalledMemberScope {
+    saved_scope: Option<Arc<crate::symbols::TypeDeclarationScope>>,
+    saved_file_name: String,
+    crossed_file: bool,
+}
+
+fn install_member_scope(
+    ctx: &mut CheckerContext,
+    scope: &Arc<crate::symbols::TypeDeclarationScope>,
+    file_name: &str,
+) -> InstalledMemberScope {
+    let saved_scope = ctx.type_declaration_scope.clone();
+    let saved_file_name = ctx.file_name.clone();
+    let crossed_file = saved_file_name != file_name;
+    ctx.type_declaration_scope = Some(scope.clone());
+    ctx.set_file_name(file_name.to_string());
+    if crossed_file {
+        ctx.cross_file_resolution_depth += 1;
+    }
+    InstalledMemberScope {
+        saved_scope,
+        saved_file_name,
+        crossed_file,
+    }
+}
+
+fn restore_member_scope(ctx: &mut CheckerContext, saved: InstalledMemberScope) {
+    if saved.crossed_file {
+        ctx.cross_file_resolution_depth -= 1;
+    }
+    ctx.set_file_name(saved.saved_file_name);
+    ctx.type_declaration_scope = saved.saved_scope;
+}
+
 pub(crate) fn resolve_interface_declaration(
     extends: &[ParsedNamedType],
     members: &[ParsedInterfaceMember],
@@ -813,6 +849,10 @@ pub(crate) fn resolve_interface_declaration(
     // and diagnostics produced inside a lazy force are dropped with the
     // recovered context.
     lazy_member_context: Option<(&str, usize)>,
+    // The declaration body, when some of its members came from a `declare
+    // module` augmentation written in another file and must resolve under that
+    // file's scope rather than this declaration's.
+    augmented_body: Option<&crate::symbols::InterfaceBody>,
 ) -> ResolvedType {
     crate::program::record_interface_member_declaration_visits(members.len());
     crate::program::record_program_counter(|c| {
@@ -1045,6 +1085,9 @@ pub(crate) fn resolve_interface_declaration(
             });
         }
         let mut deferred_method_components = false;
+        let installed_member_scope = augmented_body
+            .and_then(|body| body.member_scope(member_index))
+            .map(|(scope, file_name)| install_member_scope(ctx, scope, file_name));
         let mut property_type = if let Some(function) = cached_method {
             ResolvedType {
                 ty: Type::Function(function),
@@ -1105,6 +1148,9 @@ pub(crate) fn resolve_interface_declaration(
                 resolve_parsed_type(member.ty.clone(), ctx, resolving, substitution)
             })
         };
+        if let Some(saved) = installed_member_scope {
+            restore_member_scope(ctx, saved);
+        }
         let emitted_diagnostics = ctx.diagnostics().len() != diagnostics_before
             || ctx.utility_diagnostic_keys.len() != utility_keys_before;
         let degraded = crate::program::expansion_degradation_epoch() != degradation_before;

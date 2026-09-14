@@ -367,6 +367,7 @@ pub(crate) fn validate_local_type_declaration(
                         None,
                         None,
                         None,
+                        (!interface.body.fragment_scopes.is_empty()).then(|| &*interface.body),
                     );
                     ctx.pop_type_parameter_scope();
                 })

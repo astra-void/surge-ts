@@ -216,6 +216,20 @@ pub(crate) fn check_function_body(
     // hoist below).
     let saved_type_declaration_scope = install_body_local_type_declarations(&body, scopes, ctx);
 
+    // A nested function body is deferred: it runs after the enclosing block has
+    // finished evaluating, so it may legally name a `const`/`let` declared later
+    // in that block. Recursive schemas are written exactly this way
+    // (`const A: Schema = lazy(() => object({ b: B })); const B: Schema = ...`).
+    // Publish those bindings as a fallback rather than into the scope itself, so
+    // straight-line resolution order — and the flow state built from it — is
+    // unchanged.
+    //
+    // Installed before the hoist below, not after: a hoisted signature's
+    // annotation is mapped there, and `function g(...args:
+    // ConstructorParameters<typeof E>)` under a sibling `const E = Error`
+    // otherwise reported a false TS2304 for a name that is plainly in scope.
+    let saved_module_value_fallback = install_deferred_block_value_fallback(&body, ctx);
+
     // Hoist nested `function` declarations into the current scope so a sibling
     // closure can call them (function declarations are function-scoped and
     // callable before their statement position).
@@ -252,15 +266,6 @@ pub(crate) fn check_function_body(
         }
     }
 
-    // A nested function body is deferred: it runs after the enclosing block has
-    // finished evaluating, so it may legally name a `const`/`let` declared later
-    // in that block. Recursive schemas are written exactly this way
-    // (`const A: Schema = lazy(() => object({ b: B })); const B: Schema = ...`).
-    // Publish those bindings as a fallback rather than into the scope itself, so
-    // straight-line resolution order — and the flow state built from it — is
-    // unchanged. Only *annotated* declarations qualify: an unannotated one would
-    // need its initializer inferred out of order.
-    let saved_module_value_fallback = install_deferred_block_value_fallback(&body, ctx);
 
     // A body-local type declaration's own body may name a body-local *value*
     // (`type Schema = Infer<typeof schema>`), and the `typeof` arm resolves

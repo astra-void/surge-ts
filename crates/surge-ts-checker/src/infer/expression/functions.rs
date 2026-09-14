@@ -57,7 +57,7 @@ pub(crate) fn infer_arrow_function(
             declared_return_type.unwrap_or_else(|| {
                 let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
                 match infer_expression(expression, &locals, ctx) {
-                    InferredExpression::Known(ty) => ty,
+                    InferredExpression::Known(ty) => widen_fresh_literal_return(expression, ty),
                     _ => Type::Unknown,
                 }
             })
@@ -72,7 +72,19 @@ pub(crate) fn infer_arrow_function(
             // generic inference: `vi.fn((result) => { … })` inferred no `T`, so
             // `Mock<T>` stayed uninstantiated and every use of the mock was a
             // false error.
-            .or_else(|| (!body_contains_return(body)).then_some(Type::Void))
+            //
+            // A body that cannot complete at all (`() => { throw new Error(…) }`)
+            // returns `never`, which is assignable everywhere; typing it `void`
+            // made zustand's throwing storage stub unassignable to `StateStorage`.
+            .or_else(|| {
+                (!body_contains_return(body)).then(|| {
+                    if crate::flow::analyze_function_body_flow(body).guarantees_exit {
+                        Type::Never
+                    } else {
+                        Type::Void
+                    }
+                })
+            })
             .unwrap_or(Type::Unknown),
     };
 
@@ -82,6 +94,26 @@ pub(crate) fn infer_arrow_function(
         false,
         required_parameter_count(arrow_function.parameters.as_slice()),
     )
+}
+
+/// tsc widens the *fresh* literal a body expression returns, so `() => ''`
+/// infers `() => string` and an object literal's property declared that way is
+/// assignable from any `() => string`. A literal that came from a `const` is not
+/// fresh and keeps its own type, so freshness is decided syntactically here, the
+/// same way the generic-argument path decides it.
+fn widen_fresh_literal_return(expression: &ParsedExpression, ty: Type) -> Type {
+    if matches!(
+        expression,
+        ParsedExpression::StringLiteral(_)
+            | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::ObjectLiteral { .. }
+            | ParsedExpression::ArrayLiteral { .. }
+    ) {
+        crate::checks::expr::widen_type(&ty)
+    } else {
+        ty
+    }
 }
 
 fn primitive_declared_return_type(ty: &surge_ts_syntax::ParsedType) -> Option<Type> {
@@ -250,7 +282,7 @@ fn infer_block_body_return_type(
                 if ty.is_unknown() {
                     return None;
                 }
-                returned.push(ty);
+                returned.push(widen_fresh_literal_return(expression, ty));
             }
             _ => {}
         }

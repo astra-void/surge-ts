@@ -721,6 +721,14 @@ pub struct ParsedObjectType {
     /// A bare call signature (`(value?: any): number`) on the object type,
     /// making values of this type callable without `new`.
     pub call_signature: Option<Box<ParsedFunctionType>>,
+    /// Every call signature as written, in source order, kept only when the
+    /// type literal declares more than one. `call_signature` above stays the
+    /// permissive fold every other consumer reads; this list exists for
+    /// `infer` capture binding, which must pair the pattern's signatures with
+    /// the check type's overloads one for one — the fold widens a slot the
+    /// overloads disagree on, and an `infer` capture in that slot is exactly
+    /// what gets widened away.
+    pub call_signature_overloads: Vec<ParsedFunctionType>,
     /// A construct signature. Carries the lowering of a constructor *type*
     /// (`new (args) => T`, `abstract new (args) => T`), which is an object type
     /// with only this signature — modelled distinctly from a call signature so

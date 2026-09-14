@@ -212,8 +212,14 @@ pub(crate) fn check_variable_declaration_against_symbols(
     // the result degrades to the sentinel. Only the un-annotated form carries it;
     // an explicit annotation already supplies the callable type.
     let function_signature = match (&declared_type, variable.initializer.as_ref()) {
+        // A *type predicate* is carried the same way, generic or not: the guard
+        // machinery reads `v is T` off the written signature, and an inferred
+        // function type has nowhere to keep it — so `const isW = (v: W | X): v
+        // is W => …` narrowed nothing at all, while the same predicate written
+        // as a `function` declaration did.
         (None, Some(surge_ts_syntax::ParsedExpression::ArrowFunction(arrow)))
-            if !arrow.type_parameters.is_empty() =>
+            if !arrow.type_parameters.is_empty()
+                || matches!(arrow.return_type, Some(surge_ts_syntax::ParsedType::Predicate(_))) =>
         {
             Some(crate::checks::function::function_signature_info(
                 &arrow.type_parameters,

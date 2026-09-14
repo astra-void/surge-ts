@@ -398,6 +398,12 @@ pub(crate) fn collect_exportable_value_symbols(
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
     imported_symbols: Option<&SymbolTable>,
+    // Whether these statements are a *module* file's own top level. A module's
+    // `declare const screen` is module-local and must bind ahead of a global of
+    // the same name; the statements of an ambient `declare module` block inside
+    // a script `.d.ts` (`@types/node`) are not a module file and keep the
+    // global-wins behavior.
+    module_file: bool,
     ctx: &CheckerContext,
 ) -> SymbolTable {
     if thin_prelim_enabled() && ctx.thin_superseded_value_collection {
@@ -497,6 +503,7 @@ pub(crate) fn collect_exportable_value_symbols(
             &mut exportable_values,
             &mut shadow_ctx,
             !library_file,
+            module_file,
         );
     }
     apply_merging_namespace_value_members(&merging_namespaces, &mut exportable_values);
@@ -761,6 +768,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
     exportable_values: &mut SymbolTable,
     ctx: &mut CheckerContext,
     check_initializers: bool,
+    module_file: bool,
 ) {
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
@@ -785,8 +793,18 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                 let shadowed_by_import_type_global =
                     exportable_values.get_own_shared(&variable.name).is_none()
                         && ctx.is_import_type_global(&variable.name);
+                // A module file's own `declare const` is module-local, so a
+                // global of the same name never supersedes it: with the global
+                // winning, `export declare const screen: Screen` in
+                // `@testing-library/dom` published the DOM `window.screen`
+                // instead, and every `screen.getByText(…)` in a consumer was a
+                // false TS2339. The block statements of a script `.d.ts` keep
+                // the old behavior — there a `declare const` *is* the global.
+                let shadowed_by_global = module_file
+                    && exportable_values.get_own_shared(&variable.name).is_none();
                 if exportable_values.get_shared(&variable.name).is_none()
                     || shadowed_by_import_type_global
+                    || shadowed_by_global
                 {
                     let kind = match variable.kind {
                         surge_ts_syntax::ParsedVariableKind::Var => SymbolKind::Var,
@@ -844,6 +862,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                     exportable_values,
                     ctx,
                     check_initializers,
+                    module_file,
                 )
             }
         }

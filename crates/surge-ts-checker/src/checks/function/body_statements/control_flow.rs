@@ -20,7 +20,8 @@ use super::super::{
     narrow_discriminant_in_scope, narrow_truthy_guarded_identifiers, visible_symbols,
 };
 use super::{
-    body_ends_in_never_call, branch_assigned_names, branch_assignment_types,
+    adopt_branch_assignments, body_ends_in_never_call, branch_assigned_names,
+    branch_assignment_types,
     join_branch_assignments, join_branch_pair, narrow_aliased_guard_after_exit,
     narrow_condition_and_aliases_in_scope, resolved_alias_condition, rewrite_discriminant_aliases,
 };
@@ -611,6 +612,16 @@ pub(crate) fn check_function_try_statement(
         let mut branch_deltas = Vec::new();
         let try_guarantees_value_return =
             analyze_function_body_flow(&try_statement.block).guarantees_value_return;
+        // Reaching the code after a `try` whose handler returns or throws means
+        // the block completed, so its assignments hold from there on.
+        let handler_diverts = try_statement.handler.as_ref().is_none_or(|handler| {
+            let flow = analyze_function_body_flow(&handler.body);
+            flow.guarantees_value_return || flow.guarantees_exit
+        });
+        let mut joinable_assignments = Vec::new();
+        if handler_diverts && !try_guarantees_value_return {
+            branch_assigned_names(&try_statement.block, &mut joinable_assignments);
+        }
         scopes.push_child();
         flow_state.begin_branch_capture();
         check_function_body(
@@ -622,6 +633,7 @@ pub(crate) fn check_function_try_statement(
         );
         let mut try_delta = flow_state.finish_branch_capture();
         try_delta.continues = !try_guarantees_value_return;
+        let try_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
         branch_deltas.push(try_delta);
 
@@ -678,6 +690,7 @@ pub(crate) fn check_function_try_statement(
         }
 
         merge_branch_deltas(flow_state, &branch_deltas, false);
+        adopt_branch_assignments(&try_assignment_types, scopes);
         scopes.push_child();
         check_function_body(
             try_statement.finalizer,

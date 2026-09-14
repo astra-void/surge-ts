@@ -1363,6 +1363,62 @@ intersection-keyed index zustand uses to test for a non-tuple array.
 assignment target's overloaded `setState`.
 
 
+## zustand burn-down (2026-09-14)
+
+Measured against the pinned TypeScript 7.0.2 oracle on zustand `v5.0.15`
+(`2115efb`), from an isolated worktree on top of `13455480`, with both binaries
+built from that tree. **135 -> 42**, every one of the 42 surge-only (the corpus
+measured 136 when it was provisioned the day before; one had closed on main in
+between). ky, zod,
+ofetch, ts-pattern, drizzle-orm and trpc are byte-identical across the whole
+pass; tanstack-query keeps its 9 with one message improved
+(`MutationFunction<() => "data">` now renders `() => string`, which is what tsc
+prints).
+
+Each cause below is reduced to a few lines. **None is pinned by an oracle
+preset**: a fixture for a shape that still over-reports would bake the false
+positive in, and the ones that closed are covered by the corpus itself.
+
+| # | Cause | Reduction | Closed |
+| ---: | --- | --- | ---: |
+| 1 | **An augmented interface's members resolved in the augmented file's scope.** `declare module "../vanilla" { interface StoreMutators<S, A> { … } }` merges into the target file's declaration table, where `WithPersist`/`WithDevtools`/`WithRedux` — local to the augmenting file — do not exist. The merged body now carries a resolution scope per foreign declaration fragment, and a member resolves under its own fragment's scope and file name. | two files, a dozen lines | 3 |
+| 2 | **A module's own `declare const` lost to an ambient global of the same name.** The lazy library value-annotation path skipped a declaration whose name already answered through the ambient-global parent, so `@testing-library/dom`'s `export declare const screen: Screen` published lib.dom's `window.screen`; every `screen.getByText(…)` in a consumer was a false TS2339, aliasing the import included. A module file's top-level `declare const` is module-local and can never be the global; an ambient `declare module` block inside a *script* `.d.ts` keeps the old behavior, which is the `@types/node` shape the guard beside it protects. | `import { screen } from 'pkg'`, 3 lines | 72 |
+| 3 | **`infer` captures past the first signature of an overloaded call-signature group.** A type literal's overloads fold into one permissive signature at parse time and the fold widens every slot the overloads disagree on — exactly where the captures are. `S extends { setState: { (...args: infer Sa1): infer Sr1; (...args: infer Sa2): infer Sr2 } }` bound only `Sr1`. The parsed object type now keeps the signatures as written when it declares more than one, and capture binding pairs them with the check type's overloads, aligned at the end the way tsc lines up two signature lists. | 9 lines, no imports | 3 |
+| 4 | **An interface member whose computed key is a literal was dropped.** `{ ['zustand/immer']: WithImmer<S> }` declares the same member as `{ 'zustand/immer': … }`, but only identifier and member-expression computed keys were rendered. All five zustand middleware augmentations are written that way, so `StoreMutators` stayed empty. | 3-line interface | 0 (corpus-neutral; a later link still breaks) |
+| 5 | **A `try` block's narrowing died with its branch frame.** Reaching the code after `try { s = get() } catch { return }` means the block completed, so its assignments hold; the try branch's end types are now adopted when the handler diverts (or there is none), the same snapshot-and-join the `if` path does. | 10 lines | 3 |
+| 6 | **`instanceof` narrowed nothing in an expression.** Two gaps: the context-aware narrowing only filtered union members, so a non-union subject needed the subtype narrowing that only the statement path could reach; and the constructor's arity was read from the file's own declaration table, which has no lib declarations, so in project mode `Map` resolved with no type arguments and failed outright. | 16 lines | 4 |
+| 7 | **A fresh literal returned by an arrow was not widened.** `const storage = { getItem: () => '' }` typed the property `() => ""`, so a later `storage.getItem = () => storageValue` was a false TS2322. Freshness is decided syntactically, the way the generic-argument path decides it. Applied to expression bodies and to each `return` of a straight-line block body. | 16 lines | 4 |
+| 8 | **A block body that only throws returned `void`.** `getItem: () => { throw new Error(…) }` is `never` in tsc, which is assignable everywhere; as `void` it made zustand's throwing storage stub unassignable to `StateStorage`. | 9 lines | 2 |
+| 9 | **A conditional with an `any` branch was checked branch by branch.** `cond ? options.testConnectionId : key` with the first branch `any` is `any` in tsc; the expected-type path reported the *other* branch's `string \| undefined` against the parameter. | 11 lines | 2 |
+
+**26 of the remaining 42 are behind one sealed gate.** zustand's middleware
+typing is `Mutate<S, Ms>`, a recursive generic alias that walks a mutator list
+and indexes `StoreMutators` at each step. The default cycle break answers
+`unknown` for every generic back-edge, so `set` inside `immer((set) => …)` is
+not callable and `middlewareTypes.test.tsx` alone reports 23 TS2349.
+`SURGE_GENERIC_RECURSIVE_ALIAS=1` — the instantiation-aware frame key — closes
+all of them (zustand 42 -> 16) and matches tsc exactly on a 15-line reduction of
+the walk. It stays opt-in: on the same binary it leaves **ts-pattern unfinished
+after 4 minutes** (a 15-minute run was still going when it was killed) and costs
+**drizzle-orm 4 -> 6**. Re-measure both before proposing to flip it.
+
+The 16 that remain with the gate on, by root cause where it is known:
+`src/middleware/devtools.ts` two TS2339 on `api.dispatch` after a
+`api is WithDispatch` predicate whose subject is a contextually-typed generic
+store; one TS2304 for the second `infer Sr2` of the devtools capture (the
+persist copy of the same pattern closed with cause 3); two TS2304 in
+`devtools.test.tsx` for `typeof` of a *function-local* `const`
+(`const OriginalError = Error` read from a nested function's parameter
+annotation — reduced to 15 lines, and the same shape another session measured at
+480 occurrences elsewhere, so it wants its own pass); `src/vanilla.ts:20`
+TS2536 on `Ms['length' & keyof Ms]`, which does not reproduce outside the
+corpus; `src/middleware/immer.ts:76` TS7006 on a rest parameter contextually
+typed by an overloaded `setState`; two TS2349 in `persist.ts` where `options`
+is a spread over an optional `partialize`; and one TS2353 where tsc skips the
+excess-property check because the parameter is a naked type parameter
+(4-line reduction).
+
+
 ## Compatibility fixture matrix
 
 Fourteen real-world-shaped oracle presets (added 2026-07-16) pin the library
