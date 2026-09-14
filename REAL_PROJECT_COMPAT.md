@@ -2667,13 +2667,29 @@ binary built from that checkout and passed as `SURGE_TS_BIN`:
 
 | Corpus | surge-only | `tsc`-only |
 | --- | ---: | ---: |
+| ky | 0 | 0 |
+| ofetch | 0 | 0 |
+| zod | 0 | 0 |
+| ts-pattern | 0 | 2 |
+| drizzle-orm | 4 | 16 |
 | tanstack-query | **8** | 0 |
+| trpc | 16 | 103 |
 | zustand | **37** | 0 |
 
-Both are below the figures the merged sections record (tanstack 10 / 11,
-zustand 42): the two burn-downs overlap, and main's own later fixes close some
-of the same diagnostics. The remaining tanstack codes are TS2339 4, TS2345 2,
-TS2304 1, TS2322 1.
+tanstack-query and zustand are below the figures the merged sections record
+(tanstack 10 / 11, zustand 42): the two burn-downs overlap, and main's own later
+fixes close some of the same diagnostics. The remaining tanstack codes are
+TS2339 4, TS2345 2, TS2304 1, TS2322 1. zod is at exact parity here, below the
+8 its last report recorded.
+
+trpc is measured at `--maxDiagnostics 3000`, not the harness default of 500.
+At 500 both sides truncate to exactly 500 and the comparison reports a
+symmetric 89 / 89 that is a cap artifact, not a parity result. Uncapped, the
+pre-merge binary at `f77ce724` and the merged binary produce the *same* totals
+(1244 `tsc`, 1157 surge-ts) and the same 103 / 16 split, so the merge leaves
+trpc unchanged. The 16 surge-only diagnostics are pre-existing and are not the
+0 that [[trpc-false-positive-burndown]] recorded at a different cap and corpus
+revision; they are unexamined here.
 
 Gates at the same commit: oracle sweep 240 / 241 presets, and the workspace
 suite 1943 / 1944. Each carries exactly one failure, and both were reproduced
