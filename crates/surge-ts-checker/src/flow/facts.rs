@@ -113,6 +113,10 @@ fn is_always_truthy_condition(condition: &ParsedExpression) -> bool {
     matches!(condition, ParsedExpression::BooleanLiteral(true))
 }
 
+fn is_always_falsy_condition(condition: &ParsedExpression) -> bool {
+    matches!(condition, ParsedExpression::BooleanLiteral(false))
+}
+
 /// Whether `body` contains a `break` that would exit the loop it directly
 /// belongs to. Recurses into structured statements that share the loop's break
 /// target (`if`/block/`try`) but not into nested loops or `switch`, which
@@ -194,6 +198,18 @@ pub(crate) fn summarize_function_statement_flow(
         ParsedFunctionBodyStatement::If(if_statement) => {
             let then_summary = summarize_function_body_flow(&if_statement.then_body);
             let else_summary = summarize_function_body_flow(&if_statement.else_body);
+
+            // tsc's binder makes the branch opposite a literal `true`/`false`
+            // condition unreachable, so `if (true) { return 1 }` ends the
+            // function and the other branch contributes nothing. It is the
+            // *keyword* that folds, not truthiness — `if (1)` still falls
+            // through in tsc too.
+            if is_always_truthy_condition(&if_statement.condition) {
+                return then_summary;
+            }
+            if is_always_falsy_condition(&if_statement.condition) {
+                return else_summary;
+            }
 
             ReturnFlowSummary {
                 contains_value_return: then_summary.contains_value_return

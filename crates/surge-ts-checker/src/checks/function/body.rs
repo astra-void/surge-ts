@@ -111,6 +111,14 @@ pub(crate) fn emit_missing_return_diagnostic(
         None => diagnostic,
     };
 
+    // tsc runs this check only when the function's end point is reachable
+    // (`checkAllCodePathsInNonVoidFunctionReturnOrThrow` is gated on
+    // `functionHasImplicitReturn`). A body that always diverges — `while (true)
+    // {}`, a returning `if (true)`, a bare `return;` — reports nothing here.
+    if body_flow.guarantees_exit {
+        return;
+    }
+
     if body_flow.contains_value_return {
         if !body_flow.guarantees_value_return {
             ctx.push(with_span(Diagnostic::ts2366(ctx.file_name.clone())));

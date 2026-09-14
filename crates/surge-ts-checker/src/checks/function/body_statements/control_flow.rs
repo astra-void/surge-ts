@@ -15,6 +15,7 @@ use crate::flow::{
 };
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::symbols::ScopeStack;
+use super::super::narrowing::narrow_reference_non_null_in_scope;
 use super::super::{
     check_function_body, evaluate_condition_expression_with_truthy_guards, insert_binding_name,
     narrow_discriminant_in_scope, narrow_truthy_guarded_identifiers, visible_symbols,
@@ -221,21 +222,49 @@ pub(crate) fn check_function_while_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
-    check_obvious_truthiness_condition(
-        &while_statement.condition,
-        while_statement.condition_span,
-        ctx,
-    );
+    let ParsedWhileStatement {
+        condition,
+        condition_span,
+        body,
+        runs_at_least_once,
+    } = while_statement;
 
-    let flow_active = flow_state.tracked_local_count() > 0;
-    let condition_blocked = if flow_active {
-        check_expression_flow(
-            &while_statement.condition,
-            while_statement.condition_span,
-            flow_state,
-            statement_index,
-            ctx,
-        )
+    // A lowered `do … while (c)` runs its body first, so the body is checked
+    // with the enclosing flow state (its assignments stand afterwards) and the
+    // condition is checked last, where it may read what the body assigned.
+    if runs_at_least_once {
+        scopes.push_child();
+        check_function_body(body, return_type, scopes, flow_state, ctx);
+        scopes.pop_child();
+        check_while_condition(&condition, condition_span, statement_index, scopes, flow_state, ctx);
+        return;
+    }
+
+    check_while_condition(&condition, condition_span, statement_index, scopes, flow_state, ctx);
+
+    scopes.push_child();
+    if flow_state.tracked_local_count() > 0 {
+        flow_state.begin_branch_capture();
+        check_function_body(body, return_type, scopes, flow_state, ctx);
+        let _ = flow_state.finish_branch_capture();
+    } else {
+        check_function_body(body, return_type, scopes, flow_state, ctx);
+    }
+    scopes.pop_child();
+}
+
+fn check_while_condition(
+    condition: &surge_ts_syntax::ParsedExpression,
+    condition_span: Option<surge_ts_syntax::TextSpan>,
+    statement_index: usize,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    check_obvious_truthiness_condition(condition, condition_span, ctx);
+
+    let condition_blocked = if flow_state.tracked_local_count() > 0 {
+        check_expression_flow(condition, condition_span, flow_state, statement_index, ctx)
     } else {
         FlowCheck::Clear
     };
@@ -243,22 +272,12 @@ pub(crate) fn check_function_while_statement(
     if !condition_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
         let _ = evaluate_condition_expression_with_truthy_guards(
-            &while_statement.condition,
-            while_statement.condition_span,
+            condition,
+            condition_span,
             &visible_symbols,
             ctx,
         );
     }
-
-    scopes.push_child();
-    if flow_active {
-        flow_state.begin_branch_capture();
-        check_function_body(while_statement.body, return_type, scopes, flow_state, ctx);
-        let _ = flow_state.finish_branch_capture();
-    } else {
-        check_function_body(while_statement.body, return_type, scopes, flow_state, ctx);
-    }
-    scopes.pop_child();
 }
 
 pub(crate) fn check_function_for_of_statement(
@@ -285,17 +304,29 @@ pub(crate) fn check_function_for_of_statement(
     let mut element_type = Type::Unknown;
     if !iterable_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
-        if let InferredExpression::Known(iterable_type) = evaluate_expression(
+        let iterable_type = evaluate_expression(
             &for_of_statement.iterable,
             for_of_statement.iterable_span,
             &visible_symbols,
             ctx,
-        ) {
+        );
+        // `for (k in o)` binds the property key, which is always `string` — the
+        // right-hand side is still evaluated so errors inside it surface.
+        if for_of_statement.keys_only {
+            element_type = Type::String;
+        } else if let InferredExpression::Known(iterable_type) = iterable_type {
             element_type = for_of_element_type(&iterable_type);
         }
     }
 
     scopes.push_child();
+    // `for (const _ in ref)` acts as a non-null assertion on `ref` for the
+    // duration of the body (tsc: `getTypeAtFlowNode`, flow.go — "for (const _
+    // in ref) acts as a nonnull on ref"), so indexing an optional object with
+    // the key it just produced is not a possibly-undefined access.
+    if for_of_statement.keys_only {
+        narrow_reference_non_null_in_scope(&for_of_statement.iterable, scopes);
+    }
     insert_binding_name(&for_of_statement.binding_name, element_type, scopes);
     if flow_active {
         flow_state.begin_branch_capture();

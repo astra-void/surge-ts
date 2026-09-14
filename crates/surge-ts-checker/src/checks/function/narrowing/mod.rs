@@ -537,6 +537,27 @@ fn union_disjunct_narrowings(
     changed.then_some(merged)
 }
 
+/// Removes `null`/`undefined` from a reference's type in the current scope.
+/// `for (const _ in ref)` is the one statement form that narrows this way
+/// without a condition (tsc, flow.go: "for (const _ in ref) acts as a nonnull
+/// on ref").
+pub(crate) fn narrow_reference_non_null_in_scope(
+    expression: &ParsedExpression,
+    scopes: &mut ScopeStack,
+) {
+    let Some((base, path)) = reference_path(expression) else {
+        return;
+    };
+    narrow_reference_in_scope(
+        &base,
+        &path,
+        ReferenceGuard::Nullish {
+            keep_matching: false,
+        },
+        scopes,
+    );
+}
+
 fn narrow_value_guards_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,

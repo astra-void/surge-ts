@@ -1262,6 +1262,10 @@ pub struct ParsedWhileStatement {
     pub condition: ParsedExpression,
     pub condition_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
+    /// The body runs before the condition can stop it — a lowered `do … while
+    /// (c)`, or a `while (true)`. Assignments the body makes are definite
+    /// afterwards, and the condition may read what the body assigned.
+    pub runs_at_least_once: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1270,6 +1274,10 @@ pub struct ParsedForOfStatement {
     pub iterable: ParsedExpression,
     pub iterable_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
+    /// `for (k in o)` rather than `for (k of o)`: the binding is the property
+    /// key (always `string`), not the iterated element, and the right-hand side
+    /// need not be iterable.
+    pub keys_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

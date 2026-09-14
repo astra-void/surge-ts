@@ -1,8 +1,9 @@
 use oxc_ast::ast::{
     AssignmentTarget, BindingPattern, BindingProperty, BlockStatement,
-    CatchClause, Declaration, Expression, ExpressionStatement, ForOfStatement, ForStatementLeft,
-    FormalParameter, Function, IfStatement, ObjectPattern, PropertyKey, Statement, SwitchCase,
-    SwitchStatement, ThrowStatement, TryStatement, VariableDeclaration, WhileStatement,
+    CatchClause, Declaration, DoWhileStatement, Expression, ExpressionStatement, ForInStatement, ForOfStatement,
+    ForStatement, ForStatementInit, ForStatementLeft, FormalParameter, Function, IfStatement,
+    ObjectPattern, PropertyKey, Statement, SwitchCase, SwitchStatement, ThrowStatement,
+    TryStatement, VariableDeclaration, WhileStatement,
 };
 use oxc_span::GetSpan;
 
@@ -113,6 +114,21 @@ fn parse_function_body_statement(
                     while_statement,
                 ))]
             })
+        }
+        // A label only names a `break`/`continue` target. Those are modelled
+        // without a target already, so the label is dropped and its statement
+        // parsed in place — before this, the whole labelled statement was
+        // dropped and its body went unchecked.
+        Statement::LabeledStatement(labeled_statement) => {
+            parse_function_body_statement(&labeled_statement.body)
+        }
+        Statement::ForStatement(for_statement) => Some(parse_for_statement(for_statement)),
+        Statement::ForInStatement(for_in_statement) => parse_for_in_statement(for_in_statement)
+            .map(|for_in_statement| {
+                vec![ParsedFunctionBodyStatement::ForOf(Box::new(for_in_statement))]
+            }),
+        Statement::DoWhileStatement(do_while_statement) => {
+            Some(parse_do_while_statement(do_while_statement))
         }
         Statement::ForOfStatement(for_of_statement) => parse_for_of_statement(for_of_statement)
             .map(|for_of_statement| {
@@ -357,11 +373,87 @@ fn parse_while_statement(while_statement: &WhileStatement<'_>) -> Option<ParsedW
     let (condition, condition_span) = parse_expression(&while_statement.test);
     let body = parse_branch_body(&while_statement.body);
 
+    // `while (true)` enters its body unconditionally, so what the body assigns
+    // is assigned afterwards — tsc's flow graph gets this from the same
+    // `true`-keyword rule that makes the loop's exit unreachable.
+    let runs_at_least_once = matches!(condition, ParsedExpression::BooleanLiteral(true));
+
     Some(ParsedWhileStatement {
         condition,
         condition_span: Some(text_span_from_oxc_span(condition_span)),
         body,
+        runs_at_least_once,
     })
+}
+
+/// `for (init; test; update) body` is lowered to a block holding the
+/// initializer followed by a `while (test)` whose body ends with the update
+/// expression. Nothing downstream matches a classic `for` statement, so without
+/// the lowering the whole statement was dropped and every diagnostic inside its
+/// body went missing. The enclosing block keeps the initializer's bindings
+/// loop-scoped, so two sibling `for (let i = ...)` loops do not collide.
+fn parse_for_statement(for_statement: &ForStatement<'_>) -> Vec<ParsedFunctionBodyStatement> {
+    let mut block = Vec::new();
+
+    match &for_statement.init {
+        Some(ForStatementInit::VariableDeclaration(declaration)) => {
+            block.extend(parse_variable_declaration_as_function_body(declaration));
+        }
+        Some(init) => {
+            if let Some(expression) = init.as_expression() {
+                let (expression, _) = parse_expression(expression);
+                block.push(ParsedFunctionBodyStatement::Expression(Box::new(expression)));
+            }
+        }
+        None => {}
+    }
+
+    let mut body = parse_branch_body(&for_statement.body);
+    if let Some(update) = &for_statement.update {
+        let (update, _) = parse_expression(update);
+        body.push(ParsedFunctionBodyStatement::Expression(Box::new(update)));
+    }
+
+    // A `for` with no test never falls through on its own, and enters its body
+    // unconditionally, exactly like `while (true)` — tsc models both the same
+    // way.
+    let runs_at_least_once = for_statement.test.is_none();
+    let (condition, condition_span) = match &for_statement.test {
+        Some(test) => {
+            let (condition, condition_span) = parse_expression(test);
+            (condition, Some(text_span_from_oxc_span(condition_span)))
+        }
+        None => (ParsedExpression::BooleanLiteral(true), None),
+    };
+
+    block.push(ParsedFunctionBodyStatement::While(Box::new(
+        ParsedWhileStatement {
+            condition,
+            condition_span,
+            body,
+            runs_at_least_once,
+        },
+    )));
+
+    vec![ParsedFunctionBodyStatement::Block(block)]
+}
+
+/// `do body while (test)` is lowered to a `while (test) body` carrying
+/// `runs_at_least_once`, which is what tells the checker to run the body before
+/// the condition and to keep the body's assignments.
+fn parse_do_while_statement(
+    do_while_statement: &DoWhileStatement<'_>,
+) -> Vec<ParsedFunctionBodyStatement> {
+    let (condition, condition_span) = parse_expression(&do_while_statement.test);
+
+    vec![ParsedFunctionBodyStatement::While(Box::new(
+        ParsedWhileStatement {
+            condition,
+            condition_span: Some(text_span_from_oxc_span(condition_span)),
+            body: parse_branch_body(&do_while_statement.body),
+            runs_at_least_once: true,
+        },
+    ))]
 }
 
 fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<ParsedForOfStatement> {
@@ -387,6 +479,37 @@ fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<Parse
         iterable,
         iterable_span: Some(text_span_from_oxc_span(iterable_span)),
         body,
+        keys_only: false,
+    })
+}
+
+/// `for (k in o) body` reuses the `for…of` statement shape with `keys_only`
+/// set: the two differ only in what the binding is typed as and in whether the
+/// right-hand side has to be iterable, and every caller that recurses into the
+/// body works unchanged.
+fn parse_for_in_statement(
+    for_in_statement: &ForInStatement<'_>,
+) -> Option<ParsedForOfStatement> {
+    let binding_name = match &for_in_statement.left {
+        ForStatementLeft::VariableDeclaration(declaration) => {
+            let declarator = declaration.declarations.first()?;
+            parse_binding_name(&declarator.id)
+        }
+        ForStatementLeft::AssignmentTargetIdentifier(identifier) => ParsedBindingName::Identifier {
+            name: identifier.name.to_string(),
+            span: Some(text_span_from_oxc_span(identifier.span)),
+        },
+        _ => return None,
+    };
+
+    let (iterable, iterable_span) = parse_expression(&for_in_statement.right);
+
+    Some(ParsedForOfStatement {
+        binding_name,
+        iterable,
+        iterable_span: Some(text_span_from_oxc_span(iterable_span)),
+        body: parse_branch_body(&for_in_statement.body),
+        keys_only: true,
     })
 }
 
