@@ -193,7 +193,7 @@ Detailed history, drift taxonomies, and burn-down records live in
 | **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
 | **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; under `SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1` (body-local `Expect<Equal<…>>` assertions fire) the surge-only count is 7 after the 2026-09-13/14 follow-up (63 → 7; the six left are one `Chainable` alias-cycle degradation, see the note); dirty-tree measurement, not a gate (see note) |
 | **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 4 | **newly provisioned, provisional** — 134 when first measured; all 4 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
-| **zustand** (pmndrs/zustand 5.0.15) | `2115efb` | 0 | 136 | **newly provisioned, provisional** — clean under the oracle, so every surge diagnostic is a false positive; first measurement, not a gate (see note) |
+| **zustand** (pmndrs/zustand 5.0.15) | `2115efb` | 0 | 42 | **provisional** — 136 when first measured; clean under the oracle, so all 42 are surge-only false positives, and 26 of them are behind one sealed gate; not a gate (see note) |
 
 Notes that matter:
 
@@ -337,25 +337,32 @@ Notes that matter:
   [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#ts-pattern-surge-only-inventory-2026-09-11).
   Measured on a **dirty working tree** on top of `6e034fd`; re-measure from a
   clean worktree before treating any of it as a baseline.
-- **zustand is newly provisioned and is not a gate.** Upstream's own root
-  `tsconfig.json` is the corpus — `pnpm test:types` runs `tsc --noEmit` against
-  it, it covers `src/` and `tests/` in one 31-file program, and the pinned
-  TypeScript 7.0.2 oracle reports **0** diagnostics on it, so it is a
-  false-positive corpus like ky and unnamed and needs no aggregate target
-  (`pnpm run real:zustand:provision` clones and installs it). surge reported
-  **136** on the first measurement, every one surge-only, finishing in about
-  0.24 s at about 88 MB peak RSS (`tsc` 1.71 s / 326 MB, `tsgo` 0.19 s / 181 MB
-  on the same target) — no hang and no unbounded expansion. It is the smallest
-  corpus in the set and the most concentrated: zustand's middleware typing is
-  built on a `declare module 'zustand/vanilla'` augmentation of
-  `StoreMutators`, and the three augmentation members resolve in the *augmented*
-  file's scope rather than the augmenting file's, so `WithDevtools`,
-  `WithPersist` and `WithRedux` are `TS2304` at their use sites in
-  `src/vanilla.ts` and the store type they feed loses its middleware surface.
-  The inventory and the two reduced reproductions are in
-  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#zustand-corpus-provisioned-2026-09-13).
+- **zustand is not a gate, and its over-report has been burned down.**
+  Upstream's own root `tsconfig.json` is the corpus — `pnpm test:types` runs
+  `tsc --noEmit` against it, it covers `src/` and `tests/` in one 31-file
+  program, and the pinned TypeScript 7.0.2 oracle reports **0** diagnostics on
+  it, so it is a false-positive corpus like ky and unnamed and needs no
+  aggregate target (`pnpm run real:zustand:provision` clones and installs it).
+  It is also the cheapest corpus to iterate on: about 0.24 s at about 88 MB
+  peak RSS (`tsc` 1.71 s / 326 MB, `tsgo` 0.19 s / 181 MB).
+  surge reported **136** on the first measurement and stands at **42**, every
+  one a false positive. Eleven causes closed, each pinned by a reduction of a
+  handful of lines and each leaving every other corpus byte-identical — the
+  full list is in
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#zustand-burn-down-2026-09-14).
+  The two largest were an augmented interface's members resolving in the
+  *augmented* file's scope, and a module's own `declare const` losing to an
+  ambient global of the same name, which published lib.dom's `window.screen`
+  as `@testing-library/dom`'s `screen` export (50 diagnostics on its own).
+  **26 of the remaining 42 are behind the generic-recursive-alias gate**
+  (`SURGE_GENERIC_RECURSIVE_ALIAS=1` takes zustand to 16): zustand's middleware
+  types are a recursive generic alias walking a mutator list, and the default
+  cycle break answers `unknown` for every generic back-edge. That gate stays
+  sealed — on the same binary it leaves ts-pattern unfinished after 4 minutes
+  (it was still running at 15) and costs drizzle-orm 4 -> 6 — so the remaining
+  cluster is not a quick fix.
   A ky-style exact-0/0 gate can be armed once the over-report reaches zero; it
-  is deliberately not armed at 136.
+  is deliberately not armed at 42.
 - **tanstack-query is newly provisioned; its count is provisional.** The
   aggregate target `tsconfig.surge.json` (10 TS/React packages, installed by
   `pnpm run real:tanstack-query:provision`) is clean under the oracle, so it is
