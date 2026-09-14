@@ -72,7 +72,19 @@ pub(crate) fn infer_arrow_function(
             // generic inference: `vi.fn((result) => { … })` inferred no `T`, so
             // `Mock<T>` stayed uninstantiated and every use of the mock was a
             // false error.
-            .or_else(|| (!body_contains_return(body)).then_some(Type::Void))
+            //
+            // A body that cannot complete at all (`() => { throw new Error(…) }`)
+            // returns `never`, which is assignable everywhere; typing it `void`
+            // made zustand's throwing storage stub unassignable to `StateStorage`.
+            .or_else(|| {
+                (!body_contains_return(body)).then(|| {
+                    if crate::flow::analyze_function_body_flow(body).guarantees_exit {
+                        Type::Never
+                    } else {
+                        Type::Void
+                    }
+                })
+            })
             .unwrap_or(Type::Unknown),
     };
 
