@@ -46,7 +46,7 @@ level at this commit; the bisect and the before/after are in
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1932 / 1933 passed** — `literal_union_does_not_collapse_boolean_literal_with_boolean` asserts that `true | false` stays a two-member union, which `5b87a462` deliberately changed without updating the test |
+| Workspace tests | `cargo nextest run --workspace` | **1938 / 1939 passed** — `any_member_produces_no_degraded_interface_resolutions`, a counter-based invariant (`an any member must not degrade any interface resolution`), is at 3 of 14; bisected to `6e097c69`, whose deferral of a non-distributive conditional with an unresolved parameter interacts with the `any`-member guards |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
 | Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **225 / 225 passed** |
 | Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **224 / 225 passed** — one message drift, see below |
