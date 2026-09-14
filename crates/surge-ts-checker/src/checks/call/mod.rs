@@ -1332,9 +1332,15 @@ pub(crate) fn check_function_type_call(
     // at the call site — `cb()` is valid for `cb: (x: void) => void`, and a
     // `Promise<void>` executor's `resolve: (value: void | PromiseLike<void>) => void`
     // accepts `resolve()`.
+    // A trailing parameter surge could not type (`unknown | PromiseLike<T>`
+    // with `T` still open — a Promise executor read through a polluted
+    // instantiation) may well be that `void`, so it cannot count as required.
     let parameters = function_type.parameters();
     let mut required = function_type.required_parameter_count();
-    while required > 0 && parameter_is_void_optional(&parameters[required - 1]) {
+    while required > 0
+        && (parameter_is_void_optional(&parameters[required - 1])
+            || names_open_parameter(&parameters[required - 1]))
+    {
         required -= 1;
     }
 

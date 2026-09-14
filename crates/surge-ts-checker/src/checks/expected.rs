@@ -1011,9 +1011,12 @@ fn evaluate_array_literal_with_expected_type(
 }
 
 fn mutable_sequence_shape(member: &Type) -> Type {
-    match member {
-        Type::Reference(reference) if reference.is_readonly_array() => reference.resolve(),
-        other => other.clone(),
+    // `ReadonlyArray<T>` spelled as a lib reference resolves to the readonly
+    // wrapper, whose own resolution is the mutable shape; `peeled` follows
+    // the whole chain.
+    match member.peeled() {
+        sequence @ (Type::Array(_) | Type::Tuple(_)) => sequence,
+        _ => member.clone(),
     }
 }
 
@@ -1079,7 +1082,32 @@ fn sole_matching_sequence_member(
     });
     match (fitting.next(), fitting.next()) {
         (Some(member), None) => return Some((*member).clone()),
-        (Some(_), Some(_)) => return None,
+        // Several tuples of the literal's arity fit (`['line']` against
+        // `['list'] | ['line'] | [string] | …`): tsc types each element by the
+        // union of the candidates' slots, which keeps the literal a tuple of
+        // literals that then fits the union target. Arrays among the fits
+        // keep the literal ambiguous.
+        (Some(first), Some(second)) => {
+            let fitting_tuples: Vec<&[Type]> = std::iter::once(first)
+                .chain(std::iter::once(second))
+                .chain(fitting)
+                .map(|member| match member {
+                    Type::Tuple(slots) => Some(slots.as_slice()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let slots = (0..elements.len())
+                .map(|index| {
+                    surge_ts_types::union_type(
+                        fitting_tuples
+                            .iter()
+                            .map(|slots| slots[index].clone())
+                            .collect(),
+                    )
+                })
+                .collect();
+            return Some(Type::Tuple(slots));
+        }
         (None, _) => {}
     }
 
