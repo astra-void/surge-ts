@@ -128,6 +128,41 @@ pub(super) fn join_branch_pair(
     }
 }
 
+/// Adopts a branch's end types outright, for a join the branch is the *only*
+/// incoming edge of. A `try` whose `catch` returns or throws is that shape:
+/// reaching the statement's end means the block ran to completion, so the
+/// assignments it made hold from there on. Without this the narrowing dies with
+/// the branch frame and a `let x: T | undefined` assigned inside the `try` reads
+/// as possibly-undefined for the rest of the function.
+pub(super) fn adopt_branch_assignments(branch_types: &[(String, Type)], scopes: &mut ScopeStack) {
+    for (name, branch_ty) in branch_types {
+        let Some(symbol) = scopes.resolve(name) else {
+            continue;
+        };
+        if *branch_ty == symbol.ty {
+            continue;
+        }
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let bound = scopes
+            .visible_symbols()
+            .declared_type(name)
+            .cloned()
+            .unwrap_or_else(|| symbol.ty.clone());
+        if !is_assignable_to(branch_ty, &bound) {
+            continue;
+        }
+        let _ = scopes.update_visible(
+            name,
+            SymbolInfo {
+                ty: branch_ty.clone(),
+                kind,
+                function_signature,
+            },
+        );
+    }
+}
+
 /// Snapshots the current type of each assigned binding at a branch's end, before
 /// its scope frame pops.
 pub(super) fn branch_assignment_types(names: &[String], scopes: &ScopeStack) -> Vec<(String, Type)> {
