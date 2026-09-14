@@ -1027,6 +1027,13 @@ pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
     }
     match key {
         PropertyKey::StaticIdentifier(_) | PropertyKey::PrivateIdentifier(_) => None,
+        // A computed key that is a literal is just that property name —
+        // `{ ['a']: T }` and `{ 'a': T }` declare the same member. Dropping it
+        // emptied every interface written that way, which is how zustand's
+        // `interface StoreMutators<S, A> { ['zustand/immer']: WithImmer<S> }`
+        // augmentation contributed nothing at all.
+        PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::NumericLiteral(literal) => Some(literal.raw_str().to_string()),
         other => render(other.to_expression()).map(|path| format!("[{path}]")),
     }
 }
