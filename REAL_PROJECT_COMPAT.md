@@ -2656,3 +2656,30 @@ Still open in the same area, each measured: a callback passed as a *named*
 function rather than an arrow (`f(src)`) infers nothing, and `Promise.resolve(1)`
 does not instantiate `T` — the latter is an interface-member overload group,
 which main does not yet resolve.
+
+## Post-merge reconciliation (2026-09-14)
+
+The two sections above were written on separate worktrees and quote different
+tanstack-query baselines (10 and 11) because neither tree contained the other's
+fixes. Both are now merged into `main`, so neither number describes the tree.
+Measured here after the merge, from a clean `main` at `a78ea118` with the
+binary built from that checkout and passed as `SURGE_TS_BIN`:
+
+| Corpus | surge-only | `tsc`-only |
+| --- | ---: | ---: |
+| tanstack-query | **8** | 0 |
+| zustand | **37** | 0 |
+
+Both are below the figures the merged sections record (tanstack 10 / 11,
+zustand 42): the two burn-downs overlap, and main's own later fixes close some
+of the same diagnostics. The remaining tanstack codes are TS2339 4, TS2345 2,
+TS2304 1, TS2322 1.
+
+Gates at the same commit: oracle sweep 240 / 241 presets, and the workspace
+suite 1943 / 1944. Each carries exactly one failure, and both were reproduced
+on the pre-merge commit `f77ce724` and are unchanged by the merge —
+`iterable-element-inference-basic` (identical `onlyTsc` 2 / `onlyRust` 3
+divergence before and after) and the pinned counter invariant
+`any_member_produces_no_degraded_interface_resolutions` (3 degraded of 14
+attempts, byte-identical before and after). Neither is a merge regression, and
+neither is fixed here.
