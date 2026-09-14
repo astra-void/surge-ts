@@ -326,6 +326,12 @@ fn evaluate_comparison_binary(
         return InferredExpression::Known(Type::Boolean);
     }
 
+    // `never` is comparable to every type, so tsc reports no overlap error on a
+    // comparison in an already-dead branch.
+    if matches!(left_type, Type::Never) || matches!(right_type, Type::Never) {
+        return InferredExpression::Known(Type::Boolean);
+    }
+
     if is_comparison_operand_valid(left_type) && is_comparison_operand_valid(right_type) {
         let left_base = left_type.base_primitive();
         let right_base = right_type.base_primitive();
@@ -383,6 +389,12 @@ fn evaluate_equality_binary(
     }
 
     if matches!(left_type, Type::Any) || matches!(right_type, Type::Any) {
+        return InferredExpression::Known(Type::Boolean);
+    }
+
+    // `never` is comparable to every type, so tsc reports no overlap error on a
+    // comparison in an already-dead branch.
+    if matches!(left_type, Type::Never) || matches!(right_type, Type::Never) {
         return InferredExpression::Known(Type::Boolean);
     }
 
