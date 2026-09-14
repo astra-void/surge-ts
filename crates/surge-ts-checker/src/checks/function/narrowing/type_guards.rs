@@ -71,7 +71,16 @@ pub(super) fn resolve_constructor_instance_type(
     // it has to carry the arity the declaration expects — a bare generic name
     // would report TS2314 for arguments the guard never writes. `x instanceof
     // GSub` narrows to `GSub<any>` in tsc, which is what filling `any` gives.
-    let arity = match ctx.type_declarations.get(ctor_name) {
+    // Through the full resolution surface, not the file's own table: a lib
+    // constructor (`Map`, `WeakSet`) is declared in the default lib, so reading
+    // arity from the local table alone gave it zero, and `Map` then resolved
+    // with no arguments and failed — leaving `x instanceof Map` narrowing
+    // nothing at all in project mode.
+    let arity = match ctx
+        .type_declarations
+        .get(ctor_name)
+        .or_else(|| ctx.lookup_type_declaration(ctor_name))
+    {
         Some(crate::symbols::TypeDeclarationInfo::Interface(info)) => {
             info.body.type_parameters.len()
         }
@@ -265,7 +274,14 @@ pub(super) fn narrow_instanceof_heritage_symbol_table(
     let instance = resolve_constructor_instance_type(ctor_name, ctx)?;
     let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         if path.is_empty() {
+            // A non-union subject narrows down its subtype edge instead, the
+            // same fallback the scope-based single-guard path takes: without it
+            // only an `if` narrowed `valueA instanceof Map`, and the same test
+            // written as the condition of a `?:` left the subject alone.
             narrow_union_by_instanceof(&declared, ctor_name, Some(&instance), branch_is_true)
+                .or_else(|| {
+                    narrow_to_instanceof_subclass(&declared, Some(&instance), branch_is_true)
+                })
         } else {
             narrowed_reference_type(
                 &declared,
