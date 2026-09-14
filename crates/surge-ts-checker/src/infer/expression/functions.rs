@@ -57,7 +57,7 @@ pub(crate) fn infer_arrow_function(
             declared_return_type.unwrap_or_else(|| {
                 let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
                 match infer_expression(expression, &locals, ctx) {
-                    InferredExpression::Known(ty) => ty,
+                    InferredExpression::Known(ty) => widen_fresh_literal_return(expression, ty),
                     _ => Type::Unknown,
                 }
             })
@@ -82,6 +82,26 @@ pub(crate) fn infer_arrow_function(
         false,
         required_parameter_count(arrow_function.parameters.as_slice()),
     )
+}
+
+/// tsc widens the *fresh* literal a body expression returns, so `() => ''`
+/// infers `() => string` and an object literal's property declared that way is
+/// assignable from any `() => string`. A literal that came from a `const` is not
+/// fresh and keeps its own type, so freshness is decided syntactically here, the
+/// same way the generic-argument path decides it.
+fn widen_fresh_literal_return(expression: &ParsedExpression, ty: Type) -> Type {
+    if matches!(
+        expression,
+        ParsedExpression::StringLiteral(_)
+            | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::ObjectLiteral { .. }
+            | ParsedExpression::ArrayLiteral { .. }
+    ) {
+        crate::checks::expr::widen_type(&ty)
+    } else {
+        ty
+    }
 }
 
 fn primitive_declared_return_type(ty: &surge_ts_syntax::ParsedType) -> Option<Type> {
