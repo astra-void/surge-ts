@@ -462,6 +462,7 @@ export const fixturePresets: Record<string, string> = {
   'callback-return-type-parameter-basic': path.join(workspaceRoot, 'tests/compat-projects/callback-return-type-parameter-basic/tsconfig.json'),
   'mapped-type-optionality-modifier-basic': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-optionality-modifier-basic/tsconfig.json'),
   'callable-intersection-brand-basic': path.join(workspaceRoot, 'tests/compat-projects/callable-intersection-brand-basic/tsconfig.json'),
+  'ambient-namespace-member-contextual-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-namespace-member-contextual-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
