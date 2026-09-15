@@ -230,6 +230,12 @@ fixtures = [
   "tests/smoke/manifest.toml",
 ]
 
+[TS2534]
+status = "emitted"
+oracle = [
+  "missing-return-diagnostic-selection-basic",
+]
+
 [TS2356]
 status = "catalog-only"
 reason = "The `++`/`--` operand rule is not implemented. It was emitted for unary `+`/`-`, which coerce in tsc, and that was a false positive"

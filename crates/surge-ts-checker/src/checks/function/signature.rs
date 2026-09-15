@@ -1409,7 +1409,12 @@ pub(crate) fn check_function_body_with_signature_and_this(
     }
 
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
-        emit_missing_return_diagnostic(body_flow, missing_return_span, ctx);
+        emit_missing_return_diagnostic(
+            body_flow,
+            function_type.return_type(),
+            missing_return_span,
+            ctx,
+        );
     } else if !has_explicit_return_type
         && !is_constructor
         && !returned_void_like

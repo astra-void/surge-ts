@@ -2183,6 +2183,7 @@ pub(crate) fn widen_candidate_type(ty: &Type) -> Type {
                             ty: widen_candidate_type(&property.ty),
                             optional: property.optional,
                             method: property.method,
+                            readonly: property.readonly,
                         },
                     )
                 })

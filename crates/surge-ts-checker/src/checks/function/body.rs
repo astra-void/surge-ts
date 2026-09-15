@@ -29,10 +29,44 @@ pub(crate) fn should_check_missing_return(return_type: &Type) -> bool {
     } else {
         return_type
     };
-    !matches!(
-        return_type,
-        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Undefined | Type::Void
-    ) && !type_contains_unknown(return_type)
+    // tsc's early exit (`checkAllCodePathsInNonVoidFunctionReturnOrThrow`,
+    // checker.go:3759): the unwrapped return type *maybe* contains `void` — so a
+    // `number | void` union is exempt too — or is exactly `any`/`undefined`. A
+    // union merely containing `undefined` is not exempt here; it is the TS2366
+    // branch that then finds `undefined` assignable and stays quiet.
+    if matches!(return_type, Type::Any | Type::Undefined) || return_type_maybe_void(return_type) {
+        return false;
+    }
+    // `GenuineUnknown` is a written `unknown` annotation, which tsc does report
+    // on; bare `Unknown` is surge's degradation sentinel and must stay silent.
+    if matches!(return_type, Type::GenuineUnknown) {
+        return true;
+    }
+    !matches!(return_type, Type::Unknown | Type::TypeParameter(_))
+        && !type_contains_unknown(return_type)
+}
+
+/// tsc's `maybeTypeOfKind(t, TypeFlagsVoid)`: `void` itself, or a union with a
+/// `void` constituent.
+fn return_type_maybe_void(return_type: &Type) -> bool {
+    match return_type {
+        Type::Void => true,
+        Type::Union(union) => union.types().iter().any(return_type_maybe_void),
+        Type::Reference(_) => return_type_maybe_void(&return_type.peeled()),
+        _ => false,
+    }
+}
+
+/// tsc's `isTypeAssignableTo(undefinedType, t)` gate on the TS2366 branch
+/// (checker.go:3784). `void`/`any` cases have already left through the early
+/// exit, so what remains is a union that carries `undefined` (or `unknown`).
+fn return_type_admits_undefined(return_type: &Type) -> bool {
+    match return_type {
+        Type::Undefined | Type::Void | Type::Any | Type::Unknown | Type::GenuineUnknown => true,
+        Type::Union(union) => union.types().iter().any(return_type_admits_undefined),
+        Type::Reference(_) => return_type_admits_undefined(&return_type.peeled()),
+        _ => false,
+    }
 }
 
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
@@ -103,6 +137,7 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
 
 pub(crate) fn emit_missing_return_diagnostic(
     body_flow: crate::flow::FunctionBodyFlow,
+    return_type: &Type,
     missing_return_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) {
@@ -119,12 +154,28 @@ pub(crate) fn emit_missing_return_diagnostic(
         return;
     }
 
-    if body_flow.contains_value_return {
-        if !body_flow.guarantees_value_return {
-            ctx.push(with_span(Diagnostic::ts2366(ctx.file_name.clone())));
-        }
-    } else {
+    // tsc's switch (checker.go:3777-3800), in order: a `never` return type with a
+    // reachable end point is TS2534; no explicit value return is TS2355; a type
+    // that does not admit `undefined` is TS2366; otherwise `noImplicitReturns`
+    // still owes TS7030.
+    if matches!(return_type.peeled(), Type::Never) {
+        ctx.push(with_span(Diagnostic::ts2534(ctx.file_name.clone())));
+        return;
+    }
+
+    if !body_flow.contains_value_return {
         ctx.push(with_span(Diagnostic::ts2355(ctx.file_name.clone())));
+        return;
+    }
+
+    if body_flow.guarantees_value_return {
+        return;
+    }
+
+    if !return_type_admits_undefined(return_type) {
+        ctx.push(with_span(Diagnostic::ts2366(ctx.file_name.clone())));
+    } else if ctx.options.no_implicit_returns {
+        ctx.push(with_span(Diagnostic::ts7030(ctx.file_name.clone())));
     }
 }
 
