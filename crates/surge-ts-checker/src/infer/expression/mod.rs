@@ -30,6 +30,37 @@ pub(crate) use access::*;
 pub(crate) use functions::*;
 pub(crate) use literals::*;
 pub(crate) use operators::*;
+/// The type of `left ?? right`. tsc expands a genuine `unknown` left operand to
+/// `{} | null | undefined` before taking its non-nullable half
+/// (`getAdjustedTypeWithFacts`), so `u ?? x` is `{} | x`, not `unknown`; the
+/// degradation sentinel and placeholder parameters keep flowing through as-is,
+/// because a modelling failure must not invent a type.
+pub(crate) fn nullish_coalescing_result(left_ty: Type, right_ty: Type) -> Type {
+    if left_ty == Type::Any || (left_ty.is_unknown() && left_ty != Type::GenuineUnknown) {
+        return left_ty;
+    }
+    if left_ty == Type::Undefined {
+        return right_ty;
+    }
+    let non_nullable = non_nullable_unknown(surge_ts_types::remove_nullish(&left_ty));
+    union_type(vec![non_nullable, right_ty])
+}
+
+fn non_nullable_unknown(ty: Type) -> Type {
+    match ty {
+        Type::GenuineUnknown => Type::Object(ObjectType::new(PropertyMap::default(), None)),
+        Type::Union(union) => union_type(
+            union
+                .types()
+                .iter()
+                .cloned()
+                .map(non_nullable_unknown)
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 enum CopySource {
     Identifier,
     CallReturn,
@@ -225,14 +256,7 @@ pub(crate) fn infer_expression(
 
             match (left_type, right_type) {
                 (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty)) => {
-                    if left_ty == Type::Any || left_ty.is_unknown() {
-                        InferredExpression::Known(left_ty)
-                    } else if left_ty == Type::Undefined {
-                        InferredExpression::Known(right_ty)
-                    } else {
-                        let filtered_left = surge_ts_types::remove_nullish(&left_ty);
-                        InferredExpression::Known(union_type(vec![filtered_left, right_ty]))
-                    }
+                    InferredExpression::Known(nullish_coalescing_result(left_ty, right_ty))
                 }
                 _ => InferredExpression::Unknown,
             }

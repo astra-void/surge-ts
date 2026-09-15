@@ -483,14 +483,9 @@ fn evaluate_nullish_coalescing(
 
     match (left_result, right_result) {
         (InferredExpression::Known(left_type), InferredExpression::Known(right_type)) => {
-            if left_type == Type::Any || left_type.is_unknown() {
-                InferredExpression::Known(left_type)
-            } else if left_type == Type::Undefined {
-                InferredExpression::Known(right_type)
-            } else {
-                let filtered_left = surge_ts_types::remove_nullish(&left_type);
-                InferredExpression::Known(union_type(vec![filtered_left, right_type]))
-            }
+            InferredExpression::Known(crate::infer::expression::nullish_coalescing_result(
+                left_type, right_type,
+            ))
         }
         (
             InferredExpression::Known(Type::Unknown)
