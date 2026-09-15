@@ -776,6 +776,7 @@ fn plain_object(entries: Vec<(&str, Type)>) -> Type {
         properties: Arc::new(properties),
         property_map_id: None,
         string_index_type: None,
+        number_index_type: None,
         alias_name: None,
         alias_id: None,
         construct_signature: None,

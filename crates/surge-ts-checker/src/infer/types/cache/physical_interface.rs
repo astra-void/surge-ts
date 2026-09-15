@@ -772,6 +772,7 @@ mod physical_interface_cache_tests {
             Vec::new(),
             None,
             None,
+            None,
             Vec::new(),
             None,
         )

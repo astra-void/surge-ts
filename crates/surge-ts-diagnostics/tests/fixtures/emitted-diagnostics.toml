@@ -357,6 +357,15 @@ oracle = [
   "write-target-types-basic",
 ]
 
+[TS7015]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/numeric-index-signature-basic/src/index.ts",
+]
+oracle = [
+  "numeric-index-signature-basic",
+]
+
 [TS4104]
 status = "emitted"
 fixtures = [

@@ -485,6 +485,8 @@ pub struct ParsedInterfaceDeclaration {
     /// present. The key type is not modelled separately; both string and number
     /// index signatures map here.
     pub string_index_type: Option<ParsedType>,
+    /// See [`ParsedObjectType::number_index_type`].
+    pub number_index_type: Option<ParsedType>,
     /// A bare call signature (`(value?: any): number`) on the interface, making
     /// values of this type callable without `new` (e.g. `NumberConstructor`).
     pub call_signature: Option<ParsedFunctionType>,
@@ -744,6 +746,10 @@ pub struct ParsedObjectType {
     pub properties: Vec<ParsedObjectTypeProperty>,
     /// A string/number index signature (`[k: string]: T`).
     pub string_index_type: Option<Box<ParsedType>>,
+    /// `[key: number]: T`. Kept apart from the string index: a numeric key
+    /// prefers it, and a string key a number-only type cannot answer is an
+    /// implicit `any` rather than a resolved member.
+    pub number_index_type: Option<Box<ParsedType>>,
     /// A bare call signature (`(value?: any): number`) on the object type,
     /// making values of this type callable without `new`.
     pub call_signature: Option<Box<ParsedFunctionType>>,

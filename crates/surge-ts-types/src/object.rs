@@ -27,6 +27,12 @@ pub struct ObjectType {
     pub properties: Arc<PropertyMap>,
     pub property_map_id: Option<PropertyMapId>,
     pub string_index_type: Option<Arc<Type>>,
+    /// `[key: number]: T`. Kept apart from the string index because the two
+    /// answer different keys: a numeric key prefers this one and falls back to
+    /// the string index (`findApplicableIndexInfo`), while a *string* key a
+    /// number-only type cannot answer is TS7015 under `noImplicitAny` — so an
+    /// object declaring only this one leaves `string_index_type` empty.
+    pub number_index_type: Option<Arc<Type>>,
     /// Name of the interface or type alias this object was resolved from, used
     /// only for diagnostic display (tsc shows `'StrictObj'`, not the structural
     /// expansion). Deliberately excluded from equality so assignability and
@@ -87,6 +93,7 @@ impl PartialEq for ObjectType {
             Arc::ptr_eq(&self.properties, &other.properties) || self.properties == other.properties;
         properties_equal
             && self.string_index_type == other.string_index_type
+            && self.number_index_type == other.number_index_type
             && signatures_equal(&self.construct_signature, &other.construct_signature)
             && signatures_equal(&self.call_signature, &other.call_signature)
     }
@@ -183,6 +190,7 @@ impl ObjectType {
             properties,
             property_map_id,
             string_index_type: string_index_type.map(Arc::new),
+            number_index_type: None,
             alias_name: None,
             alias_id: None,
             construct_signature: None,
@@ -192,6 +200,29 @@ impl ObjectType {
             non_primitive: false,
             intersection_operands: None,
         }
+    }
+
+    /// Declares `[key: number]: T` on this object; see `number_index_type`.
+    pub fn with_number_index_type(mut self, number_index_type: Option<Type>) -> Self {
+        self.number_index_type = number_index_type.map(Arc::new);
+        self
+    }
+
+    /// The index signature that answers `key`, following tsc's
+    /// `findApplicableIndexInfo`: a numeric key prefers the number index and
+    /// falls back to the string one; every other key can only use the string
+    /// index.
+    pub fn applicable_index_type(&self, key_is_numeric: bool) -> Option<&Type> {
+        if key_is_numeric && let Some(number_index) = self.number_index_type.as_deref() {
+            return Some(number_index);
+        }
+        self.string_index_type.as_deref()
+    }
+
+    /// tsc's `hasNumericPropertyNames`: exactly one index signature, and it is
+    /// the numeric one. A `for…in` over such a type binds its key as `number`.
+    pub fn has_numeric_property_names(&self) -> bool {
+        self.number_index_type.is_some() && self.string_index_type.is_none()
     }
 
     /// Records the nominal reference operands of the intersection this object
@@ -272,7 +303,10 @@ impl ObjectType {
             return Some(property.ty.clone());
         }
 
-        if let Some(indexed) = self.string_index_type.as_deref() {
+        // A numeric member name is answered by the numeric index signature
+        // first — `record[1]` on `{ [k: number]: T }` — and by the string one
+        // otherwise, exactly as `findApplicableIndexInfo` orders them.
+        if let Some(indexed) = self.applicable_index_type(is_numeric_key(name)) {
             return Some(indexed.clone());
         }
 
@@ -286,7 +320,8 @@ impl ObjectType {
     }
 
     pub fn contains_property(&self, name: &str) -> bool {
-        self.properties.contains_key(name) || self.string_index_type.is_some()
+        self.properties.contains_key(name)
+            || self.applicable_index_type(is_numeric_key(name)).is_some()
     }
 
     /// Like [`Self::contains_property`], but counts only members the SOURCE
@@ -319,6 +354,12 @@ impl ObjectType {
     }
 }
 
+/// Whether a property name is a numeric one — the form a numeric index
+/// signature answers (tsc: `isNumericLiteralName`).
+pub fn is_numeric_key(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// The members of the global `Object` interface (lib.es5), shared by the apparent
 /// type of every non-nullish value. Parameter types are approximated as `any`
 /// (the real signatures take `PropertyKey`/`Object`) since only arity and the
@@ -342,6 +383,7 @@ impl Clone for ObjectType {
             properties: self.properties.clone(),
             property_map_id: self.property_map_id,
             string_index_type: self.string_index_type.clone(),
+            number_index_type: self.number_index_type.clone(),
             alias_name: self.alias_name.clone(),
             alias_id: self.alias_id.clone(),
             construct_signature: self.construct_signature.clone(),

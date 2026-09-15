@@ -482,7 +482,17 @@ pub(crate) fn resolve_object_type(
             (!resolved.had_error).then_some(resolved.ty)
         });
 
-    let mut resolved_object = alloc_object_type(properties, string_index_type);
+    let number_index_type = object_type
+        .number_index_type
+        .as_deref()
+        .and_then(|index_type| {
+            let resolved = resolve_parsed_type(index_type.clone(), ctx, resolving, substitution);
+            had_error |= resolved.had_error;
+            (!resolved.had_error).then_some(resolved.ty)
+        });
+
+    let mut resolved_object =
+        alloc_object_type(properties, string_index_type).with_number_index_type(number_index_type);
     if object_type.non_primitive {
         resolved_object = resolved_object.with_non_primitive_marker();
     }

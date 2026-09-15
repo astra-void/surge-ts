@@ -70,12 +70,12 @@ const MAX_ASSIGNABILITY_STEPS: u64 = 250_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RelationKey {
     tag: u8,
-    parts: [usize; 5],
+    parts: [usize; 6],
 }
 
 /// Stable identity for memoizing a comparison side. Every field that can change
-/// the assignability verdict must contribute (properties, string index, call and
-/// construct signatures, `alias_id` for the nominal fast path); types without a
+/// the assignability verdict must contribute (properties, both index signatures,
+/// call and construct signatures, `alias_id` for the nominal fast path); types without a
 /// shared-`Arc` identity return `None` and are simply not memoized.
 fn relation_key(ty: &Type) -> Option<RelationKey> {
     match ty {
@@ -85,6 +85,10 @@ fn relation_key(ty: &Type) -> Option<RelationKey> {
                 Arc::as_ptr(&object.properties) as usize,
                 object
                     .string_index_type
+                    .as_ref()
+                    .map_or(0, |index| Arc::as_ptr(index) as usize),
+                object
+                    .number_index_type
                     .as_ref()
                     .map_or(0, |index| Arc::as_ptr(index) as usize),
                 object
@@ -101,11 +105,11 @@ fn relation_key(ty: &Type) -> Option<RelationKey> {
         }),
         Type::Union(union) => Some(RelationKey {
             tag: 2,
-            parts: [union.payload_address(), 0, 0, 0, 0],
+            parts: [union.payload_address(), 0, 0, 0, 0, 0],
         }),
         Type::Function(function) => Some(RelationKey {
             tag: 3,
-            parts: [function.payload_address(), 0, 0, 0, 0],
+            parts: [function.payload_address(), 0, 0, 0, 0, 0],
         }),
         _ => None,
     }
@@ -197,10 +201,13 @@ fn discriminated_union_assignable(from: &Type, to_union: &crate::UnionType) -> b
                     readonly: false,
                 },
             );
-            let narrowed = Type::Object(ObjectType::new(
-                narrowed_properties,
-                from_object.string_index_type.as_deref().cloned(),
-            ));
+            let narrowed = Type::Object(
+                ObjectType::new(
+                    narrowed_properties,
+                    from_object.string_index_type.as_deref().cloned(),
+                )
+                .with_number_index_type(from_object.number_index_type.as_deref().cloned()),
+            );
             peeled_members
                 .iter()
                 .any(|member| is_assignable_to(&narrowed, member))
@@ -526,6 +533,7 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         (Type::Function(source), Type::Object(target)) => {
             target.construct_signature().is_none()
                 && target.string_index_type.is_none()
+                && target.number_index_type.is_none()
                 && match target.call_signature() {
                     Some(call_signature) => is_function_assignable_to(source, call_signature),
                     None => true,
@@ -568,10 +576,20 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             | Type::OpenTuple(_),
             Type::Object(target),
         ) => {
+            // A required member is satisfied by whatever the source's own
+            // intrinsic surface answers for it — `length` on an array or
+            // string, `[Symbol.iterator]` on either. surge models these as
+            // their own `Type` variants rather than as `Array`/`String`
+            // interface instances, so without the lookup every lib interface an
+            // array satisfies in tsc (`ArrayLike<T>`, `Iterable<T>`, a bare
+            // `{ length: number }`) was rejected wholesale.
             target
                 .properties
-                .values()
-                .all(|property| property.is_optional())
+                .iter()
+                .all(|(name, property)| match from.get_property_access_type(name) {
+                    Some(source_ty) => is_assignable_to(&source_ty, &property.ty),
+                    None => property.is_optional(),
+                })
                 // Only an index signature the source *declared* rejects here. A
                 // checker-injected openness marker records an intersection operand
                 // surge could not enumerate (`T & {}` where `T` stayed generic), so
@@ -905,9 +923,9 @@ pub fn object_assignability_failure(
 
     for (property_name, target_property) in target.properties.iter() {
         let source_property = source.properties.get(property_name.as_ref());
-        let source_property_ty = source_property
-            .map(|property| &property.ty)
-            .or_else(|| source.string_index_type.as_deref());
+        let source_property_ty = source_property.map(|property| &property.ty).or_else(|| {
+            source.applicable_index_type(crate::object::is_numeric_key(property_name.as_ref()))
+        });
 
         let source_property_ty = source_property_ty
             .cloned()

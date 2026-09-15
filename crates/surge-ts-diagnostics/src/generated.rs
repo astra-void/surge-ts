@@ -445,6 +445,16 @@ pub const TS2514: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS7015: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS7015",
+    number: Some(7015),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Element implicitly has an 'any' type because index expression is not of type 'number'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2862: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2862",
     number: Some(2862),
@@ -1270,6 +1280,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2540,
     TS2542,
     TS2514,
+    TS7015,
     TS2862,
     TS4104,
     TS2536,
@@ -1760,6 +1771,11 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2514(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2514, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts7015(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS7015, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

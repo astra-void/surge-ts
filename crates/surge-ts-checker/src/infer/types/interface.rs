@@ -650,6 +650,7 @@ pub(crate) fn resolve_interface(
                     &interface.body.extends,
                     &interface.body.members,
                     interface.body.string_index_type.as_ref(),
+                    interface.body.number_index_type.as_ref(),
                     interface.body.call_signature.as_ref(),
                     &interface.body.construct_signatures,
                     ctx,
@@ -835,6 +836,7 @@ pub(crate) fn resolve_interface_declaration(
     extends: &[ParsedNamedType],
     members: &[ParsedInterfaceMember],
     string_index_type: Option<&ParsedType>,
+    number_index_type: Option<&ParsedType>,
     call_signature: Option<&ParsedFunctionType>,
     construct_signatures: &[ParsedFunctionType],
     ctx: &mut CheckerContext,
@@ -1392,7 +1394,20 @@ pub(crate) fn resolve_interface_declaration(
         None => inherited_index_type.or(if base_is_open { Some(Type::Any) } else { None }),
     };
 
-    let mut object_type = alloc_object_type(properties, resolved_index_type);
+    // A numeric index signature is resolved alongside the string one: a numeric
+    // key prefers it, and its presence alone is what makes a *string* key an
+    // implicit `any` rather than a resolved member.
+    let resolved_number_index_type = number_index_type.map(|parsed| {
+        let resolved = crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::InterfaceIndexSignatureMapping,
+            || resolve_parsed_type(parsed.clone(), ctx, resolving, substitution),
+        );
+        had_error |= resolved.had_error;
+        resolved.ty
+    });
+
+    let mut object_type = alloc_object_type(properties, resolved_index_type)
+        .with_number_index_type(resolved_number_index_type);
     if openness_is_synthetic {
         object_type = object_type.with_open_index_marker();
     }

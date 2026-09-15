@@ -445,6 +445,10 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                     parts.push(format!("[key: string]: {}", index_type.name()));
                 }
 
+                if let Some(index_type) = &object.number_index_type {
+                    parts.push(format!("[key: number]: {}", index_type.name()));
+                }
+
                 let properties = parts.join("; ");
 
                 if properties.is_empty() {
@@ -458,6 +462,7 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
 fn string_property_access_type(name: &str) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
+        ITERATION_PROTOCOL_MEMBER => Some(iteration_protocol_type(&Type::String)),
         // `searchValue` may be a string or a `RegExp`, so it stays permissive.
         // The replacement is a string *or* a replacer function; spelling that as
         // a union rather than `Any` keeps argument checking just as permissive
@@ -625,6 +630,40 @@ fn array_iteration_callback(element: &Type, return_type: Type) -> Type {
     )
 }
 
+/// The member name `[Symbol.iterator]` parses to; see `computed_key_name` in the
+/// parser, which renders a computed key under a name no written identifier can
+/// spell.
+pub const ITERATION_PROTOCOL_MEMBER: &str = "[Symbol.iterator]";
+
+/// The iteration protocol an array, tuple or string carries through the lib's
+/// `[Symbol.iterator](): ArrayIterator<T>` / `StringIterator<T>`. surge models
+/// these as their own [`Type`] variants rather than as `Array`/`String`
+/// interface instances, so nothing supplied that member and no array ever
+/// satisfied `Iterable<T>`: every `take([1, 2, 3])` against
+/// `take<T>(items: Iterable<T>)` was a false `TS2345`.
+///
+/// Only what the relation reads is modelled. `next()` yields `{ value: E }`,
+/// the least `IteratorYieldResult<T>` accepts — `done` is optional there — so
+/// the element is still checked and `number[]` stays rejected against
+/// `Iterable<string>`.
+fn iteration_protocol_type(element: &Type) -> Type {
+    let mut yielded = crate::PropertyMap::default();
+    yielded.insert(
+        std::sync::Arc::from("value"),
+        crate::ObjectProperty::required(element.clone()),
+    );
+    let yielded = Type::Object(ObjectType::new(yielded, None));
+
+    let mut iterator = crate::PropertyMap::default();
+    iterator.insert(
+        std::sync::Arc::from("next"),
+        crate::ObjectProperty::required(function_type(vec![], yielded, false, 0)),
+    );
+    let iterator = Type::Object(ObjectType::new(iterator, None));
+
+    function_type(vec![], iterator, false, 0)
+}
+
 fn element_or_undefined(element: &Type) -> Type {
     crate::union_type(vec![element.clone(), Type::Undefined])
 }
@@ -654,6 +693,7 @@ pub fn array_member_type(name: &str, element: &Type) -> Option<Type> {
 fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
     match name {
         "length" => Some(Type::Number),
+        ITERATION_PROTOCOL_MEMBER => Some(iteration_protocol_type(element)),
         "map" => Some(function_type(
             vec![array_iteration_callback(element, Type::Any)],
             Type::Array(Box::new(Type::Any)),

@@ -358,6 +358,7 @@ pub(crate) fn validate_local_type_declaration(
                         &interface.body.extends,
                         &interface.body.members,
                         interface.body.string_index_type.as_ref(),
+                        interface.body.number_index_type.as_ref(),
                         interface.body.call_signature.as_ref(),
                         &interface.body.construct_signatures,
                         ctx,

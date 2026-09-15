@@ -352,6 +352,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS7015",
+    "category": "Error",
+    "message": "Element implicitly has an 'any' type because index expression is not of type 'number'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2862",
     "category": "Error",
     "message": "Type '{0}' is generic and can only be indexed for reading.",

@@ -44,6 +44,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
             ParsedObjectType {
                 properties: Vec::new(),
                 string_index_type: None,
+                number_index_type: None,
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -81,6 +82,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                 ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
                     properties: Vec::new(),
                     string_index_type: None,
+                    number_index_type: None,
                     call_signature: None,
                     call_signature_overloads: Vec::new(),
                     construct_signature: Some(Box::new(function)),
@@ -656,6 +658,7 @@ fn same_tuple_element_type(left: &ParsedType, right: &ParsedType) -> bool {
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
     let mut string_index_type: Option<Box<ParsedType>> = None;
+    let mut number_index_type: Option<Box<ParsedType>> = None;
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
     let mut call_signature_overloads: Vec<ParsedFunctionType> = Vec::new();
     let mut construct_signature: Option<Box<ParsedFunctionType>> = None;
@@ -707,9 +710,14 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 continue;
             }
             TSSignature::TSIndexSignature(index_signature) => {
-                // The last index signature wins, matching the interface path.
+                // The last index signature of each kind wins, matching the
+                // interface path.
                 if let Some(value_type) = parse_index_signature_value_type(index_signature) {
-                    string_index_type = Some(Box::new(value_type));
+                    if index_signature_is_numeric(index_signature) {
+                        number_index_type = Some(Box::new(value_type));
+                    } else {
+                        string_index_type = Some(Box::new(value_type));
+                    }
                 }
                 continue;
             }
@@ -731,6 +739,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
         properties,
         string_index_type,
+        number_index_type,
         call_signature,
         // One signature is already the whole story; the fold is lossless there.
         call_signature_overloads: if call_signature_overloads.len() > 1 {
@@ -1038,6 +1047,20 @@ pub(crate) fn parse_index_signature_value_type(
     index_signature: &oxc_ast::ast::TSIndexSignature<'_>,
 ) -> Option<ParsedType> {
     parse_type(&index_signature.type_annotation.type_annotation)
+}
+
+/// Whether an index signature is keyed by `number`. tsc keeps the two kinds
+/// apart: a numeric key prefers the number signature, and a string key a
+/// number-only type cannot answer is an implicit `any`.
+pub(crate) fn index_signature_is_numeric(
+    index_signature: &oxc_ast::ast::TSIndexSignature<'_>,
+) -> bool {
+    index_signature.parameters.first().is_some_and(|parameter| {
+        matches!(
+            parameter.type_annotation.type_annotation,
+            oxc_ast::ast::TSType::TSNumberKeyword(_)
+        )
+    })
 }
 
 pub(crate) fn parse_type_parameters(

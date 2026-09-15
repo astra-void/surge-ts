@@ -214,6 +214,11 @@ pub(crate) enum SymbolKind {
     Const,
     Function,
     Parameter,
+    /// The key of a `for…in` over an object whose only index signature is
+    /// numeric. Its type is `string` like any other key; the kind records what
+    /// tsc's `isForInVariableForNumericPropertyNames` asks at an access through
+    /// it — that the key indexes as a `number`.
+    ForInNumericKey,
     /// A binding stubbed for an import whose module was reported unresolved.
     /// Its type is tsc's error type (`any`), and unlike an inferred `any` that
     /// records a surge modelling failure, this one is what the source really

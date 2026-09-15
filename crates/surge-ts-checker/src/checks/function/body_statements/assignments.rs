@@ -335,7 +335,12 @@ fn element_write_target_type(receiver: &Type, index_type: &Type) -> Option<Type>
             {
                 return Some(member);
             }
-            object.string_index_type.as_deref().cloned()
+            // A numeric key prefers the number index signature and falls back to
+            // the string one; every other key can only use the string index.
+            let key_is_numeric = literal_index_key(index_type)
+                .map(|key| surge_ts_types::is_numeric_key(&key))
+                .unwrap_or_else(|| is_assignable_to(index_type, &Type::Number));
+            object.applicable_index_type(key_is_numeric).cloned()
         }
         // A nominal reference (`Array<number>`, an alias) writes like whatever
         // it names; an open tuple like the array of everything it can hold.
@@ -409,7 +414,7 @@ fn check_element_assignment(
     index: &ParsedExpression,
     index_span: Option<surge_ts_syntax::TextSpan>,
     assignment: &ParsedMemberAssignment,
-    scopes: &ScopeStack,
+    scopes: &mut ScopeStack,
     ctx: &mut CheckerContext,
 ) {
     let visible_symbols = visible_symbols(scopes);
@@ -472,18 +477,76 @@ fn check_element_assignment(
     let out_of_bounds_target =
         tuple_index_out_of_bounds(&receiver_type, index, &index_type, property_span, ctx);
 
+    let index_indexes_as_number = matches!(
+        index,
+        ParsedExpression::Identifier { name, .. }
+            if visible_symbols
+                .get(name)
+                .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::ForInNumericKey))
+    );
+
+    // A key a number-only receiver cannot answer is an implicit `any`, and a
+    // write through one is the same TS7015 a read of it reports.
+    if !index_indexes_as_number
+        && ctx.options.no_implicit_any
+        && let Type::Object(object) = receiver_type.peeled()
+        && object.number_index_type.is_some()
+        && object
+            .applicable_index_type(is_assignable_to(&index_type, &Type::Number))
+            .is_none()
+        && literal_index_key(&index_type)
+            .and_then(|key| object.get_property_access_type(&key))
+            .is_none()
+    {
+        let diagnostic = Diagnostic::ts7015(ctx.file_name.clone());
+        ctx.push(match property_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        });
+        return;
+    }
+
     let target_type = out_of_bounds_target
         .or_else(|| {
             literal_index_key(&index_type)
                 .and_then(|key| accessor_write_type(&receiver_type, &key, ctx))
         })
         .or_else(|| union_index_write_target_type(&receiver_type, &index_type, ctx))
-        .or_else(|| element_write_target_type(&receiver_type, &index_type));
+        .or_else(|| {
+            element_write_target_type(
+                &receiver_type,
+                // A `for…in` key over a numerically-keyed object writes through
+                // the numeric index signature, as it reads through it.
+                if index_indexes_as_number {
+                    &Type::Number
+                } else {
+                    &index_type
+                },
+            )
+        });
     let Some(target_type) = target_type else {
         return;
     };
 
-    check_assigned_value(&target_type, assignment, &visible_symbols, ctx);
+    let assigned = check_assigned_value(&target_type, assignment, &visible_symbols, ctx);
+
+    // A write is what a later read of the same element sees: tsc narrows an
+    // element access with a literal or const-like key to the assigned type, and
+    // without it `counts[key] = (counts[key] ?? 0) + 1` left the next read of
+    // `counts[key]` possibly-undefined under `noUncheckedIndexedAccess`.
+    if let Some(assigned) = assigned
+        && let Some(key) = crate::checks::function::element_reference_key(object, index)
+    {
+        let _ = scopes.insert_current_narrowed(
+            key,
+            crate::symbols::SymbolInfo {
+                ty: assigned,
+                kind: crate::symbols::SymbolKind::Var,
+                function_signature: None,
+            },
+            target_type,
+        );
+    }
 }
 
 /// The value half of a member write: evaluate it against the target type and
@@ -493,7 +556,7 @@ fn check_assigned_value(
     assignment: &ParsedMemberAssignment,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
-) {
+) -> Option<Type> {
     let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type(
         &assignment.value,
         assignment.value_span,
@@ -504,15 +567,15 @@ fn check_assigned_value(
     );
 
     let InferredExpression::Known(value_type) = inferred_value else {
-        return;
+        return None;
     };
 
     if value_type.is_unknown() || target_type.is_unknown() {
-        return;
+        return None;
     }
 
     if is_assignable_to(&value_type, target_type) {
-        return;
+        return Some(value_type);
     }
 
     let diagnostic = Diagnostic::ts2322(
@@ -527,6 +590,7 @@ fn check_assigned_value(
         None => diagnostic,
     };
     ctx.push(diagnostic);
+    None
 }
 
 /// `exports.foo = …` / `module.exports = …` in a JavaScript file is a CommonJS

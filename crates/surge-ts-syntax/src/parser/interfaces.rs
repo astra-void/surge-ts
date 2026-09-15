@@ -25,20 +25,27 @@ pub(crate) fn parse_interface_declaration(
         &super::types::setter_accessor_types(&declaration.body.body),
     );
 
-    // A string/number index signature (`[key: string]: T`) contributes the
-    // object's `string_index_type` rather than a named property. The last one
-    // wins (interfaces rarely declare more than one).
-    let string_index_type = declaration
-        .body
-        .body
-        .iter()
-        .filter_map(|member| match member {
-            TSSignature::TSIndexSignature(index_signature) => {
-                parse_index_signature_value_type(index_signature)
-            }
-            _ => None,
-        })
-        .next_back();
+    // An index signature (`[key: string]: T`, `[key: number]: T`) contributes
+    // the object's index type rather than a named property, and the two kinds
+    // are kept apart: a numeric key prefers the number one. The last of each
+    // kind wins (interfaces rarely declare more than one).
+    let index_signature_of = |numeric: bool| {
+        declaration
+            .body
+            .body
+            .iter()
+            .filter_map(|member| match member {
+                TSSignature::TSIndexSignature(index_signature)
+                    if super::types::index_signature_is_numeric(index_signature) == numeric =>
+                {
+                    parse_index_signature_value_type(index_signature)
+                }
+                _ => None,
+            })
+            .next_back()
+    };
+    let string_index_type = index_signature_of(false);
+    let number_index_type = index_signature_of(true);
 
     // A bare call signature (`(value?: any): number`) makes the interface
     // callable. Multiple overloads fold into one permissive signature the same
@@ -84,6 +91,7 @@ pub(crate) fn parse_interface_declaration(
             .collect(),
         members,
         string_index_type,
+        number_index_type,
         call_signature,
         construct_signatures,
     })

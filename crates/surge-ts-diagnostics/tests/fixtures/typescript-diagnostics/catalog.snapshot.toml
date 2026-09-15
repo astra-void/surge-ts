@@ -353,6 +353,14 @@ message = "A tuple type cannot be indexed with a negative value."
 arity = 0
 
 [[diagnostic]]
+code = "TS7015"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Element implicitly has an 'any' type because index expression is not of type 'number'."
+arity = 0
+
+[[diagnostic]]
 code = "TS2862"
 category = "Error"
 source = "typescript"

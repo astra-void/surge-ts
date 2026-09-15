@@ -302,6 +302,7 @@ pub(crate) fn check_function_for_of_statement(
     };
 
     let mut element_type = Type::Unknown;
+    let mut numeric_property_names = false;
     if !iterable_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
         let iterable_type = evaluate_expression(
@@ -311,9 +312,17 @@ pub(crate) fn check_function_for_of_statement(
             ctx,
         );
         // `for (k in o)` binds the property key, which is always `string` — the
-        // right-hand side is still evaluated so errors inside it surface.
+        // right-hand side is still evaluated so errors inside it surface. The
+        // key is *indexed* as a number when the iterated object's only index
+        // signature is numeric, which is a property of the access rather than
+        // of the binding (tsc: `isForInVariableForNumericPropertyNames`).
         if for_of_statement.keys_only {
             element_type = Type::String;
+            numeric_property_names = matches!(
+                &iterable_type,
+                InferredExpression::Known(iterable_type)
+                    if has_numeric_property_names(iterable_type)
+            );
         } else if let InferredExpression::Known(iterable_type) = iterable_type {
             element_type = for_of_element_type(&iterable_type);
         }
@@ -328,6 +337,22 @@ pub(crate) fn check_function_for_of_statement(
         narrow_reference_non_null_in_scope(&for_of_statement.iterable, scopes);
     }
     insert_binding_name(&for_of_statement.binding_name, element_type, scopes);
+    // The key of a `for…in` over a numerically-keyed object indexes as a
+    // number, so an access through it reads the numeric index signature rather
+    // than reporting an implicit `any`.
+    if numeric_property_names
+        && let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } =
+            &for_of_statement.binding_name
+        && let Some(symbol) = scopes.resolve(name).cloned()
+    {
+        scopes.insert_current(
+            name.as_str(),
+            crate::symbols::SymbolInfo {
+                kind: crate::symbols::SymbolKind::ForInNumericKey,
+                ..symbol
+            },
+        );
+    }
     if flow_active {
         flow_state.begin_branch_capture();
         check_function_body(for_of_statement.body, return_type, scopes, flow_state, ctx);
@@ -336,6 +361,15 @@ pub(crate) fn check_function_for_of_statement(
         check_function_body(for_of_statement.body, return_type, scopes, flow_state, ctx);
     }
     scopes.pop_child();
+}
+
+/// tsc's `hasNumericPropertyNames`: the type's only index signature is the
+/// numeric one, which is what makes a `for…in` key over it a `number`.
+fn has_numeric_property_names(ty: &Type) -> bool {
+    match ty.peeled() {
+        Type::Object(object) => object.has_numeric_property_names(),
+        _ => false,
+    }
 }
 
 pub(crate) fn for_of_element_type(iterable_type: &Type) -> Type {

@@ -474,6 +474,13 @@ fn fine_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8, budget: &mut u32) 
             // walking two more signatures per object is not worth it.
             // `is_intersection` is genuinely excluded from equality and must
             // stay unhashed.
+            match &object.number_index_type {
+                Some(index_type) => {
+                    1u8.hash(hasher);
+                    fine_key_into(index_type, hasher, depth + 1, budget);
+                }
+                None => 0u8.hash(hasher),
+            }
             match &object.string_index_type {
                 Some(index) => {
                     1u8.hash(hasher);
@@ -562,6 +569,13 @@ fn dedup_key_into(ty: &Type, hasher: &mut FxHasher, depth: u8) {
                 properties = properties.wrapping_add(property_hasher.finish());
             }
             properties.hash(hasher);
+            match &object.number_index_type {
+                Some(index) => {
+                    1u8.hash(hasher);
+                    dedup_key_into(index, hasher, depth + 1);
+                }
+                None => 0u8.hash(hasher),
+            }
             match &object.string_index_type {
                 Some(index) => {
                     1u8.hash(hasher);
@@ -868,6 +882,7 @@ mod tests {
                 properties: Arc::new(properties),
                 property_map_id: None,
                 string_index_type: None,
+                number_index_type: None,
                 alias_name: None,
                 alias_id: None,
                 construct_signature: None,
@@ -1001,6 +1016,7 @@ mod tests {
                     properties: Arc::new(properties),
                     property_map_id: None,
                     string_index_type: None,
+                    number_index_type: None,
                     alias_name: None,
                     alias_id: None,
                     construct_signature: None,
@@ -1035,6 +1051,7 @@ mod tests {
                 properties: Arc::new(properties),
                 property_map_id: None,
                 string_index_type: None,
+                number_index_type: None,
                 alias_name: None,
                 alias_id: None,
                 construct_signature: None,
@@ -1081,6 +1098,7 @@ mod tests {
                 properties: Arc::new(properties),
                 property_map_id: None,
                 string_index_type: None,
+                number_index_type: None,
                 alias_name: None,
                 alias_id: None,
                 construct_signature: None,

@@ -444,6 +444,7 @@ export const fixturePresets: Record<string, string> = {
   'possibly-undefined-receiver-basic': path.join(workspaceRoot, 'tests/compat-projects/possibly-undefined-receiver-basic/tsconfig.json'),
   'no-unchecked-indexed-access-basic': path.join(workspaceRoot, 'tests/compat-projects/no-unchecked-indexed-access-basic/tsconfig.json'),
   'write-target-types-basic': path.join(workspaceRoot, 'tests/compat-projects/write-target-types-basic/tsconfig.json'),
+  'numeric-index-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/numeric-index-signature-basic/tsconfig.json'),
   'ts-extension-import-basic': path.join(workspaceRoot, 'tests/compat-projects/ts-extension-import-basic/tsconfig.json'),
   'spelling-suggestion-basic': path.join(workspaceRoot, 'tests/compat-projects/spelling-suggestion-basic/tsconfig.json'),
   'logical-assignment-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/logical-assignment-narrowing-basic/tsconfig.json'),
