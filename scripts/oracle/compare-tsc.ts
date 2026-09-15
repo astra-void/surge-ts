@@ -431,6 +431,7 @@ export const fixturePresets: Record<string, string> = {
   'ambient-class-static-inheritance-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-class-static-inheritance-basic/tsconfig.json'),
   'interface-extends-function-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-extends-function-alias-basic/tsconfig.json'),
   'iterable-element-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/iterable-element-inference-basic/tsconfig.json'),
+  'spread-argument-element-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/spread-argument-element-inference-basic/tsconfig.json'),
   'generic-class-static-inheritance-no-global-merge-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-class-static-inheritance-no-global-merge-basic/tsconfig.json'),
   'namespace-value-member-annotation-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-value-member-annotation-basic/tsconfig.json'),
   'numeric-enum-number-assignability-basic': path.join(workspaceRoot, 'tests/compat-projects/numeric-enum-number-assignability-basic/tsconfig.json'),
@@ -461,6 +462,7 @@ export const fixturePresets: Record<string, string> = {
   'method-type-parameter-default-basic': path.join(workspaceRoot, 'tests/compat-projects/method-type-parameter-default-basic/tsconfig.json'),
   'callback-return-type-parameter-basic': path.join(workspaceRoot, 'tests/compat-projects/callback-return-type-parameter-basic/tsconfig.json'),
   'mapped-type-optionality-modifier-basic': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-optionality-modifier-basic/tsconfig.json'),
+  'declared-literal-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/declared-literal-inference-basic/tsconfig.json'),
   'callable-intersection-brand-basic': path.join(workspaceRoot, 'tests/compat-projects/callable-intersection-brand-basic/tsconfig.json'),
   'ambient-namespace-member-contextual-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-namespace-member-contextual-basic/tsconfig.json'),
 };
