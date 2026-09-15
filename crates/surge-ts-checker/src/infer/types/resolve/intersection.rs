@@ -904,5 +904,24 @@ fn is_brand_like_object(object: &ObjectType) -> bool {
         && object
             .properties
             .values()
-            .all(|property| property.is_optional())
+            .all(|property| property.is_optional() && is_phantom_member_type(&property.ty))
+}
+
+/// A brand's member carries no payload: `never` (`{ _?: never }`) or an empty
+/// object (`WithRequired<T, K> = T & { [_ in K]: {} }`). A member with a real
+/// type is one the value is asked for — next's `AppType` is
+/// `ComponentType<P> & { getInitialProps?(context): IP | Promise<IP> }`, and
+/// collapsing that away made every `MyApp.getInitialProps = …` a false TS2339
+/// on a type whose own display still showed the member.
+fn is_phantom_member_type(ty: &Type) -> bool {
+    match ty {
+        Type::Never => true,
+        Type::Object(object) => {
+            object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.call_signature().is_none()
+                && object.construct_signature().is_none()
+        }
+        _ => false,
+    }
 }
