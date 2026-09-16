@@ -68,6 +68,45 @@ pub(crate) fn check_variable_declaration_with_symbols(
     Some(symbol)
 }
 
+/// Reports an initializer whose type is not assignable to the annotation it
+/// initializes, at `target_span` — the declared name.
+pub(crate) fn report_initializer_mismatch(
+    inferred_initializer_type: &Type,
+    declared_type: &Type,
+    target_span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if inferred_initializer_type.is_unknown()
+        || type_contains_unknown(declared_type)
+        || type_contains_unknown(inferred_initializer_type)
+        || crate::checks::call::is_open_instantiation(inferred_initializer_type)
+        || is_assignable_to(inferred_initializer_type, declared_type)
+    {
+        return;
+    }
+    let inferred_type_name = source_display_name(inferred_initializer_type, declared_type);
+    let declared_type_name = declared_type.name();
+    let (inferred_type_name, declared_type_name) = crate::checks::expr::disambiguated_pair(
+        inferred_initializer_type,
+        inferred_type_name,
+        declared_type,
+        declared_type_name,
+        &ctx.file_name,
+    );
+    let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
+        inferred_initializer_type,
+        declared_type,
+        &inferred_type_name,
+        &declared_type_name,
+        false,
+        ctx.file_name.clone(),
+    );
+    ctx.push(match target_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
+}
+
 pub(crate) fn check_variable_declaration_against_symbols(
     variable: ParsedVariableDeclaration,
     symbols: &SymbolTable,
@@ -155,40 +194,12 @@ pub(crate) fn check_variable_declaration_against_symbols(
     let mut inferred_symbol_type = match &inferred_initializer {
         InferredExpression::Known(inferred_initializer_type) => {
             if let Some(ref declared_type) = declared_type {
-                if !inferred_initializer_type.is_unknown()
-                    && !type_contains_unknown(declared_type)
-                    && !type_contains_unknown(inferred_initializer_type)
-                    && !crate::checks::call::is_open_instantiation(inferred_initializer_type)
-                    && !is_assignable_to(inferred_initializer_type, declared_type)
-                {
-                    let inferred_type_name =
-                        source_display_name(inferred_initializer_type, declared_type);
-                    let declared_type_name = declared_type.name();
-                    let (inferred_type_name, declared_type_name) =
-                        crate::checks::expr::disambiguated_pair(
-                            inferred_initializer_type,
-                            inferred_type_name,
-                            declared_type,
-                            declared_type_name,
-                            &ctx.file_name,
-                        );
-                    let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
-                        inferred_initializer_type,
-                        declared_type,
-                        &inferred_type_name,
-                        &declared_type_name,
-                        false,
-                        ctx.file_name.clone(),
-                    );
-
-                    let target_span = variable.name_span.or(variable.initializer_span);
-                    let diagnostic = match target_span {
-                        Some(span) => diagnostic.with_span(convert_span(span)),
-                        None => diagnostic,
-                    };
-
-                    ctx.push(diagnostic);
-                }
+                report_initializer_mismatch(
+                    inferred_initializer_type,
+                    declared_type,
+                    variable.name_span.or(variable.initializer_span),
+                    ctx,
+                );
             }
 
             if declared_type.is_none() && !inferred_initializer_type.is_unknown() {

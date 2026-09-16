@@ -833,8 +833,67 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     ctx,
                 );
             }
-            ParsedClassMember::Property(_) | ParsedClassMember::Accessor(_) => {}
+            ParsedClassMember::Property(property) => {
+                let this_type = if property.is_static {
+                    static_type.clone()
+                } else {
+                    instance_type.clone()
+                };
+                check_class_property_initializer(property, this_type, ctx);
+            }
+            ParsedClassMember::Accessor(_) => {}
         }
+    }
+}
+
+/// tsc checks a property initializer as it checks a variable's
+/// (`checkVariableLikeDeclaration`): against the annotation when there is one,
+/// with `this` bound to the instance — or the constructor, for a static.
+fn check_class_property_initializer(
+    property: &ParsedClassProperty,
+    this_type: Type,
+    ctx: &mut CheckerContext,
+) {
+    let Some(initializer) = &property.initializer else {
+        return;
+    };
+    let mut symbols = ctx
+        .symbols
+        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    let _ = symbols.insert(
+        "this".to_string(),
+        SymbolInfo {
+            ty: this_type,
+            kind: SymbolKind::Const,
+            function_signature: None,
+        },
+    );
+    let Some(declared_type) = property.declared_type.clone() else {
+        crate::checks::expr::evaluate_expression(
+            initializer,
+            property.initializer_span,
+            &symbols,
+            ctx,
+        );
+        return;
+    };
+    let declared_type = map_parsed_type(declared_type, ctx);
+    let inferred = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+        initializer,
+        property.initializer_span,
+        property.name_span,
+        Some(&declared_type),
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+        &symbols,
+        ctx,
+    );
+    if let crate::infer::InferredExpression::Known(inferred_type) = inferred {
+        crate::checks::var::report_initializer_mismatch(
+            &inferred_type,
+            &declared_type,
+            property.name_span.or(property.initializer_span),
+            ctx,
+        );
     }
 }
 
