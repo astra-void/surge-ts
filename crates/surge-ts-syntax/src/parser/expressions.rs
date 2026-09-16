@@ -937,9 +937,28 @@ pub(crate) fn parse_conditional_expression(
     })
 }
 
+/// `-1` and `+1` are literals to tsc (`checkPrefixUnaryExpression` returns the
+/// fresh literal type of the signed value), so they lower to the literal itself
+/// and every syntactic freshness check sees them as one.
+pub(crate) fn signed_number_literal_text(unary_expression: &UnaryExpression<'_>) -> Option<String> {
+    let Expression::NumericLiteral(literal) = &unary_expression.argument else {
+        return None;
+    };
+    let value = match unary_expression.operator {
+        UnaryOperator::UnaryNegation => -literal.value,
+        UnaryOperator::UnaryPlus => literal.value,
+        _ => return None,
+    };
+    // `-0` is the literal type `0`.
+    Some(if value == 0.0 { 0.0 } else { value }.to_string())
+}
+
 pub(crate) fn parse_unary_expression(
     unary_expression: &UnaryExpression<'_>,
 ) -> Option<ParsedExpression> {
+    if let Some(text) = signed_number_literal_text(unary_expression) {
+        return Some(ParsedExpression::NumberLiteral(text));
+    }
     let operator = match unary_expression.operator {
         UnaryOperator::LogicalNot => ParsedUnaryOperator::Not,
         UnaryOperator::UnaryPlus => ParsedUnaryOperator::Plus,

@@ -188,7 +188,6 @@ fn declared_member<'a>(
 /// carries both diagnostics.
 fn tuple_index_out_of_bounds(
     receiver: &Type,
-    index: &ParsedExpression,
     index_type: &Type,
     span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
@@ -196,12 +195,10 @@ fn tuple_index_out_of_bounds(
     let Type::Tuple(elements) = receiver.peeled() else {
         return None;
     };
-    // `-1` is a unary expression over a literal, and its type widens to
-    // `number`, so the negative case is read off the syntax.
-    let index = match index_type {
-        Type::NumberLiteral(literal) => literal.value.parse::<i64>().ok()?,
-        _ => negated_literal_index(index)?,
+    let Type::NumberLiteral(literal) = index_type else {
+        return None;
     };
+    let index = literal.value.parse::<i64>().ok()?;
 
     let diagnostic = if index < 0 {
         Diagnostic::ts2514(ctx.file_name.clone())
@@ -221,22 +218,6 @@ fn tuple_index_out_of_bounds(
         None => diagnostic,
     });
     Some(Type::Undefined)
-}
-
-/// The value of a `-<number literal>` index expression.
-fn negated_literal_index(index: &ParsedExpression) -> Option<i64> {
-    let ParsedExpression::Unary {
-        operator: surge_ts_syntax::ParsedUnaryOperator::Minus,
-        operand,
-        ..
-    } = index
-    else {
-        return None;
-    };
-    let ParsedExpression::NumberLiteral(literal) = operand.as_ref() else {
-        return None;
-    };
-    literal.parse::<i64>().ok().map(|value| -value)
 }
 
 /// tsc's `isReadonlySymbol` for the members surge records it for: a `readonly`
@@ -475,7 +456,7 @@ fn check_element_assignment(
     // right, and the element it names is `undefined` — which is what tsc then
     // reports the assigned value against, so both diagnostics appear.
     let out_of_bounds_target =
-        tuple_index_out_of_bounds(&receiver_type, index, &index_type, property_span, ctx);
+        tuple_index_out_of_bounds(&receiver_type, &index_type, property_span, ctx);
 
     let index_indexes_as_number = matches!(
         index,

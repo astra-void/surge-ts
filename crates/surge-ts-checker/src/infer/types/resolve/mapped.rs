@@ -16,12 +16,13 @@ fn mapped_key_is_open(constraint: &Type) -> bool {
     }
 }
 
-/// The property names a literal key constraint enumerates. A numeric key names
-/// the member by its text, the same way an object literal's numeric key does.
-fn mapped_literal_keys(constraint: &Type) -> Option<Vec<String>> {
+/// The literal keys a key constraint enumerates, each with the property name it
+/// produces. A numeric key names the member by its text, the same way an object
+/// literal's numeric key does, while the key parameter stays the number literal.
+fn mapped_literal_keys(constraint: &Type) -> Option<Vec<(String, Type)>> {
     match constraint {
-        Type::StringLiteral(value) => Some(vec![value.clone()]),
-        Type::NumberLiteral(literal) => Some(vec![literal.value.clone()]),
+        Type::StringLiteral(value) => Some(vec![(value.clone(), constraint.clone())]),
+        Type::NumberLiteral(literal) => Some(vec![(literal.value.clone(), constraint.clone())]),
         Type::Union(union) => {
             let mut keys = Vec::new();
             for variant in union.types() {
@@ -115,7 +116,7 @@ pub(crate) fn resolve_mapped_type(
     let mut properties = PropertyMap::default();
     let mut had_error = false;
 
-    for key in keys {
+    for (key, key_type) in keys {
         if !try_consume_type_expansion_step() {
             return ResolvedType {
                 ty: Type::Unknown,
@@ -124,7 +125,7 @@ pub(crate) fn resolve_mapped_type(
         }
         let mut new_substitution =
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
-        new_substitution.insert(mapped.key_name.clone(), Type::StringLiteral(key.clone()));
+        new_substitution.insert(mapped.key_name.clone(), key_type);
 
         // `as` remaps the key: `never` drops it, a union of literals fans it
         // out, anything else is a shape surge cannot enumerate.

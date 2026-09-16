@@ -415,9 +415,13 @@ fn parse_literal_type(literal_type: &TSLiteralType<'_>) -> ParsedType {
         TSLiteral::BooleanLiteral(boolean_literal) => {
             ParsedType::BooleanLiteral(boolean_literal.value)
         }
-        TSLiteral::UnaryExpression(_)
-        | TSLiteral::BigIntLiteral(_)
-        | TSLiteral::TemplateLiteral(_) => ParsedType::Unknown,
+        TSLiteral::UnaryExpression(unary_expression) => {
+            match super::expressions::signed_number_literal_text(unary_expression) {
+                Some(text) => ParsedType::NumberLiteral(text),
+                None => ParsedType::Unknown,
+            }
+        }
+        TSLiteral::BigIntLiteral(_) | TSLiteral::TemplateLiteral(_) => ParsedType::Unknown,
     }
 }
 
@@ -1116,6 +1120,10 @@ pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
         // augmentation contributed nothing at all.
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
         PropertyKey::NumericLiteral(literal) => Some(literal.raw_str().to_string()),
+        // `[-1]` names the property `-1`, as a written literal key would.
+        PropertyKey::UnaryExpression(unary) => {
+            super::expressions::signed_number_literal_text(unary)
+        }
         other => render(other.to_expression()).map(|path| format!("[{path}]")),
     }
 }
