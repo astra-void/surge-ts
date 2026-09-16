@@ -185,6 +185,16 @@ pub const TS2322: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2820: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2820",
+    number: Some(2820),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' is not assignable to type '{1}'. Did you mean '{2}'?",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS18046: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS18046",
     number: Some(18046),
@@ -1254,6 +1264,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2314,
     TS2315,
     TS2322,
+    TS2820,
     TS18046,
     TS2532,
     TS18048,
@@ -1542,6 +1553,24 @@ impl Diagnostic {
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2820(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2820,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
             ],
             file_name,
         )

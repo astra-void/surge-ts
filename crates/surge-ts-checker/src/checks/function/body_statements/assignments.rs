@@ -578,7 +578,9 @@ fn check_assigned_value(
         return Some(value_type);
     }
 
-    let diagnostic = Diagnostic::ts2322(
+    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+        &value_type,
+        target_type,
         &crate::checks::expr::source_display_name(&value_type, target_type),
         &target_type.name(),
         ctx.file_name.clone(),
@@ -809,7 +811,9 @@ pub(crate) fn check_member_assignment(
     }
 
     if !is_assignable_to(&value_type, &target_type) {
-        let diagnostic = Diagnostic::ts2322(
+        let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+            &value_type,
+            &target_type,
             &crate::checks::expr::source_display_name(&value_type, &target_type),
             &target_type.name(),
             ctx.file_name.clone(),
@@ -878,7 +882,9 @@ pub(crate) fn check_this_property_assignment(
     }
 
     if !is_assignable_to(&value_type, &property_type) {
-        let diagnostic = Diagnostic::ts2322(
+        let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+            &value_type,
+            &property_type,
             &crate::checks::expr::source_display_name(&value_type, &property_type),
             &property_type.name(),
             ctx.file_name.clone(),

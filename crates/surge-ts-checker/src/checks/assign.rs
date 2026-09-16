@@ -74,7 +74,9 @@ pub(crate) fn check_assignment_with_symbols(
             {
                 let inferred_type_name = inferred_value_type.name();
                 let target_type_name = target_type.name();
-                let diagnostic = Diagnostic::ts2322(
+                let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                    &inferred_value_type,
+                    &target_type,
                     &inferred_type_name,
                     &target_type_name,
                     ctx.file_name.clone(),

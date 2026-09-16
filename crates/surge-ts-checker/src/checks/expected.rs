@@ -984,7 +984,9 @@ fn evaluate_array_literal_with_expected_type(
                 if !is_assignable_to(&actual_type, expected_element_type) {
                     let actual_type_name = actual_type.name();
                     let expected_type_name = expected_element_type.name();
-                    let diagnostic = Diagnostic::ts2322(
+                    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                        &actual_type,
+                        expected_element_type,
                         &actual_type_name,
                         &expected_type_name,
                         ctx.file_name.clone(),
@@ -1212,7 +1214,9 @@ fn evaluate_tuple_literal_with_expected_type(
                 if !is_assignable_to(&actual_type, expected_element_type) {
                     let actual_type_name = actual_type.name();
                     let expected_type_name = expected_element_type.name();
-                    let diagnostic = Diagnostic::ts2322(
+                    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                        &actual_type,
+                        expected_element_type,
                         &actual_type_name,
                         &expected_type_name,
                         ctx.file_name.clone(),
@@ -1468,7 +1472,9 @@ fn evaluate_object_literal_with_expected_type(
                             expected_type_name,
                             &ctx.file_name,
                         );
-                    let diagnostic = Diagnostic::ts2322(
+                    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                        &actual_type,
+                        &expected_property_type,
                         &actual_type_name,
                         &expected_type_name,
                         ctx.file_name.clone(),
@@ -1839,11 +1845,15 @@ fn push_expected_type_mismatch(
         &ctx.file_name,
     );
     let diagnostic = match diagnostic_kind {
-        ExpectedTypeDiagnostic::TypeNotAssignable => Diagnostic::ts2322(
-            &source_type_name,
-            &expected_type_name,
-            ctx.file_name.clone(),
-        ),
+        ExpectedTypeDiagnostic::TypeNotAssignable => {
+            crate::checks::expr::type_not_assignable_diagnostic(
+                source_type,
+                expected_type,
+                &source_type_name,
+                &expected_type_name,
+                ctx.file_name.clone(),
+            )
+        }
         ExpectedTypeDiagnostic::ArgumentNotAssignable => Diagnostic::ts2345(
             &source_type_name,
             &expected_type_name,

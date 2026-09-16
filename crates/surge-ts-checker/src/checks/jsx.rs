@@ -492,7 +492,13 @@ fn check_known_prop(
         &ctx.file_name,
     );
     ctx.push(diagnostic_with_syntax_span(
-        Diagnostic::ts2322(&source, &target, ctx.file_name.clone()),
+        crate::checks::expr::type_not_assignable_diagnostic(
+            attribute_type,
+            &expected_type,
+            &source,
+            &target,
+            ctx.file_name.clone(),
+        ),
         attribute.name_span.or(fallback_span),
     ));
 }

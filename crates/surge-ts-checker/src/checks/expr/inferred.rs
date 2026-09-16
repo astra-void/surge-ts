@@ -317,6 +317,44 @@ fn suggested_unresolved_name(
     best.map(str::to_string)
 }
 
+/// tsc's `getSpellingSuggestion` over an ordered candidate list. On a distance
+/// tie the earlier candidate wins, which is tsc's order for union members.
+/// More than `max_candidates` candidates (when non-zero) means no suggestion.
+pub(crate) fn spelling_suggestion<'a>(
+    name: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+    max_candidates: usize,
+) -> Option<&'a str> {
+    let name_length = name.chars().count();
+    let max_length_difference = 2.max(name_length * 34 / 100);
+    let mut best_distance = (name_length * 4 / 10) as f64 + 0.9;
+    let mut best: Option<&str> = None;
+    for (index, candidate) in candidates.into_iter().enumerate() {
+        if max_candidates > 0 && index >= max_candidates {
+            return None;
+        }
+        if candidate.is_empty()
+            || candidate == name
+            || candidate.len().abs_diff(name_length) > max_length_difference
+        {
+            continue;
+        }
+        if candidate.len() < 3 && !candidate.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        let Some(distance) = levenshtein_with_max(name, candidate, best_distance) else {
+            continue;
+        };
+        if distance < best_distance {
+            best_distance = distance;
+            best = Some(candidate);
+        } else if best.is_none() {
+            best = Some(candidate);
+        }
+    }
+    best
+}
+
 /// Levenshtein distance where a case-only substitution costs 0.1, abandoning a
 /// row once every cell exceeds `max`.
 fn levenshtein_with_max(source: &str, target: &str, max: f64) -> Option<f64> {

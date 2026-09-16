@@ -363,7 +363,13 @@ fn emit_contextual_signature_mismatch(
         &ctx.file_name,
     );
     ctx.push(crate::spans::diagnostic_with_syntax_span(
-        Diagnostic::ts2322(&source_name, &target_name, ctx.file_name.clone()),
+        crate::checks::expr::type_not_assignable_diagnostic(
+            &source,
+            &target,
+            &source_name,
+            &target_name,
+            ctx.file_name.clone(),
+        ),
         span,
     ));
 }

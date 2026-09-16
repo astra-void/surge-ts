@@ -366,6 +366,15 @@ oracle = [
   "numeric-index-signature-basic",
 ]
 
+[TS2820]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/string-literal-spelling-suggestion-basic/src/index.ts",
+]
+oracle = [
+  "string-literal-spelling-suggestion-basic",
+]
+
 [TS4104]
 status = "emitted"
 fixtures = [

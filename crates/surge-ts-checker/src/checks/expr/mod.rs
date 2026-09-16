@@ -74,8 +74,62 @@ pub(crate) fn assignability_mismatch_diagnostic(
     if argument_position {
         surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
     } else {
-        surge_ts_diagnostics::Diagnostic::ts2322(source_name, target_name, file_name)
+        type_not_assignable_diagnostic(source, target, source_name, target_name, file_name)
     }
+}
+
+/// tsc's plain assignability message (`reportRelationError` with no head
+/// message): TS2322, or TS2820 when a string literal missed a union by a typo
+/// of one of its string-literal members.
+pub(crate) fn type_not_assignable_diagnostic(
+    source: &Type,
+    target: &Type,
+    source_name: &str,
+    target_name: &str,
+    file_name: impl Into<String>,
+) -> surge_ts_diagnostics::Diagnostic {
+    match suggested_string_literal_member(source, target) {
+        Some(suggestion) => surge_ts_diagnostics::Diagnostic::ts2820(
+            source_name,
+            target_name,
+            Type::StringLiteral(suggestion).name(),
+            file_name,
+        ),
+        None => surge_ts_diagnostics::Diagnostic::ts2322(source_name, target_name, file_name),
+    }
+}
+
+/// tsc's `getSuggestedTypeForNonexistentStringLiteralType`.
+fn suggested_string_literal_member(source: &Type, target: &Type) -> Option<String> {
+    let Type::StringLiteral(value) = source else {
+        return None;
+    };
+    let peeled;
+    let union = match target {
+        Type::Union(union) => union,
+        Type::Reference(_) => {
+            peeled = target.peeled();
+            let Type::Union(union) = &peeled else {
+                return None;
+            };
+            union
+        }
+        _ => return None,
+    };
+    let members: Vec<Type> = union
+        .types()
+        .iter()
+        .map(|member| match member {
+            Type::Reference(_) => member.peeled(),
+            other => other.clone(),
+        })
+        .collect();
+    let candidates = members.iter().filter_map(|member| match member {
+        Type::StringLiteral(candidate) => Some(candidate.as_str()),
+        _ => None,
+    });
+    crate::checks::expr::inferred::spelling_suggestion(value, candidates, 1000)
+        .map(str::to_string)
 }
 
 pub(crate) fn evaluate_const_expression(

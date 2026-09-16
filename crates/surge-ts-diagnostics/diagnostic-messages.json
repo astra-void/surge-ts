@@ -144,6 +144,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2820",
+    "category": "Error",
+    "message": "Type '{0}' is not assignable to type '{1}'. Did you mean '{2}'?",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS18046",
     "category": "Error",
     "message": "'{0}' is of type 'unknown'.",
