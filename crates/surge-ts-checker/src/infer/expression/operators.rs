@@ -10,6 +10,18 @@ use crate::symbols::SymbolTable;
 
 use crate::infer::InferredExpression;
 
+/// tsc's `!` result (`checkPrefixUnaryExpression`): `false` for an operand
+/// that is always truthy, `true` for one always falsy, `boolean` otherwise.
+pub(crate) fn logical_not_result_type(operand: &Type) -> Type {
+    if matches!(operand.peeled(), Type::Never) {
+        return Type::Boolean;
+    }
+    match crate::checks::function::type_truthiness(operand) {
+        Some(truthy) => Type::BooleanLiteral(!truthy),
+        None => Type::Boolean,
+    }
+}
+
 /// tsc's `typeofType`: the union of every `typeof` result, in sorted order.
 pub(crate) fn typeof_result_type() -> Type {
     union_type(
@@ -38,13 +50,12 @@ pub(crate) fn infer_unary_expression(
     let operand_type = infer_expression(operand, symbols, ctx);
 
     match operator {
-        ParsedUnaryOperator::Not => {
-            if is_known_non_unknown(&operand_type) {
-                InferredExpression::Known(Type::Boolean)
-            } else {
-                InferredExpression::Unknown
+        ParsedUnaryOperator::Not => match operand_type {
+            InferredExpression::Known(ty) if !ty.is_unknown() => {
+                InferredExpression::Known(logical_not_result_type(&ty))
             }
-        }
+            _ => InferredExpression::Unknown,
+        },
         ParsedUnaryOperator::Typeof => InferredExpression::Known(typeof_result_type()),
         // `void` / `delete` / `~`: the operand has already been walked, and the
         // result stays unmodelled rather than guessing `undefined`/`boolean`/`number`.

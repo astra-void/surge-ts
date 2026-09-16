@@ -136,13 +136,12 @@ pub(crate) fn evaluate_unary_expression(
     operand_result: InferredExpression,
 ) -> InferredExpression {
     match operator {
-        ParsedUnaryOperator::Not => {
-            if is_known_non_unknown(&operand_result) {
-                InferredExpression::Known(Type::Boolean)
-            } else {
-                InferredExpression::Unknown
-            }
-        }
+        ParsedUnaryOperator::Not => match inferred_type(&operand_result) {
+            Some(operand_type) if !operand_type.is_unknown() => InferredExpression::Known(
+                crate::infer::expression::logical_not_result_type(&operand_type),
+            ),
+            _ => InferredExpression::Unknown,
+        },
         ParsedUnaryOperator::Typeof => {
             InferredExpression::Known(crate::infer::expression::typeof_result_type())
         }

@@ -367,7 +367,7 @@ pub(super) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
 /// shape with at least one member is always truthy, and a union decides only
 /// when all of its members agree. `{}` admits `""` and `0`, so a memberless
 /// object stays undecided.
-pub(super) fn type_truthiness(ty: &Type) -> Option<bool> {
+pub(crate) fn type_truthiness(ty: &Type) -> Option<bool> {
     match ty {
         Type::BooleanLiteral(value) => Some(*value),
         Type::StringLiteral(value) => Some(!value.is_empty()),
