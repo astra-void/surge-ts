@@ -123,7 +123,12 @@ pub(crate) fn narrow_union_by_instanceof(
     // arm.
     let peeled = ty.peeled();
     let Type::Union(union) = &peeled else {
-        return None;
+        // A lone type that is an instance of the constructor cannot reach the
+        // `else` branch (`isTypeDerivedFrom` filters it out), so an exhaustive
+        // chain of `instanceof` checks ends at `never`.
+        return (!keep_matching
+            && instanceof_matches_with_heritage(&peeled, ctor_name, instance) == Some(true))
+        .then_some(Type::Never);
     };
     let kept: Vec<Type> = union
         .types()
