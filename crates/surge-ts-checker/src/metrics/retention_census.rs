@@ -1336,6 +1336,10 @@ fn parsed_statement_bytes(statement: &surge_ts_syntax::ParsedStatement) -> u64 {
                     .map(parsed_statement_bytes)
                     .sum::<u64>()
         }
+        S::Block(statements) => statements
+            .iter()
+            .map(parsed_body_statement_bytes)
+            .sum::<u64>(),
         S::If(if_statement) => {
             size_of::<surge_ts_syntax::ParsedIfStatement>() as u64
                 + parsed_expression_bytes(&if_statement.condition)

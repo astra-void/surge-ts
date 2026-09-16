@@ -89,6 +89,22 @@ pub(crate) fn check_module_if_statement(
     }
 }
 
+/// A module-scope loop, block, `switch` or `try` is checked exactly as the
+/// same statement in a function body, over a scope rooted at the module's
+/// symbols.
+pub(crate) fn check_module_block(
+    statements: Vec<surge_ts_syntax::ParsedFunctionBodyStatement>,
+    ctx: &mut CheckerContext,
+) {
+    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+    let flow_facts = crate::flow::collect_function_flow_facts(&statements);
+    let mut flow_state = crate::flow::FunctionFlowState::new(
+        flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
+    );
+    crate::checks::function::check_function_body(statements, None, &mut scopes, &mut flow_state, ctx);
+}
+
 pub(crate) fn check_program_statement(
     statement: ParsedStatement,
     file_index: usize,
@@ -130,6 +146,7 @@ pub(crate) fn check_program_statement(
             expr::check_expression_statement(*expression, ctx);
         }
         ParsedStatement::If(if_statement) => check_module_if_statement(&if_statement, ctx),
+        ParsedStatement::Block(statements) => check_module_block(statements, ctx),
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
         ParsedStatement::ClassDeclaration(class) => {

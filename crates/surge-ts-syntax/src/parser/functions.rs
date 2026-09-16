@@ -99,7 +99,7 @@ fn parse_return_statement(statement: &Statement<'_>) -> Option<ParsedReturnState
     })
 }
 
-fn parse_function_body_statement(
+pub(crate) fn parse_function_body_statement(
     statement: &Statement<'_>,
 ) -> Option<Vec<ParsedFunctionBodyStatement>> {
     match statement {

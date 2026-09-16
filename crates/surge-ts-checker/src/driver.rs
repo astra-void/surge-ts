@@ -1122,6 +1122,9 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
         ParsedStatement::If(if_statement) => {
             crate::program::check_module_if_statement(&if_statement, ctx);
         }
+        ParsedStatement::Block(statements) => {
+            crate::program::check_module_block(statements, ctx);
+        }
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
         ParsedStatement::ClassDeclaration(class) => {

@@ -63,6 +63,16 @@ fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
         }
         Statement::IfStatement(if_statement) => functions::parse_if_statement(if_statement)
             .map(|if_statement| vec![ParsedStatement::If(Box::new(if_statement))]),
+        Statement::BlockStatement(_)
+        | Statement::ForStatement(_)
+        | Statement::ForInStatement(_)
+        | Statement::ForOfStatement(_)
+        | Statement::WhileStatement(_)
+        | Statement::DoWhileStatement(_)
+        | Statement::SwitchStatement(_)
+        | Statement::TryStatement(_)
+        | Statement::LabeledStatement(_) => functions::parse_function_body_statement(statement)
+            .map(|statements| vec![ParsedStatement::Block(statements)]),
         _ => None,
     }
 }

@@ -133,6 +133,10 @@ pub enum ParsedStatement {
     /// branch leaves the module (`if (isCancel(x)) process.exit(0)`) and narrow
     /// the statements that follow.
     If(Box<ParsedIfStatement>),
+    /// A module-scope loop, block, `switch`, `try` or labelled statement,
+    /// lowered as a function body lowers it so its statements are checked the
+    /// same way.
+    Block(Vec<ParsedFunctionBodyStatement>),
     UnsupportedDeclaration {
         span: Option<TextSpan>,
     },
