@@ -121,7 +121,7 @@ fn is_always_falsy_condition(condition: &ParsedExpression) -> bool {
 /// belongs to. Recurses into structured statements that share the loop's break
 /// target (`if`/block/`try`) but not into nested loops or `switch`, which
 /// capture their own `break`.
-fn body_breaks_enclosing_loop(body: &[ParsedFunctionBodyStatement]) -> bool {
+pub(crate) fn body_breaks_enclosing_loop(body: &[ParsedFunctionBodyStatement]) -> bool {
     body.iter().any(statement_breaks_enclosing_loop)
 }
 

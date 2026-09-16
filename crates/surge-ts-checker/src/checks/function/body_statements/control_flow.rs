@@ -573,9 +573,27 @@ pub(crate) fn check_function_switch_statement(
         right: Box::new(test.clone()),
         right_span: None,
     };
+    let any_of = |tests: &mut dyn Iterator<Item = &ParsedExpression>| {
+        tests
+            .map(equality_condition)
+            .reduce(|left, right| ParsedExpression::Logical {
+                left: Box::new(left),
+                left_span: None,
+                operator: surge_ts_syntax::ParsedLogicalOperator::Or,
+                operator_span: None,
+                right: Box::new(right),
+                right_span: None,
+            })
+    };
+    // Matching none of the cases is what the `default` clause, and the code
+    // after a `switch` without one, sees (`narrowTypeBySwitchOnDiscriminant`).
+    let no_case_matches =
+        any_of(&mut switch_statement.cases.iter().filter_map(|case| case.test.as_ref()));
     // Per case: the tests of the maximal run of empty-consequent cases falling
-    // into it, plus its own test. `None` for a group containing `default`.
-    let case_group_conditions: Vec<Option<ParsedExpression>> = {
+    // into it, plus its own test, and the branch of that condition the body
+    // runs in. A group containing `default` runs wherever no case *outside* the
+    // group matched.
+    let case_group_conditions: Vec<Option<(ParsedExpression, bool)>> = {
         let mut group: Vec<Option<&ParsedExpression>> = Vec::new();
         switch_statement
             .cases
@@ -583,20 +601,15 @@ pub(crate) fn check_function_switch_statement(
             .map(|switch_case| {
                 group.push(switch_case.test.as_ref());
                 let condition = if group.iter().any(|test| test.is_none()) {
-                    None
-                } else {
-                    group
-                        .iter()
-                        .filter_map(|test| *test)
-                        .map(equality_condition)
-                        .reduce(|left, right| ParsedExpression::Logical {
-                            left: Box::new(left),
-                            left_span: None,
-                            operator: surge_ts_syntax::ParsedLogicalOperator::Or,
-                            operator_span: None,
-                            right: Box::new(right),
-                            right_span: None,
+                    any_of(&mut switch_statement.cases.iter().filter_map(|case| {
+                        case.test.as_ref().filter(|test| {
+                            !group.iter().flatten().any(|member| std::ptr::eq(*member, *test))
                         })
+                    }))
+                    .map(|condition| (condition, false))
+                } else {
+                    any_of(&mut group.iter().filter_map(|test| *test))
+                        .map(|condition| (condition, true))
                 };
                 if !switch_case.consequent.is_empty() {
                     group.clear();
@@ -605,6 +618,18 @@ pub(crate) fn check_function_switch_statement(
             })
             .collect()
     };
+    let has_default = switch_statement.cases.iter().any(|case| case.test.is_none());
+    let every_case_exits = switch_statement.cases.last().is_some_and(|case| !case.consequent.is_empty())
+        && switch_statement
+            .cases
+            .iter()
+            .filter(|case| !case.consequent.is_empty())
+            .all(|case| {
+                // `break` leaves the case for the code after the `switch`.
+                let flow = analyze_function_body_flow(&case.consequent);
+                (flow.guarantees_value_return || flow.guarantees_exit)
+                    && !crate::flow::body_breaks_enclosing_loop(&case.consequent)
+            });
 
     if flow_active {
         let mut branch_deltas = Vec::new();
@@ -623,8 +648,8 @@ pub(crate) fn check_function_switch_statement(
             }
 
             scopes.push_child();
-            if let Some(condition) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, true, ctx);
+            if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
+                narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
             }
             flow_state.begin_branch_capture();
             check_function_body(
@@ -644,8 +669,8 @@ pub(crate) fn check_function_switch_statement(
     } else {
         for (case_index, switch_case) in switch_statement.cases.into_iter().enumerate() {
             scopes.push_child();
-            if let Some(condition) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, true, ctx);
+            if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
+                narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
             }
             check_function_body(
                 switch_case.consequent,
@@ -656,6 +681,15 @@ pub(crate) fn check_function_switch_statement(
             );
             scopes.pop_child();
         }
+    }
+
+    // Only the implicit `default` path continues past a `switch` whose every
+    // case leaves it.
+    if !has_default
+        && every_case_exits
+        && let Some(condition) = no_case_matches.as_ref()
+    {
+        narrow_discriminant_in_scope(condition, scopes, false, ctx);
     }
 }
 
