@@ -78,6 +78,10 @@ pub enum ParsedGrammarDiagnosticKind {
     AlwaysTruthyExpression,
     /// A tested expression whose syntax makes it always falsy — TS2873.
     AlwaysFalsyExpression,
+    /// A `??` left operand whose syntax is never nullish — TS2869.
+    NeverNullishCoalesceOperand,
+    /// A `??` left operand whose syntax is always nullish — TS2871.
+    AlwaysNullishCoalesceOperand,
     /// A parameter written both optional and with a default — TS1015.
     OptionalParameterWithInitializer,
     /// A required parameter after an optional one — TS1016.

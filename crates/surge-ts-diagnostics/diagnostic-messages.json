@@ -512,6 +512,22 @@
     "support": "catalog-only"
   },
   {
+    "code": "TS2869",
+    "category": "Error",
+    "message": "Right operand of ?? is unreachable because the left operand is never nullish.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2871",
+    "category": "Error",
+    "message": "This expression is always nullish.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2872",
     "category": "Error",
     "message": "This kind of expression is always truthy.",

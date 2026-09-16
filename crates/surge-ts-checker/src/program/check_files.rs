@@ -871,6 +871,8 @@ pub(crate) fn emit_grammar_diagnostics(
             Kind::UnusedCommaOperand => Diagnostic::ts2695(ctx.file_name.clone()),
             Kind::AlwaysTruthyExpression => Diagnostic::ts2872(ctx.file_name.clone()),
             Kind::AlwaysFalsyExpression => Diagnostic::ts2873(ctx.file_name.clone()),
+            Kind::NeverNullishCoalesceOperand => Diagnostic::ts2869(ctx.file_name.clone()),
+            Kind::AlwaysNullishCoalesceOperand => Diagnostic::ts2871(ctx.file_name.clone()),
             Kind::ImplicitAnyReturn => {
                 if !ctx.options.no_implicit_any {
                     continue;

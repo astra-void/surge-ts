@@ -645,6 +645,26 @@ pub const TS2749: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::CatalogOnly,
 };
 
+pub const TS2869: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2869",
+    number: Some(2869),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Right operand of ?? is unreachable because the left operand is never nullish.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2871: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2871",
+    number: Some(2871),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This expression is always nullish.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2872: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2872",
     number: Some(2872),
@@ -1320,6 +1340,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2741,
     TS2745,
     TS2749,
+    TS2869,
+    TS2871,
     TS2872,
     TS2873,
     TS7005,
@@ -2023,6 +2045,16 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2869(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2869, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2871(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2871, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

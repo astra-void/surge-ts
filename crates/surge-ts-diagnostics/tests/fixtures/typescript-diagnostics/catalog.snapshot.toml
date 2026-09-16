@@ -513,6 +513,22 @@ message = "'{0}' refers to a value, but is being used as a type here. Did you me
 arity = 1
 
 [[diagnostic]]
+code = "TS2869"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Right operand of ?? is unreachable because the left operand is never nullish."
+arity = 0
+
+[[diagnostic]]
+code = "TS2871"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This expression is always nullish."
+arity = 0
+
+[[diagnostic]]
 code = "TS2872"
 category = "Error"
 source = "typescript"

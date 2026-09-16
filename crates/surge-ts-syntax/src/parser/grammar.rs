@@ -667,6 +667,50 @@ fn syntactic_truthiness(expression: &Expression<'_>) -> Option<bool> {
     }
 }
 
+/// tsc's `getSyntacticNullishnessSemantics`: `Some(true)` for syntax that is
+/// always nullish, `Some(false)` for syntax never nullish, `None` when it can be
+/// either. A nested `??` follows its right operand, as TypeScript 7.0 does.
+fn syntactic_nullishness(expression: &Expression<'_>) -> Option<bool> {
+    match expression.get_inner_expression() {
+        Expression::AwaitExpression(_)
+        | Expression::CallExpression(_)
+        | Expression::ChainExpression(_)
+        | Expression::ImportExpression(_)
+        | Expression::TaggedTemplateExpression(_)
+        | Expression::ComputedMemberExpression(_)
+        | Expression::StaticMemberExpression(_)
+        | Expression::PrivateFieldExpression(_)
+        | Expression::MetaProperty(_)
+        | Expression::NewExpression(_)
+        | Expression::YieldExpression(_)
+        | Expression::ThisExpression(_)
+        | Expression::Super(_) => None,
+        Expression::LogicalExpression(logical) => match logical.operator {
+            oxc_syntax::operator::LogicalOperator::Coalesce => syntactic_nullishness(&logical.right),
+            _ => None,
+        },
+        Expression::AssignmentExpression(assignment) => match assignment.operator {
+            oxc_syntax::operator::AssignmentOperator::Assign
+            | oxc_syntax::operator::AssignmentOperator::LogicalNullish => {
+                syntactic_nullishness(&assignment.right)
+            }
+            oxc_syntax::operator::AssignmentOperator::LogicalOr
+            | oxc_syntax::operator::AssignmentOperator::LogicalAnd => None,
+            _ => Some(false),
+        },
+        Expression::SequenceExpression(sequence) => {
+            sequence.expressions.last().and_then(syntactic_nullishness)
+        }
+        Expression::ConditionalExpression(conditional) => {
+            let when_true = syntactic_nullishness(&conditional.consequent)?;
+            (syntactic_nullishness(&conditional.alternate)? == when_true).then_some(when_true)
+        }
+        Expression::NullLiteral(_) => Some(true),
+        Expression::Identifier(identifier) => (identifier.name == "undefined").then_some(true),
+        _ => Some(false),
+    }
+}
+
 fn is_side_effect_free(expression: &Expression<'_>) -> bool {
     match expression.get_inner_expression() {
         Expression::Identifier(_)
@@ -814,7 +858,14 @@ impl<'a> Visit<'a> for GrammarCollector {
     }
 
     fn visit_logical_expression(&mut self, logical: &oxc_ast::ast::LogicalExpression<'a>) {
-        if logical.operator != oxc_syntax::operator::LogicalOperator::Coalesce {
+        if logical.operator == oxc_syntax::operator::LogicalOperator::Coalesce {
+            let left = logical.left.get_inner_expression();
+            match syntactic_nullishness(left) {
+                Some(true) => self.push(Kind::AlwaysNullishCoalesceOperand, left.span(), None),
+                Some(false) => self.push(Kind::NeverNullishCoalesceOperand, left.span(), None),
+                None => {}
+            }
+        } else {
             self.check_truthiness(&logical.left);
         }
         oxc_ast_visit::walk::walk_logical_expression(self, logical);
