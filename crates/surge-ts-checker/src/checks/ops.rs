@@ -143,7 +143,9 @@ pub(crate) fn evaluate_unary_expression(
                 InferredExpression::Unknown
             }
         }
-        ParsedUnaryOperator::Typeof => InferredExpression::Known(Type::String),
+        ParsedUnaryOperator::Typeof => {
+            InferredExpression::Known(crate::infer::expression::typeof_result_type())
+        }
         // `void` / `delete` / `~`: the operand has already been walked, and the
         // result stays unmodelled rather than guessing `undefined`/`boolean`/`number`.
         ParsedUnaryOperator::Discard => InferredExpression::Unknown,

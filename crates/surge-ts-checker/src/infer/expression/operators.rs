@@ -10,6 +10,25 @@ use crate::symbols::SymbolTable;
 
 use crate::infer::InferredExpression;
 
+/// tsc's `typeofType`: the union of every `typeof` result, in sorted order.
+pub(crate) fn typeof_result_type() -> Type {
+    union_type(
+        [
+            "bigint",
+            "boolean",
+            "function",
+            "number",
+            "object",
+            "string",
+            "symbol",
+            "undefined",
+        ]
+        .into_iter()
+        .map(|name| Type::StringLiteral(name.to_string()))
+        .collect(),
+    )
+}
+
 pub(crate) fn infer_unary_expression(
     operator: ParsedUnaryOperator,
     operand: &ParsedExpression,
@@ -26,7 +45,7 @@ pub(crate) fn infer_unary_expression(
                 InferredExpression::Unknown
             }
         }
-        ParsedUnaryOperator::Typeof => InferredExpression::Known(Type::String),
+        ParsedUnaryOperator::Typeof => InferredExpression::Known(typeof_result_type()),
         // `void` / `delete` / `~`: the operand has already been walked, and the
         // result stays unmodelled rather than guessing `undefined`/`boolean`/`number`.
         ParsedUnaryOperator::Discard => InferredExpression::Unknown,
