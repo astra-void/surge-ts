@@ -6,9 +6,8 @@ mod inferred;
 
 pub(crate) use diagnostics::*;
 pub(crate) use evaluate::*;
-use guarded_unknown::{
-    downgrade_guarded_genuine_unknown, downgrade_predicate_guarded_genuine_unknown,
-};
+pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;
+use guarded_unknown::downgrade_predicate_guarded_genuine_unknown;
 use index_access::*;
 pub(crate) use inferred::*;
 

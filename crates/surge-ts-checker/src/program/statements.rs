@@ -97,11 +97,19 @@ fn narrowed_module_symbols(
     let base = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
     let narrowed =
         crate::checks::function::narrow_condition_symbol_table(condition, &base, branch_is_true);
-    crate::checks::function::narrow_predicate_guards_symbol_table(
+    let narrowed = crate::checks::function::narrow_predicate_guards_symbol_table(
         condition,
         narrowed.as_ref().unwrap_or(&base),
         branch_is_true,
         ctx,
+    )
+    .or(narrowed);
+    // As in a function body, a guarded `unknown` stops reading as the `unknown`
+    // keyword in the branch where its guard holds.
+    crate::checks::expr::downgrade_guarded_genuine_unknown(
+        condition,
+        narrowed.as_ref().unwrap_or(&base),
+        branch_is_true,
     )
     .or(narrowed)
 }
