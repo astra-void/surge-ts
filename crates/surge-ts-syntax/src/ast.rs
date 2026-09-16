@@ -1060,6 +1060,10 @@ pub struct ParsedObjectProperty {
     /// accessor's *value* type — the getter's return type, or the setter's
     /// parameter type — not the accessor function itself.
     pub is_accessor: bool,
+    /// The key expression of a computed name that is not itself a literal
+    /// (`{ [key]: v }`). `name` holds its written path; the checker names the
+    /// property by the key's literal type once it is known.
+    pub computed_key: Option<Box<ParsedExpression>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

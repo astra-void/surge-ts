@@ -1124,6 +1124,12 @@ pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
         PropertyKey::UnaryExpression(unary) => {
             super::expressions::signed_number_literal_text(unary)
         }
+        // A template without substitutions is a string literal too.
+        PropertyKey::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(|cooked| cooked.to_string()),
         other => render(other.to_expression()).map(|path| format!("[{path}]")),
     }
 }

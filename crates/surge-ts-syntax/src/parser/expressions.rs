@@ -1017,6 +1017,7 @@ pub(crate) fn parse_object_properties(
                         is_spread: true,
                         is_accessor: false,
                         is_shorthand: false,
+                        computed_key: None,
                     });
                 }
             };
@@ -1088,6 +1089,14 @@ pub(crate) fn parse_object_properties(
                 is_spread: false,
                 is_accessor: false,
                 is_shorthand: property.shorthand,
+                computed_key: property
+                    .computed
+                    .then(|| property.key.as_expression())
+                    .flatten()
+                    .filter(|key| {
+                        matches!(key, Expression::Identifier(_) | Expression::StaticMemberExpression(_))
+                    })
+                    .map(|key| Box::new(parse_expression(key).0)),
             })
         })
         .collect()
@@ -1172,6 +1181,7 @@ fn parse_object_method_shorthand_named(
         is_spread: false,
         is_accessor: false,
         is_shorthand: false,
+        computed_key: None,
     })
 }
 

@@ -1315,6 +1315,9 @@ fn evaluate_object_literal_with_expected_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let properties = &*crate::infer::expression::resolve_computed_property_names(
+        properties, symbols, ctx,
+    );
     let object_start = Instant::now();
     let mut inferred_property_types = BTreeMap::new();
     // The empty object type `{}` (no properties, no string index) accepts any

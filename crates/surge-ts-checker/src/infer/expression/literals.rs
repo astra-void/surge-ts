@@ -19,11 +19,58 @@ use crate::symbols::SymbolTable;
 
 use crate::infer::InferredExpression;
 
+/// tsc names a computed property by its key's type (`checkComputedPropertyName`):
+/// a string or number literal key is that property, and a `string`/`number` key
+/// adds no named member at all. The written path stays the name only for keys
+/// surge cannot type, which keeps well-known symbols (`[Symbol.iterator]`) as
+/// they were.
+pub(crate) fn resolve_computed_property_names<'a>(
+    properties: &'a [ParsedObjectProperty],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> std::borrow::Cow<'a, [ParsedObjectProperty]> {
+    if properties.iter().all(|property| property.computed_key.is_none()) {
+        return std::borrow::Cow::Borrowed(properties);
+    }
+    let mut resolved = Vec::with_capacity(properties.len());
+    for property in properties {
+        let Some(key) = property.computed_key.as_deref() else {
+            resolved.push(property.clone());
+            continue;
+        };
+        // The key is re-inferred by every pass that reads the literal; its own
+        // diagnostics belong to the pass that walks it, not to this lookup.
+        let diagnostics_before = ctx.diagnostics().len();
+        let key_type = infer_expression(key, symbols, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
+        let InferredExpression::Known(key_type) = key_type else {
+            resolved.push(property.clone());
+            continue;
+        };
+        match key_type.peeled() {
+            Type::StringLiteral(name) => {
+                let mut renamed = property.clone();
+                renamed.name = name;
+                resolved.push(renamed);
+            }
+            Type::NumberLiteral(literal) => {
+                let mut renamed = property.clone();
+                renamed.name = literal.value;
+                resolved.push(renamed);
+            }
+            Type::String | Type::Number | Type::Any => {}
+            _ => resolved.push(property.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(resolved)
+}
+
 pub(crate) fn infer_object_literal(
     properties: &[ParsedObjectProperty],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Type {
+    let properties = &*resolve_computed_property_names(properties, symbols, ctx);
     let object_literal_start = Instant::now();
     let mut merged_properties: PropertyMap = PropertyMap::default();
     // A spread source that surge could not fully enumerate carries
