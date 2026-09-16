@@ -1475,6 +1475,23 @@ fn evaluate_object_literal_with_expected_type(
                             expected_type_name,
                             &ctx.file_name,
                         );
+                    // A name that is not a literal (`[key]`, `[-1]`) gets its own
+                    // message, reported on the whole `[…]` name
+                    // (`elaborateObjectLiteral`, `IsComputedNonLiteralName`).
+                    if property.computed_key.is_some() {
+                        ctx.push(diagnostic_with_syntax_span(
+                            Diagnostic::ts2418(
+                                &actual_type_name,
+                                &expected_type_name,
+                                ctx.file_name.clone(),
+                            ),
+                            choose_span(
+                                property.name_span,
+                                choose_span(property.span, fallback_span),
+                            ),
+                        ));
+                        return InferredExpression::Unknown;
+                    }
                     let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
                         &actual_type,
                         &expected_property_type,

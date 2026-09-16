@@ -185,6 +185,16 @@ pub const TS2322: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2418: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2418",
+    number: Some(2418),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type of computed property's value is '{0}', which is not assignable to type '{1}'.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2820: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2820",
     number: Some(2820),
@@ -1264,6 +1274,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2314,
     TS2315,
     TS2322,
+    TS2418,
     TS2820,
     TS18046,
     TS2532,
@@ -1550,6 +1561,18 @@ impl Diagnostic {
     pub fn ts2322(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2322,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2418(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2418,
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),

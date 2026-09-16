@@ -144,6 +144,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2418",
+    "category": "Error",
+    "message": "Type of computed property's value is '{0}', which is not assignable to type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2820",
     "category": "Error",
     "message": "Type '{0}' is not assignable to type '{1}'. Did you mean '{2}'?",

@@ -1065,9 +1065,10 @@ pub(crate) fn parse_object_properties(
             // fully-quoted literal (Prisma's generated client config) inferred as
             // `{}` and reported every required property as missing.
             let (name, key_span) = match &property.key {
+                // tsc's name node for `[key]` is the whole bracketed name.
                 _ if property.computed => (
                     super::types::computed_key_name(&property.key)?,
-                    property.key.span(),
+                    Span::new(property.span.start, property.key.span().end + 1),
                 ),
                 PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
                 PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
@@ -1094,7 +1095,12 @@ pub(crate) fn parse_object_properties(
                     .then(|| property.key.as_expression())
                     .flatten()
                     .filter(|key| {
-                        matches!(key, Expression::Identifier(_) | Expression::StaticMemberExpression(_))
+                        matches!(
+                            key,
+                            Expression::Identifier(_)
+                                | Expression::StaticMemberExpression(_)
+                                | Expression::UnaryExpression(_)
+                        )
                     })
                     .map(|key| Box::new(parse_expression(key).0)),
             })
