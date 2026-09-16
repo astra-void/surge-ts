@@ -62,6 +62,13 @@ pub(crate) fn resolve_template_literal_type(
         combinations = next;
     }
 
+    if combinations.is_empty() {
+        return ResolvedType {
+            ty: Type::Never,
+            had_error,
+        };
+    }
+
     let members: Vec<Type> = combinations.into_iter().map(Type::StringLiteral).collect();
 
     ResolvedType {
@@ -80,6 +87,9 @@ fn finite_literal_strings(ty: &Type) -> Option<Vec<String>> {
         Type::StringLiteral(value) => Some(vec![value.clone()]),
         Type::NumberLiteral(value) => Some(vec![value.value.clone()]),
         Type::BooleanLiteral(value) => Some(vec![value.to_string()]),
+        Type::Boolean => Some(vec!["false".to_string(), "true".to_string()]),
+        // tsc maps the template over a `never` hole, which yields `never`.
+        Type::Never => Some(Vec::new()),
         Type::Union(union) => {
             let mut parts = Vec::new();
             for member in union.types().iter() {
