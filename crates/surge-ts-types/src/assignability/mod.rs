@@ -275,11 +275,20 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     // `Flags.A | Flags.B` is typed `number`, and the bitwise combination is the
     // normal way to build a flag argument. The reverse (a string into a string
     // enum) is rejected, which is why only the numeric marker opens this.
+    // A number *literal* is not covered: it must match a member's value
+    // (`isSimpleTypeRelatedTo`), which the structural comparison against the
+    // enum's member union below decides — a computed member resolves to
+    // `number` and so still accepts any literal. `number | 0` (from `x ?? 0`)
+    // is `number` once tsc's subtype reduction drops the literal.
     if matches!(to, Type::Reference(reference) if reference.numeric_enum)
-        && matches!(
-            from.base_primitive().as_ref().unwrap_or(from),
-            Type::Number | Type::NumberLiteral(_)
-        )
+        && match from {
+            Type::Number => true,
+            Type::Union(union) => {
+                union.types().iter().any(|member| matches!(member, Type::Number))
+                    && matches!(from.base_primitive(), Some(Type::Number))
+            }
+            _ => false,
+        }
     {
         return true;
     }
