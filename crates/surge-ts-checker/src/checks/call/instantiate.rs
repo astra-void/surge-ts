@@ -931,6 +931,19 @@ pub(crate) fn infer_type_argument_substitution(
         }
     }
 
+    let top_level_return_type_parameters: Vec<&str> = function_signature
+        .return_type
+        .as_ref()
+        .map(|return_type| {
+            function_signature
+                .type_parameters
+                .iter()
+                .map(|type_parameter| type_parameter.name.as_str())
+                .filter(|name| type_parameter_at_top_level_in_return_type(return_type, name))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let rest_index = function_signature
         .rest
         .then(|| function_signature.parameter_types.len().checked_sub(1))
@@ -1038,7 +1051,16 @@ pub(crate) fn infer_type_argument_substitution(
         // A constrained parameter keeps its literals whatever the argument is;
         // `mark_keeps_literal` recorded that above, and
         // `record_type_argument_candidate` enforces it.
-        let widen_literals = argument_is_fresh_literal(&argument.expression);
+        // tsc widens an inferred literal only when the type parameter does not
+        // occur at the top level of the return type (`getCovariantInference`):
+        // `id(1)` is `1` while `box(1)` is `{ v: number }`. A literal inside an
+        // object or array literal argument has already widened at its mutable
+        // location, so only a bare primitive literal is kept.
+        let widen_literals = argument_is_fresh_literal(&argument.expression)
+            && !(argument_is_primitive_literal(&argument.expression)
+                && top_level_return_type_parameters
+                    .iter()
+                    .any(|name| type_parameter_at_top_level(parameter_type, name, 0)));
         // `f(...xs)` supplies the *elements* of `xs`, each lined up with the
         // position it covers — tsc's `getSpreadArgumentType`. Matching the
         // spread's own type against the parameter bound a rest `T[]`'s `T` to
@@ -1220,6 +1242,61 @@ fn infer_from_context_sensitive_callbacks(
 /// survives only when it is not fresh (`{ n: 1 } as const`, an annotated
 /// binding) or when the parameter's constraint asks for one, so this is limited
 /// to a literal written at the call site inferring a bare type parameter.
+/// tsc's `isTypeParameterAtTopLevelInReturnType`: the return type (or a type
+/// predicate's type) is the parameter itself, a union or intersection with it
+/// as a member, or a conditional whose branch is, up to three levels deep.
+fn type_parameter_at_top_level_in_return_type(return_type: &ParsedType, name: &str) -> bool {
+    match return_type {
+        ParsedType::Predicate(predicate) => predicate
+            .ty
+            .as_ref()
+            .is_some_and(|ty| type_parameter_at_top_level(ty, name, 0)),
+        other => type_parameter_at_top_level(other, name, 0),
+    }
+}
+
+fn type_parameter_at_top_level(ty: &ParsedType, name: &str, depth: usize) -> bool {
+    match ty {
+        ParsedType::Named(named) => named.type_arguments.is_empty() && named.name == name,
+        ParsedType::Union(members) | ParsedType::Intersection(members) => members
+            .iter()
+            .any(|member| type_parameter_at_top_level(member, name, depth)),
+        // In the true branch of `T extends X ? T : …` the parameter is a
+        // substitution type carrying the implied constraint, not the parameter
+        // itself (`getImpliedConstraint`), so only the false branch counts there.
+        ParsedType::Conditional(conditional) if depth < 3 => {
+            (!conditional_implies_constraint(
+                &conditional.check_type,
+                &conditional.extends_type,
+                name,
+            ) && type_parameter_at_top_level(&conditional.true_type, name, depth + 1))
+                || type_parameter_at_top_level(&conditional.false_type, name, depth + 1)
+        }
+        _ => false,
+    }
+}
+
+fn conditional_implies_constraint(check: &ParsedType, extends: &ParsedType, name: &str) -> bool {
+    match (check, extends) {
+        (ParsedType::Tuple(check), ParsedType::Tuple(extends))
+            if check.len() == 1 && extends.len() == 1 =>
+        {
+            conditional_implies_constraint(&check[0], &extends[0], name)
+        }
+        (ParsedType::Named(named), _) => named.type_arguments.is_empty() && named.name == name,
+        _ => false,
+    }
+}
+
+fn argument_is_primitive_literal(argument: &surge_ts_syntax::ParsedExpression) -> bool {
+    matches!(
+        argument,
+        surge_ts_syntax::ParsedExpression::StringLiteral(_)
+            | surge_ts_syntax::ParsedExpression::NumberLiteral(_)
+            | surge_ts_syntax::ParsedExpression::BooleanLiteral(_)
+    )
+}
+
 fn argument_is_fresh_literal(argument: &surge_ts_syntax::ParsedExpression) -> bool {
     // A fresh literal: a primitive literal, or an object/array literal whose
     // property and element literals widen the same way (`subject({ n: 1 })`
