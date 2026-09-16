@@ -470,6 +470,25 @@ fn parse_object_binding_property_declarations(
         return Vec::new();
     };
 
+    // An object literal initializer is contextually typed by the pattern, whose
+    // defaulted elements are optional properties (`getTypeFromBindingPattern`),
+    // so a defaulted name the literal does not write reads `undefined` rather
+    // than a missing property.
+    if matches!(property.value, BindingPattern::AssignmentPattern(_))
+        && static_object_literal(&source_initializer).is_some_and(|properties| {
+            literal_lacks_property(properties, identifier.name.as_str())
+        })
+    {
+        return parse_binding_pattern_declarations(
+            &property.value,
+            Some(ParsedExpression::UndefinedLiteral),
+            Some(text_span_from_oxc_span(identifier.span)),
+            is_declare,
+            kind,
+            None,
+        );
+    }
+
     // Marked bracketed: this access is synthesized from a binding pattern, and
     // tsc does not apply `noPropertyAccessFromIndexSignature` (TS4111) to
     // destructuring — only to written dotted accesses.
@@ -489,6 +508,40 @@ fn parse_object_binding_property_declarations(
         kind,
         None,
     )
+}
+
+/// The properties of the object literal `expression` statically evaluates to:
+/// the literal itself, a property of one whose value is a literal, or the
+/// default an absent value falls back to.
+fn static_object_literal(expression: &ParsedExpression) -> Option<&[crate::ParsedObjectProperty]> {
+    match expression {
+        ParsedExpression::ObjectLiteral { properties, .. } => Some(properties),
+        ParsedExpression::ConstAssertion { expression, .. } => static_object_literal(expression),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let properties = static_object_literal(object)?;
+            let property = properties
+                .iter()
+                .find(|property| property.name == *property_name && !property.is_spread)?;
+            static_object_literal(&property.value)
+        }
+        ParsedExpression::NullishCoalescing { left, right, .. } => match left.as_ref() {
+            ParsedExpression::UndefinedLiteral => static_object_literal(right),
+            left => static_object_literal(left),
+        },
+        _ => None,
+    }
+}
+
+/// Whether a literal certainly does not write `name`: a spread or a computed key
+/// could supply it.
+fn literal_lacks_property(properties: &[crate::ParsedObjectProperty], name: &str) -> bool {
+    properties
+        .iter()
+        .all(|property| !property.is_spread && property.computed_key.is_none() && property.name != name)
 }
 
 fn parse_array_pattern_declarations(
