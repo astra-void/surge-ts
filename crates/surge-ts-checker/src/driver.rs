@@ -55,6 +55,7 @@ pub fn check_source_with_options(
         let diagnostic = Diagnostic::surge_parser_error(message, file_name.clone());
         ctx.push(diagnostic);
     }
+    crate::program::emit_grammar_diagnostics(&parsed.grammar_diagnostics, &mut ctx);
 
     ctx.merge_script_interfaces_with_globals = !parsed.is_module;
     collect_type_declarations(&parsed.statements, &mut ctx);

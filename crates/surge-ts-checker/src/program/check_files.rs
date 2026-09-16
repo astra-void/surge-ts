@@ -869,6 +869,8 @@ pub(crate) fn emit_grammar_diagnostics(
             Kind::MultipleConstructorImplementations => Diagnostic::ts2392(ctx.file_name.clone()),
             Kind::MissingSuperCall => Diagnostic::ts2377(ctx.file_name.clone()),
             Kind::UnusedCommaOperand => Diagnostic::ts2695(ctx.file_name.clone()),
+            Kind::AlwaysTruthyExpression => Diagnostic::ts2872(ctx.file_name.clone()),
+            Kind::AlwaysFalsyExpression => Diagnostic::ts2873(ctx.file_name.clone()),
             Kind::ImplicitAnyReturn => {
                 if !ctx.options.no_implicit_any {
                     continue;

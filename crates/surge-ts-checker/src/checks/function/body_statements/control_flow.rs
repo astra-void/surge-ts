@@ -11,7 +11,7 @@ use crate::context::CheckerContext;
 use crate::context::convert_span;
 use crate::flow::{
     FlowCheck, FunctionFlowState, analyze_function_body_flow, check_expression_flow,
-    check_obvious_truthiness_condition, merge_branch_deltas,
+    merge_branch_deltas,
 };
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::symbols::ScopeStack;
@@ -35,8 +35,6 @@ pub(crate) fn check_function_if_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
-    check_obvious_truthiness_condition(&if_statement.condition, if_statement.condition_span, ctx);
-
     // `if (ok)` where `ok` is a boolean `const` alias narrows by the condition
     // the alias was written as, not by the opaque identifier.
     let alias_condition = resolved_alias_condition(&if_statement.condition, flow_state);
@@ -261,8 +259,6 @@ fn check_while_condition(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
-    check_obvious_truthiness_condition(condition, condition_span, ctx);
-
     let condition_blocked = if flow_state.tracked_local_count() > 0 {
         check_expression_flow(condition, condition_span, flow_state, statement_index, ctx)
     } else {

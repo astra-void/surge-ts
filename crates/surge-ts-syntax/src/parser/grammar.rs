@@ -46,6 +46,15 @@ impl GrammarCollector {
         });
     }
 
+    /// tsc's `checkTruthinessOfType` diagnostic, which depends only on syntax.
+    fn check_truthiness(&mut self, expression: &Expression<'_>) {
+        match syntactic_truthiness(expression) {
+            Some(true) => self.push(Kind::AlwaysTruthyExpression, expression.span(), None),
+            Some(false) => self.push(Kind::AlwaysFalsyExpression, expression.span(), None),
+            None => {}
+        }
+    }
+
     fn is_ambient(&self) -> bool {
         self.ambient_depth > 0
     }
@@ -623,6 +632,41 @@ fn body_calls_super(body: &FunctionBody<'_>) -> bool {
 /// tsc's `isSideEffectFree`: the expressions whose value can be dropped without
 /// anything happening. A property access is deliberately *not* one of them — a
 /// getter can do anything.
+/// tsc's `getSyntacticTruthySemantics`: `Some(true)` for syntax that is always
+/// truthy, `Some(false)` for syntax always falsy, `None` when it can be either.
+fn syntactic_truthiness(expression: &Expression<'_>) -> Option<bool> {
+    match expression.get_inner_expression() {
+        // `while (0)` and `while (1)` are idioms, not mistakes. tsc compares the
+        // literal's normalized text, so `0.0` and `0x1` are exempt too.
+        Expression::NumericLiteral(literal) => {
+            (literal.value != 0.0 && literal.value != 1.0).then_some(true)
+        }
+        Expression::ArrayExpression(_)
+        | Expression::ArrowFunctionExpression(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::ClassExpression(_)
+        | Expression::FunctionExpression(_)
+        | Expression::JSXElement(_)
+        | Expression::ObjectExpression(_)
+        | Expression::RegExpLiteral(_) => Some(true),
+        Expression::NullLiteral(_) => Some(false),
+        Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::Void => Some(false),
+        Expression::StringLiteral(literal) => Some(!literal.value.is_empty()),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => Some(
+            template
+                .quasis
+                .first()
+                .is_some_and(|quasi| !quasi.value.raw.is_empty()),
+        ),
+        Expression::ConditionalExpression(conditional) => {
+            let when_true = syntactic_truthiness(&conditional.consequent)?;
+            (syntactic_truthiness(&conditional.alternate)? == when_true).then_some(when_true)
+        }
+        Expression::Identifier(identifier) if identifier.name == "undefined" => Some(false),
+        _ => None,
+    }
+}
+
 fn is_side_effect_free(expression: &Expression<'_>) -> bool {
     match expression.get_inner_expression() {
         Expression::Identifier(_)
@@ -730,6 +774,50 @@ impl<'a> Visit<'a> for GrammarCollector {
     fn visit_ts_type_literal(&mut self, literal: &oxc_ast::ast::TSTypeLiteral<'a>) {
         self.check_interface_members(&literal.members);
         oxc_ast_visit::walk::walk_ts_type_literal(self, literal);
+    }
+
+    fn visit_unary_expression(&mut self, unary: &oxc_ast::ast::UnaryExpression<'a>) {
+        if unary.operator == UnaryOperator::LogicalNot {
+            self.check_truthiness(&unary.argument);
+        }
+        oxc_ast_visit::walk::walk_unary_expression(self, unary);
+    }
+
+    fn visit_if_statement(&mut self, statement: &oxc_ast::ast::IfStatement<'a>) {
+        self.check_truthiness(&statement.test);
+        oxc_ast_visit::walk::walk_if_statement(self, statement);
+    }
+
+    fn visit_while_statement(&mut self, statement: &oxc_ast::ast::WhileStatement<'a>) {
+        self.check_truthiness(&statement.test);
+        oxc_ast_visit::walk::walk_while_statement(self, statement);
+    }
+
+    fn visit_do_while_statement(&mut self, statement: &oxc_ast::ast::DoWhileStatement<'a>) {
+        self.check_truthiness(&statement.test);
+        oxc_ast_visit::walk::walk_do_while_statement(self, statement);
+    }
+
+    fn visit_for_statement(&mut self, statement: &oxc_ast::ast::ForStatement<'a>) {
+        if let Some(test) = &statement.test {
+            self.check_truthiness(test);
+        }
+        oxc_ast_visit::walk::walk_for_statement(self, statement);
+    }
+
+    fn visit_conditional_expression(
+        &mut self,
+        conditional: &oxc_ast::ast::ConditionalExpression<'a>,
+    ) {
+        self.check_truthiness(&conditional.test);
+        oxc_ast_visit::walk::walk_conditional_expression(self, conditional);
+    }
+
+    fn visit_logical_expression(&mut self, logical: &oxc_ast::ast::LogicalExpression<'a>) {
+        if logical.operator != oxc_syntax::operator::LogicalOperator::Coalesce {
+            self.check_truthiness(&logical.left);
+        }
+        oxc_ast_visit::walk::walk_logical_expression(self, logical);
     }
 
     fn visit_sequence_expression(&mut self, sequence: &oxc_ast::ast::SequenceExpression<'a>) {

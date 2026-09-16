@@ -35,6 +35,7 @@ mod unused_locals;
 pub(crate) use ambient::*;
 pub(crate) use binding::*;
 use check_files::*;
+pub(crate) use check_files::emit_grammar_diagnostics;
 pub(crate) use classes::*;
 pub(crate) use diagnostics::*;
 pub(crate) use file_classify::*;

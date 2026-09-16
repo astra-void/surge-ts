@@ -801,10 +801,6 @@ fn render_flow_counters(counters: &ProgramCounters) {
         "    flow_return_analysis_walk_count: {}",
         counters.flow_return_analysis_walk_count
     );
-    eprintln!(
-        "    flow_truthiness_check_count: {}",
-        counters.flow_truthiness_check_count
-    );
 }
 
 fn render_symbol_and_export_counters(counters: &ProgramCounters) {

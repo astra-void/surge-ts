@@ -106,7 +106,6 @@ pub(crate) struct ProgramCounters {
     pub(crate) flow_read_lookup_count: u64,
     pub(crate) flow_read_lookup_scope_steps_total: u64,
     pub(crate) flow_return_analysis_walk_count: u64,
-    pub(crate) flow_truthiness_check_count: u64,
     pub(crate) type_name_lookup_string_count: u64,
     pub(crate) symbol_info_handle_copy_count: u64,
     pub(crate) symbol_info_payload_deep_clone_count: u64,
@@ -574,10 +573,6 @@ pub(crate) fn record_flow_read_lookup_count(scope_steps: usize) {
 
 pub(crate) fn record_flow_return_analysis_walk_count() {
     record_program_counter(|c| c.flow_return_analysis_walk_count += 1);
-}
-
-pub(crate) fn record_flow_truthiness_check_count() {
-    record_program_counter(|c| c.flow_truthiness_check_count += 1);
 }
 
 pub(crate) fn record_type_name_lookup_string_count(count: usize) {

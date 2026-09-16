@@ -74,6 +74,10 @@ pub enum ParsedGrammarDiagnosticKind {
     /// A comma operator whose left side is discarded and cannot have an
     /// effect — TS2695.
     UnusedCommaOperand,
+    /// A tested expression whose syntax makes it always truthy — TS2872.
+    AlwaysTruthyExpression,
+    /// A tested expression whose syntax makes it always falsy — TS2873.
+    AlwaysFalsyExpression,
     /// A parameter written both optional and with a default — TS1015.
     OptionalParameterWithInitializer,
     /// A required parameter after an optional one — TS1016.

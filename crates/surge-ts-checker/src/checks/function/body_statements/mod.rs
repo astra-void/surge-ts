@@ -13,7 +13,7 @@ use crate::checks::var::{VariableCheckOptions, check_variable_declaration_agains
 use crate::context::CheckerContext;
 use crate::flow::{
     AssignmentState, FlowCheck, FunctionFlowState, apply_variable_declaration_state,
-    check_expression_flow, check_obvious_truthiness_condition,
+    check_expression_flow,
 };
 use crate::infer::InferredExpression;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
@@ -287,15 +287,6 @@ pub(crate) fn check_function_expression_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
-    if let ParsedExpression::Conditional {
-        condition,
-        condition_span,
-        ..
-    } = &expression
-    {
-        check_obvious_truthiness_condition(condition, *condition_span, ctx);
-    }
-
     let flow_blocked = if flow_state.tracked_local_count() > 0 {
         check_expression_flow(&expression, None, flow_state, statement_index, ctx)
     } else {
