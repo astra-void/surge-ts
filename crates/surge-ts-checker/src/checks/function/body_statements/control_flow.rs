@@ -241,6 +241,19 @@ pub(crate) fn check_function_while_statement(
     check_while_condition(&condition, condition_span, statement_index, scopes, flow_state, ctx);
 
     scopes.push_child();
+    // The condition is tested before every iteration, so the body starts where
+    // it held, whatever the previous iteration assigned.
+    let alias_condition = resolved_alias_condition(&condition, flow_state);
+    let base_condition: &ParsedExpression = alias_condition.as_deref().unwrap_or(&condition);
+    let rewritten_condition = rewrite_discriminant_aliases(base_condition, flow_state);
+    narrow_condition_and_aliases_in_scope(
+        base_condition,
+        rewritten_condition.as_ref(),
+        scopes,
+        true,
+        flow_state,
+        ctx,
+    );
     if flow_state.tracked_local_count() > 0 {
         flow_state.begin_branch_capture();
         check_function_body(body, return_type, scopes, flow_state, ctx);
