@@ -161,9 +161,12 @@ pub(crate) fn parameter_scope_type(
                 ty
             }
         }
-        ParsedBindingName::ObjectPattern(_)
-        | ParsedBindingName::ArrayPattern(_)
-        | ParsedBindingName::Unsupported { .. } => Type::Any,
+        // A destructured parameter's elements read the parameter's type; the
+        // element lookups stay permissive on a miss.
+        ParsedBindingName::ObjectPattern(_) | ParsedBindingName::ArrayPattern(_) => {
+            with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone())
+        }
+        ParsedBindingName::Unsupported { .. } => Type::Any,
     }
 }
 
