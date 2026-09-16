@@ -32,23 +32,19 @@ pub(crate) fn check_program_file_statements(
     }
 }
 
-/// A module-scope `if`: the condition is checked, and when one branch cannot
-/// fall through (`if (isCancel(value)) process.exit(0)`) the statements after
-/// it see the other branch's narrowing, exactly as a function body would.
-/// The branch bodies themselves are not checked here — module scope has no
-/// flow state to check them under yet — which is what happened to them before
-/// the parser kept them at all.
+/// A module-scope `if`: each branch is checked under its own narrowing, and
+/// when one branch cannot fall through (`if (isCancel(value)) process.exit(0)`)
+/// the statements after it see the other branch's narrowing, exactly as a
+/// function body would.
 pub(crate) fn check_module_if_statement(
     if_statement: &surge_ts_syntax::ParsedIfStatement,
     ctx: &mut CheckerContext,
 ) {
     let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-    // The condition is evaluated for its narrowing only. Reporting it would
-    // change what a module-scope `if` costs relative to the statements around
-    // it: its branches are not checked yet, and a condition that reads a value
-    // surge models more loosely than tsc (`args.verbose` off a parsed-options
-    // object that degraded to an index signature) would report where tsc
-    // does not. Its diagnostics are discarded like a probe's.
+    // The condition is evaluated for its narrowing only: a condition that reads
+    // a value surge models more loosely than tsc (`args.verbose` off a
+    // parsed-options object that degraded to an index signature) would report
+    // where tsc does not. Its diagnostics are discarded like a probe's.
     let checkpoint = ctx.diagnostics().len();
     let _ = crate::checks::expr::evaluate_expression(
         &if_statement.condition,
@@ -57,6 +53,19 @@ pub(crate) fn check_module_if_statement(
         ctx,
     );
     ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    for (branch, branch_is_true) in [
+        (&if_statement.then_body, true),
+        (&if_statement.else_body, false),
+    ] {
+        if branch.is_empty() {
+            continue;
+        }
+        let branch_symbols = narrowed_module_symbols(&if_statement.condition, branch_is_true, ctx)
+            .unwrap_or_else(|| {
+                ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext)
+            });
+        check_statements_over_module_scope(branch.clone(), branch_symbols, ctx);
+    }
     let scopes = crate::symbols::ScopeStack::from_root(symbols);
     let diverts = |body: &[surge_ts_syntax::ParsedFunctionBodyStatement]| {
         let flow = crate::flow::analyze_function_body_flow(body);
@@ -71,22 +80,30 @@ pub(crate) fn check_module_if_statement(
         (false, true) => true,
         _ => return,
     };
-    let base = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-    let narrowed = crate::checks::function::narrow_condition_symbol_table(
-        &if_statement.condition,
-        &base,
-        surviving_branch,
-    );
-    let narrowed = crate::checks::function::narrow_predicate_guards_symbol_table(
-        &if_statement.condition,
-        narrowed.as_ref().unwrap_or(&base),
-        surviving_branch,
-        ctx,
-    )
-    .or(narrowed);
-    if let Some(narrowed) = narrowed {
+    if let Some(narrowed) =
+        narrowed_module_symbols(&if_statement.condition, surviving_branch, ctx)
+    {
         ctx.symbols = narrowed;
     }
+}
+
+/// The module symbols as narrowed by `condition` holding (or not), when the
+/// condition narrows anything.
+fn narrowed_module_symbols(
+    condition: &surge_ts_syntax::ParsedExpression,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) -> Option<crate::symbols::SymbolTable> {
+    let base = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    let narrowed =
+        crate::checks::function::narrow_condition_symbol_table(condition, &base, branch_is_true);
+    crate::checks::function::narrow_predicate_guards_symbol_table(
+        condition,
+        narrowed.as_ref().unwrap_or(&base),
+        branch_is_true,
+        ctx,
+    )
+    .or(narrowed)
 }
 
 /// A module-scope loop, block, `switch` or `try` is checked exactly as the
@@ -97,6 +114,14 @@ pub(crate) fn check_module_block(
     ctx: &mut CheckerContext,
 ) {
     let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    check_statements_over_module_scope(statements, symbols, ctx);
+}
+
+fn check_statements_over_module_scope(
+    statements: Vec<surge_ts_syntax::ParsedFunctionBodyStatement>,
+    symbols: crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
     let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
     let flow_facts = crate::flow::collect_function_flow_facts(&statements);
     let mut flow_state = crate::flow::FunctionFlowState::new(
