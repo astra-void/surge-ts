@@ -50,7 +50,15 @@ pub(super) fn type_for_typeof_tag(tag: &str) -> Option<Type> {
 
 pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
     let Type::Union(union) = ty else {
-        return None;
+        // A lone primitive the test rules out leaves the branch unreachable
+        // (`typeof x === "number"` after `x` narrowed to `string`), which is how
+        // an exhaustive chain of `typeof` checks reaches `never`. Object and
+        // function tags are left alone: surge's object shapes do not always
+        // carry the call signature that decides between them.
+        return typeof_tag_of(ty)
+            .filter(|member_tag| !matches!(*member_tag, "object" | "function"))
+            .filter(|member_tag| (*member_tag == tag) != keep_matching)
+            .map(|_| Type::Never);
     };
     let kept: Vec<Type> = union
         .types()
